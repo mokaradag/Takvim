@@ -826,7 +826,7 @@ export function validateComposition(composition, response) {
       let items = block.items;
       if (prose) {
         const checked = checkProse(block.text, { known: (id) => Boolean(render.propositions?.has(id) || render.tables.has(id) || render.charts.has(id) || render.details?.has(id)),
-          used: new Set([...usedPropositions, ...[...usedSources].filter((id) => render.details?.has(id)), ...pointers.map((pointer) => pointer.id)]), recoverDetail: (id) => Boolean(render.details?.has(id)) });
+          used: new Set([...usedPropositions, ...[...usedSources].filter((id) => render.details?.has(id))]), recoverDetail: (id) => Boolean(render.details?.has(id)) });
         // Kurala uymayan düzyazı paragrafı tümüyle düşer (yalnızca modelin içeriği azalır); kapsamı sunucu tamamlar.
         // Bütün düzyazı paragrafları düşerse düzen reddedilir.
         if (!checked.ok) { proseRejected.push(checked.issue); continue; }

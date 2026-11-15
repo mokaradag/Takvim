@@ -4,10 +4,106 @@ import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 registerServerOnlyShim();
 const { unpackTypedPlan } = await import('../src/server/ai/tools/executionSet.js');
 const { expandAnalysis, parseAnalysis, analysisSuggestion } = await import('../src/server/ai/tools/analysisPlan.js');
+const { parseRequestDeclaration } = await import('../src/server/ai/tools/requestDeclaration.js');
 const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
 const TODAY = '2026-09-30';
 const unpack = (extra, options = {}) => unpackTypedPlan({ toolCalls: [{ name: 'rota_plan', arguments: JSON.stringify({ intent: 'rota', language: 'tr', ...extra }) }] }, { today: TODAY, ...options }).plan;
 const call = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
+
+test('geçmiş göreli ufuk yaklaşan işte bugüne daraltılmaz; geçerli ufuklar korunur', () => {
+  for (const relativeWindow of ['last_7_days', 'yesterday']) {
+    for (const focus of ['upcoming', 'upcomings']) assert.throws(() => unpack({ analysis: { scope: 'self', focus: [focus], relativeWindow } }));
+    assert.throws(() => unpack({ analysis: { scope: 'self', focus: ['status'], relativeWindow,
+      also: [{ scope: 'team', focus: ['upcoming'] }] } }));
+  }
+  const historical = unpack({ analysis: { scope: 'self', focus: ['status'], relativeWindow: 'last_7_days' } });
+  assert.deepEqual([historical.request.filters.dateFrom, historical.request.filters.dateTo], ['2026-09-24', TODAY]);
+  for (const relativeWindow of ['today', 'next_7_days']) {
+    const plan = unpack({ analysis: { scope: 'self', focus: ['upcoming'], relativeWindow } });
+    assert.deepEqual([plan.request.filters.dateFrom, plan.request.filters.dateTo], [TODAY, relativeWindow === 'today' ? TODAY : '2026-10-06']);
+  }
+  assert.throws(() => unpack({ analysis: { scope: 'self', focus: ['upcoming'], dateFrom: '2026-09-20', dateTo: '2026-09-29' } }));
+  for (const dateFrom of ['2026-09-24', TODAY, '2026-10-01']) {
+    const plan = unpack({ analysis: { scope: 'self', focus: ['upcoming'], dateFrom, dateTo: '2026-10-06' } });
+    assert.deepEqual([plan.request.filters.dateFrom, plan.request.filters.dateTo], [dateFrom < TODAY ? TODAY : dateFrom, '2026-10-06']);
+  }
+});
+
+test('yinelenen taşınmış alanlar aynı kanonik istekle karşılaştırılır; gerçek çelişki reddedilir', () => {
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } };
+  for (const filters of [{ assignee: 'any' }, { assignee: 'any', status: null }, { project: 'Mavi Kanat', assignee: 'any' }]) {
+    assert.deepEqual(unpack({ request: { ...request, filters }, filters }).request, unpack({ request: { ...request, filters } }).request);
+  }
+  assert.deepEqual(unpack({ request: { ...request, filters: {} }, filters: { assignee: 'any' }, operation: 'list' }).request.filters, {});
+  for (const filters of [{ assignee: 'team' }, { priority: ['high'] }]) {
+    assert.throws(() => unpack({ request: { ...request, filters: { assignee: 'me' } }, filters }));
+  }
+  assert.throws(() => unpack({ request: { ...request, filters: { assignee: 'me' } }, filters: { assignee: 'any' } }));
+  const invalid = unpack({ request, filters: { assignee: 'geçersiz' } }).request;
+  assert.throws(() => parseRequestDeclaration(invalid, { today: TODAY, textTrusted: () => true, identityTrusted: () => true }));
+});
+
+test('isteğe bağlı bütçe son birleşimde kalan farklı sınır ve düzenleri sayar', () => {
+  const analysis = { scope: 'team', level: 'unit', focus: ['overview', 'overdue'] };
+  const overdue = expandAnalysis(parseAnalysis(analysis), { today: TODAY }).find((part) => part.rank);
+  for (const [limits, layouts, budget, expected] of [
+    [[3, 5], ['auto', 'auto'], 3, 3], [[3, 3], ['auto', 'auto'], 3, 3],
+    [[3, 3], ['table', 'list'], 3, 3], [[3, 5], ['auto', 'auto'], 4, 4]
+  ]) {
+    const requests = limits.map((limit, index) => ({ ...overdue, layout: layouts[index], rank: { ...overdue.rank, limit } }));
+    const plan = unpack({ analysis, request: requests[0], additionalRequests: [requests[1]] }, { optionalFits: (parts) => parts.length <= budget });
+    const parts = [plan.request, ...(plan.additionalRequests || [])];
+    assert.equal(parts.length, expected);
+    assert.ok(parts.length <= budget);
+    assert.deepEqual(parts.filter((part) => part.rank).map((part) => part.rank.limit), limits[0] === limits[1] && layouts[0] === layouts[1] ? [3] : limits);
+  }
+});
+
+for (const sibling of ['dateFrom', 'dateTo']) test(`geçersiz dönem onarımı mevcut geçerli sınırı koruyarak eksik sınırı doldurur: ${sibling}`, async (t) => {
+  const dates = { dateFrom: '2026-11-15', dateTo: '2026-11-28' };
+  const analysis = { scope: 'self', focus: ['status'], relativeWindow: 'next_14_days', [sibling]: dates[sibling] };
+  const queue = [call({ intent: 'rota', language: 'tr', analysis }), call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], ...dates } })];
+  const { ask } = phase4eConversation(t, { planner: () => queue.shift() });
+  const result = await ask({ text: 'Belirtilen dönemdeki görev durumumu göster' });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.equal(result.inputs.length, 2);
+  assert.ok(result.log.some((row) => row.query === 'task-facts'));
+});
+
+for (const failure of ['metin', 'kesilme', 'geçersiz-plan', 'boş-yanıt']) test(`güvenli ilk açıklama kullanılamayan doğrulama çıktısında korunur: ${failure}`, async (t) => {
+  const clarify = call({ intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } });
+  const unusable = failure === 'geçersiz-plan' ? call({ intent: 'rota', language: 'tr', analysis: { scope: 'geçersiz' } })
+    : { type: 'reply', text: failure === 'boş-yanıt' ? '' : 'Kullanılamayan çıktı', ...(failure === 'kesilme' ? { finishReason: 'length' } : {}) };
+  const queue = [clarify];
+  const { ask } = phase4eConversation(t, { planner: () => queue.shift() || unusable });
+  const result = await ask({ text: 'Onun terminini göster' });
+  assert.equal(result.answer.finishReason, 'clarification', result.answer.content);
+  assert.deepEqual(result.log, []);
+  assert.ok(result.inputs.length <= 5);
+});
+
+test('geçersiz dönem onarımı geçerli sınırı değiştiremez', async (t) => {
+  const analysis = { scope: 'self', focus: ['status'], relativeWindow: 'next_14_days', dateFrom: TODAY };
+  const queue = [call({ intent: 'rota', language: 'tr', analysis }),
+    call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], dateFrom: '2026-10-01', dateTo: '2026-10-14' } }),
+    call({ intent: 'abstain', language: 'tr', abstain: { reason: 'outside_data' } })];
+  const { ask } = phase4eConversation(t, { planner: () => queue.shift() });
+  const result = await ask({ text: 'Belirtilen dönemdeki görev durumumu göster' });
+  assert.equal(result.answer.finishReason, 'unsupported');
+  assert.deepEqual(result.log, []);
+  assert.equal(result.inputs.length, 3);
+});
+
+for (const invalidFirst of [true, false]) test(`açıklama yedeği geçersiz ilk kararı veya sonraki güvenlik reddini canlandırmaz: ${invalidFirst}`, async (t) => {
+  const queue = [call({ intent: 'clarify', language: 'tr', clarify: { reason: invalidFirst ? 'geçersiz' : 'missing_referent' } })];
+  const { ask } = phase4eConversation(t, { planner: () => queue.shift() || (invalidFirst
+    ? { type: 'reply', text: 'Kullanılamayan çıktı' }
+    : call({ intent: 'abstain', language: 'tr', abstain: { reason: 'security' } })) });
+  const result = await ask({ text: 'Onun terminini göster' });
+  assert.notEqual(result.answer.finishReason, 'clarification');
+  assert.deepEqual(result.log, []);
+  if (!invalidFirst) assert.equal(result.answer.finishReason, 'unsupported');
+});
 
 test('çelişen göreli ve mutlak dönem sessizce seçilmez; eşdeğer dönem birleşir', () => {
   const analysis = { scope: 'self', focus: ['status'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: '2026-10-06' };
@@ -120,6 +216,30 @@ const { validateComposition } = await import('../src/domain/ai/groundedCompositi
 const composition = (count, detail = 'short') => ({ view: { language: 'tr' }, render: { locale: 'tr', detail,
   propositions: new Map(Array.from({ length: count }, (_, index) => [`P${index + 1}`, { id: `P${index + 1}`, part: 1, evidenceId: index === count - 1 ? 'R2' : 'R1' }])),
   tables: new Map(), details: new Map(), charts: new Map(), titles: new Map() } });
+
+for (const pointer of ['T1', 'G1']) test(`yinelenen görsel yönlendirme yeni paragraf önermesini düşürmez: ${pointer}`, () => {
+  const page = composition(2);
+  page.render.tables.set('T1', { id: 'T1', part: 1, evidenceId: 'R1', columns: [] });
+  page.render.charts.set('G1', { id: 'G1', part: 1, evidenceId: 'R1', table: null, types: ['bar'] });
+  const tail = pointer === 'T1' ? { type: 'rows', source: pointer } : { type: 'chart', source: pointer, style: 'bar' };
+  const result = validateComposition(page, { blocks: [{ type: 'say', text: `{P1} {${pointer}}` }, { type: 'say', text: `{P2} {${pointer}}` }, tail] });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const paragraphs = result.blocks.filter((block) => block.type === 'say');
+  assert.ok(paragraphs.some((block) => block.items.includes('P2')));
+  assert.equal(paragraphs.flatMap((block) => block.items).filter((id) => id === pointer).length, 1);
+  const duplicate = validateComposition(page, { blocks: [{ type: 'say', text: '{P1}' }, { type: 'say', text: `{P1} {P2} {${pointer}}` }, tail] });
+  assert.ok(!duplicate.ok || duplicate.blocks.filter((block) => block.type === 'say').flatMap((block) => block.items).filter((id) => id === 'P1').length === 1);
+});
+
+for (const explicit of [false, true]) test(`gecikme yinelemesi başka kapsamın devraldığı yönü genişletmez: ${explicit}`, () => {
+  const plan = unpack({ analysis: { scope: 'self', focus: ['status'], dateFrom: '2026-10-01', dateTo: '2026-10-31',
+    also: [{ scope: 'self', focus: ['overdue'], relativeWindow: 'all_time' }, { scope: 'team', ...(explicit ? { focus: ['critical'] } : {}) }] } });
+  assert.deepEqual(plan.analysis.focus, ['status', 'overdue']);
+  assert.deepEqual(plan.analysis.also[0].focus, explicit ? ['critical'] : ['status']);
+  const parts = [plan.request, ...(plan.additionalRequests || [])];
+  assert.equal(parts.length, 5);
+  assert.equal(parts.filter((part) => part.filters?.assignee === 'team' && part.filters?.deadline === 'overdue').length, 0);
+});
 
 test('anlatım budaması yalnız paragraf önermesini silemez', () => {
   const page = composition(4);

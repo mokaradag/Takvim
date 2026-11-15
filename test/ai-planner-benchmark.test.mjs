@@ -3129,6 +3129,55 @@ test('zorunlu düz metin yeniden denemesi ilk çağrının eksik araç kataloğu
 });
 
 
+test('tam istem tekrarı başka soru geçmişiyle durağan önek kanıtına dönüşmez', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z');
+  const base = { models: ['claude-haiku-4-5-20251001'], effort: 'low', staticPromptHash: 'sistem', toolCatalogHash: 'araçlar',
+    cacheTailKind: 'single_user', at: new Date(now - 1000).toISOString(), durationMs: 10 };
+  const a = { ...base, promptHash: 'uzun-soru', usage: { input_tokens: 10, cache_creation_input_tokens: 5000, cache_read_input_tokens: 0 } };
+  const b = { ...base, promptHash: 'kısa-soru', usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  const repeated = { ...a, usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 5000 } };
+  const state = cacheReuseState([a, { ...b, cacheEligibility: 'below_minimum' }], repeated, now);
+  assert.equal(state.prefixTokens, null);
+  assert.equal(state.eligibility, 'verified_full');
+  const recorded = { ...repeated, cachePrefixTokens: state.observedPrefixTokens, cacheEligibility: state.eligibility };
+  const last = cacheReuseState([a, { ...b, cacheEligibility: 'below_minimum' }, recorded], b, now);
+  assert.equal(last.error, null);
+  assert.equal(last.eligibility, 'below_minimum');
+});
+
+test('model bağdaştırıcısı: kaçırma satırı önek gözlemini devralmaz', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const cli = await claudeCommandFixture(t, { reuse: true });
+  cli.release();
+  const payload = (question) => ({ messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: question }], tools: [], toolChoice: 'none' });
+  assert.equal((await cli.start({}, null, payload('birinci')).done).error, undefined);
+  assert.equal((await cli.start({}, null, payload('ikinci')).done).error, undefined);
+  assert.ok(cli.rows().at(-1).cachePrefixTokens > 0);
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('cached?100:0', '0'));
+  assert.equal((await cli.start({}, null, payload('üçüncü')).done).error, undefined);
+  assert.equal(cli.rows().at(-1).cachePrefixTokens, null);
+});
+
+test('durağan önek kanıtı kaçırmaya kopyalanarak gençleştirilemez; yeni okuma yeni gözlemdir', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z');
+  const base = { models: ['claude-haiku-4-5-20251001'], effort: 'low', staticPromptHash: 'sistem', toolCatalogHash: 'araçlar',
+    cacheTailKind: 'single_user', durationMs: 0 };
+  const observed = { ...base, at: new Date(now).toISOString(), promptHash: 'ilk', cachePrefixTokens: 5000,
+    usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 5000 } };
+  const miss = { ...base, promptHash: 'ikinci', at: new Date(now + 240000).toISOString(),
+    usage: { input_tokens: 6000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  const state = cacheReuseState([observed], miss, now + 240000);
+  assert.equal(state.error, 'PLANNER_CACHE_NOT_REUSED');
+  assert.equal(state.observedPrefixTokens, null);
+  const recorded = { ...miss, cachePrefixTokens: state.observedPrefixTokens, cacheEligibility: state.eligibility };
+  const aged = cacheReuseState([observed, recorded], { ...miss, promptHash: 'üçüncü' }, now + 360000);
+  assert.equal(aged.error, 'PLANNER_CACHE_PREFIX_UNVERIFIED');
+  assert.equal(aged.prefixTokens, null);
+  const fresh = cacheReuseState([observed, recorded], { ...observed, promptHash: 'yeni' }, now + 260000);
+  assert.equal(fresh.observedPrefixTokens, 5000);
+  assert.equal(fresh.error, null);
+});
+
 test('önbellek yeteneği modelin belirteç sınırıdır; karakter uzunluğu uygunluk kanıtı değildir', () => {
   assert.equal(cacheMinimumTokens('claude-haiku-4-5-20251001'), 4096);
   assert.equal(cacheMinimumTokens('claude-sonnet-4-5-20250929'), 1024);

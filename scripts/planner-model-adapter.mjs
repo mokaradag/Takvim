@@ -213,20 +213,23 @@ export function cacheMinimumTokens(model) {
 
 /** Aynı durağan öneğin yakın gözlemleri: soru metni önbellek kimliğinin parçası değildir. */
 export function cacheReuseState(prior, row, startedAt) {
-  const recent = prior.filter((item) => {
+  const matching = prior.filter((item) => {
     const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
-    return !item.error && item.models?.length === 1 && row.models?.length === 1 && item.models[0] === row.models[0]
+    return item.models?.length === 1 && row.models?.length === 1 && item.models[0] === row.models[0]
       && item.effort === row.effort && item.staticPromptHash === row.staticPromptHash && item.toolCatalogHash === row.toolCatalogHash
       && ageMs >= 0 && ageMs < 5 * 60 * 1000;
   });
+  const recent = matching.filter((item) => !item.error);
   const read = row.usage?.cache_read_input_tokens || 0;
   const written = row.usage?.cache_creation_input_tokens || 0;
   const observed = (item) => item.usage?.cache_read_input_tokens > 0 || item.usage?.cache_creation_input_tokens > 0;
   const baseline = recent.findLast(observed);
   const exact = recent.some((item) => item.promptHash === row.promptHash && observed(item));
-  // İki farklı tek kullanıcı iletisi ortak dinamik blok taşımaz: aralarındaki gerçek okuma durağan öneği kanıtlar.
-  const crossRead = read > 0 && row.cacheTailKind === 'single_user' && recent.some((item) => item.cacheTailKind === 'single_user' && item.promptHash !== row.promptHash);
-  const prefixTokens = crossRead ? read : recent.findLast((item) => item.cachePrefixTokens > 0)?.cachePrefixTokens || null;
+  // Tam istem daha önce gönderildiyse okuma onun önbelleğinden gelebilir; farklı soru geçmişi bunu önek kanıtına dönüştürmez.
+  const crossRead = read > 0 && row.cacheTailKind === 'single_user' && !matching.some((item) => item.promptHash === row.promptHash)
+    && recent.some((item) => item.cacheTailKind === 'single_user' && item.promptHash !== row.promptHash && observed(item));
+  const observedPrefixTokens = crossRead ? read : null;
+  const prefixTokens = observedPrefixTokens || recent.findLast((item) => item.cachePrefixTokens > 0)?.cachePrefixTokens || null;
   const tokens = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].map((key) => row.usage?.[key]);
   const minimum = cacheMinimumTokens(row.models?.[0]);
   const belowMinimum = !read && !written && minimum != null && tokens.every((value) => Number.isSafeInteger(value) && value >= 0)
@@ -236,7 +239,7 @@ export function cacheReuseState(prior, row, startedAt) {
   // ayrı altyapı nedeni modeli suçlamadan koşuyu durdurur. Bilinen kısa önekte sahte önbellek kaçırma hatası üretilmez.
   const error = read || !recent.length ? null : exact || prefixTokens ? 'PLANNER_CACHE_NOT_REUSED'
     : prefixBelowMinimum ? null : 'PLANNER_CACHE_PREFIX_UNVERIFIED';
-  return { baseline, prefixTokens, eligibility: prefixTokens ? 'verified_prefix' : exact ? 'verified_full'
+  return { baseline, prefixTokens, observedPrefixTokens, eligibility: prefixTokens ? 'verified_prefix' : exact ? 'verified_full'
     : read ? 'observed_reuse' : prefixBelowMinimum ? 'below_minimum' : 'unverified', error };
 }
 
@@ -841,7 +844,8 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     const cacheState = cacheReuseState(prior, row, startedAt);
     row.cacheMinimumTokens = cacheMinimumTokens(model);
     row.cacheEligibility = cacheState.eligibility;
-    row.cachePrefixTokens = cacheState.prefixTokens;
+    // Devralınan kanıt yeni satıra kopyalanmaz: beş dakikalık yaş özgün gözlemde kalır.
+    row.cachePrefixTokens = cacheState.observedPrefixTokens;
     const catalogProblem = JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort()) ? 'PLANNER_TOOLS_NOT_OFFERED'
       : prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash) ? 'PLANNER_TOOL_ORDER_UNSTABLE' : null;
     if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {

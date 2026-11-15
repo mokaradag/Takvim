@@ -7,7 +7,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema, populationShape } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
-import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
+import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
@@ -340,7 +340,6 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
     const requested = visual ? base.charts || (!explicitCharts && follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
-    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve, optionalFits: (parts) => optionalFits([...parts, ...explicit.filter((item) => !parts.some((part) => coveredRequest(part, item)))]) });
     // Açık istek, özetin aynı okumasıysa ikinci kez okunmaz; açık satır sınırı ve sunum tercihi (liste/tablo) o okumaya geçer.
     // Geçersiz sunum tercihi ya da satır sınırı özetin okumasına taşınmaz: istek ayrı bölüm kalır ve sorunu kendi yoluyla bildirilir
     // (onarım o isteğin yolunu açar; özetin okuması geçersiz değerle reddedilmez).
@@ -363,6 +362,11 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       }
       return { parts, kept, merged: [...merged].sort((a, b) => a - b) };
     };
+    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve, optionalFits: (parts) => {
+      // Bütçe, son plandakiyle aynı sınır ve düzen uyuşmazlıklarını sayar; zorunlu istekler yerinden edilmez.
+      const merged = merge(parts);
+      return optionalFits([...merged.parts, ...merged.kept]);
+    } });
     // Açık istekler için yer ayrılır (tek ya da çok kapsamlı özette): isteğe bağlı okumalar (grafik, bütünleyici, alt birim kırılımı,
     // dağılım yönleri) kalan bütçeyle eklenir. Ayrılan yer açılımı değiştirip bir isteğin kapsanmasını bozabilir; ayrılan yer kalan
     // istek sayısına ulaşana dek yeniden hesaplanır (yer yalnızca büyür; en çok `maxParts` tur).
@@ -516,7 +520,10 @@ function relocatedPlanKeys(plan) {
   if (!target) return plan;
   const into = target === 'new' ? {} : { ...plan[target] };
   for (const key of stray) {
-    if (Object.hasOwn(into, key) && stableJson(into[key]) !== stableJson(plan[key])) return plan;
+    if (Object.hasOwn(into, key) && stableJson(into[key]) !== stableJson(plan[key])) {
+      // İstek daha önce çözülmüştür; taşınan kopya da aynı kanonik biçimle karşılaştırılır.
+      if (target !== 'request' || stableJson(decodeRequest(into)) !== stableJson(decodeRequest({ ...into, [key]: plan[key] }))) return plan;
+    }
     into[key] = plan[key];
   }
   const rest = Object.fromEntries(Object.entries(plan).filter(([key]) => !stray.includes(key)));
@@ -588,7 +595,10 @@ function equivalentAnalysisSpelling(plan, today) {
   const isDate = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
   // İstek süzgecinin geçmiş dönem değerleri (`last_7_days`, `yesterday`) özette göreli pencere değildir; aynı günleri gösteren tarih
   // çiftine çevrilir (türlü değerin eşdeğeri; tarih yazılmışsa çeviri yapılmaz, alan doğrulamada reddedilir).
-  if (!follow && today && ['last_7_days', 'yesterday'].includes(out.relativeWindow) && out.dateFrom == null && out.dateTo == null) {
+  const canonical = normalizedBrief(out);
+  const upcoming = [canonical, ...(Array.isArray(canonical.also) ? canonical.also : [])].some((layer) => Array.isArray(layer?.focus) && layer.focus.includes('upcoming'));
+  // Yaklaşan iş geçmiş alt sınırı bugüne çeker; geçmiş göreli pencere bu yönde onarım için reddedilir.
+  if (!follow && !upcoming && today && ['last_7_days', 'yesterday'].includes(out.relativeWindow) && out.dateFrom == null && out.dateTo == null) {
     const shift = (days) => new Date(Date.parse(`${today}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
     const [from, to] = out.relativeWindow === 'yesterday' ? [shift(-1), shift(-1)] : [shift(-6), today];
     const { relativeWindow: _window, ...rest } = out;
@@ -603,7 +613,8 @@ function equivalentAnalysisSpelling(plan, today) {
       && layer.focus.every((focus) => focus === 'overdue') && Object.keys(layer).every((key) => ['scope', 'level', 'names', 'focus', 'relativeWindow'].includes(key));
     const redundant = out.also.filter((layer) => sameScope(layer) && overdueOnly(layer));
     if (redundant.length) {
-      out = { ...out, focus: [...new Set([...out.focus, 'overdue'])], also: out.also.filter((layer) => !redundant.includes(layer)) };
+      // Ortak normalleştirme, diğer kapsamların özgün devralınan yönlerini birincil yön genişlemeden sabitler.
+      out = { ...canonical, focus: [...new Set([...canonical.focus, 'overdue'])], also: (canonical.also || []).filter((layer) => !(sameScope(layer) && overdueOnly(layer))) };
       if (!out.also.length) delete out.also;
     }
   }

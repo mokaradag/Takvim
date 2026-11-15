@@ -832,7 +832,7 @@ function analysisRepairMatches(turn, plan) {
   if (!pin || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN].includes(plan.intent)) return true;
   const analysis = normalizedBrief(plan.analysis);
   // Çakışma onarımı bir gösterimi kaldırabilir; kalan gösterimin tek bir sınırını bile değiştiremez.
-  const dateConflict = pin.raw.relativeWindow && (pin.raw.dateFrom || pin.raw.dateTo);
+  const dateConflict = analysisSchema().properties.relativeWindow.enum.includes(pin.raw.relativeWindow) && (pin.raw.dateFrom || pin.raw.dateTo);
   const sameWindow = !dateConflict || analysis && ((analysis.relativeWindow === pin.raw.relativeWindow || pin.raw.relativeWindow === 'all_time' && !analysis.relativeWindow) && !analysis.dateFrom && !analysis.dateTo
     || !analysis.relativeWindow && analysis.dateFrom === pin.raw.dateFrom && analysis.dateTo === pin.raw.dateTo);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
@@ -2462,12 +2462,17 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     && executor.phaseSpentMs() < limits.maxToolPhaseMs && !evidenceReady();
   const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() || restartable() : toolsAvailable());
   let missingPreviousResult = null;
+  let clarificationFallback = null;
+  // Yalnızca doğrulanmış ilk açıklama, kabul edilmiş karar ya da okuma yokken kullanılabilir.
+  const safeClarification = () => clarificationFallback && !session.signal?.aborted && !turn.request && !turn.decision
+    && !turn.readStarted && !ledger.ids().length && !ledger.revoked();
   const fallback = async (reason) => {
     if (turn.textFieldsRequired) {
       emitPlanned(turn, { intent: 'text_fields' });
       return finish(turn, { ok: true, kind: 'clarification', normalized: renderTextFieldsRequired({ locale: turn.locale }), citedIds: [], issues: [] }, onText);
     }
     if (missingPreviousResult) return plannerChoice(turn, missingPreviousResult, onText);
+    if (safeClarification()) return plannerChoice(turn, clarificationFallback, onText);
     if (deepCanHelp()) return escalation(turn, reason);
     if (turn.partCount > 1 && !ledger.revoked()) {
       const outcome = settlePart(turn, { ok: true, kind: 'unavailable', normalized: renderPartUnavailable({ locale: turn.locale }), citedIds: [], issues: [] }, 'server');
@@ -2566,7 +2571,6 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       if (outcome) return finish(turn, outcome.verdict, onText, outcome.selectedBy);
     }
   };
-  let clarificationFallback = null;
   let allowTools = resumed ? !frozen() : true;
   for (;;) {
     // Geçerliliğini yitiren kanıt dökümdedir: başka bir sağlayıcı turu ya da görünür yanıt olamaz.
@@ -2608,9 +2612,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     } catch (error) {
       turn.work += 1;
       traceRound(turn, { purpose, startedAt, error });
-      // İlk güvenli açıklama yalnızca doğrulama çağrısının geçici sağlayıcı hatasında kullanılabilir; veri/yetki kararı taşınmaz.
-      if (clarificationFallback && !session.signal?.aborted && !turn.request && !turn.decision && !ledger.ids().length
-        && !ledger.revoked() && [AI_ERROR_CODES.AI_RATE_LIMITED, AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE].includes(error?.code)) {
+      // Geçici sağlayıcı hatası ilk güvenli açıklamayı kaybettirmez; veri/yetki kararı taşınmaz.
+      if (safeClarification() && [AI_ERROR_CODES.AI_RATE_LIMITED, AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE].includes(error?.code)) {
         return plannerChoice(turn, clarificationFallback, onText);
       }
       if (turn.answers.length && !session.signal?.aborted
@@ -2626,10 +2629,10 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         turn.trace.pending = 'retry';
         continue;
       }
+      if (safeClarification()) return plannerChoice(turn, clarificationFallback, onText);
       if (deepCanHelp()) return escalation(turn, 'EMPTY_COMPLETION', { error });
       throw error;
     }
-    clarificationFallback = null;
     turn.work += 1;
     if (!result.replayed) {
       traceRound(turn, { purpose, startedAt, result });
@@ -2702,7 +2705,10 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     const declaredRoute = parseTurnRoute(declaration);
     // Bildirim yalnızca veri okunmadan önce kabul edilir; sonrasında istek değişmez.
     const declared = !frozen() && declaredRoute ? acceptDeclaration(turn, declaration, declaredRoute) : null;
-    if (declared) turn.trace.declarations += 1;
+    if (declared) {
+      clarificationFallback = null;
+      turn.trace.declarations += 1;
+    }
     // İlk planlama kararı yerine gelen düz metin karar değildir (açıklama ya da ret metni de modelin değil
     // sunucunun işidir): araç denenmeden önce mevcut bildirim bütçesiyle türlü karar istenir. Metin dökümde
     // boş bir plan çağrısı olarak reddedilir; metnin kendisi taşınmaz.
