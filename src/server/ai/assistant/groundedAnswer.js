@@ -32,7 +32,7 @@ import { concreteCollections, rankedRowIndexes, REQUEST_LIMITS, taskResultScope 
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { layerAspectLabel, PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderLayerOmissions, renderOverlappingSeries, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { ANALYSIS_LIMITS, analysisAlternative, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, normalizedBrief } from '../tools/analysisPlan.js';
+import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, normalizedBrief } from '../tools/analysisPlan.js';
 import { caveatPropositions } from '../../../domain/ai/groundedPropositions.js';
 import { expandedAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
 import { ANALYSIS_CONTEXT_VERSION, analysisContextSummary, normalizeAnalysisContext, normalizePendingAnalysis, withPendingAnalysis } from '../../../domain/ai/analysisContext.js';
@@ -788,10 +788,8 @@ function pinAnalysisRepair(turn, plan, details) {
     if (path === '$.analysis.also' && reason === 'duplicate') paths.add('__duplicateLayers');
     if (['$.language', '$.chart', '$.charts', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
     if (path.startsWith('$.analysis.') && !(path === '$.analysis.also' && ['duplicate', 'scope', 'window'].includes(reason)) && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
-    // Satır göndergesi (`rows`) yalnızca önceki yanıtın satır sırasıdır; reddedilen değeri (ör. üç öğe ya da satır kapsamı dışında
-    // yazılmış dizi) ancak alan değiştirilerek ya da kaldırılarak düzeltilir. Öğe sınırı reddi (`maxItems`) yönler için "düşürme"
-    // anlamına gelir, satır göndergesi için gelmez: alan sabitlenirse geçerli onarım `repairScope` ile reddediliyordu.
-    if (path === '$.analysis.rows') paths.add('rows');
+    // Gerçek satır göndergeleri onarımda silinemez; başka kapsamdaki anlamsız alan kaldırılabilir.
+    if (path === '$.analysis.rows' && (existing?.raw || plan.analysis).scope !== 'row') paths.add('rows');
     // Kapsamlar arası dönem çakışması yalnızca dönem alanlarını açar: birincilin dönemi ve her ek kapsamın konumsal dönem alanları
     // (ilk maskede). Kapsam kimlikleri, düzeyleri, adları ve yönleri sabit kalır; onarım bir kapsamı silerek çakışmayı gideremez.
     if (path === '$.analysis.also' && reason === 'window') {
@@ -801,11 +799,11 @@ function pinAnalysisRepair(turn, plan, details) {
         layers.forEach((_, index) => paths.add(`also[${index}].${key}`));
       }
     }
-    // Aşama F: göreli pencere ile tarihlerin çakışması ancak ikisinden biri kaldırılarak düzeltilir: üç alan da onarımda değişebilir.
-    // Dönem tek kavramdır: sözlük dışı göreli pencerenin (ör. `last_7_days`) ya da geçersiz tarihin doğal onarımı aynı dönemi öbür gösterimle
-    // yazmaktır; yalnızca reddedilen alan açılırsa eşdeğer tarih çiftine geçen onarım `repairScope` ile reddediliyordu (gerçek koşuda ölçüldü).
-    if (/^\$\.analysis\.(?:relativeWindow|dateFrom|dateTo)$/.test(path) && ['conflict', 'enum', 'date', 'invalid', 'reversed', 'past'].includes(reason)) {
-      for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
+    // Çakışan gösterimlerden biri kaldırılabilir; tek geçersiz sınır geçerli kardeşini serbest bırakmaz.
+    if (path === '$.analysis.relativeWindow' && ['conflict', 'enum'].includes(reason)) {
+      for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) {
+        if (reason === 'conflict' || (existing?.raw || plan.analysis)[key] == null || key === 'relativeWindow') paths.add(key);
+      }
     }
     // Ek kapsam dönem taşıyamaz: reddedilen dönem ancak özetin kendi dönem alanlarında yeniden yazılarak düzeltilir (üçü de değişebilir).
     // Özetin kendi geçerli dönemi varsa sabit kalır: ek kapsamın geçersiz alanı, birincil kapsamın geçerli sınırlarını değiştirme izni
@@ -2507,16 +2505,10 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     }
     // Reddedilen ayrıntılı isteğin türlü alanlarından (araç, sorumlu koşulu, varlıklar) eşdeğer analitik özet önerisi.
     const suggestion = !analysisPlan ? analysisSuggestion(rejectedPlan?.request) : null;
-    // Tek istekli plan, aracın taşımadığı ölçü ya da nüfus sorunu yüzünden reddedildiyse ve eşdeğer özet kurulamıyorsa kaba özet önerisi
-    // ipuçlarının BAŞINA konur (sistem notu ilk ipuçlarını taşır); yalnızca ipucudur, plan modelin kalır.
-    const unfit = details.some((detail) => /(?:^\$|\.)(?:metrics(?:\[\d+\])?|population(?:\.[a-zA-Z]+)?|bindings):/.test(String(detail)));
-    // Önce birebir eşdeğer öneri, yoksa kaba öneri; yalnızca liste/sıralama isteğinde (belirli sayım doğru istek biçimidir).
-    const listLike = ['list', 'rank'].includes(rejectedPlan?.request?.operation);
-    const alternative = !analysisPlan && unfit && listLike && !Array.isArray(rejectedPlan?.additionalRequests) ? suggestion || analysisAlternative(rejectedPlan?.request) : null;
     // Güvenilmeyen adın önceki kimlikle eşitliği bilinmez; onarım özneyi değiştiremez, açıklama isteyebilir.
     const followup = analysisPlan && turn.previousAnalysis && details.includes('$.analysis.names:untrusted')
       ? ['Ad bu iletide geçmiyor ve önceki özneyle eşitliği doğrulanmış değil: özneyi previous/row ile değiştirme; clarify ile kaydın adını veya kodunu yeniden iste.'] : [];
-    const hints = [...(alternative ? [alternative] : []), ...(analysisPlan && !explicitDetails.length ? [] : rawHints), ...followup, ...analysisHints(details), ...(suggestion && suggestion !== alternative ? [suggestion] : [])];
+    const hints = [...(analysisPlan && !explicitDetails.length ? [] : rawHints), ...followup, ...analysisHints(details), ...(suggestion ? [suggestion] : [])];
     recordPlannerRejection(details[0]);
     if (analysisPlan && !details.includes('$.plan:repairScope')) pinAnalysisRepair(turn, rejectedPlan, details);
     if (rejectedPlan && !analysisPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls), executionCalls, repairMatched);
@@ -2574,6 +2566,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       if (outcome) return finish(turn, outcome.verdict, onText, outcome.selectedBy);
     }
   };
+  let clarificationFallback = null;
   let allowTools = resumed ? !frozen() : true;
   for (;;) {
     // Geçerliliğini yitiren kanıt dökümdedir: başka bir sağlayıcı turu ya da görünür yanıt olamaz.
@@ -2615,6 +2608,11 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     } catch (error) {
       turn.work += 1;
       traceRound(turn, { purpose, startedAt, error });
+      // İlk güvenli açıklama yalnızca doğrulama çağrısının geçici sağlayıcı hatasında kullanılabilir; veri/yetki kararı taşınmaz.
+      if (clarificationFallback && !session.signal?.aborted && !turn.request && !turn.decision && !ledger.ids().length
+        && !ledger.revoked() && [AI_ERROR_CODES.AI_RATE_LIMITED, AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE].includes(error?.code)) {
+        return plannerChoice(turn, clarificationFallback, onText);
+      }
       if (turn.answers.length && !session.signal?.aborted
         && ([AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE, AI_ERROR_CODES.AI_BUSY, AI_ERROR_CODES.AI_RATE_LIMITED].includes(error?.code)
           || error?.code === AI_ERROR_CODES.AI_TIMEOUT && error.details?.reason === 'PROVIDER_STALLED')) {
@@ -2631,6 +2629,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       if (deepCanHelp()) return escalation(turn, 'EMPTY_COMPLETION', { error });
       throw error;
     }
+    clarificationFallback = null;
     turn.work += 1;
     if (!result.replayed) {
       traceRound(turn, { purpose, startedAt, result });
@@ -2657,7 +2656,17 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     repairMatched = false;
     if (!frozen() && result.toolCalls.some((call) => call.name === 'rota_plan')) {
       try {
-        plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; }, previousAnalysis: turn.previousAnalysis, today: turn.context.today, detail: turn.answerDetail });
+        plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; }, previousAnalysis: turn.previousAnalysis, today: turn.context.today, detail: turn.answerDetail,
+          optionalFits: (raw) => {
+            try {
+              const requests = raw.map((request) => parseRequestDeclaration(request, { textTrusted: turn.containment.textTrusted,
+                identityTrusted: turn.containment.identityTrusted, referent: turn.containment.referent, today: turn.context.today }));
+              return analysisFitsBudget(turn, requests);
+            } catch (error) {
+              if (error?.code !== TOOL_ERROR_CODES.INVALID_ARGUMENTS) throw error;
+              return false;
+            }
+          } });
         rejectedPlan = plan.brief ? { ...rejectedPlan, analysis: plan.brief } : plan.plan;
         explicitPaths = plan.explicitPaths || null;
         analysisSections = plan.plan.analysis?.sections || null;
@@ -2676,6 +2685,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     // takip turlarında açıklamayı sunucunun kendi notları ister, orada doğrulama yapılmaz. Yinelenen karar aşağıda kabul edilir.
     if (plan && plan.plan.intent === PLANNER_INTENTS.CLARIFY && !turn.clarifyChecked && turn.trace.declarations === 0
       && !turn.previousResult && !turn.previousAnalysis && turn.declarationsLeft > 0) {
+      clarificationFallback = plan.plan;
       turn.clarifyChecked = true;
       turn.trace.declarations += 1;
       if (rejectDeclaration(modelCalls, ['$.clarify:unconfirmed'], [CLARIFY_CONFIRM_HINT])) continue;

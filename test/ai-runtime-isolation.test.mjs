@@ -245,6 +245,8 @@ test('telemetri ve günlük yazımı bozulsa da yapay zekâ isteği ve olağan u
   assert.equal(probe.body.result.credentialSource, 'default');
   const reloaded = await stack.reload({ refreshMode: 'manual' });
   assert.ok(reloaded.projects.length > 0);
+  // Manuel yenilemenin arka plan eşitlemesi bitmeden SQL ikizi kaldırılmaz; olağan yük yolu mevcut işi bekler.
+  await stack.reload();
 });
 
 /* ── Sağlık ve Sistem Yönetimi ────────────────────────────── */

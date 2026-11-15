@@ -672,11 +672,21 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
   biriminin portföyü, iyeliksiz soru `all`, termin kovaları, sayısız kazanan sorusu ve kilometre taşı sorusu özettir; 14 örnek plan
   (kıyas sorularıyla mekanik örtüşme denetimi); grafik türü ve plan düzeyi alanlarının yapısal eşdeğer yazımı; nüfus süzgeci ve grup
   etiketi eşdeğerliği; dönem ve satır göndergesi onarımı; doğal kırılım ve adlı projede kilometre taşı okuması (yer varsa); geçersiz
-  liste isteğine özet önerisi; düzyazı düzeninde ayrıntı sınırı ve `D#` yuvası; tek kod çitli düzen yanıtı.
-- **Doğrulandı:** [Kabul Matrisi §8](BILGIN-ANALIZ-KABUL-MATRISI.md) — aynı düzenekte taban ortalaması 79,7/135, son kod ≈ 95,7/135
-  (başarısızlıkta −%29; hiçbir küme gerilemedi; %50 hedefine ulaşılmadı); taze varyantlar 12/18 → 15/18; güvenlik vakalarında
+  liste isteği için yalnızca eşdeğer özet önerisi; düzyazı düzeninde ayrıntı sınırı ve `D#` yuvası; tek kod çitli düzen yanıtı.
+- **Doğrulandı:** [Kabul Matrisi §8](BILGIN-ANALIZ-KABUL-MATRISI.md) — aynı düzenekte taban ortalaması 79,7/135, önceki kodda tamamlanan C6/C7 yürütmelerinden betimsel tahmin ≈94,9/135
+  (tahmini başarısızlık azalması ≈%27,5; G hedeflide gerileme dışlanamaz; %50 hedefi gösterilmedi); taze varyantlar 12/18 → 15/18; güvenlik vakalarında
   yetkisiz okuma yok.
 - **Açık:** §8.6'daki sınıflar (altın plan etiketi tutarsızlıkları, plan değişkenliği, onarım sınırında ikinci değişiklik, metin
   kanalında JSON, düzen modelinin serbest metni); son kodun G hedefli kümesi sağlayıcı kullanım sınırı nedeniyle tam koşulamadı.
 - **Sonraki giriş noktası:** son kodla G hedefli kümenin tam koşusu; ardından §8.6 sınıfları (özellikle onarım turunda yalnızca
   sunum tercihini değiştiren düzeltmenin güvenli kabulü tasarımı) ve Windows VM yeniden oynatması (§11).
+
+
+### 2026-11-15 — Sözleşme koruma düzeltmeleri
+
+Dönem ve gerçek satır göndergeleri onarımda korunur; çelişkili dönem ve desteklenmeyen grafik sessizce değiştirilmez.
+Eşdeğer olmayan kaba özet önerisi kaldırıldı; kullanıcı adları sistem onarım notuna yazılmaz.
+İsteğe bağlı okumalar kalan bütçeye göre eklenir; dönemli proje özetine dönemsiz kilometre taşı eklenmez.
+Önbellek uygunluğu karakter eşiğinden çıkarılmaz; gözlenen kullanım ve doğrulanmamış kapsam ayrı raporlanır.
+Kabul Matrisi §8.3'te C6/C7'nin iki hedefli kümesi aynı yöntemle birleştirildi. Bu kod için yeni canlı model ölçümü yapılmadı;
+önceki ölçümler yeni düzeltmelerin deneysel doğrulaması değildir.

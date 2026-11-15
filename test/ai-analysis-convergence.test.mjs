@@ -356,7 +356,7 @@ test('grafik kapısı istemcinin uzun ve tildeli çitlerini, JSON içindeki ters
 
 test('eşdeğer tekil ve çoğul grafik yazımı analiz onarımını engellemez', async (t) => {
   const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
-  // Tek uçlu tarih göreli ön ayarla çelişkisini korur (tam tarih çifti ön ayarın yerine geçer): onarım turu açılır.
+  // Tek uçlu tarih göreli ön ayarla çelişkisini korur (tam çift de yalnızca eşdeğerse birleşir): onarım turu açılır.
   const queue = [{ intent: 'rota', language: 'tr', chart: ['bar', 'donut'], analysis: { scope: 'self', focus: ['status'], dateTo: '2026-10-13', relativeWindow: 'next_7_days' } },
     { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis: { scope: 'self', focus: ['status'], dateTo: '2026-10-13' } }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
@@ -804,4 +804,27 @@ test('aylık teslimat kıyası çizelge yönüyle de geçer; pencere veya gecikm
   assert.deepEqual(score(requests), []);
   assert.ok(score(requests.filter((item) => item.filters?.deadline !== 'overdue')).length);
   assert.ok(score(requests.map((item) => ({ ...item, filters: { ...item.filters, dateFrom: undefined, dateTo: undefined } }))).length);
+});
+
+test('nitelendirme belgesi iki kısmi koşuyu aynı yöntemle toplar; eksik kapsamı tam ölçüm saymaz', async () => {
+  const { readFileSync } = await import('node:fs');
+  const document = readFileSync(new URL('../docs/BILGIN-ANALIZ-KABUL-MATRISI.md', import.meta.url), 'utf8');
+  const rows = document.split('\n').filter((line) => /^\| [GF] (hedefli|ayrık) \(\d+\)/u.test(line) && line.includes('**'));
+  const finalRows = rows.filter((line) => line.split('|').length === 12);
+  assert.equal(finalRows.length, 4);
+  let total = 0;
+  for (const row of finalRows) {
+    const cells = row.split('|').slice(1, -1).map((cell) => cell.replaceAll('*', '').replaceAll('¹', '').trim());
+    const size = Number(/\((\d+)\)/u.exec(cells[0])[1]);
+    const completed = cells.slice(7, 9).map((cell) => {
+      const [passed, attempted = size] = cell.split('/').map(Number);
+      return { passed, attempted };
+    });
+    const estimate = completed.reduce((sum, run) => sum + run.passed, 0) / completed.reduce((sum, run) => sum + run.attempted, 0) * size;
+    total += estimate;
+    assert.ok(cells[9].includes(estimate.toFixed(1).replace('.', ',')), row);
+  }
+  assert.ok(document.includes(`Toplam ≈${total.toFixed(1).replace('.', ',')}/135`));
+  assert.match(document, /tamamlanmış bir 135 vakalık son-kod ölçümü değildir/);
+  assert.match(document, /G hedefli kümede gerileme dışlanamaz/);
 });

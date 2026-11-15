@@ -826,7 +826,7 @@ export function validateComposition(composition, response) {
       let items = block.items;
       if (prose) {
         const checked = checkProse(block.text, { known: (id) => Boolean(render.propositions?.has(id) || render.tables.has(id) || render.charts.has(id) || render.details?.has(id)),
-          used: new Set([...usedPropositions, ...pointers.map((pointer) => pointer.id)]) });
+          used: new Set([...usedPropositions, ...[...usedSources].filter((id) => render.details?.has(id)), ...pointers.map((pointer) => pointer.id)]), recoverDetail: (id) => Boolean(render.details?.has(id)) });
         // Kurala uymayan düzyazı paragrafı tümüyle düşer (yalnızca modelin içeriği azalır); kapsamı sunucu tamamlar.
         // Bütün düzyazı paragrafları düşerse düzen reddedilir.
         if (!checked.ok) { proseRejected.push(checked.issue); continue; }
@@ -1099,13 +1099,16 @@ export function validateComposition(composition, response) {
       .filter((id) => render.propositions.get(id)?.part === part);
     const inProse = new Set(normalized.filter((block) => block.type === 'say' && block.prose).flatMap((block) => block.items));
     const removable = order.filter((id) => inProse.has(id) && !render.propositions.get(id)?.required).reverse();
-    const excess = new Set(removable.slice(0, narrated.length - ceiling));
+    // Her bölümde en az bir paragraf önermesi kalır; olanaksız seçim sunucu yedeğine döner.
+    const excess = new Set(removable.slice(0, Math.min(narrated.length - ceiling, Math.max(0, order.length - 1))));
     if (narrated.length - excess.size > ceiling) return fail('NARRATION_LIMIT');
     for (let at = 0; at < normalized.length; at += 1) {
       const block = normalized[at];
       if (block.type !== 'say' || !block.prose || !block.items.some((id) => excess.has(id))) continue;
-      const items = block.items.filter((id) => !excess.has(id));
-      normalized[at] = { ...block, items, prose: block.prose.filter((sentence) => !sentence.some((token) => token.slot && excess.has(token.slot))), text: proseText(items) };
+      let items = block.items.filter((id) => !excess.has(id));
+      const retained = items.map((id) => render.propositions.get(id)).filter(Boolean);
+      items = items.filter((id) => !(render.tables.has(id) || render.charts.has(id)) || retained.some((proposition) => supports(render, id, proposition)));
+      normalized[at] = { ...block, items, prose: block.prose.filter((sentence) => sentence.every((token) => !token.slot || items.includes(token.slot))), text: proseText(items) };
     }
     for (const id of excess) usedPropositions.delete(id);
     narrationTrimmed += excess.size;

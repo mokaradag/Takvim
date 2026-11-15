@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { planCase, recordOf } from '../scripts/planner-evaluation.mjs';
 import { loadPlannerBenchmark, PLANNER_BENCHMARK_FILE, resolveExample, scoreDecision } from '../scripts/planner-scoring.mjs';
-import { CACHE_MIN_STATIC_CHARS } from '../scripts/planner-model-adapter.mjs';
+import { cacheMinimumTokens, cacheReuseBaseline } from '../scripts/planner-model-adapter.mjs';
 
 const { semanticPlanningAdvice } = await import('../src/server/ai/assistant/semanticPlanning.js');
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
@@ -1311,8 +1311,8 @@ test("model bağdaştırıcısı: eşzamanlı model nitelendirmeleri defteri pay
   }
 });
 
-/** Önbellek kapısının uygulandığı uzunlukta durağan sistem yönergesi (gerçek planlayıcı öneki gibi önbelleklenebilir). */
-const CACHEABLE_SYSTEM = 'kararlı önek '.repeat(Math.ceil(CACHE_MIN_STATIC_CHARS / 12) + 1);
+/** Yapay sağlayıcı öneği; gerçek önbellek uygunluğuna ilişkin kanıt değildir. */
+const CACHEABLE_SYSTEM = 'kararlı önek '.repeat(550);
 
 async function claudeCommandFixture(t, { reuse = false, events = null, newline = true, descendant = false, standalone = false, payload = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
   const { spawn, spawnSync } = await import('node:child_process');
@@ -1500,16 +1500,15 @@ test("model bağdaştırıcısı: bayat önbellek ısınır, yakın çağrı ve 
   assert.equal(cli.rows().filter(row => row.reserved).length, 3);
 });
 
-test('model bağdaştırıcısı: önbelleklenemeyecek kadar kısa durağan önek önbellek tabanı sayılmaz; uzun önek okumayı zorunlu tutar', async (t) => {
-  // Kısa düzen yönergesi + değişken olgu sayfası: CLI bütün istemi önbelleğe yazar ama durağan önek tek başına en küçük
-  // önbelleklenebilir uzunluğun altında olduğundan sonraki tur onu hiç okuyamaz (gerçek koşudaki imza).
+test('model bağdaştırıcısı: önbelleksiz kullanım taban değildir; gözlenen oluşturma aynı tam istemde okumayı zorunlu tutar', async (t) => {
+  // Uzun ama sıkıştırılabilir metin karakter sayısı nedeniyle önbelleklenebilir sayılmaz.
   const wholePrompt = [
     { type: 'system', subtype: 'init', tools: [] },
     { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: 'ok' }] } },
-    { type: 'result', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 3, cache_creation_input_tokens: 4376, cache_read_input_tokens: 0, output_tokens: 1 } }
+    { type: 'result', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 } }
   ];
-  const payload = { messages: [{ role: 'system', content: 'kısa düzen yönergesi'.repeat(200) }, { role: 'user', content: 'olgu sayfası' }], tools: [], toolChoice: 'none' };
-  assert.ok(payload.messages[0].content.length < CACHE_MIN_STATIC_CHARS);
+  const payload = { messages: [{ role: 'system', content: 'a'.repeat(7000) }, { role: 'user', content: 'olgu sayfası' }], tools: [], toolChoice: 'none' };
+  assert.equal(payload.messages[0].content.length, 7000);
   const short = await claudeCommandFixture(t, { events: wholePrompt, payload, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
   const opening = short.start();
   await short.waitFor(() => short.count() === 1);
@@ -3127,4 +3126,27 @@ test('zorunlu düz metin yeniden denemesi ilk çağrının eksik araç kataloğu
   const result = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '1' }).done;
   assert.equal(result.error, 'PLANNER_TOOLS_NOT_OFFERED');
   assert.equal(cli.count(), 1);
+});
+
+
+test('önbellek yeteneği modelin belirteç sınırıdır; karakter uzunluğu uygunluk kanıtı değildir', () => {
+  assert.equal(cacheMinimumTokens('claude-haiku-4-5-20251001'), 4096);
+  assert.equal(cacheMinimumTokens('claude-sonnet-4-5-20250929'), 1024);
+  assert.equal(cacheMinimumTokens('claude-opus-4-7'), 2048);
+  assert.equal(cacheMinimumTokens('claude-haiku-5-5'), 512);
+  assert.equal(cacheMinimumTokens('bilinmeyen-model'), null);
+});
+
+for (const model of ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929']) test(`önbellek tabanı gerçek kullanım, aynı model ve tam istem gerektirir: ${model}`, () => {
+  const now = Date.parse('2026-11-15T10:00:00Z');
+  const row = { models: [model], staticPromptHash: 'sistem', toolCatalogHash: 'araçlar', promptHash: 'tam-istem' };
+  const prior = { ...row, at: new Date(now - 1000).toISOString(), durationMs: 100, staticChars: 7000,
+    usage: { input_tokens: 1500, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  assert.equal(cacheReuseBaseline([prior], row, now), undefined);
+  const cached = { ...prior, staticChars: 3300, usage: { cache_creation_input_tokens: 1500 } };
+  assert.equal(cacheReuseBaseline([cached], row, now), cached);
+  assert.equal(cacheReuseBaseline([{ ...cached, promptHash: 'başka-olgu-sayfası' }], row, now), undefined);
+  assert.equal(cacheReuseBaseline([{ ...cached, models: ['başka-model'] }], row, now), undefined);
+  assert.equal(cacheReuseBaseline([{ ...cached, error: 'PLANNER_PROVIDER_ERROR' }], row, now), undefined);
+  assert.equal(cacheReuseBaseline([{ ...cached, at: new Date(now - 300001).toISOString() }], row, now), undefined);
 });

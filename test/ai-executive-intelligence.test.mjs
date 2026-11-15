@@ -1094,11 +1094,10 @@ test('özetin eşdeğer yazımları onarım turu harcamaz: analysis kararı, öz
   assert.deepEqual(reject({ intent: 'analysis', language: 'tr', request: { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } } }), ['$.intent:enum']);
   const same = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: shift(6) } }).plan.analysis;
   assert.deepEqual([same.relativeWindow, same.dateFrom ?? null, same.dateTo ?? null], ['next_7_days', null, null], 'göreli dönem kalır; yinelenen tarih çifti düşer');
-  const dated = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'all_time', dateFrom: TODAY, dateTo: shift(13) } }).plan.analysis;
-  assert.deepEqual([dated.relativeWindow ?? null, dated.dateTo], [null, shift(13)]);
-  // Farklı günleri gösteren TAM tarih çifti göreli ön ayarın yerine geçer (model tarihleri sorudan hesaplar, ön ayar şablondan kalır).
-  const pair = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: shift(13) } }).plan.analysis;
-  assert.deepEqual([pair.relativeWindow ?? null, pair.dateFrom, pair.dateTo], [null, TODAY, shift(13)]);
+  // Birbirinden farklı dönemler eşdeğer değildir; tam tarih çifti de çelişkiyi gizleyemez.
+  for (const relativeWindow of ['all_time', 'next_7_days']) {
+    assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow, dateFrom: TODAY, dateTo: shift(13) } }), ['$.analysis.relativeWindow:conflict']);
+  }
   // Tek uçlu tarih ön ayarla çelişkisini korur.
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', dateTo: shift(13) } }), ['$.analysis.relativeWindow:conflict']);
 });

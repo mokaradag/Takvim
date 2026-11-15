@@ -68,7 +68,7 @@ test('altı yön model şemasından fiziksel okuma tavanına (6) kadar korunur; 
   assert.deepEqual(values.entities.map((item) => item.text), ['Ayşe Yılmaz', 'Zeynep Kaya']);
 });
 
-test('iki grafik türü dizisi kabul edilir ve her türün okuması eklenir; sözlük dışı tür görsel niyeti koruyarak düşer', () => {
+test('iki grafik türü dizisi kabul edilir; eşdeğer türler birleşir, desteklenmeyen tercihler reddedilir', () => {
   const { plan } = unpack({ intent: 'rota', language: 'tr', chart: ['donut', 'stacked'], analysis: { scope: 'self', focus: ['status'] } });
   assert.equal(plan.chart, 'donut');
   assert.deepEqual(plan.charts, ['donut', 'stacked']);
@@ -76,21 +76,19 @@ test('iki grafik türü dizisi kabul edilir ve her türün okuması eklenir; sö
   const reads = [plan.request, ...(plan.additionalRequests || [])];
   assert.ok(reads.some((part) => part.population.groupBy === 'status'), 'halka için durum dağılımı');
   assert.ok(reads.some((part) => part.population.groupBy === 'project' && part.metrics.includes('tasks.done')), 'yığılmış için proje başına açık/tamamlanan');
-  // Grafik türü yalnızca sunum tercihidir: yinelenen tür tekilleşir, pasta halkanın yazımıdır, çizicinin taşıyamadığı üçüncü tür
-  // düşer ve sözlük dışı tür görsel niyeti koruyarak kaldırılır (zayıf model bu planları onaramayıp Derin modele devrediliyordu).
+  // Yalnızca aynı tercihin eşdeğer yazımları birleşir; üçüncü veya desteklenmeyen tür atılarak başka tercihe çevrilmez.
   const shaped = (chart) => unpack({ intent: 'rota', language: 'tr', chart, analysis: { scope: 'self', focus: ['status'] } }).plan;
-  for (const [chart, primary, list] of [[['donut', 'donut'], 'donut', undefined], [['donut', 'pie'], 'donut', undefined], [['bar', 'donut', 'line'], 'bar', ['bar', 'donut']],
-    [['scatter', 'stacked'], 'stacked', undefined], ['scatter', undefined, undefined], ['pie', 'donut', undefined]]) {
+  for (const [chart, primary, list] of [[['donut', 'donut'], 'donut', undefined], [['donut', 'pie'], 'donut', undefined], ['pie', 'donut', undefined]]) {
     const result = shaped(chart);
     assert.equal(result.chart, primary, JSON.stringify(chart));
     assert.deepEqual(result.charts, list, JSON.stringify(chart));
     assert.equal(result.visual, true, `${JSON.stringify(chart)}: görsel niyet korunur`);
   }
-  assert.equal(shaped([]).chart, undefined, 'boş liste tercih değildir');
+  for (const chart of [[], ['bar', 'donut', 'line'], ['scatter', 'stacked'], 'scatter']) assert.throws(() => shaped(chart));
   // Zayıf modelin JSON metni olarak yazdığı dizi (canlı Haiku gözlemi) aynı kurallarla çözülür.
   assert.deepEqual(unpack({ intent: 'rota', language: 'tr', chart: '["donut", "stacked"]', analysis: { scope: 'self', focus: ['status'] } }).plan.charts, ['donut', 'stacked']);
   assert.equal(shaped('["donut", "pie"]').chart, 'donut');
-  assert.equal(shaped('[donut, stacked]').visual, true, 'çözülemeyen metin tür değildir; görsel niyet korunur');
+  assert.throws(() => shaped('[donut, stacked]'), 'bozuk metin sessizce başka grafikle karşılanmaz');
   // Nesne biçimli tür ve birincil tür çelişkisi eskisi gibi reddedilir.
   assert.throws(() => shaped('{"type":"donut"}'), (error) => error.details.includes('$.chart:enum'));
   assert.throws(() => unpack({ intent: 'rota', language: 'tr', chart: 'line', charts: ['bar', 'donut'], analysis: { scope: 'self', focus: ['status'] } }), (error) => error.details.includes('$.charts:enum'));

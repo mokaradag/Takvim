@@ -33,7 +33,7 @@ export function tokenizeProse(text) {
  * kurulumu ve birleştirme sunucunundur.
  * @returns {{ ok: true, ids: string[], sentences: { slot: string }[][], dropped: number, cut: 0, issues: [] } | { ok: false, issue: string }}
  */
-export function checkProse(text, { known, used = new Set() }) {
+export function checkProse(text, { known, used = new Set(), recoverDetail = () => false }) {
   const parsed = tokenizeProse(text);
   if (!parsed.ok) return parsed;
   const seen = new Set(used);
@@ -45,7 +45,10 @@ export function checkProse(text, { known, used = new Set() }) {
       continue;
     }
     if (!known(token.slot)) return fail('UNKNOWN_PROPOSITION');
-    if (seen.has(token.slot)) return fail('DUPLICATE_PROPOSITION');
+    if (seen.has(token.slot)) {
+      if (recoverDetail(token.slot)) continue;
+      return fail('DUPLICATE_PROPOSITION');
+    }
     seen.add(token.slot);
     ids.push(token.slot);
   }

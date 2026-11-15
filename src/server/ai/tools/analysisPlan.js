@@ -578,7 +578,7 @@ function upcomingFrom(window, today) {
  * Özetin bölümleri: her yön en çok bir istek; eşdeğer istekler tekilleşir; çok bölümlü planın sınırı aşılmaz.
  * Sonuç modelin yazacağı ham istek nesneleridir (`request` + `additionalRequests`), doğrulama sonrasındadır.
  */
-export function expandAnalysis(analysis, { previous = null, today = null, detail = null, chart = null, charts = null, reserve = 0 } = {}) {
+export function expandAnalysis(analysis, { previous = null, today = null, detail = null, chart = null, charts = null, reserve = 0, optionalFits = () => true } = {}) {
   analysis = resolveAnalysisBrief(analysis, { previous, today });
   if (analysis.relativeWindow && analysis.relativeWindow !== 'all_time') {
     if (!today) throw invalidArguments(['$.analysis.relativeWindow:required']);
@@ -596,10 +596,10 @@ export function expandAnalysis(analysis, { previous = null, today = null, detail
     // Önceki ekip kapsamının düzeyi de öznenin parçasıdır: örgütsel kırılımın düzeyi (ör. bölüm → birim) ondan seçilir.
     const level = analysis.scope === 'previous' && resolved.scope === 'team' && previous.level ? { level: previous.level } : {};
     analysis = { ...analysis, scope: resolved.scope, ...level };
-    return expandWith(analysis, narrowed(resolved.base), today, detail, chart, charts, reserve);
+    return expandWith(analysis, narrowed(resolved.base), today, detail, chart, charts, reserve, false, optionalFits);
   }
-  if (analysis.also?.length) return expandLayers(analysis, today, { chart, charts, reserve });
-  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail, chart, charts, reserve, true);
+  if (analysis.also?.length) return expandLayers(analysis, today, { chart, charts, reserve, optionalFits });
+  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail, chart, charts, reserve, true, optionalFits);
 }
 
 /**
@@ -640,7 +640,7 @@ export function analysisLayers(analysis) {
  * sığmayan dağılım yönü SESSİZCE düşmez: `omitted` olarak döner ve yanıtta adıyla belirtilir; kapsamların hiçbiri düşmez. Dönem
  * yalnızca dönemli yönlerin okumalarına uygulanır; özet bugünkü durumdur.
  */
-function expandLayers(analysis, today, { chart = null, charts = null, reserve = 0 } = {}) {
+function expandLayers(analysis, today, { chart = null, charts = null, reserve = 0, optionalFits = () => true } = {}) {
   const layers = analysisLayers(analysis);
   const window = { ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) };
   const windowed = Object.keys(window).length > 0;
@@ -713,7 +713,7 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (!items.length) continue;
-    if (parts.length + items.length > budget) { omitted.push(Object.freeze({ layer: 0, focus })); continue; }
+    if (parts.length + items.length > budget || !optionalFits([...parts, ...items])) { omitted.push(Object.freeze({ layer: 0, focus })); continue; }
     add(items, { layer: 0, focus });
   }
   // Bölüm ya da direktörlük düzeyindeki ekip kapsamının doğal kırılımı alt örgüt birimleridir (tek kapsamlı özetteki kuralın aynısı):
@@ -726,7 +726,7 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     let produced = null;
     try { produced = focusRequest('org', layerAnalysis, basedOf(layer), today); } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= budget) add(items, { layer: index, focus: 'org' });
+    if (items.length && parts.length + items.length <= budget && optionalFits([...parts, ...items])) add(items, { layer: index, focus: 'org' });
   });
   // Bütçe önce bütün kapsamların özetine ayrılır; yanıt sırası ise kapsam kapsamdır (özet ve o kapsamın dağılımları ardışık).
   const ordered = parts.map((part, position) => ({ part, position, layer: owners.get(part).layer })).sort((a, b) => a.layer - b.layer || a.position - b.position).map((item) => item.part);
@@ -817,7 +817,7 @@ function budgetDetails(analysis) {
   return ['$.analysis.focus:requestBudget'];
 }
 
-function expandWith(analysis, base, today = null, detail = null, chart = null, charts = null, reserve = 0, original = false) {
+function expandWith(analysis, base, today = null, detail = null, chart = null, charts = null, reserve = 0, original = false, optionalFits = () => true) {
   // İsteğe bağlı okumalar (grafik, bütünleyici, alt birim kırılımı) açık istekler için ayrılan yeri kullanmaz; bildirilen yönler
   // eskisi gibi `maxParts` içinde kalmalıdır (toplam bütçe ayrıca denetlenir).
   const optionalBudget = Math.max(0, ANALYSIS_LIMITS.maxParts - reserve);
@@ -851,7 +851,10 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     let produced = null;
     try { produced = produce(extra); } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= detailedBudget) parts.push(...items);
+    if (items.length && parts.length + items.length <= detailedBudget && optionalFits([...parts, ...items])) {
+      for (const item of items) seen.add(JSON.stringify(item));
+      parts.push(...items);
+    }
   }
   // Ekip özetinin doğal kırılımı (bkz. `naturalBreakdown`): bölüm ya da direktörlük düzeyinde alt örgüt birimleri (direktörlük → bölümler,
   // bölüm → birimler), birim düzeyinde ya da düzeysiz ekipte kişilere göre iş yükü. Model yönü yazmadıysa okuma sunucuca eklenir (portföy
@@ -862,17 +865,23 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     let produced = null;
     try { produced = produce(natural); } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= optionalBudget) parts.push(...items);
+    if (items.length && parts.length + items.length <= optionalBudget && optionalFits([...parts, ...items])) {
+      for (const item of items) seen.add(JSON.stringify(item));
+      parts.push(...items);
+    }
   }
   // Adı verilen projenin genel durum özetinde proje sağlığının parçası kilometre taşı durumudur (gecikmiş kilometre taşı, sıradaki):
   // model genel durumu (`overview`) isteyip `milestones` yönünü yazmadıysa okuma sunucuca eklenir (alt birim kırılımı gibi; kullanıcı
   // cümlesi yorumlanmaz, yalnızca türlü kapsam ve yön). Gerçek Haiku planlarında proje sağlığı ve yönetici özeti sorularında bu yön
   // sıkça atlanıyordu. İsteğe bağlı okumadır: yer yoksa eklenmez, bildirilen hiçbir yön düşmez, yeni yetki ya da araç açılmaz.
-  if (analysis.scope === 'project' && declared.includes('overview') && !declared.includes('milestones') && !analysis.withSelf) {
+  if (analysis.scope === 'project' && declared.includes('overview') && !declared.includes('milestones') && !analysis.withSelf && !analysis.dateFrom && !analysis.dateTo) {
     let produced = null;
     try { produced = produce('milestones'); } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= optionalBudget) parts.push(...items);
+    if (items.length && parts.length + items.length <= optionalBudget && optionalFits([...parts, ...items])) {
+      for (const item of items) seen.add(JSON.stringify(item));
+      parts.push(...items);
+    }
   }
   return parts;
 
@@ -891,7 +900,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
       const bases = people.length > 1 ? people.map((person) => ({ ...base, entities: [person, ...common] }))
         : analysis.withSelf ? [base, { filters: { ...base.filters, assignee: 'me' }, entities: common }] : [base];
       const splits = bases.map((side) => groups(side, 'project', { split: true, future: futureWindow(analysis, today) })).filter((split) => !seen.has(JSON.stringify(split)));
-      if (parts.length + splits.length <= optionalBudget) {
+      if (parts.length + splits.length <= optionalBudget && optionalFits([...parts, ...splits])) {
         for (const split of splits) { seen.add(JSON.stringify(split)); parts.push(split); }
       }
     }
@@ -918,7 +927,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
         } else produced = analysis.withSelf ? selfComparison(needed, analysis, base, today, chart) : produce(needed);
       } catch (error) { produced = optionalRead(error); }
       const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-      if (items.length && parts.length + items.length <= optionalBudget) {
+      if (items.length && parts.length + items.length <= optionalBudget && optionalFits([...parts, ...items])) {
         for (const item of items) seen.add(JSON.stringify(item));
         parts.push(...items);
       }
@@ -946,49 +955,6 @@ export function analysisDetails(details = []) {
  * modelin kendi entities[].text değerleri olduğu yalnızca yapısal olarak söylenir. Eşleme yoksa `null`. Model öneriyi
  * benimsemek zorunda değildir; karar yine onundur.
  */
-/**
- * Reddedilen ayrıntılı isteğin türlü alanlarından (araç, gruplama, süzgeç, ölçü, sorumlu koşulu, varlıklar) KABA analitik özet önerisi.
- * `analysisSuggestion` okumaların birebir eşdeğer olmasını ister; istek zaten geçersizse (ör. araç istenen ölçüyü taşımıyor) eşdeğerlik
- * kurulamaz ve zayıf model aynı geçersiz isteği yineleyip Derin modele devrediliyordu (gerçek Haiku koşularında ekip ve proje iş yükü
- * sorularında ölçüldü). Bu öneri yalnızca düzeltme ipucudur: kapsamı ve yönleri sorudan doğrulamasını söyler; sunucu planı modelin yerine
- * koymaz, öneri hiçbir okumayı, süzgeci ya da yetkiyi değiştirmez. Özet aileleri dışındaki araçlar (tek kayıt, bağımlılık, iş dağılım
- * ağacı, hareket, talep) için öneri yoktur.
- */
-const SUMMARY_TOOLS = Object.freeze(['rota_workload_summary', 'rota_portfolio_summary', 'rota_task_analytics', 'rota_task_search', 'rota_project_search']);
-export function analysisAlternative(request) {
-  if (!request || typeof request !== 'object' || Array.isArray(request) || request.previousResult) return null;
-  // Belirli bir sayım ya da tek değer (`value`) doğru istek biçimidir; yalnızca liste/sıralama özetin alanına girer.
-  if (!['list', 'rank'].includes(request.operation)) return null;
-  const tool = request.population?.tool;
-  if (!SUMMARY_TOOLS.includes(tool)) return null;
-  const filters = request.filters && typeof request.filters === 'object' && !Array.isArray(request.filters) ? request.filters : {};
-  const metrics = Array.isArray(request.metrics) ? request.metrics.filter((metric) => typeof metric === 'string') : [];
-  const entities = Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object' && typeof entity.text === 'string') : [];
-  const groupBy = request.population?.groupBy;
-  const focus = [];
-  const add = (item, when) => { if (when && !focus.includes(item)) focus.push(item); };
-  add('workload', tool === 'rota_workload_summary' || groupBy === 'assignee' || metrics.includes('person.name'));
-  add('projects', tool === 'rota_portfolio_summary' || groupBy === 'project' || metrics.includes('project.name'));
-  add('org', ['department', 'unit'].includes(groupBy));
-  add('milestones', filters.milestone === true);
-  add('overdue', filters.deadline === 'overdue' || metrics.includes('tasks.overdue') || metrics.includes('task.overdueDays'));
-  add('upcoming', String(filters.deadline || '').startsWith('due_') || metrics.includes('tasks.dueNext7Days'));
-  add('status', groupBy === 'status' || metrics.some((metric) => ['tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.completionRatePercent'].includes(metric)));
-  add('priority', groupBy === 'priority');
-  add('deadlines', groupBy === 'deadline');
-  add('schedule', groupBy === 'target_month');
-  if (!focus.length) return null;
-  const named = (type) => entities.filter((entity) => entity.type === type).map((entity) => entity.text);
-  const scope = filters.assignee === 'me' ? 'self' : filters.assignee === 'team' ? 'team' : named('person').length ? 'person' : named('project').length ? 'project'
-    : ['rota_portfolio_summary', 'rota_project_search'].includes(tool) || focus.includes('projects') ? 'projects' : 'all';
-  const names = ['person', 'project'].includes(scope) ? named(scope).slice(0, ANALYSIS_LIMITS.maxNames) : [];
-  const candidate = { scope, ...(scope === 'team' && ANALYSIS_LEVELS.includes(filters.teamLevel) ? { level: filters.teamLevel } : {}),
-    ...(names.length ? { names } : {}), focus: focus.filter((item) => layerApplicable(item, scope) && !(item === 'org' && scope !== 'team')).slice(0, 4) };
-  if (!candidate.focus.length) return null;
-  try { parseAnalysis(candidate); } catch { return null; }
-  return `Bu soru büyük olasılıkla bir durum, dağılım ya da iş yükü sorusudur: geçersiz request yerine analitik özet yaz (kapsamı, düzeyi ve yönleri sorudan doğrula; sunucu okumaları kendisi kurar): {"intent":"rota","language":"tr","analysis":${JSON.stringify(candidate)}}. İstek gerçekten tek bir kaydın alanı, belirli bir sayım ya da özel bir liste içinse yalnızca bildirilen sorunları düzelt.`;
-}
-
 export function analysisSuggestion(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return null;
   if (request.previousResult || (request.filters != null && (typeof request.filters !== 'object' || Array.isArray(request.filters)))) return null;

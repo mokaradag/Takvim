@@ -5,7 +5,7 @@
  *   - Taze sorudaki açıklama kararı (clarify) veri okunmadan bir kez doğrulanır; yinelenen karar kabul edilir, takip turunda ve
  *     çekimserlikte doğrulama yapılmaz, doğrulama yetki ya da okuma açmaz.
  *   - Düz metin ilk yanıtın düzeltme ipucu isteğin son kullanıcı iletisi olduğunu ve analitik özet yolunu söyler.
- *   - Sunum tercihi olan grafik türü sözlük dışıysa ya da çizicinin taşıyabileceğinden fazlaysa plan reddedilmez; görsel niyet korunur.
+ *   - Sunum tercihi olan grafik türü sözlük dışıysa ya da çizicinin taşıyabileceğinden fazlaysa açık tercih onarım için korunur.
  *   - Plan düzeyine yazılmış `reasoning` ve nüfus nesnesine yazılmış süzgeç anahtarları eşdeğer yazımdır; çelişki reddedilir.
  *   - Planlayıcı yönergesi talimat biçimli iletiyi istek sayar ve yönü önce grup, sonra konu olarak seçtirir.
  */
@@ -18,7 +18,7 @@ const { unpackTypedPlan, typedPlanningTool } = await import('../src/server/ai/to
 const { parseRequestDeclaration } = await import('../src/server/ai/tools/requestDeclaration.js');
 const { groundedSystemPrompt } = await import('../src/server/ai/assistant/groundedPrompt.js');
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
-const { analysisAlternative, analysisSchema, expandAnalysis, parseAnalysis, ANALYSIS_LIMITS } = await import('../src/server/ai/tools/analysisPlan.js');
+const { analysisSuggestion, analysisSchema, expandAnalysis, parseAnalysis, ANALYSIS_LIMITS } = await import('../src/server/ai/tools/analysisPlan.js');
 const { phase4eConversation, populationReads } = await import('./helpers/phase4eScenario.mjs');
 
 const TODAY = '2026-09-30';
@@ -102,21 +102,11 @@ test('düz metin ilk yanıtın ipucu isteğin son kullanıcı iletisi olduğunu 
 
 /* ── Sunum tercihi: grafik türü ──────────────────────────────────── */
 
-test('sözlük dışı grafik türü planı reddettirmez: görsel niyet korunur, okuma ve kapsam değişmez', () => {
+test('sözlük dışı veya fazla grafik tercihi onarım için reddedilir', () => {
   const analysis = { scope: 'projects', focus: ['overview', 'status', 'overdue'] };
-  const scatter = unpack({ intent: 'rota', language: 'tr', chart: 'scatter', analysis }).plan;
-  const plain = unpack({ intent: 'rota', language: 'tr', visual: true, analysis }).plan;
-  assert.equal(scatter.visual, true);
-  assert.equal(scatter.chart, undefined);
-  assert.deepEqual(scatter.request, plain.request, 'okumalar görsel istekle aynı');
-  assert.deepEqual(scatter.additionalRequests, plain.additionalRequests);
-  // Üç tür: ilk ikisi sırayla kalır; birincil tür ilk geçerli türdür.
-  const three = unpack({ intent: 'rota', language: 'tr', charts: ['kpi', 'bar', 'stacked'], analysis }).plan;
-  assert.deepEqual([three.chart, three.charts], ['kpi', ['kpi', 'bar']]);
-  // Kullanıcı görselleştirmeyi reddettiyse tür yine düşer ve görsel niyet kurulmaz.
-  const declined = unpack({ intent: 'rota', language: 'tr', visual: false, chart: 'scatter', analysis }).plan;
-  assert.equal(declined.visual, false);
-  assert.equal(declined.chart, undefined);
+  for (const fields of [{ chart: 'scatter' }, { charts: ['kpi', 'bar', 'stacked'] }, { visual: false, chart: 'scatter' }]) {
+    assert.throws(() => unpack({ intent: 'rota', language: 'tr', ...fields, analysis }));
+  }
 });
 
 test('grafik türü normalleştirmesi istek ve kapsam çelişkisini gizlemez', () => {
@@ -238,25 +228,15 @@ test('ekip özetine doğal kırılım isteğe bağlı eklenir: birimde kişiler,
     (error) => error.details.includes('$.analysis.focus:requestBudget'));
 });
 
-test('geçersiz liste isteğinin ilk ipucu kaba analitik özet önerisidir; tek değer isteğinde öneri yoktur', async (t) => {
-  // Gerçek koşudaki sınıf: ekip iş yükü için iş yükü aracının taşımadığı ölçülerle liste; model aynı isteği yineleyip Derin'e gidiyordu.
-  const list = { operation: 'list', metrics: ['person.name', 'tasks.open', 'tasks.todo', 'tasks.overdue'], population: { tool: 'rota_workload_summary', collection: 'people' },
-    filters: { assignee: 'team' }, layout: 'table' };
-  const queue = [call({ intent: 'rota', language: 'tr', request: list }), call({ intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['workload', 'overdue'] } })];
+test('geçersiz liste için eşdeğer olmayan özet önerilmez; düzeltme liste sözleşmesini korur', async (t) => {
+  const request = { operation: 'list', metrics: ['task.title', 'tasks.open'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
+  assert.equal(analysisSuggestion(request), null);
+  const queue = [call({ intent: 'rota', language: 'tr', request }), call({ intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } })];
   const { ask } = phase4eConversation(t, { planner: () => queue.shift() });
-  const result = await ask({ text: 'Ekibimin iş yükünü tablo halinde göster' });
-  const note = toolNotes(result.inputs[1]).at(-1);
-  // Birebir eşdeğer öneri varsa o, yoksa kaba öneri ilk ipucudur (sistem notu ilk ipuçlarını taşır).
-  assert.match(note.error.hints[0], /^Bu soru (?:analitik özetle de bildirilebilir|büyük olasılıkla bir durum, dağılım ya da iş yükü sorusudur)/);
-  const suggested = JSON.parse(/\{"intent".*?\}\}/.exec(note.error.hints[0])[0]);
-  assert.equal(suggested.analysis.scope, 'team');
-  assert.ok(suggested.analysis.focus.includes('workload'));
-  // Eşdeğerlik kurulamayan geçersiz istekte (proje arama aracında taşınmayan ölçüler) kaba öneri kurulur.
-  const rough = analysisAlternative({ operation: 'list', metrics: ['project.name', 'tasks.open', 'tasks.overdue'], population: { tool: 'rota_project_search', collection: 'matches' }, layout: 'table' });
-  assert.match(rough, /"analysis":\{"scope":"projects","focus":\["projects","overdue","upcoming"\]|"analysis":\{"scope":"projects","focus":\["projects","overdue"\]/);
-  assert.equal(analysisAlternative({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } }), null, 'tek değer önerilmez');
-  assert.equal(analysisAlternative({ operation: 'list', metrics: ['task.title'], population: { tool: 'rota_dependency_inspect' } }), null, 'özet ailesi dışı araç önerilmez');
-  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const result = await ask({ text: 'Bütün görevlerimi listele' });
+  const hints = toolNotes(result.inputs[1]).at(-1).error.hints;
+  assert.ok(hints.every((hint) => !hint.includes('büyük olasılıkla')));
+  assert.deepEqual(result.log, []);
 });
 
 test('belirli bir sayım doğru istek biçimidir: geçersiz tek değer isteğinin ipuçlarına özet önerisi girmez', async (t) => {

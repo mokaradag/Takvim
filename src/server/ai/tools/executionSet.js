@@ -115,7 +115,7 @@ function decodeRequest(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return request;
   const decoded = { ...request };
   for (const key of NESTED_PLAN_FIELDS.request) if (Object.hasOwn(decoded, key)) decoded[key] = decodedJson(decoded[key]);
-  return populationShape(projectSelectorAsEntity(decoded));
+  return projectSelectorAsEntity(populationShape(decoded));
 }
 
 /**
@@ -189,45 +189,14 @@ function normalizePlan(plan) {
   return { ...rest, request: { ...rest.request, filters: { ...filters, ...window } } };
 }
 
-/**
- * Grafik türü tercihinin yapısal normalleştirmesi. Tür yalnızca sunumun tercihidir: veri okumasını, kapsamı ya da yetkiyi
- * değiştirmez. Kapalı sözlük dışındaki tür (ör. "scatter") ya da çizicinin taşıyabileceğinden fazla tür (en çok iki) planın
- * tamamını reddettiriyor, zayıf model aynı planı yineleyip Derin modele devrediliyordu (gerçek Haiku planlarında ölçüldü). Görsel
- * niyet korunur (`visual: true`; kullanıcı görselleştirmeyi reddetmediyse), sözlükteki türler yazıldıkları sırayla en çok ikisi
- * kalır, kalan tercihi sunucunun grafik seçimi karşılar. Dizi biçiminde yazılan `chart` ve tek tür olarak yazılan `charts` aynı
- * listedir. Birincil tür çelişkisi (`chart` ile `charts[0]` farklı) burada çözülmez; doğrulama eskisi gibi reddeder.
- */
+/** Grafik tercihlerinin yalnızca eşdeğer yazımlarını birleştirir; desteklenmeyen tercih doğrulamada kalır. */
 function chartPreferences(plan) {
-  // Kapalı sözlükteki türün aynı görsel ailedeki yazımı (yön sözlüğündeki tekil/çoğul eşlemesi gibi model çıktısının değeridir).
-  const canonical = (type) => CHART_ALIASES[type] || type;
-  const known = (type) => typeof type === 'string' && PLAN_CHART_TYPES.includes(canonical(type));
-  const rawChart = decodedJson(plan.chart);
-  const rawCharts = decodedJson(plan.charts);
-  let out = plan;
-  let dropped = false;
-  const listOf = (value) => (Array.isArray(value) ? value : typeof value === 'string' ? [value] : null);
-  const tidy = (list) => {
-    const kept = [...new Set(list.filter(known).map(canonical))].slice(0, 2);
-    if (kept.length !== list.length || list.some((type) => known(type) && canonical(type) !== type)) dropped = true;
-    return kept;
-  };
-  if (typeof rawChart === 'string' && known(rawChart) && canonical(rawChart) !== rawChart) out = { ...out, chart: canonical(rawChart) };
-  if (plan.charts != null && listOf(rawCharts)) {
-    const kept = tidy(listOf(rawCharts));
-    const { charts: _charts, ...rest } = out;
-    out = kept.length ? { ...rest, charts: kept } : rest;
-  }
-  if (Array.isArray(rawChart) && plan.charts == null) {
-    const kept = tidy(rawChart);
-    const { chart: _chart, ...rest } = out;
-    out = kept.length ? { ...rest, charts: kept } : rest;
-  } else if (typeof rawChart === 'string' && !known(rawChart)) {
-    const { chart: _chart, ...rest } = out;
-    out = rest;
-    dropped = true;
-  }
-  const declined = out.visual === false || out.analysis?.visual === false;
-  return dropped && !declined ? { ...out, visual: true } : out;
+  const canonical = (type) => typeof type === 'string' ? CHART_ALIASES[type] || type : type;
+  const chart = decodedJson(plan.chart);
+  const charts = decodedJson(plan.charts);
+  const list = (value) => Array.isArray(value) ? [...new Set(value.map(canonical))] : typeof value === 'string' ? [canonical(value)] : value;
+  return { ...plan, ...(plan.chart != null ? { chart: Array.isArray(chart) ? list(chart) : canonical(chart) } : {}),
+    ...(plan.charts != null ? { charts: list(charts) } : {}) };
 }
 
 /**
@@ -235,7 +204,7 @@ function chartPreferences(plan) {
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
  * `{ plan: { intent, language, request, additionalRequests? }, calls }`.
  */
-export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null, detail = null } = {}) {
+export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null, detail = null, optionalFits = () => true } = {}) {
   const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
   if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
   const [call] = plans;
@@ -244,7 +213,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
-  plan = relocatedPlanKeys(plan);
+  plan = decodeNestedJson(relocatedPlanKeys(plan));
   if (Array.isArray(plan.analysis) && plan.analysis.length && plan.analysis.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
     const [primary, ...also] = plan.analysis;
     onDecoded({ ...plan, analysis: { ...primary, ...(also.length ? { also } : {}) } });
@@ -371,7 +340,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
     const requested = visual ? base.charts || (!explicitCharts && follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
-    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve });
+    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve, optionalFits: (parts) => optionalFits([...parts, ...explicit.filter((item) => !parts.some((part) => coveredRequest(part, item)))]) });
     // Açık istek, özetin aynı okumasıysa ikinci kez okunmaz; açık satır sınırı ve sunum tercihi (liste/tablo) o okumaya geçer.
     // Geçersiz sunum tercihi ya da satır sınırı özetin okumasına taşınmaz: istek ayrı bölüm kalır ve sorunu kendi yoluyla bildirilir
     // (onarım o isteğin yolunu açar; özetin okuması geçersiz değerle reddedilmez).
@@ -532,10 +501,9 @@ function relocatedPlanKeys(plan) {
   const stray = Object.keys(plan).filter((key) => !PLAN_KEYS.includes(key) && key !== 'reasoning');
   if (!stray.length) return plan;
   const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-  // Tek başına `operation` bir istek değildir (ölçü ve nüfus olmadan hiçbir okuma kurmaz): istek yazılmamış özetin, açıklamanın ya da
-  // çekimserliğin yanında anlam taşımaz ve düşer (plan düzeyindeki `reasoning` gibi). Ölçü ya da nüfusla birlikte yazılmışsa belirsizdir.
+  // Özetin value işlemi etkisizdir; list/rank tamlık ve sıra sınırı taşır, onarım için korunur.
   if (stray.length === 1 && stray[0] === 'operation' && plan.request == null && plan.additionalRequests == null
-    && (object(plan.analysis) || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN, PLANNER_INTENTS.GENERAL].includes(plan.intent))) {
+    && (object(plan.analysis) && plan.operation === 'value' || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN, PLANNER_INTENTS.GENERAL].includes(plan.intent))) {
     const { operation: _operation, ...rest } = plan;
     return rest;
   }
@@ -593,11 +561,7 @@ function layeredAnalysis(plan) {
  *  - `intent: "analysis"` özetle birlikte yazıldıysa karar Rota verisidir (`analysis` yalnızca `rota` kararının alanıdır);
  *  - özetin içindeki `reasoning` isteğe ait bir ipucudur, özetin okumalarını değiştirmez: düşürülür;
  *  - göreli dönem, aynı günleri gösteren tarih çiftiyle birlikte yazıldıysa çelişki yoktur: göreli dönem kalır, tarihler düşer;
- *  - takip dışındaki özette "dönem yok" (`all_time`) tarih çiftiyle birlikte yazıldıysa dönem tarihlerdir;
- *  - takip dışındaki özette göreli dönem ön ayarı (`today`, `next_7_days`) BAŞKA günleri gösteren TAM bir tarih çiftiyle birlikte
- *    yazıldıysa dönem tarihlerdir: gerçek Haiku planlarında model "önümüzdeki 30 gün", "önümüzdeki hafta" ya da "14 gün" için tarihleri
- *    takvim çapalarından doğru hesaplayıp şablondaki `next_7_days` alanını da bırakıyordu (ölçülen her vakada tarihler soruyla
- *    eşleşti, ön ayar eşleşmedi); çelişki reddi onarımda Derin devrine götürüyordu. Tek uçlu tarih ön ayarla çelişkisini korur;
+ *  - çelişen dönemler korunur ve onarım için reddedilir;
  *  - takip dışındaki özette birincil kapsamın yinelemesi olan ve yalnızca gecikme yönü için "dönem yok" (`all_time`) yazılmış ek kapsam,
  *    birincil dönem bugün ya da sonrasında başlıyorsa birincilin gecikme yönüdür: gecikme okuması gelecek dönemden zaten arındırılır
  *    (`futureWindow`), ek kapsam aynı nüfusu yineler.
@@ -615,9 +579,7 @@ function equivalentAnalysisSpelling(plan, today) {
   if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return plan;
   let out = { ...analysis };
   if (Object.hasOwn(out, 'reasoning')) delete out.reasoning;
-  const dated = out.dateFrom != null || out.dateTo != null;
-  if (dated && out.relativeWindow === 'all_time' && !['previous', 'row'].includes(out.scope)) delete out.relativeWindow;
-  if (dated && today && ['today', 'next_7_days'].includes(out.relativeWindow) && out.dateFrom === today
+  if (today && ['today', 'next_7_days'].includes(out.relativeWindow) && out.dateFrom === today
     && out.dateTo === (out.relativeWindow === 'today' ? today : new Date(Date.parse(`${today}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10))) {
     delete out.dateFrom;
     delete out.dateTo;
@@ -632,7 +594,6 @@ function equivalentAnalysisSpelling(plan, today) {
     const { relativeWindow: _window, ...rest } = out;
     out = { ...rest, dateFrom: from, dateTo: to };
   }
-  if (!follow && ['today', 'next_7_days'].includes(out.relativeWindow) && isDate(out.dateFrom) && isDate(out.dateTo)) delete out.relativeWindow;
   // Gecikme yönünün "dönem yok" yinelemesi (yalnızca gelecek dönemde; bkz. yukarıdaki açıklama).
   if (!follow && today && isDate(out.dateFrom) && out.dateFrom >= today && Array.isArray(out.also) && Array.isArray(out.focus)) {
     const sameScope = (layer) => layer && typeof layer === 'object' && !Array.isArray(layer) && layer.scope === out.scope

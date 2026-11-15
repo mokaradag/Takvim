@@ -197,13 +197,33 @@ async function withLock(file, work, timeoutMs) {
   }
 }
 
-/**
- * Önbellek kapısının uygulandığı en kısa durağan önek (karakter). Haiku 4.5'in en küçük önbelleklenebilir istemi 4096 belirteçtir; bu
- * deponun Türkçe yönergelerinde ölçülen oran belirteç başına ≈2,2 karakterdir (planlayıcı öneki ≈84 bin karakter ↔ 38 042 önbellek
- * belirteci). Belirteç başına 1,5 karakterlik temkinli alt sınırla 6144 karakterin altındaki önek önbelleklenemez; daha uzun önekte
- * yeniden kullanım zorunlu kalır.
+/** Sağlayıcının belirteç alt sınırı; bilinmeyen model için karakterden yetenek çıkarılmaz.
+ * Kaynak: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
  */
-export const CACHE_MIN_STATIC_CHARS = 6144;
+export function cacheMinimumTokens(model) {
+  const families = [
+    [4096, ['haiku-4-5', 'opus-4-5', 'opus-4-6']],
+    [2048, ['opus-4-7']],
+    [1024, ['sonnet-4', 'sonnet-4-5', 'sonnet-4-6', 'sonnet-5', 'opus-4', 'opus-4-1', 'opus-4-8']],
+    [512, ['fable-5', 'fable-5-1', 'fable-5-2', 'mythos-5', 'mythos-5-1', 'mythos-5-2', 'opus-5', 'opus-5-5', 'sonnet-5-5', 'haiku-5-5']]
+  ];
+  return families.find(([, names]) => names.some((name) => model === `claude-${name}`
+    || new RegExp(`^claude-${name}-(?:[0-9]{8}|latest)$`).test(model)))?.[0] ?? null;
+}
+
+/** Kullanım aynı tam istemin önbelleğini kanıtlar; farklı kuyruğun durağan öneki için uygunluk çıkarılmaz. */
+export function cacheReuseBaseline(prior, row, startedAt) {
+  return prior.find((item) => {
+    const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
+    const sameModel = item.models?.length === 1 && row.models?.length === 1 && item.models[0] === row.models[0] && item.effort === row.effort;
+    const read = item.usage?.cache_read_input_tokens || 0;
+    const written = item.usage?.cache_creation_input_tokens || 0;
+    const observed = read > 0 || written > 0;
+    const exact = item.promptHash && item.promptHash === row.promptHash;
+    return !item.error && sameModel && item.staticPromptHash === row.staticPromptHash && item.toolCatalogHash === row.toolCatalogHash
+      && observed && exact && ageMs >= 0 && ageMs < 5 * 60 * 1000;
+  });
+}
 export const MODEL_CLEANUP_TIMEOUT_MS = 5000;
 export const MODEL_FORCED_RETRY_ATTEMPTS = 2;
 export function modelCommandTimeoutMs(timeoutMs, forcedRetry = process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
@@ -716,6 +736,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
   // Üretim turunun çıktı sınırı (ör. doğal yanıt düzeninin dar sınırı) korunur; verilmemişse planlayıcı sınırı.
   const outputLimit = Number.isSafeInteger(payload.maxOutputTokens) && payload.maxOutputTokens > 0 ? Math.min(payload.maxOutputTokens, 4096) : 4096;
   const staticPromptHash = hash(system.content);
+  const promptHash = hash(conversationText(rest, system.content));
   const toolCatalogHash = hash(JSON.stringify([forced?.name ?? null, all, hideTools]));
   // Önbelleklenebilir durağan önek: sistem yönergesi, sunulan araçlar ve zorunlu aracın şeması (turdan bağımsız baytlar).
   const staticChars = String(system.content).length + JSON.stringify(tools).length + (forced ? JSON.stringify(forced.parameters ?? {}).length : 0);
@@ -784,7 +805,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     const offered = (init?.tools || []).filter((name) => name.startsWith(PREFIX)).map((name) => name.slice(PREFIX.length));
     const row = { at: new Date().toISOString(), ...(callId ? { callId } : {}), models, effort, thinking: usage.output_tokens_details.thinking_tokens || usage.thinkingBlocks ? 'on' : 'off', usage,
       apiCalls: ids.size, numTurns: result?.num_turns ?? null, stopReason: !forced && blocks.some((block) => block.type === 'tool_use') ? 'tool_use' : result?.stop_reason ?? null,
-      durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, staticChars, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
+      durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, promptHash, staticChars, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
     if (timedOut) return fail(cleanupFailed ? 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_TIMEOUT', row);
     if (cleanupFailed) return fail('MODEL_COMMAND_CLEANUP_ERROR', row);
     // --max-turns 1 yerel araç devrini belgeli CLI durumuyla bitirir; bu başarısız tamamlama değildir.
@@ -797,15 +818,10 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     // bağlı tek yeniden deneme uygulanır ve `forcedText` ile ayrıca sayılır (yeniden deneme yoksa metin sunucuya eskisi gibi iletilir).
     const forcedProse = Boolean(forced && !hideTools && !forcedToolCall && code === 1 && result?.subtype === 'error_max_turns'
       && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
-    // Önbellek tabanı: aynı durağan istem ve araç kataloğuyla beş dakika içindeki başarılı çağrı. Durağan önek sağlayıcının en küçük
-    // önbelleklenebilir uzunluğunun altındaysa (`CACHE_MIN_STATIC_CHARS`; ör. doğal yanıt düzeni yönergesi) yeniden kullanım
-    // beklenemez: CLI yalnızca değişken olgu sayfasını da içeren bütün istemi önbelleğe yazar, sonraki tur onu okuyamaz. Böyle bir
-    // önekte kapı model kalitesinden bağımsız sahte altyapı hatası üretirdi; önbelleklenebilir önekte kapı eskisi gibi zorunludur.
-    const cacheBaseline = () => (staticChars < CACHE_MIN_STATIC_CHARS ? undefined : prior.find((item) => {
-      const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
-      return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
-        && ageMs >= 0 && ageMs < 5 * 60 * 1000;
-    }));
+    // Karakter sayısı yalnızca tanıdır; önbelleklenebilirlik sağlayıcının gerçek belirteç kullanımıyla kanıtlanır.
+    const cacheBaseline = () => cacheReuseBaseline(prior, row, startedAt);
+    row.cacheMinimumTokens = cacheMinimumTokens(model);
+    row.cacheEligibility = usage.cache_read_input_tokens > 0 ? 'observed_reuse' : cacheBaseline() ? 'verified_baseline' : 'unverified';
     const catalogProblem = JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort()) ? 'PLANNER_TOOLS_NOT_OFFERED'
       : prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash) ? 'PLANNER_TOOL_ORDER_UNSTABLE' : null;
     if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
