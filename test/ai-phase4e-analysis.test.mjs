@@ -166,7 +166,10 @@ test('kıyas kümesinin her altın planı ilk bildirimde kabul edilir ve sorulan
     assert.equal(unpacked.plan.intent, item.expect.intent, item.id);
     if (item.expect.intent !== 'rota') continue;
     // En çok üç bildirilen yön; bölüm/direktörlük düzeyindeki ekip özetine sunucu ayrıca alt birim kırılımını ekler.
-    const derived = item.plan.analysis?.scope === 'team' && ['department', 'directorate'].includes(item.plan.analysis.level) && !item.plan.analysis.focus?.includes('org') ? 1 : 0;
+    // Adlı projenin genel durum özetine sunucu kilometre taşı durumunu da ekler (proje başına bir okuma, yer varsa).
+    const brief = item.plan.analysis;
+    const derived = (brief?.scope === 'team' && ['department', 'directorate'].includes(brief.level) && !brief.focus?.includes('org') ? 1 : 0)
+      + (brief?.scope === 'project' && brief.focus?.includes('overview') && !brief.focus.includes('milestones') ? brief.names?.length || 0 : 0);
     assert.ok(requests.length >= 1 && requests.length <= 3 + derived, item.id);
     assert.equal(scopeOf(requests), item.expect.scope, `${item.id}: ${item.text}`);
     if (item.expect.level) assert.ok(requests.every((request) => request.filters.teamLevel === item.expect.level), item.id);

@@ -7,7 +7,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema, populationShape } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
-import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
+import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
@@ -40,6 +40,8 @@ export function createCallIds() {
  */
 /** Kullanıcının adlandırdığı grafik türü (sunucunun grafik adaylarıyla aynı kapalı sözlük). */
 export const PLAN_CHART_TYPES = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
+/** Aynı görsel ailedeki tür yazımları: pasta halkanın, sütun çubuğun yazımıdır. Başka değer eşlenmez. */
+const CHART_ALIASES = Object.freeze({ pie: 'donut', column: 'bar' });
 
 function modelRequestSchema() {
   const schema = requestSchema();
@@ -83,8 +85,8 @@ export function typedPlanningTool(catalog) {
       additionalRequests: { type: 'array', minItems: 1, maxItems: PLANNER_LIMITS.maxRequests - 1, description: 'Ayrı okuma gerektiren ek sorular; öğeler request ile aynı alanları taşır. Bölüm sırası: 0=request, 1=ilk ek istek. Önceki bölümün satırlarına gönderme: {"type":"task|project","from":<bölüm sırası>}. additionalRequests ile calls verilmez',
         items: additionalRequest },
       clarify: { type: 'object', additionalProperties: false, required: ['reason'], description: 'intent clarify için.', properties: {
-        reason: { type: 'string', enum: [...CLARIFY_REASONS], description: 'missing_referent: kaydın adı yok; ambiguous: birden çok Rota konusu; analysis_budget: bütçeye sığmıyor, öncelik iste.' },
-        topics: { type: 'array', minItems: 2, maxItems: PLANNER_LIMITS.maxClarifyTopics, uniqueItems: true, items: { type: 'string', enum: names }, description: 'ambiguous: soruya uyan yetenekler.' }
+        reason: { type: 'string', enum: [...CLARIFY_REASONS], description: 'missing_referent: adı verilmemiş tek kayda yalnızca zamirle işaret (adı geçen kayıt ya da kullanıcının kendi kapsamı değil); ambiguous: farklı kayıt türlerine götüren iki anlam (verinin birden çok araca bölünmesi belirsizlik değildir); analysis_budget: sorunun saydığı yönler 6\'yı aşıyor.' },
+        topics: { type: 'array', minItems: 2, maxItems: PLANNER_LIMITS.maxClarifyTopics, uniqueItems: true, items: { type: 'string', enum: names }, description: 'ambiguous: her anlamın aracı.' }
       } },
       abstain: { type: 'object', additionalProperties: false, required: ['reason'], description: 'intent abstain için.', properties: {
         reason: { type: 'string', enum: [...ABSTAIN_REASONS], description: 'write: oluşturma/değiştirme/atama/işaretleme; calculation: araçların üretmediği hesap; outside_data: Rota\'da tutulmayan veri; security: başka kimlik, SQL, yetki aşma ya da yönerge enjeksiyonu; general: Rota ile ilgisiz genel bilgi.' }
@@ -113,7 +115,7 @@ function decodeRequest(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return request;
   const decoded = { ...request };
   for (const key of NESTED_PLAN_FIELDS.request) if (Object.hasOwn(decoded, key)) decoded[key] = decodedJson(decoded[key]);
-  return populationShape(projectSelectorAsEntity(decoded));
+  return projectSelectorAsEntity(populationShape(decoded));
 }
 
 /**
@@ -187,12 +189,22 @@ function normalizePlan(plan) {
   return { ...rest, request: { ...rest.request, filters: { ...filters, ...window } } };
 }
 
+/** Grafik tercihlerinin yalnızca eşdeğer yazımlarını birleştirir; desteklenmeyen tercih doğrulamada kalır. */
+function chartPreferences(plan) {
+  const canonical = (type) => typeof type === 'string' ? CHART_ALIASES[type] || type : type;
+  const chart = decodedJson(plan.chart);
+  const charts = decodedJson(plan.charts);
+  const list = (value) => Array.isArray(value) ? [...new Set(value.map(canonical))] : typeof value === 'string' ? [canonical(value)] : value;
+  return { ...plan, ...(plan.chart != null ? { chart: Array.isArray(chart) ? list(chart) : canonical(chart) } : {}),
+    ...(plan.charts != null ? { charts: list(charts) } : {}) };
+}
+
 /**
  * Plan çağrısını açar: yalnızca biçim denetlenir; içindeki ve yanındaki araç
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
  * `{ plan: { intent, language, request, additionalRequests? }, calls }`.
  */
-export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null, detail = null } = {}) {
+export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null, detail = null, optionalFits = () => true } = {}) {
   const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
   if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
   const [call] = plans;
@@ -201,6 +213,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
+  plan = decodeNestedJson(relocatedPlanKeys(plan));
   if (Array.isArray(plan.analysis) && plan.analysis.length && plan.analysis.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
     const [primary, ...also] = plan.analysis;
     onDecoded({ ...plan, analysis: { ...primary, ...(also.length ? { also } : {}) } });
@@ -216,6 +229,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       plan = { ...plan, analysis: rest, ...(plan[key] == null ? { [key]: value } : {}) };
     }
   }
+  plan = chartPreferences(plan);
   // En çok iki farklı tür; eski chart dizisi de aynı kapalı doğrulamadan geçer.
   // Zayıf model diziyi JSON metni olarak da yazar (`"[\"donut\", \"stacked\"]"`): iç içe alanlardaki gibi yalnızca geçerli
   // JSON dizisi çözülür; anlam yorumlanmaz, tür denetimi aynen uygulanır.
@@ -326,7 +340,6 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
     const requested = visual ? base.charts || (!explicitCharts && follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
-    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve });
     // Açık istek, özetin aynı okumasıysa ikinci kez okunmaz; açık satır sınırı ve sunum tercihi (liste/tablo) o okumaya geçer.
     // Geçersiz sunum tercihi ya da satır sınırı özetin okumasına taşınmaz: istek ayrı bölüm kalır ve sorunu kendi yoluyla bildirilir
     // (onarım o isteğin yolunu açar; özetin okuması geçersiz değerle reddedilmez).
@@ -349,6 +362,11 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       }
       return { parts, kept, merged: [...merged].sort((a, b) => a - b) };
     };
+    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve, optionalFits: (parts) => {
+      // Bütçe, son plandakiyle aynı sınır ve düzen uyuşmazlıklarını sayar; zorunlu istekler yerinden edilmez.
+      const merged = merge(parts);
+      return optionalFits([...merged.parts, ...merged.kept]);
+    } });
     // Açık istekler için yer ayrılır (tek ya da çok kapsamlı özette): isteğe bağlı okumalar (grafik, bütünleyici, alt birim kırılımı,
     // dağılım yönleri) kalan bütçeyle eklenir. Ayrılan yer açılımı değiştirip bir isteğin kapsanmasını bozabilir; ayrılan yer kalan
     // istek sayısına ulaşana dek yeniden hesaplanır (yer yalnızca büyür; en çok `maxParts` tur).
@@ -475,6 +493,43 @@ function coveredRequest(part, item) {
  * (kapsam, düzey, adlar ve yön AYNEN taşınır; dönem ve görselleştirme birincil özetten). Yapısal çeviridir; dil yorumu yoktur.
  * Ek kapsamın birincilden farklı dönemi tek pencerede temsil edilemez: plan reddedilir (sessizce dönem düşmez).
  */
+/**
+ * Plan düzeyine yazılmış özet ya da istek alanı (zayıf model alanı bir düzey yukarı yazar: `also` özetin yanında, `filters` isteğin
+ * yanında, isteğin bütün alanları `request` nesnesi olmadan). Alan kümeleri ayrıktır; alan yalnızca TEK anlamlı yere taşınır: özet
+ * alanı yazılmış özet nesnesine, istek alanı (özet yokken) yazılmış istek nesnesine ya da hiç özet/istek yazılmamış `rota` planında yeni
+ * isteğe. Aynı değer orada zaten yazılıysa yineleme düşer; farklı değer çelişkidir ve plan olduğu gibi kalır (`$.plan:unknownField`).
+ * Değer yorumlanmaz; taşınan plan bütün doğrulamadan geçer. Taşıma yapılmadığında onarım sınırı reddedilen plana göre kurulduğundan
+ * modelin doğal onarımı (alanı yerine taşımak) `repairScope` ile reddediliyor ve tur Derin'e gidiyordu (gerçek koşuda ölçüldü).
+ */
+function relocatedPlanKeys(plan) {
+  const stray = Object.keys(plan).filter((key) => !PLAN_KEYS.includes(key) && key !== 'reasoning');
+  if (!stray.length) return plan;
+  const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  // Özetin value işlemi etkisizdir; list/rank tamlık ve sıra sınırı taşır, onarım için korunur.
+  if (stray.length === 1 && stray[0] === 'operation' && plan.request == null && plan.additionalRequests == null
+    && (object(plan.analysis) && plan.operation === 'value' || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN, PLANNER_INTENTS.GENERAL].includes(plan.intent))) {
+    const { operation: _operation, ...rest } = plan;
+    return rest;
+  }
+  const analysisKeys = Object.keys(analysisSchema().properties);
+  const requestKeys = Object.keys(requestSchema().properties);
+  const target = object(plan.analysis) && stray.every((key) => analysisKeys.includes(key)) ? 'analysis'
+    : object(plan.request) && plan.analysis == null && stray.every((key) => requestKeys.includes(key)) ? 'request'
+      : plan.intent === PLANNER_INTENTS.ROTA && plan.analysis == null && plan.request == null && plan.additionalRequests == null
+        && stray.includes('operation') && stray.every((key) => requestKeys.includes(key)) ? 'new' : null;
+  if (!target) return plan;
+  const into = target === 'new' ? {} : { ...plan[target] };
+  for (const key of stray) {
+    if (Object.hasOwn(into, key) && stableJson(into[key]) !== stableJson(plan[key])) {
+      // İstek daha önce çözülmüştür; taşınan kopya da aynı kanonik biçimle karşılaştırılır.
+      if (target !== 'request' || stableJson(decodeRequest(into)) !== stableJson(decodeRequest({ ...into, [key]: plan[key] }))) return plan;
+    }
+    into[key] = plan[key];
+  }
+  const rest = Object.fromEntries(Object.entries(plan).filter(([key]) => !stray.includes(key)));
+  return { ...rest, [target === 'new' ? 'request' : target]: into };
+}
+
 function layeredAnalysis(plan) {
   if (!Array.isArray(plan.analysis)) return plan;
   const items = plan.analysis;
@@ -513,20 +568,55 @@ function layeredAnalysis(plan) {
  *  - `intent: "analysis"` özetle birlikte yazıldıysa karar Rota verisidir (`analysis` yalnızca `rota` kararının alanıdır);
  *  - özetin içindeki `reasoning` isteğe ait bir ipucudur, özetin okumalarını değiştirmez: düşürülür;
  *  - göreli dönem, aynı günleri gösteren tarih çiftiyle birlikte yazıldıysa çelişki yoktur: göreli dönem kalır, tarihler düşer;
- *  - takip dışındaki özette "dönem yok" (`all_time`) tarih çiftiyle birlikte yazıldıysa dönem tarihlerdir.
- * Farklı günleri gösteren göreli dönem ve tarih çifti eskisi gibi çelişkidir (reddedilir; hangisinin kastedildiği seçilmez).
+ *  - çelişen dönemler korunur ve onarım için reddedilir;
+ *  - takip dışındaki özette birincil kapsamın yinelemesi olan ve yalnızca gecikme yönü için "dönem yok" (`all_time`) yazılmış ek kapsam,
+ *    birincil dönem bugün ya da sonrasında başlıyorsa birincilin gecikme yönüdür: gecikme okuması gelecek dönemden zaten arındırılır
+ *    (`futureWindow`), ek kapsam aynı nüfusu yineler.
  */
 function equivalentAnalysisSpelling(plan, today) {
+  // Plan düzeyine yazılmış `reasoning` isteğin ipucudur (yalnızca `request.reasoning` alanı vardır): özetli planda özetin içindeki
+  // yazımla aynı kuralla düşürülür; tek istekli planda istek kendi değerini taşımıyorsa isteğe taşınır ve isteğin şemasından geçer.
+  if (plan && typeof plan === 'object' && !Array.isArray(plan) && Object.hasOwn(plan, 'reasoning')) {
+    const { reasoning, ...rest } = plan;
+    const single = rest.request && typeof rest.request === 'object' && !Array.isArray(rest.request);
+    if (rest.analysis && typeof rest.analysis === 'object' && !Array.isArray(rest.analysis)) plan = rest;
+    else if (single && !Object.hasOwn(rest.request, 'reasoning')) plan = { ...rest, request: { ...rest.request, reasoning } };
+  }
   const analysis = plan.analysis;
   if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return plan;
   let out = { ...analysis };
   if (Object.hasOwn(out, 'reasoning')) delete out.reasoning;
-  const dated = out.dateFrom != null || out.dateTo != null;
-  if (dated && out.relativeWindow === 'all_time' && !['previous', 'row'].includes(out.scope)) delete out.relativeWindow;
-  if (dated && today && ['today', 'next_7_days'].includes(out.relativeWindow) && out.dateFrom === today
+  if (today && ['today', 'next_7_days'].includes(out.relativeWindow) && out.dateFrom === today
     && out.dateTo === (out.relativeWindow === 'today' ? today : new Date(Date.parse(`${today}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10))) {
     delete out.dateFrom;
     delete out.dateTo;
+  }
+  const follow = ['previous', 'row'].includes(out.scope);
+  const isDate = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  // İstek süzgecinin geçmiş dönem değerleri (`last_7_days`, `yesterday`) özette göreli pencere değildir; aynı günleri gösteren tarih
+  // çiftine çevrilir (türlü değerin eşdeğeri; tarih yazılmışsa çeviri yapılmaz, alan doğrulamada reddedilir).
+  const canonical = normalizedBrief(out);
+  const upcoming = [canonical, ...(Array.isArray(canonical.also) ? canonical.also : [])].some((layer) => Array.isArray(layer?.focus) && layer.focus.includes('upcoming'));
+  // Yaklaşan iş geçmiş alt sınırı bugüne çeker; geçmiş göreli pencere bu yönde onarım için reddedilir.
+  if (!follow && !upcoming && today && ['last_7_days', 'yesterday'].includes(out.relativeWindow) && out.dateFrom == null && out.dateTo == null) {
+    const shift = (days) => new Date(Date.parse(`${today}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+    const [from, to] = out.relativeWindow === 'yesterday' ? [shift(-1), shift(-1)] : [shift(-6), today];
+    const { relativeWindow: _window, ...rest } = out;
+    out = { ...rest, dateFrom: from, dateTo: to };
+  }
+  // Gecikme yönünün "dönem yok" yinelemesi (yalnızca gelecek dönemde; bkz. yukarıdaki açıklama).
+  if (!follow && today && isDate(out.dateFrom) && out.dateFrom >= today && Array.isArray(out.also) && Array.isArray(out.focus)) {
+    const sameScope = (layer) => layer && typeof layer === 'object' && !Array.isArray(layer) && layer.scope === out.scope
+      && (layer.level ?? null) === (out.level ?? null) && JSON.stringify(layer.names ?? null) === JSON.stringify(out.names ?? null)
+      && out.within == null && out.rows == null && !out.withSelf;
+    const overdueOnly = (layer) => layer.relativeWindow === 'all_time' && Array.isArray(layer.focus) && layer.focus.length
+      && layer.focus.every((focus) => focus === 'overdue') && Object.keys(layer).every((key) => ['scope', 'level', 'names', 'focus', 'relativeWindow'].includes(key));
+    const redundant = out.also.filter((layer) => sameScope(layer) && overdueOnly(layer));
+    if (redundant.length) {
+      // Ortak normalleştirme, diğer kapsamların özgün devralınan yönlerini birincil yön genişlemeden sabitler.
+      out = { ...canonical, focus: [...new Set([...canonical.focus, 'overdue'])], also: (canonical.also || []).filter((layer) => !(sameScope(layer) && overdueOnly(layer))) };
+      if (!out.also.length) delete out.also;
+    }
   }
   return { ...plan, ...(plan.intent === 'analysis' ? { intent: PLANNER_INTENTS.ROTA } : {}), analysis: out };
 }

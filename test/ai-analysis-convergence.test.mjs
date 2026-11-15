@@ -34,7 +34,8 @@ test('birincil türü yineleyen takip ikinci grafiği korur; yeni tür ve açık
 test('grafik dizisi reddedilmeden analiz onarım için sabitlenir', () => {
   const analysis = { scope: 'self', focus: ['status'], dateFrom: TODAY, dateTo: '2026-10-13' };
   let decoded;
-  assert.throws(() => unpack({ intent: 'rota', language: 'tr', charts: ['pie'], analysis }, null, (plan) => { decoded = plan; }));
+  // Birincil tür çelişkisi (chart ile charts[0] farklı) sunum normalleştirmesinden sonra da reddedilir.
+  assert.throws(() => unpack({ intent: 'rota', language: 'tr', chart: 'line', charts: ['bar', 'donut'], analysis }, null, (plan) => { decoded = plan; }));
   assert.deepEqual(decoded?.analysis, analysis);
 });
 
@@ -355,9 +356,9 @@ test('grafik kapısı istemcinin uzun ve tildeli çitlerini, JSON içindeki ters
 
 test('eşdeğer tekil ve çoğul grafik yazımı analiz onarımını engellemez', async (t) => {
   const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
-  const fixed = { scope: 'self', focus: ['status'], dateFrom: TODAY, dateTo: '2026-10-13' };
-  const queue = [{ intent: 'rota', language: 'tr', chart: ['bar', 'donut'], analysis: { ...fixed, relativeWindow: 'next_7_days' } },
-    { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis: fixed }];
+  // Tek uçlu tarih göreli ön ayarla çelişkisini korur (tam çift de yalnızca eşdeğerse birleşir): onarım turu açılır.
+  const queue = [{ intent: 'rota', language: 'tr', chart: ['bar', 'donut'], analysis: { scope: 'self', focus: ['status'], dateTo: '2026-10-13', relativeWindow: 'next_7_days' } },
+    { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis: { scope: 'self', focus: ['status'], dateTo: '2026-10-13' } }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
   const result = await ask({ text: 'İşlerimin durumunu çubuk ve halka grafikle göster' });
   assert.equal(result.inputs.length, 2);
@@ -376,7 +377,8 @@ test('yeni ekip analizi önceki bölüm düzeyini devralmaz', async (t) => {
   assert.equal(first.analysisContext.level, 'department');
   const next = await ask({ text: 'Ekibimin durum dağılımı', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['status'] } } });
   assert.equal(next.answer.finishReason, 'stop', next.answer.content);
-  assert.match(next.answer.content.split('\n\n')[0], /ekibinizin işleri/);
+  // Açılış ekibin kendi diliyle (düzeysiz ekipte doğal kırılım kişilere göre iş yüküdür) kurulur; bölüm düzeyi devralınmaz.
+  assert.match(next.answer.content.split('\n\n')[0], /[Ee]kibinizin işler/);
   assert.doesNotMatch(next.answer.content.split('\n\n')[0], /bölümünüzün/);
   const reads = populationReads(next.log);
   assert.ok(reads.length);
@@ -609,13 +611,14 @@ for (const composition of [true, false]) test(`İngilizce durum yanıtının dil
   assert.deepEqual(turnViolations(result, { focus: ['status'], finish: 'stop' }), [], result.answer.content);
 });
 
-for (const charts of [['bar', 'pie'], JSON.stringify(['bar', 'pie'])]) test(`birincil alanı olmayan grafik listesinin onarımı geçerli ilk türü korur: ${Array.isArray(charts) ? 'dizi' : 'JSON metni'}`, async (t) => {
+for (const charts of [['bar', 'pie'], JSON.stringify(['bar', 'pie'])]) test(`aynı görsel ailedeki tür yazımı ilk turda kabul edilir; geçerli ilk tür korunur: ${Array.isArray(charts) ? 'dizi' : 'JSON metni'}`, async (t) => {
   const { phase4eConversation, renderedCharts } = await import('./helpers/phase4eScenario.mjs');
   const analysis = { scope: 'self', focus: ['status'] };
-  const queue = [{ intent: 'rota', language: 'tr', charts, analysis }, { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis }];
+  // Pasta halkanın yazımıdır: düzeltme turu harcanmaz, çubuk birincil kalır.
+  const queue = [{ intent: 'rota', language: 'tr', charts, analysis }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
   const result = await ask({ text: 'görev durumumu çubuk ve halka grafikle göster' });
-  assert.equal(result.inputs.length, 2);
+  assert.equal(result.inputs.length, 1);
   assert.equal(result.answer.finishReason, 'stop', result.answer.content);
   assert.deepEqual(new Set(renderedCharts(result.answer.content).map((chart) => chart.type)), new Set(['bar', 'donut']));
   assert.deepEqual(result.analysisContext.charts, ['bar', 'donut']);
@@ -624,7 +627,8 @@ for (const charts of [['bar', 'pie'], JSON.stringify(['bar', 'pie'])]) test(`bir
 for (const change of [{ chart: 'line', charts: ['line', 'donut'] }, { analysis: { scope: 'all', focus: ['status'] } }]) test(`grafik listesi onarımı geçerli türü veya kapsamı değiştiremez: ${change.chart ? 'tür' : 'kapsam'}`, async (t) => {
   const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
   const analysis = { scope: 'self', focus: ['status'] };
-  const queue = [{ intent: 'rota', language: 'tr', charts: ['bar', 'pie'], analysis }, { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis, ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
+  // İlk plan okumayı etkileyen sözlük dışı yön yüzünden reddedilir; geçerli grafik listesi ve kapsam onarım sınırında sabittir.
+  const queue = [{ intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis: { ...analysis, focus: ['status', 'geçersiz'] } }, { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis, ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
   const result = await ask({ text: 'görev durumumu çubuk ve halka grafikle göster' });
   assert.equal(result.inputs.length, 3);
@@ -800,4 +804,27 @@ test('aylık teslimat kıyası çizelge yönüyle de geçer; pencere veya gecikm
   assert.deepEqual(score(requests), []);
   assert.ok(score(requests.filter((item) => item.filters?.deadline !== 'overdue')).length);
   assert.ok(score(requests.map((item) => ({ ...item, filters: { ...item.filters, dateFrom: undefined, dateTo: undefined } }))).length);
+});
+
+test('nitelendirme belgesi iki kısmi koşuyu aynı yöntemle toplar; eksik kapsamı tam ölçüm saymaz', async () => {
+  const { readFileSync } = await import('node:fs');
+  const document = readFileSync(new URL('../docs/BILGIN-ANALIZ-KABUL-MATRISI.md', import.meta.url), 'utf8');
+  const rows = document.split('\n').filter((line) => /^\| [GF] (hedefli|ayrık) \(\d+\)/u.test(line) && line.includes('**'));
+  const finalRows = rows.filter((line) => line.split('|').length === 12);
+  assert.equal(finalRows.length, 4);
+  let total = 0;
+  for (const row of finalRows) {
+    const cells = row.split('|').slice(1, -1).map((cell) => cell.replaceAll('*', '').replaceAll('¹', '').trim());
+    const size = Number(/\((\d+)\)/u.exec(cells[0])[1]);
+    const completed = cells.slice(7, 9).map((cell) => {
+      const [passed, attempted = size] = cell.split('/').map(Number);
+      return { passed, attempted };
+    });
+    const estimate = completed.reduce((sum, run) => sum + run.passed, 0) / completed.reduce((sum, run) => sum + run.attempted, 0) * size;
+    total += estimate;
+    assert.ok(cells[9].includes(estimate.toFixed(1).replace('.', ',')), row);
+  }
+  assert.ok(document.includes(`Toplam ≈${total.toFixed(1).replace('.', ',')}/135`));
+  assert.match(document, /tamamlanmış bir 135 vakalık son-kod ölçümü değildir/);
+  assert.match(document, /G hedefli kümede gerileme dışlanamaz/);
 });

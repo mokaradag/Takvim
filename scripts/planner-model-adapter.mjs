@@ -16,7 +16,8 @@
  *
  * Ortam: PLANNER_CLAUDE_MODEL (varsayılan claude-haiku-4-5-20251001), PLANNER_CLAUDE_EFFORT (low),
  * PLANNER_CLAUDE_LOG (çağrı başına içeriksiz ölçüm satırı; bütçe ve önbellek kapısının durumu), PLANNER_CLAUDE_MAX_CALLS, PLANNER_CLAUDE_MAX_UNCACHED
- * (önbellekten okunmayan girdi belirteçlerinin toplam üst sınırı), PLANNER_CLAUDE_REQUIRE_CACHE=1 (aynı önekle ikinci
+ * (önbellekten okunmayan girdi belirteçlerinin toplam üst sınırı), PLANNER_CLAUDE_NAMED_TOOL=auto (adlı araç seçimini standart araç
+ * profilinin üretim sözleşmesiyle, sıradan MCP aracı olarak sunar), PLANNER_CLAUDE_REQUIRE_CACHE=1 (aynı önekle ikinci
  * çağrıdan sonra önbellek okuması zorunlu). Ev klasörü yalıtıldığı için CLI'nin kayıtlı oturumu görünmez; kimlik bilgisi
  * ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN ya da CLAUDE_CODE_OAUTH_TOKEN (ya da barındırılan oturumun ortamı) ile verilir.
  * PLANNER_CLAUDE_HOME (varsayılan geçici kökte POSIX için `rota-planner-claude-home-<uid>`, Windows için `rota-planner-claude-home`) alt ağacıyla birlikte yalnızca bu kullanıcıya
@@ -65,7 +66,12 @@ function serveTools(file) {
  * "bugün" kullandı). Üretimde böyle bir ek blok yoktur. Not, eklenen blokların Rota bağlamı olmadığını söyler; sistem yönergesi ve
  * araç kataloğu (önbelleğe alınan önek) bayt bayt aynı kalır, not yalnızca kullanıcı iletisinin başındadır.
  */
-export const HOST_CONTEXT_NOTE = '[ORTAM NOTU]\nBu iletiyi taşıyan komut satırı aracı kendi ortam bilgisini (güncel tarih, kullanıcı, depo ya da bütçe içeren system-reminder blokları) ekleyebilir. Bu bloklar Rota bağlamı DEĞİLDİR ve yok sayılır: geçerli tarih ve bağlam yalnızca sistem yönergesinde ve aşağıdaki iletilerde yazandır.';
+/*
+ * Tek kullanıcı iletisine düzleştirilen konuşmada rol bilgisi yalnızca bölüm etiketleridir; üretimde roller iletinin kendisidir. Gerçek
+ * Haiku koşularında talimat biçimli kullanıcı iletisinden ve düzeltme turundan sonra model "yanıtlanacak bir kullanıcı iletisi
+ * görmüyorum" diye yanıtladı: notun son cümlesi bölümlerin rolünü betimler (yanıt ipucu değildir, üretimde rollerin taşıdığı bilgidir).
+ */
+export const HOST_CONTEXT_NOTE = '[ORTAM NOTU]\nBu iletiyi taşıyan komut satırı aracı kendi ortam bilgisini (güncel tarih, kullanıcı, depo ya da bütçe içeren system-reminder blokları) ekleyebilir. Bu bloklar Rota bağlamı DEĞİLDİR ve yok sayılır: geçerli tarih ve bağlam yalnızca sistem yönergesinde ve aşağıdaki iletilerde yazandır. Aşağıdaki iletiler konuşmanın sırasıdır: [KULLANICI] bölümü kullanıcının yanıtlanacak iletisidir; varsa [ASİSTAN], [ARAÇ SONUCU] ve [SUNUCU NOTU] bölümleri bu iletiye verilmiş önceki yanıt adımlarıdır ve sıradaki yanıt konuşmanın devamıdır.';
 
 /** Sistem dışı iletiler tek kullanıcı iletisinde, sırasıyla ve rolleriyle. */
 function conversationText(messages, system = '') {
@@ -191,6 +197,55 @@ async function withLock(file, work, timeoutMs) {
   }
 }
 
+/** Sağlayıcının belirteç alt sınırı; bilinmeyen model için karakterden yetenek çıkarılmaz.
+ * Kaynak: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+ */
+export function cacheMinimumTokens(model) {
+  const families = [
+    [4096, ['haiku-4-5', 'opus-4-5', 'opus-4-6']],
+    [2048, ['opus-4-7']],
+    [1024, ['sonnet-4', 'sonnet-4-5', 'sonnet-4-6', 'sonnet-5', 'opus-4', 'opus-4-1', 'opus-4-8']],
+    [512, ['fable-5', 'fable-5-1', 'fable-5-2', 'mythos-5', 'mythos-5-1', 'mythos-5-2', 'opus-5', 'opus-5-5', 'sonnet-5-5', 'haiku-5-5']]
+  ];
+  return families.find(([, names]) => names.some((name) => model === `claude-${name}`
+    || new RegExp(`^claude-${name}-(?:[0-9]{8}|latest)$`).test(model)))?.[0] ?? null;
+}
+
+/** Aynı durağan öneğin yakın gözlemleri: soru metni önbellek kimliğinin parçası değildir. */
+export function cacheReuseState(prior, row, startedAt) {
+  const matching = prior.filter((item) => {
+    const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
+    return item.models?.length === 1 && row.models?.length === 1 && item.models[0] === row.models[0]
+      && item.effort === row.effort && item.staticPromptHash === row.staticPromptHash && item.toolCatalogHash === row.toolCatalogHash
+      && ageMs >= 0 && ageMs < 5 * 60 * 1000;
+  });
+  const recent = matching.filter((item) => !item.error);
+  const read = row.usage?.cache_read_input_tokens || 0;
+  const written = row.usage?.cache_creation_input_tokens || 0;
+  const observed = (item) => item.usage?.cache_read_input_tokens > 0 || item.usage?.cache_creation_input_tokens > 0;
+  const baseline = recent.findLast(observed);
+  const exact = recent.some((item) => item.promptHash === row.promptHash && observed(item));
+  // Tam istem daha önce gönderildiyse okuma onun önbelleğinden gelebilir; farklı soru geçmişi bunu önek kanıtına dönüştürmez.
+  const crossRead = read > 0 && row.cacheTailKind === 'single_user' && !matching.some((item) => item.promptHash === row.promptHash)
+    && recent.some((item) => item.cacheTailKind === 'single_user' && item.promptHash !== row.promptHash && observed(item));
+  const observedPrefixTokens = crossRead ? read : null;
+  const prefixTokens = observedPrefixTokens || recent.findLast((item) => item.cachePrefixTokens > 0)?.cachePrefixTokens || null;
+  const tokens = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].map((key) => row.usage?.[key]);
+  const minimum = cacheMinimumTokens(row.models?.[0]);
+  const belowMinimum = !read && !written && minimum != null && tokens.every((value) => Number.isSafeInteger(value) && value >= 0)
+    && tokens.reduce((sum, value) => sum + value, 0) > 0 && tokens.reduce((sum, value) => sum + value, 0) < minimum;
+  const prefixBelowMinimum = !prefixTokens && (belowMinimum || recent.some((item) => item.cacheEligibility === 'below_minimum'));
+  // Tam istem oluşturması tek başına durağan önek kanıtı değildir. Doğrulanamayan ikinci çağrı başarı diye geçmez;
+  // ayrı altyapı nedeni modeli suçlamadan koşuyu durdurur. Bilinen kısa önekte sahte önbellek kaçırma hatası üretilmez.
+  const error = read || !recent.length ? null : exact || prefixTokens ? 'PLANNER_CACHE_NOT_REUSED'
+    : prefixBelowMinimum ? null : 'PLANNER_CACHE_PREFIX_UNVERIFIED';
+  return { baseline, prefixTokens, observedPrefixTokens, eligibility: prefixTokens ? 'verified_prefix' : exact ? 'verified_full'
+    : read ? 'observed_reuse' : prefixBelowMinimum ? 'below_minimum' : 'unverified', error };
+}
+
+export function cacheReuseBaseline(prior, row, startedAt) {
+  return cacheReuseState(prior, row, startedAt).baseline;
+}
 export const MODEL_CLEANUP_TIMEOUT_MS = 5000;
 export const MODEL_FORCED_RETRY_ATTEMPTS = 2;
 export function modelCommandTimeoutMs(timeoutMs, forcedRetry = process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
@@ -690,14 +745,23 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
   if (system?.role !== 'system') return fail('PLANNER_SYSTEM_MISSING');
   const all = payload.toolChoice === 'none' ? [] : payload.tools;
   // Zorunlu adlı araç (üretimde OpenAI uyumlu adlı işlev seçimi) CLI'nin yapılandırılmış çıktısıyla verilir: yanıt o aracın şemasıdır.
-  const forced = payload.toolChoice?.name ? all.find((tool) => tool.name === payload.toolChoice.name) || null : null;
+  // PLANNER_CLAUDE_NAMED_TOOL=auto: standart araç profilinin (`chat.tools`) üretim sözleşmesi. Sağlayıcı bu profilde adlı seçimi `auto`
+  // olarak gönderir; plan aracı öteki araçlar gibi sıradan bir işlev aracıdır. CLI'nin yapılandırılmış çıktısı aracı modele
+  // "StructuredOutput" adıyla ve son yanıt biçimi olarak sunar (sistem yönergesindeki `rota_plan` adı görünmez; ölçüldü); bu kipte
+  // araç yerel MCP sunucusundan kendi adıyla, kayıt sırasıyla sunulur ve çağrısı öteki araç devirleri gibi iletilir. Şema doğrulamasını
+  // CLI değil, üretimdeki gibi sunucu yapar.
+  const namedAuto = process.env.PLANNER_CLAUDE_NAMED_TOOL === 'auto';
+  const forced = !namedAuto && payload.toolChoice?.name ? all.find((tool) => tool.name === payload.toolChoice.name) || null : null;
   // Zorunlu araç turunda yalnızca zorunlu şema (PLANNER_CLAUDE_FORCED_RETRY yeniden denemesi): üretimin adlı araç seçimi
   // modelin başka araç çağırmasını kısıtlı çözümle engeller; CLI bunu yapamaz, bu yüzden yeniden deneme ayrıca sayılır.
   const tools = hideTools ? [] : forced ? all.filter((tool) => tool !== forced) : all;
   // Üretim turunun çıktı sınırı (ör. doğal yanıt düzeninin dar sınırı) korunur; verilmemişse planlayıcı sınırı.
   const outputLimit = Number.isSafeInteger(payload.maxOutputTokens) && payload.maxOutputTokens > 0 ? Math.min(payload.maxOutputTokens, 4096) : 4096;
   const staticPromptHash = hash(system.content);
+  const promptHash = hash(conversationText(rest, system.content));
   const toolCatalogHash = hash(JSON.stringify([forced?.name ?? null, all, hideTools]));
+  // Durağan içerik uzunluğu yalnızca tanıdır: karakter sayısı önbellek uygunluğunu kanıtlamaz.
+  const staticChars = String(system.content).length + JSON.stringify(tools).length + (forced ? JSON.stringify(forced.parameters ?? {}).length : 0);
   let maxCalls;
   let maxUncached;
   try { maxCalls = limitFromEnv('PLANNER_CLAUDE_MAX_CALLS'); maxUncached = limitFromEnv('PLANNER_CLAUDE_MAX_UNCACHED'); } catch (error) { return fail(error.code); }
@@ -763,7 +827,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     const offered = (init?.tools || []).filter((name) => name.startsWith(PREFIX)).map((name) => name.slice(PREFIX.length));
     const row = { at: new Date().toISOString(), ...(callId ? { callId } : {}), models, effort, thinking: usage.output_tokens_details.thinking_tokens || usage.thinkingBlocks ? 'on' : 'off', usage,
       apiCalls: ids.size, numTurns: result?.num_turns ?? null, stopReason: !forced && blocks.some((block) => block.type === 'tool_use') ? 'tool_use' : result?.stop_reason ?? null,
-      durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
+      durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, promptHash, staticChars, cacheTailKind: rest.length === 1 && rest[0]?.role === 'user' && typeof rest[0].content === 'string' ? 'single_user' : 'conversation', toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
     if (timedOut) return fail(cleanupFailed ? 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_TIMEOUT', row);
     if (cleanupFailed) return fail('MODEL_COMMAND_CLEANUP_ERROR', row);
     // --max-turns 1 yerel araç devrini belgeli CLI durumuyla bitirir; bu başarısız tamamlama değildir.
@@ -776,12 +840,12 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     // bağlı tek yeniden deneme uygulanır ve `forcedText` ile ayrıca sayılır (yeniden deneme yoksa metin sunucuya eskisi gibi iletilir).
     const forcedProse = Boolean(forced && !hideTools && !forcedToolCall && code === 1 && result?.subtype === 'error_max_turns'
       && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
-    // Önbellek tabanı: aynı durağan istem ve araç kataloğuyla beş dakika içindeki başarılı çağrı.
-    const cacheBaseline = () => prior.find((item) => {
-      const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
-      return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
-        && ageMs >= 0 && ageMs < 5 * 60 * 1000;
-    });
+    // Karakter sayısı yalnızca tanıdır; önbelleklenebilirlik sağlayıcının gerçek belirteç kullanımıyla kanıtlanır.
+    const cacheState = cacheReuseState(prior, row, startedAt);
+    row.cacheMinimumTokens = cacheMinimumTokens(model);
+    row.cacheEligibility = cacheState.eligibility;
+    // Devralınan kanıt yeni satıra kopyalanmaz: beş dakikalık yaş özgün gözlemde kalır.
+    row.cachePrefixTokens = cacheState.observedPrefixTokens;
     const catalogProblem = JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort()) ? 'PLANNER_TOOLS_NOT_OFFERED'
       : prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash) ? 'PLANNER_TOOL_ORDER_UNSTABLE' : null;
     if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
@@ -792,8 +856,8 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       if (problem) return fail(problem, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       // Önbellek zorunluluğu yeniden denemeden ÖNCE uygulanır: yeniden deneme araçları gizlediği için katalog özeti değişir ve kendi
       // tabanı olmaz; ilk yanıtın önbellek kaçırması bu yolla gizlenemez.
-      if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) {
-        return fail('PLANNER_CACHE_NOT_REUSED', { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
+      if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheState.error) {
+        return fail(cacheState.error, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       }
       appendLedger(log, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       rmSync(work, { recursive: true, force: true });
@@ -809,16 +873,21 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     const forcedText = Boolean(forced && !forcedToolCall && !schemaRejected && code === 1 && result?.subtype === 'error_max_turns'
       && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
     if (forcedText) row.forcedText = true;
-    if (code !== 0 && !toolHandoff && !schemaRejected && !forcedText || !result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null, subtype: result?.subtype ?? null, exitCode: code ?? null });
+    // Yeniden denemesiz zorunlu turda doğrudan veri aracı çağrısı: standart araç profilinde (`chat.tools`) üretim adlı seçimi `auto`
+    // olarak gönderir; model plan yerine veri aracını çağırabilir ve sunucu bunu `$.plan:required` reddi ve düzeltme turuyla karşılar.
+    // Çağrı üretimdeki gibi sunucuya iletilir (ayrı sayılır); altyapı hatası sayılmaz.
+    const forcedHandoff = Boolean(forcedToolCall && result?.is_error === true);
+    if (forcedHandoff) row.forcedToolCall = true;
+    if (code !== 0 && !toolHandoff && !forcedHandoff && !schemaRejected && !forcedText || !result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null, subtype: result?.subtype ?? null, exitCode: code ?? null });
     if (catalogProblem) return fail(catalogProblem, { ...row, offered });
-    if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
+    if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheState.error) return fail(cacheState.error, row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
     if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);
     appendLedger(log, row);
-    // Zorunlu turda öteki araçlar yalnızca görünürdür (üretimdeki gibi); üretimin kısıtlı çözümü başka çağrı üretemez, burada da iletilmez.
+    // Zorunlu turda öteki araçların çağrısı yalnızca yeniden denemesiz devirde (üretimin `auto` seçimi) iletilir.
     const structured = !result.is_error && result.structured_output && typeof result.structured_output === 'object' && !Array.isArray(result.structured_output);
-    const toolCalls = forced ? structured ? [{ name: forced.name, arguments: result.structured_output }] : schemaRejected ? [{ name: forced.name, arguments: attempted.input }] : []
+    const toolCalls = forced && !forcedHandoff ? structured ? [{ name: forced.name, arguments: result.structured_output }] : schemaRejected ? [{ name: forced.name, arguments: attempted.input }] : []
       : blocks.filter((block) => block.type === 'tool_use' && block.name.startsWith(PREFIX))
         .map((block) => ({ name: block.name.slice(PREFIX.length), arguments: block.input ?? {} }));
     const stop = row.stopReason;

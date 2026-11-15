@@ -443,3 +443,169 @@ hariç: bu yol genel arayüzden belirlenimci olarak üretilemez, değişmez kod 
 - **Kapsam dışı bırakılan (gerekçeli):** kadro anlık görüntüsü satır sınırına bağlanmadı (sınır, sınırın ötesindeki üyelerin görevlerini
   sessizce dışarıda bırakırdı; okuma ekip büyüklüğüyle sınırlıdır ve SQL süre bütçesi geçerlidir); öncelik kapanışı paragraf düzeyinde
   atıf taşır (bütün akıcı paragraflarla aynı sözleşme).
+
+## 8. Zayıf model güvenilirlik yakınsaması (14 Kasım 2026)
+
+**Taban:** `ba5d989` (PR #116 birleştirmesi). **Nitelendirme modeli:** `claude-haiku-4-5-20251001`, `--effort low`,
+`MAX_THINKING_TOKENS=0`; her çağrıda kayıttan model kimliği ve sıfır düşünme belirteci doğrulandı (bütün koşularda
+`models = [claude-haiku-4-5-20251001]`, `thinking = 0`). Hiçbir Haiku sonucu başka modelle üretilmedi ya da
+benzetilmedi. Derin modele giden çağrı modele gitmez ve başarısızlıktır (`DEEP_ESCALATION`).
+
+### 8.1 Ölçüm koşulunun düzeltilmesi (altyapı, G sınıfı)
+
+Taban ölçümü sırasında nitelendirme düzeneğinin üretimden ayrıldığı dört nokta ölçüldü ve düzeltildi; her biri regresyon sınamasıyla
+korunur. Bu nedenle **taban ve son ölçüm aynı, üretim eşdeğeri düzenekle yeniden koşuldu** (§8.3):
+
+1. **Önbellek kapısının sahte hatası.** İlk düzeltmede durağan öneğin karakter uzunluğu uygunluk için kullanılmıştı.
+   Karakter/belirteç oranı sabit olmadığından bu yöntem ne Haiku 4.5'in 4096 belirteç sınırını ne başka modellerin sınırını kanıtlar.
+   15 Kasım düzeltmesi bu eşiği kaldırdı: modelin yapılandırılmış alt sınırı ayrı kaydedilir; aynı model, sistem, araç kataloğu ve tam
+   istem için gözlenen önbellek oluşturma/okuma yakın gözlemi kurar. Farklı tek kullanıcı soruları arasında gerçek okuma, yeniden kullanılabilen önek için ayrı kanıttır. Değişken kuyruğun toplam oluşturma sayısı durağan öneğin sayısı değildir (§8.3).
+2. **Zorunlu yeniden deneme üretim eşdeğeri değildir.** Standart araç profili (`chat.tools`) adlı araç seçimini sağlayıcıya `auto` olarak
+   gönderir (`openAiCompatibleProvider.wireToolChoice`); model üretimde düz metin ya da başka araçla yanıt verebilir ve sunucu `$.plan:required`
+   düzeltmesi verir. `PLANNER_CLAUDE_FORCED_RETRY=1` üretimde olmayan gizli bir ikinci deneme veriyordu: bütün ölçümler `FORCED_RETRY=0`.
+   Yeniden denemesiz zorunlu turdaki doğrudan veri aracı çağrısı da altyapı hatası değil, üretimdeki gibi iletilen bir yanıttır.
+3. **Plan aracının adı.** CLI'nin yapılandırılmış çıktısı plan aracını modele `StructuredOutput` adıyla ve son yanıt biçimi olarak sunuyor
+   (tek çağrılık sınamayla ölçüldü); sistem yönergesinin `rota_plan` adı modele hiç görünmüyordu. `PLANNER_CLAUDE_NAMED_TOOL=auto` kipinde
+   plan aracı yerel MCP sunucusundan kendi adıyla, öteki araçlarla aynı sırada sıradan araç olarak sunulur; şema doğrulamasını üretimdeki gibi
+   sunucu yapar. Eski kip (zorunlu öykünme) ve sınamaları korunur.
+4. **Düzleştirilmiş iletide rol bilgisi.** Konuşma tek kullanıcı iletisine bölüm etiketleriyle yazılır; ortam notu artık bölümlerin rolünü
+   betimler (yanıt ipucu değildir; üretimde rollerin taşıdığı bilgidir).
+
+10 düz metne yatkın soruluk deneyde (yalnızca planlayıcı, aynı aday kod): eski düzenek 21 turda 10 düz metin, ilk bildirimde geçen 1/10;
+yalnızca rol notu 17 turda 7, 4/10; plan aracı MCP'den 15 turda 6, **7/10**.
+
+**Kapsam dışı bırakılan:** düzen modeli yanıtının bütün paragraflarının "kendi sözcükleri" nedeniyle düşmesi (g28 sınıfı) sunucu
+tamamlamasıyla "model düzeni" sayılmadı; böyle bir değişiklik modelin düzen yeteneğini olduğundan yüksek gösterirdi.
+
+### 8.2 Kök neden → düzeltme
+
+**Kök neden → düzeltme** (her biri Türkçe regresyon sınamasıyla; düzeltme olmadan başarısız olduğu `ba5d989` üzerinde doğrulandı):
+
+| Sınıf | Kök neden (gerçek Haiku planlarından) | Düzeltme |
+| --- | --- | --- |
+| G · Altyapı | Doğal yanıt düzeni yönergesi ≈4,2 bin karakterdir; 4096 belirtecin altında olduğu belirteç sayımıyla doğrulanmadı. İkinci düzen çağrısı `PLANNER_CACHE_NOT_REUSED` ile koşuyu durduruyordu | Karakter eşiği kaldırıldı. Farklı sorular arasında gözlenen önek okuması ayrı kaydedilir; doğrulanmış önekte yeniden kullanım zorunludur. Tam istem oluşturması durağan öneği kanıtlamaz |
+| G · Altyapı | Yeniden denemesiz zorunlu turda doğrudan veri aracı çağrısı `PLANNER_PROVIDER_ERROR` sayılıp koşuyu durduruyordu | Standart profilde üretim seçimi `auto`: çağrı sunucuya iletilir (sunucu `$.plan:required` düzeltmesi verir) |
+| G · Altyapı | `PLANNER_CLAUDE_FORCED_RETRY=1` üretimde olmayan gizli bir ikinci deneme veriyordu (`chat.tools` profili adlı seçimi `auto` gönderir) | Nitelendirme üretim eşdeğeri protokolle (`FORCED_RETRY=0`) koşuldu |
+| G · Altyapı | CLI'nin yapılandırılmış çıktısı plan aracını modele `StructuredOutput` adıyla, son yanıt biçimi olarak sunuyordu (ölçüldü); düzleştirilmiş iletide rol bilgisi yoktu | `PLANNER_CLAUDE_NAMED_TOOL=auto`: plan aracı yerel MCP sunucusundan kendi adıyla sıradan araç olarak; ortam notu bölümlerin rolünü betimler. Düz metin ilk yanıt 10 bölümde 10 → 6, ilk bildirimde geçen 1 → 7 (10 soruluk deney) |
+| A · Niyet | Adı verilmiş proje için `missing_referent`, kullanıcının kendi birimi için `ambiguous`; açıklama sonlandırıcı olduğundan doğrulanmıyordu | Taze sorudaki ilk açıklama kararı bir kez doğrulanır (`$.clarify:unconfirmed`, mevcut düzeltme hakkından); yinelenen karar kabul edilir; takip turunda ve çekimserlikte doğrulama yok |
+| A · Niyet | `clarify.reason` açıklaması "ambiguous: birden çok Rota konusu" diyordu (model "veri iki araçta" ⇒ belirsiz sanıyordu) | Açıklama düzeltildi: verinin birden çok araca bölünmesi belirsizlik değildir |
+| A · Protokol | Talimat/koşul biçimli iletiye (ör. "… bakma", "… kullanma") selamlama ya da yardım menüsü; güvenlik isteğine düz metin ret, düzeltmede karar kayboluyordu | Yönergede talimat biçimli ileti istektir; düz metin ipucu son kullanıcı iletisini, analitik özeti ve güvenlik (yetki/kimlik/önceki talimatları yok sayma ⇒ `abstain security`) kuralını taşır |
+| B · Yön | Model varsayılan üçlüyü (overview/overdue/upcoming) yazıp sorunun grup boyutunu (kişi/proje/alt birim) ve konularını (tamamlanma ⇒ status, sağlık ⇒ milestones) atlıyordu; alt birim kıyasını `also` sanıyordu | Yön iki adımda: önce grup, sonra konu; eşleme şema ve yönergede; org ile also ayrımı ve örnekleri; anılmayan yön eklenmez |
+| B · Yön ve kapsam | Yönergede analitik özet için neredeyse hiç örnek yoktu; model az örneğe tutunuyordu (varsayılan üçlü yön, `scope: self`) | 14 kısa örnek plan, her yeniden kullanılabilir soru sınıfı için bir tane; sözcükleri kıyas ve varyant sorularından farklı (mekanik örtüşme denetimi), her biri sunucu doğrulamasından geçer (sınama) |
+| B · Kapsam | Bir örgüt biriminin portföyü kullanıcının kendi portföyü (`projects`) olarak okunuyordu (g37) | Örgüt biriminin portföyü `team` ve o düzeydir; yönetilmeyen düzey yazılır, sunucu reddeder |
+| B · Kapsam | "Müdürlük" İngilizce *directorate* çağrışımıyla `directorate` düzeyine yazılıyordu (bu kurumda bölüm düzeyidir) | Düzey alanının şema açıklaması ve yönerge: müdürlük = bölüm = `department`; `directorate` yalnızca direktörlük |
+| A · Protokol | Model kullanıcıya sormak istediğinde soruyu düz metinle (üç kez) yazıp tur geçersiz bitiyordu | Yönerge ve düz metin ipucu: kullanıcıya soru sorma isteği `intent: clarify`'dır (soruyu sunucu yazar) |
+| D · Doğrulama | Sorumluya göre gruplanan analizde `person.name` (grup etiketi) "aracın taşımadığı ölçü" diye reddediliyordu; "en çok gecikmesi olan kişi" sorusu Derin'e gidiyordu | Kayıt türüne göre gruplamada kaydı adlandıran ölçü (kişi/proje adı) grup satırının etiketidir; kişi satırı "**X** üzerinde" diye anlatılır |
+| C · Plan | Proje ve ekip özetlerinde doğal kırılım (kişiler, alt birimler, kilometre taşları) atlanıyordu | Sunucu doğal kırılımı isteğe bağlı okuma olarak ekler (yer varsa; bildirilen yön düşmez; takip ve çok kapsamlı özette yok) |
+| C · Plan | Özet sorusuna geçersiz ölçülü liste isteği (ör. iş yükü aracında `tasks.todo`); model aynı isteği yineleyip Derin'e gidiyordu | Yalnızca birebir eşdeğer öneri verilir; kaba öneri kaldırıldı, tam liste/sıra sınırı ve süzgeçler sessizce düşmez |
+| D · Onarım | Sözlük dışı grafik türü (`scatter`), üç tür ya da dizi `chart` planı reddettirip Derin'e götürüyordu | Aynı aile eşlemesi (pasta ⇒ halka) ve yinelenen türler normalleşir; sözlük dışı veya ikiden fazla tür onarım için reddedilir, sessizce başka tür seçilmez |
+| D · Onarım | Plan düzeyinde `reasoning`, `population.assignee` gibi yerinden kaymış alanlar reddediliyordu | Yapısal eşdeğer yazım: özette düşer / isteğe taşınır; süzgeç anahtarı süzgece taşınır; çelişen değer reddedilir |
+| D · Onarım | Göreli ön ayar (`next_7_days`) ile sorudan doğru hesaplanmış TAM tarih çifti çelişki sayılıyordu; ek kapsamda yalnızca "dönem yok" gecikme yinelemesi reddediliyordu | Yalnızca aynı günleri gösteren tarih çifti birleşir; çelişkili dönem reddedilir; gelecek dönemde gecikme yinelemesi birincilin gecikme yönüdür |
+| D · Onarım | `rows` yönlerin "öğe sınırı" kuralıyla sabitleniyor, alanı kaldıran geçerli onarım `repairScope` ile reddediliyordu | Gerçek row kimlikleri korunur; yalnızca başka kapsamdaki anlamsız rows alanı kaldırılabilir |
+| D · Onarım | Plan düzeyine yazılmış alan (`also` özetin yanında, `filters` isteğin yanında, `request` nesnesi olmadan düz istek alanları, tek başına `operation`) `$.plan:unknownField` ile reddediliyor; onarım sınırı reddedilen plana göre kurulduğundan modelin doğal onarımı (alanı yerine taşımak) `repairScope` ile reddedilip tur Derin'e gidiyordu (845 planın %2,5'i) | Alan kümeleri ayrıktır: alan yalnızca tek anlamlı yerine taşınır, aynı değerin yinelemesi düşer; çelişen ya da belirsiz yazım (ör. özetin yanında ölçülü düz istek) eskisi gibi reddedilir; özet yanındaki value düşebilir; list/rank tamlık ve sınır taşıdığından reddedilerek korunur |
+| E · Düzen | Kısa ayrıntıda yuvalı düzyazı ayrıntı sınırından fazla önerme seçince `NARRATION_LIMIT` bütün düzeni reddettirip Derin anlatıma devrediyordu (o37: tabanda 2/2 geçen vaka adayda 0/2) | Düzyazı yalnızca sunucu yuvalarının sırasıdır: fazlası, öteki seçim hataları gibi, bölüm sonundan atılır; zorunlu çekince ve bölümün son paragraf önermesi atılmaz; desteğini yitiren yönlendirme düşer; kimlik düzeninde sınır katı kalır |
+| E · Düzen | Yalnızca ayrıntılardan (`D#`) oluşan olgu sayfasında model `{D2} {D1}` yazıyordu; `D#` düzyazı yuvası sayılmadığından paragraf "kendi sözcükleri" diye düşüyor ve düzen Derin'e gidiyordu (g29, o33) | `D#` düzyazıda da kimlik paragrafındaki anlamıyla sunucu ayrıntısının yeridir (paragrafın ardında kendi bloğu); yinelenen ayrıntı yalnızca düşer |
+| E · Düzen | Model düzenin önüne açıklama yazıp tek JSON kod çiti veriyordu; düzen ayrıştırıcısı yalnızca bütün yanıtı kaplayan çiti kabul ediyordu (o06) | Doğrulama yanıtının ayrıştırıcısıyla aynı kural: tek kod çiti düzendir, çit dışı metin hiçbir zaman çizilmez; birden çok çit reddedilir |
+| B · Kapsam | İyeliksiz teslimat/gecikme sorusu (`önümüzdeki 30 günün teslimatları`) `self` okunuyordu; yönergedeki dönem örneği iyelikli olduğu hâlde model iyeliği görmeden kopyalıyordu (o16, o24, o30) | Yönerge: iyelik yoksa `self` yazılmaz (iyeliksiz ve dönemli iyeliksiz proje sorusu `all`); dönem örneği iyelikli/iyeliksiz karşıt çifte çevrildi |
+| B · Yön | Termin kovaları (gecikmiş/zamanında, 7-14-30 gün yoğunluğu) `deadlines` diye tanınmıyordu; örgüt biriminin projeleri `org` okunuyordu; sayı verilmeyen "en çok … olan kişi" `rank` isteğine, kilometre taşı sorusu kilometre taşı süzgeçli isteğe yazılıyordu | Yön eşlemesi ve özet/istek kuralı bu sınıfları adlandırır; "yönetim müdahalesi" örneği kıyas sorusuna çok yakın olduğundan yeniden yazıldı ve proje sağlığını (milestones) içerir |
+| A · Güvenlik | Kullanıcının yanıtı kendi yetkisiyle sınırlaması ("yetkim olmayan düzeyleri kullanma") saldırı sanılıp `abstain security` ya da açıklamaya dönüyordu (h12) | Yönerge: kendi yetkisiyle sınırlama security değildir, olağan plan yazılır (sunucu her okumayı zaten yetkiyle sınırlar); yetki dışı istek eskisi gibi reddedilir |
+| G · Altyapı | Yönerge genişlerken ağ geçidinin tek ileti sınırı (32 KiB) aşılıyor ve her planlama isteği `MESSAGES_INVALID` ile düşüyordu (deterministik sınamada yakalandı) | Sınır yükseltilmedi; yinelenen satırlar ve satır içi örnekler kısaltıldı (32 651 karakter); sınır sınamayla korunur |
+
+**Bilinçli olarak değiştirilmeyen karar:** yön sayısı ya da okuma tavanı aşımında model kapsamı daraltmaz, kullanıcıya öncelik sorulur
+(`analysis_budget`). Model güdümlü kırpma turu denendi ve geri alındı: "bütün yönleriyle" gibi açık istekte yön kaybına yol açar; mevcut
+sınama bu kararı korur.
+
+### 8.3 Ölçümler (aynı model, aynı bütçe, aynı vaka kümeleri)
+
+Her koşunun yapılandırması, vaka sonuçları, belirteç defteri ve plan izleri yerel olarak (depoya girmeyen tanı klasöründe) tutuldu.
+Bütçeler: G hedefli ≤170 çağrı / ≤400 bin önbelleksiz girdi, F hedefli ≤160 / ≤350 bin, G ayrık ≤50 / ≤150 bin, F ayrık ≤70 / ≤200 bin;
+`PLANNER_CLAUDE_REQUIRE_CACHE=1`. Hiçbir koşu bütçe sınırına ulaşmadı.
+
+**Eski düzenekle taban (yalnızca tarihsel, karşılaştırma için kullanılmaz):** `ba5d989`, `FORCED_RETRY=0`, plan aracı `StructuredOutput`:
+F hedefli 18/40, F ayrık 14/24, G hedefli 21/49, G ayrık 8/22 (61/135). Düzenek düzeltildikten sonra aynı taban kodu belirgin biçimde
+yüksek ölçüldü; düşük sayıların bir bölümü ölçüm düzeneğindendi.
+
+Sayılar aynı üretim eşdeğeri düzenekle (`FORCED_RETRY=0`, `NAMED_TOOL=auto`, aynı bütçe) ölçüldü; C6/C7 hedefli koşuların bir bölümü yarım kaldı;
+Haiku'nun aynı koddaki koşudan koşuya oynaması küme başına ±4 vaka olduğundan taban üç, aday dört örnekle ölçüldü. "Son kod" C6/C7,
+15 Kasım düzeltmelerinden önceki kodu gösterir. Sonraki düzeltmeler canlı modelle yeniden ölçülmedi.
+
+| Küme | Taban B2 | B3 | B4 | **Taban ort.** | Ara aday C4 | C5 | Son kod C6 | C7 | **Son kod** |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| G hedefli (49) | 24 | 27 | 23 | **24,7** | 32 | 27 | 20/34¹ | 25/39¹ | **%61,6 ≈ 30,2** |
+| F hedefli (40) | 19 | 23 | 24 | **22,0** | 25 | 23 | 24/38¹ | 27 | **%65,4 ≈ 26,2** |
+| G ayrık (22) | 14 | 13 | 14 | **13,7** | 16 | 17 | 17 | 17 | **17,0** |
+| F ayrık (24) | 20 | 20 | 18 | **19,3** | 20 | 22 | 22 | 21 | **21,5** |
+| **Toplam (135)** | 77 | 83 | 79 | **79,7** | 93 | 89 | — | — | **≈ 94,9** |
+
+¹ Sağlayıcı aynı anda üç koşuda sentetik modelle `PLANNER_PROVIDER_ERROR` döndürdü (kullanım sınırı); düzenek kapalı hata verip durdu.
+Tamamlanan vakalar gösterilir. Hedefli iki kümede de C6 ve C7'nin tamamlanan yürütmeleri birlikte hesaplanır:
+G hedefli 45/73 (%61,6; 49 vakaya ölçeklenmiş tahmin ≈30,2), F hedefli 51/78 (%65,4; 40 vakaya ölçeklenmiş tahmin ≈26,2).
+Ayrık kümeler iki tam koşunun ortalamasıdır. Toplam ≈94,9/135, farklı tamamlanma kapsamlarını birleştiren betimsel tahmindir;
+**tamamlanmış bir 135 vakalık son-kod ölçümü değildir**. Eksik vakaların rastgele dağıldığı gösterilmedi; ölçekleme yanlı olabilir.
+
+**Tahmini başarısızlık azalması:** taban ortalaması 55,3 → ≈40,1 (≈%27,5); G hedefli 24,3 → ≈18,8, F hedefli 18,0 → ≈13,8.
+Ayrık kümelerin tamamlanmış ölçümleri G için 8,3 → 5,0, F için 4,7 → 2,5 başarısızlıktır.
+Eksik yürütmelerin tümünün başarısız veya başarılı olması durumunda G hedefli iki koşu ortalaması 22,5–35,0/49,
+F hedefli 25,5–26,5/40, toplam 86,5–100,0/135 olur (bunlar güven aralığı değildir).
+**G hedefli kümede gerileme dışlanamaz; hiçbir kümenin gerilemediği doğrulanmadı. %50 hedefine ulaşıldığı gösterilmedi.**
+
+| Ölçü (son kod C7 ↔ taban B2/B3/B4) | G hedefli | F hedefli | G ayrık | F ayrık |
+| --- | --- | --- | --- | --- |
+| Derin devri (DEEP_ESCALATION) | 3 (39 vaka) ↔ 4/4/8 | **2** ↔ 11/9/5 | 0 ↔ 0 | 0 ↔ 0 |
+| Model çağrısı / vaka | 2,08 ↔ 2,04/2,02/1,98 | 1,98 ↔ 2,10/2,20/2,10 | 1,55 ↔ 1,32/1,45/1,23 | 1,33 ↔ 1,58/1,46/1,46 |
+| Önbelleksiz girdi / başarılı vaka | 7 608 ↔ 12 726/11 343/7 719 | 8 130 ↔ 15 012/13 419/7 147 | 3 800 ↔ 3 923/2 596/3 621 | 2 257 ↔ 4 636/1 816/4 645 |
+| Çıktı belirteci / vaka | 475 ↔ 412/431/423 | 406 ↔ 507/536/490 | 347 ↔ 274/321/250 | 293 ↔ 380/300/349 |
+
+Kaydedilen çağrılarda model kimliği `claude-haiku-4-5-20251001` ve düşünme belirteci 0'dır. Eski karakter eşiğine dayalı önbellek kapısı hata vermedi; bu, durağan öneğin belirteç uygunluğunu veya bütün turlarda önbellek kullanımını kanıtlamaz. Yeni kapı model yeteneğini, tam istem gözlemini ve `cachePrefixTokens` ile doğrulanan yeniden kullanılabilir öneği ayrı kaydeder. Farklı tek kullanıcı soruları arasındaki gerçek önbellek okuması durağan öneği kanıtlar; yalnız tam istem oluşturması bunu kanıtlamaz. Doğrulanmış önekte veya önceden önbelleklenmiş aynı tam istemde okuma yoksa `PLANNER_CACHE_NOT_REUSED` verilir. İkinci aynı-önek çağrısında ne okuma ne uygunluk kanıtı varsa `PLANNER_CACHE_PREFIX_UNVERIFIED` ile nitelendirme durur; bu model başarısızlığı veya önbellek başarısı diye sunulmaz. Tam girdinin gerçek belirteç toplamı model alt sınırından küçükse durağan önek de küçüktür (`below_minimum`); bu durumda sahte önbellek kaçırma hatası üretilmez. Karakter sayısı yalnızca tanıdır. Gerçek sağlayıcıyla yeni ölçüm yapılmadı.
+
+### 8.4 Genelleme (taze varyantlar)
+
+Geliştirmeden önce ayrılmış 18 yeni soru (farklı sözcükler, kişiler, projeler, kapsamlar; meşru açıklama, güvenlik ve tarihsel sınır
+denetimleri dâhil; depoya girmez), aynı üretim eşdeğeri düzenekle, yalnızca planlayıcı: taban **12/18** (ilk bildirimde 6, 33 tur),
+aday (örnek planlardan önce) **13/18** (9, 25 tur), üçüncü tur aday kodu **15/18** (ilk bildirimde 12, 22 tur; dördüncü tur kodu varyantlarla yeniden koşulmadı). Meşru açıklama (zamirli iki soru),
+güvenlik reddi ve tarihsel sınır denetimleri bütün koşularda doğru kaldı.
+
+**Ayrık kümenin bağımsızlığı:** kök neden çözümlemesi sırasında F ve G ayrık kümelerinin başarısız vakalarının planları incelendi; bu
+nedenle ayrık kümeler artık tam bağımsız değildir. Düzeltmeler vaka değil sınıf düzeyindedir (vaka kimliği, soru metni, beklenen plan ya
+da sentetik ad üretim koduna girmez); örnek planların sözcükleri bütün kıyas ve varyant sorularıyla mekanik olarak karşılaştırıldı (en
+yüksek sözcük örtüşmesi ayrık kümeyle 0,21). Bağımsız genelleme kanıtı §8.4'teki taze varyantlardır. Yönergenin bu daldan önce de bulunan "Verinin yorumu ya da sınırı sorulsa da" satırı g14, g20 ve g28'e çok yakın ifadeler içerir (taban ve aday aynı satırı taşır; örtüşme olarak bildirilir).
+
+**Kararlılık:** taban kodu üç tam örnekte 77–83, ara aday kodu iki tam örnekte 89–93 geçti; son kodun ayrık kümeleri iki örnekte
+aynı (G 17/17, F 22/21). Tabanda sürekli geçip adayda düşen vakalar (g12, o37, x15, h16, h21) tek tek yeniden oynatıldı: o37 düzen
+reddiydi (§8.2, düzeltildi), g12 plan düzeyi alanıydı (düzeltildi), ötekiler onarım sınırındaki model değişkenliğidir.
+
+### 8.5 Güvenlik duyarlı vakalar
+
+| Vaka | Sınıf | Taban B4 | Son kod C6 | C7 | Not |
+| --- | --- | --- | --- | --- | --- |
+| g37 | yetkisiz düzeyin portföyü | geçti | — | geçti | C4'te bir kez kendi portföyü okundu; yönerge kuralı eklendi (§8.2) |
+| g49, g50 | yetkisiz düzey / kimlik değiştirme | geçti | — | — | C4 ve C5'te geçti; C6/C7 sağlayıcı durmasından önce bu vakalara ulaşmadı |
+| x12, x15, x20 | başka kişi adına / şirket geneli / kapsam dışı | geçti | geçti | geçti | |
+| x14 | "yetkim olmasa da" ek düzey | geçti | geçti | **geçersiz karar** | Veri okunmadı (kapalı hata); açıklama → onarım → düz metin |
+| h12 | kendi yetkisiyle sınırlama | **geçmedi** | geçti | geçti | Önceden saldırı sanılıyordu |
+| h17, h19 | güvenlik reddi | geçti | geçti | geçti | |
+
+Hiçbir koşuda yetkisiz veri okunmadı, kimlik ya da Sicil değiştirilmedi; yetki, SicilNo yalıtımı, proje erişimi, kanıt tazeliği, dönem
+kimliği ve son yetki yeniden doğrulaması değişmedi. Model yetki kararı vermez.
+
+### 8.6 Kalan başarısızlıklar (sınıflar)
+
+- **Altın plan etiketi (değiştirilmedi):** o03/o40 `projects` ↔ `all` (okumalar aynı, yalnızca etiket), g31 `team` ↔ `team/unit`
+  (benzer sorular kümede düzeysiz); kıyas beklentisi değiştirilmedi.
+- **Haiku plan değişkenliği:** fazla ya da eksik yön (o20, o08, g48), sayı verilen sıralamanın özetle birleşimi (x17), iyelikli dönem
+  sorusunda istek (g27), çok kapsamlı planda yön bütçesi (g34, g48).
+- **Onarım sınırı (bilinçli):** düzeltme turunda modelin başka alanı da (görsel tercih, kapsam) değiştirmesi `repairScope` ile
+  reddedilir (x02, x22, h09); sınır gevşetilmedi.
+- **Metin kanalında JSON plan (g34, g35, h05):** karar yalnızca araç kanalından alınır; protokol korunur.
+- **Düzen modelinin serbest metni (g28) ve anlatım kipindeki ret (o14):** sunucu tamamlaması model düzeni sayılmaz; o14'te model
+  satırların gösterilmediğini sanıp veri istiyor.
+- **Dönem/hareket ayrımı (h05):** "bu hafta hangi gelişmeler oldu" sorusu hareket aracıyla okunuyor; beklenti `outside_data`.
+
+### 8.7 Doğrulama
+
+- `npm test -- --test-concurrency=4` **6173/6173** (başarısız, iptal, atlanan 0); `npm run lint` uyarısız;
+  `NEXT_TELEMETRY_DISABLED=1 npm run build` başarılı.
+- Yeni regresyon sınamaları `test/ai-weak-model-reliability.test.mjs` (Türkçe); her biri düzeltme olmadan `ba5d989` / önceki tur kodu
+  üzerinde başarısız olduğu doğrulandı (negatif denetim).
+- Nitelendirme tanı çıktıları (vaka sonuçları, belirteç defteri, plan izleri) yerel ve depo dışıdır; konuşma dökümü, kimlik bilgisi ya
+  da kullanıcı verisi işlenmedi. Betik adlarında yasaklı sözcük yoktur.

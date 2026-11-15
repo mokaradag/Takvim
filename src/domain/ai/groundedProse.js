@@ -2,13 +2,13 @@
  * Kanıt yuvalarının kapalı anlatım sözleşmesi.
  *
  * Model paragrafta yalnızca hangi sunucu önermelerinin (`{P#}`) ve yönlendirmelerinin (`{T#}`, `{G#}`) hangi sırayla
- * söyleneceğini seçer. Yuva dışındaki HİÇBİR model metni çizilmez: ne serbest sözcük ne de bağlaç. Bağlaç da bir ilişki
+ * söyleneceğini seçer; `{D#}` sunucunun hazır ayrıntısının yeridir (kimlik paragrafındaki gibi paragrafın ardında kendi bloğu). Yuva dışındaki HİÇBİR model metni çizilmez: ne serbest sözcük ne de bağlaç. Bağlaç da bir ilişki
  * iddiasıdır ("öte yandan" karşıtlık söyler); ilişkiyi yalnızca sunucu, aynı kanıtın önermeleri arasında doğrulayarak
  * kurar (groundedPropositions.js § fluentParagraph). Yuva dışı metin bu yüzden yorumlanmaz, ayıklanmaz ya da olgusallığı
  * kestirilmez: yalnızca atılır ve sayılır. Kullanıcıya ulaşan her sözcük sunucunundur.
  */
 export const PROSE_LIMITS = Object.freeze({ maxChars: 2400, maxSentences: 8 });
-const SLOT = /\{([PTG][1-9][0-9]?)\}/gu;
+const SLOT = /\{([PTGD][1-9][0-9]?)\}/gu;
 /** Yuvaları ayıran boşluk ve noktalama atılan metin sayılmaz (gözlem sayacı yalnızca sözcük taşıyan parçaları sayar). */
 const SEPARATOR = /^[\s\p{P}]*$/u;
 const fail = (issue) => ({ ok: false, issue });
@@ -33,22 +33,28 @@ export function tokenizeProse(text) {
  * kurulumu ve birleştirme sunucunundur.
  * @returns {{ ok: true, ids: string[], sentences: { slot: string }[][], dropped: number, cut: 0, issues: [] } | { ok: false, issue: string }}
  */
-export function checkProse(text, { known, used = new Set() }) {
+export function checkProse(text, { known, used = new Set(), recoverDetail = () => false }) {
   const parsed = tokenizeProse(text);
   if (!parsed.ok) return parsed;
   const seen = new Set(used);
   const ids = [];
   let dropped = 0;
+  let recovered = 0;
   for (const token of parsed.tokens) {
     if (token.text != null) {
       if (!SEPARATOR.test(token.text)) dropped += 1;
       continue;
     }
     if (!known(token.slot)) return fail('UNKNOWN_PROPOSITION');
-    if (seen.has(token.slot)) return fail('DUPLICATE_PROPOSITION');
+    if (seen.has(token.slot)) {
+      if (recoverDetail(token.slot)) { recovered += 1; continue; }
+      return fail('DUPLICATE_PROPOSITION');
+    }
     seen.add(token.slot);
     ids.push(token.slot);
   }
+  // Yalnızca bilinen ayrıntı yinelemeleri kalan paragraf çizilmez; dayanağı olmayan metin hâlâ reddedilir.
+  if (!ids.length && recovered && !dropped) return { ok: true, omitted: true, ids: [], sentences: [], dropped, cut: recovered, issues: [] };
   if (!ids.length) return fail('PROSE_UNGROUNDED');
   if (ids.length > PROSE_LIMITS.maxSentences) return fail('PROSE_LENGTH');
   return { ok: true, ids, sentences: ids.map((slot) => [{ slot }]), dropped, cut: 0, issues: [] };

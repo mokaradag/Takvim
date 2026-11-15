@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { planCase, recordOf } from '../scripts/planner-evaluation.mjs';
 import { loadPlannerBenchmark, PLANNER_BENCHMARK_FILE, resolveExample, scoreDecision } from '../scripts/planner-scoring.mjs';
+import { cacheMinimumTokens, cacheReuseBaseline, cacheReuseState } from '../scripts/planner-model-adapter.mjs';
 
 const { semanticPlanningAdvice } = await import('../src/server/ai/assistant/semanticPlanning.js');
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
@@ -1310,6 +1311,9 @@ test("model bağdaştırıcısı: eşzamanlı model nitelendirmeleri defteri pay
   }
 });
 
+/** Yapay sağlayıcı öneği; gerçek önbellek uygunluğuna ilişkin kanıt değildir. */
+const CACHEABLE_SYSTEM = 'kararlı önek '.repeat(550);
+
 async function claudeCommandFixture(t, { reuse = false, events = null, newline = true, descendant = false, standalone = false, payload = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
   const { spawn, spawnSync } = await import('node:child_process');
   const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-model-adapter.mjs');
@@ -1375,7 +1379,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
     children.at(-1)?.done.then(reply => { if (!settled && !predicate()) done(new Error(`Bağdaştırıcı hazır olmadan bitti: ${reply.error || reply.signal || 'no provider call'}`)); }, done);
     check();
   });
-  const start = (extra = {}, command = null) => {
+  const start = (extra = {}, command = null, request = payload) => {
     const launch = standalone ? spawn : spawnModelCommand;
     const child = launch(process.execPath, [adapter, model, ...(command ? [command] : [])], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...commandPlatformEnv(), PLANNER_CLAUDE_HOME: path.join(dir, 'home'), PLANNER_CLAUDE_LOG: log, ...limits, ...extra } });
@@ -1396,7 +1400,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
       child.on('close', (code, signal) => { if (standalone || !settled) finish(code, signal); });
     });
     children.push({ child, done });
-    child.stdin.end(JSON.stringify(payload || { messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
+    child.stdin.end(JSON.stringify(request || { messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
     return { child, done, stderr: () => err };
   };
   return { start, kill, waitFor, log, dir, adapter, model, command: '"' + process.execPath + '" "' + adapter + '" "' + model + '"', descendantPid: () => Number(readFileSync(path.join(dir, 'descendant'), 'utf8')), release: () => writeFileSync(release, 'go'),
@@ -1494,6 +1498,33 @@ test("model bağdaştırıcısı: bayat önbellek ısınır, yakın çağrı ve 
   assert.equal((await cli.start().done).error, 'PLANNER_BUDGET_CALLS', 'bayat satır bütçeden silinmez');
   assert.equal(cli.count(), 3);
   assert.equal(cli.rows().filter(row => row.reserved).length, 3);
+});
+
+test('model bağdaştırıcısı: önbelleksiz kullanım taban değildir; gözlenen oluşturma aynı tam istemde okumayı zorunlu tutar', async (t) => {
+  // Uzun ama sıkıştırılabilir metin karakter sayısı nedeniyle önbelleklenebilir sayılmaz.
+  const wholePrompt = [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: 'ok' }] } },
+    { type: 'result', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 } }
+  ];
+  const payload = { messages: [{ role: 'system', content: 'a'.repeat(7000) }, { role: 'user', content: 'olgu sayfası' }], tools: [], toolChoice: 'none' };
+  assert.equal(payload.messages[0].content.length, 7000);
+  const short = await claudeCommandFixture(t, { events: wholePrompt, payload, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  const opening = short.start();
+  await short.waitFor(() => short.count() === 1);
+  short.release();
+  assert.equal((await opening.done).error, undefined);
+  for (const index of [2, 3]) {
+    assert.equal((await short.start().done).error, undefined, `önbelleklenemeyen önekte ${index}. çağrı sahte önbellek hatası almaz`);
+  }
+  assert.equal(short.count(), 3);
+  // Negatif denetim: önbelleğe yazan taban varken okumayan yakın çağrı yine altyapı hatasıdır (kapı gevşemez).
+  const long = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  const first = long.start();
+  await long.waitFor(() => long.count() === 1);
+  long.release();
+  assert.equal((await first.done).error, undefined);
+  assert.equal((await long.start().done).error, 'PLANNER_CACHE_NOT_REUSED', 'önbelleğe yazılmış önek okunmadıysa koşu durur');
 });
 
 test("model bağdaştırıcısı: eşzamanlı çağrı tükenen belirteç bütçesini aşarak modele gitmez", async (t) => {
@@ -2421,8 +2452,10 @@ test("takip nitelendirmesi: takip nitelendirmesinde özet danışması gerçek m
   const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, provider });
   const response = await sendTurn({ turnId: randomUUID(), message: 'Onun durumu?' });
   assert.equal(response.events.find(event => event.event === 'done').data.assistantMessage.finishReason, 'clarification');
-  assert.equal(inputs.length, 1);
-  assert.ok(!JSON.stringify(inputs[0].messages).includes('SUNUCU (anlamsal danışmanlık)'));
+  // Taze turdaki açıklama kararı bir kez doğrulanır (ikinci tur `clarify:unconfirmed` notuyla); yinelenen karar kabul edilir.
+  assert.equal(inputs.length, 2);
+  assert.ok(JSON.stringify(inputs[1].messages).includes('clarify:unconfirmed'));
+  assert.ok(inputs.every(input => !JSON.stringify(input.messages).includes('SUNUCU (anlamsal danışmanlık)')));
   assert.ok(provider.semanticCalls.some(call => call.kind === 'embeddings'));
   assert.ok(!provider.semanticCalls.some(call => call.kind === 'rerank'));
   assert.equal(stack.db.aiToolLog?.length || 0, 0);
@@ -2654,7 +2687,7 @@ test("model bağdaştırıcısı: zorunlu turdaki düz metin yeniden denemesi ö
   const { writeFileSync } = await import('node:fs');
   // Zorunlu adlı araç turu; model araç yerine düz metin döner (CLI tek tur sınırıyla biter, çıkış kodu 1).
   const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1', payload: {
-    messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }],
+    messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: 'question' }],
     tools: [{ name: 'rota_plan', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
   }, events: [
     { type: 'system', subtype: 'init', tools: [] },
@@ -3028,6 +3061,56 @@ test('109 son: zorunlu yeniden denemenin üst süre bütçesi kilidi ve iki alt 
 
 });
 
+test('model bağdaştırıcısı: yeniden denemesiz zorunlu turdaki doğrudan veri aracı çağrısı üretimdeki gibi sunucuya iletilir', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  // Standart araç profilinde üretim adlı seçimi `auto` gönderir: model plan yerine veri aracını çağırabilir (altyapı hatası değildir).
+  const handoff = (exitCode) => claudeCommandFixture(t, { payload: {
+    messages: [{ role: 'system', content: 'Sabit yönerge' }, { role: 'user', content: 'Durumu göster' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }, { name: 'rota_project_search', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: ['mcp__rota__rota_project_search'] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'tool_use', name: 'mcp__rota__rota_project_search', input: { query: 'KAP' } }] } },
+    { type: 'result', is_error: true, subtype: exitCode === 1 ? 'error_max_turns' : 'error_during_execution', num_turns: 1, stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 1 } }
+  ] }).then((cli) => {
+    writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', `process.exitCode = ${exitCode}; }, 0);`));
+    cli.release();
+    return cli;
+  });
+  const cli = await handoff(1);
+  const reply = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '0' }).done;
+  assert.equal(reply.error, undefined, 'üretimde geçerli yanıt altyapı hatası sayılmaz');
+  assert.deepEqual(reply.toolCalls, [{ name: 'rota_project_search', arguments: { query: 'KAP' } }]);
+  assert.equal(reply.finishReason, 'tool_calls');
+  assert.equal(cli.rows().find((row) => row.usage).forcedToolCall, true, 'devir ayrıca sayılır');
+  // Negatif denetim: belgelenmemiş CLI hatası yine sağlayıcı hatasıdır.
+  const broken = await handoff(7);
+  assert.equal((await broken.start({ PLANNER_CLAUDE_FORCED_RETRY: '0' }).done).error, 'PLANNER_PROVIDER_ERROR');
+});
+
+test('model bağdaştırıcısı: adlı araç seçiminin auto kipi plan aracını kendi adıyla sıradan MCP aracı olarak sunar ve çağrısını iletir', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  // Standart araç profilinin üretim sözleşmesi: adlı seçim sağlayıcıya `auto` gider, plan aracı öteki araçlarla birlikte sunulur.
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_NAMED_TOOL: 'auto', payload: {
+    messages: [{ role: 'system', content: 'Sabit yönerge' }, { role: 'user', content: 'Durumumu özetle' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }, { name: 'rota_task_search', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: ['mcp__rota__rota_plan', 'mcp__rota__rota_task_search'] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'tool_use', name: 'mcp__rota__rota_plan', input: { intent: 'rota', language: 'tr' } }] } },
+    { type: 'result', is_error: true, subtype: 'error_max_turns', num_turns: 1, stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 1 } }
+  ] });
+  const argsFile = `${cli.dir}/args.json`;
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace("const fs = require('node:fs');", `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));`)
+    .replace('}, 0);', 'process.exitCode = 1; }, 0);'));
+  cli.release();
+  const reply = await cli.start().done;
+  assert.equal(reply.error, undefined, 'plan aracının çağrısı altyapı hatası değildir');
+  assert.deepEqual(reply.toolCalls, [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr' } }]);
+  assert.equal(reply.finishReason, 'tool_calls');
+  const args = JSON.parse(readFileSync(argsFile, 'utf8'));
+  assert.equal(args.includes('--json-schema'), false, 'yapılandırılmış çıktı (StructuredOutput) kullanılmaz');
+  assert.ok(args.includes('--mcp-config'), 'plan aracı yerel MCP sunucusundan sunulur');
+});
+
 test('zorunlu düz metin yeniden denemesi ilk çağrının eksik araç kataloğunu gizleyemez', async (t) => {
   const cli = await claudeCommandFixture(t, { payload: {
     messages: [{ role: 'system', content: 'Sabit yönerge' }, { role: 'user', content: 'Durumu göster' }],
@@ -3043,4 +3126,118 @@ test('zorunlu düz metin yeniden denemesi ilk çağrının eksik araç kataloğu
   const result = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '1' }).done;
   assert.equal(result.error, 'PLANNER_TOOLS_NOT_OFFERED');
   assert.equal(cli.count(), 1);
+});
+
+
+test('tam istem tekrarı başka soru geçmişiyle durağan önek kanıtına dönüşmez', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z');
+  const base = { models: ['claude-haiku-4-5-20251001'], effort: 'low', staticPromptHash: 'sistem', toolCatalogHash: 'araçlar',
+    cacheTailKind: 'single_user', at: new Date(now - 1000).toISOString(), durationMs: 10 };
+  const a = { ...base, promptHash: 'uzun-soru', usage: { input_tokens: 10, cache_creation_input_tokens: 5000, cache_read_input_tokens: 0 } };
+  const b = { ...base, promptHash: 'kısa-soru', usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  const repeated = { ...a, usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 5000 } };
+  const state = cacheReuseState([a, { ...b, cacheEligibility: 'below_minimum' }], repeated, now);
+  assert.equal(state.prefixTokens, null);
+  assert.equal(state.eligibility, 'verified_full');
+  const recorded = { ...repeated, cachePrefixTokens: state.observedPrefixTokens, cacheEligibility: state.eligibility };
+  const last = cacheReuseState([a, { ...b, cacheEligibility: 'below_minimum' }, recorded], b, now);
+  assert.equal(last.error, null);
+  assert.equal(last.eligibility, 'below_minimum');
+});
+
+test('model bağdaştırıcısı: kaçırma satırı önek gözlemini devralmaz', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const cli = await claudeCommandFixture(t, { reuse: true });
+  cli.release();
+  const payload = (question) => ({ messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: question }], tools: [], toolChoice: 'none' });
+  assert.equal((await cli.start({}, null, payload('birinci')).done).error, undefined);
+  assert.equal((await cli.start({}, null, payload('ikinci')).done).error, undefined);
+  assert.ok(cli.rows().at(-1).cachePrefixTokens > 0);
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('cached?100:0', '0'));
+  assert.equal((await cli.start({}, null, payload('üçüncü')).done).error, undefined);
+  assert.equal(cli.rows().at(-1).cachePrefixTokens, null);
+});
+
+test('durağan önek kanıtı kaçırmaya kopyalanarak gençleştirilemez; yeni okuma yeni gözlemdir', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z');
+  const base = { models: ['claude-haiku-4-5-20251001'], effort: 'low', staticPromptHash: 'sistem', toolCatalogHash: 'araçlar',
+    cacheTailKind: 'single_user', durationMs: 0 };
+  const observed = { ...base, at: new Date(now).toISOString(), promptHash: 'ilk', cachePrefixTokens: 5000,
+    usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 5000 } };
+  const miss = { ...base, promptHash: 'ikinci', at: new Date(now + 240000).toISOString(),
+    usage: { input_tokens: 6000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  const state = cacheReuseState([observed], miss, now + 240000);
+  assert.equal(state.error, 'PLANNER_CACHE_NOT_REUSED');
+  assert.equal(state.observedPrefixTokens, null);
+  const recorded = { ...miss, cachePrefixTokens: state.observedPrefixTokens, cacheEligibility: state.eligibility };
+  const aged = cacheReuseState([observed, recorded], { ...miss, promptHash: 'üçüncü' }, now + 360000);
+  assert.equal(aged.error, 'PLANNER_CACHE_PREFIX_UNVERIFIED');
+  assert.equal(aged.prefixTokens, null);
+  const fresh = cacheReuseState([observed, recorded], { ...observed, promptHash: 'yeni' }, now + 260000);
+  assert.equal(fresh.observedPrefixTokens, 5000);
+  assert.equal(fresh.error, null);
+});
+
+test('önbellek yeteneği modelin belirteç sınırıdır; karakter uzunluğu uygunluk kanıtı değildir', () => {
+  assert.equal(cacheMinimumTokens('claude-haiku-4-5-20251001'), 4096);
+  assert.equal(cacheMinimumTokens('claude-sonnet-4-5-20250929'), 1024);
+  assert.equal(cacheMinimumTokens('claude-opus-4-7'), 2048);
+  assert.equal(cacheMinimumTokens('claude-haiku-5-5'), 512);
+  assert.equal(cacheMinimumTokens('bilinmeyen-model'), null);
+});
+
+for (const model of ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929']) test(`önbellek tabanı gerçek kullanım, aynı model ve durağan önek gerektirir: ${model}`, () => {
+  const now = Date.parse('2026-11-15T10:00:00Z');
+  const row = { models: [model], staticPromptHash: 'sistem', toolCatalogHash: 'araçlar', promptHash: 'tam-istem' };
+  const prior = { ...row, at: new Date(now - 1000).toISOString(), durationMs: 100, staticChars: 7000,
+    usage: { input_tokens: 1500, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  assert.equal(cacheReuseBaseline([prior], row, now), undefined);
+  const cached = { ...prior, staticChars: 3300, usage: { cache_creation_input_tokens: 1500 } };
+  assert.equal(cacheReuseBaseline([cached], row, now), cached);
+  const changed = { ...cached, promptHash: 'başka-olgu-sayfası' };
+  assert.equal(cacheReuseBaseline([changed], row, now), changed);
+  assert.equal(cacheReuseState([changed], row, now).error, 'PLANNER_CACHE_PREFIX_UNVERIFIED');
+  assert.equal(cacheReuseBaseline([{ ...cached, models: ['başka-model'] }], row, now), undefined);
+  assert.equal(cacheReuseBaseline([{ ...cached, error: 'PLANNER_PROVIDER_ERROR' }], row, now), undefined);
+  assert.equal(cacheReuseBaseline([{ ...cached, at: new Date(now - 300001).toISOString() }], row, now), undefined);
+});
+
+
+test('model bağdaştırıcısı: farklı sorunun önbelleksiz yanıtı aynı önekte doğrulanmış koşu sayılmaz', async (t) => {
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  cli.release();
+  assert.equal((await cli.start().done).error, undefined);
+  const changed = { messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: 'başka bir soru' }], tools: [], toolChoice: 'none' };
+  const second = await cli.start({}, null, changed).done;
+  assert.ok(['PLANNER_CACHE_NOT_REUSED', 'PLANNER_CACHE_PREFIX_UNVERIFIED'].includes(second.error), JSON.stringify(second));
+});
+
+
+test('model bağdaştırıcısı: farklı sorularda doğrulanan durağan öneğin sonraki kaçırması reddedilir', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const cli = await claudeCommandFixture(t, { reuse: true, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  cli.release();
+  const payload = (question) => ({ messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: question }], tools: [], toolChoice: 'none' });
+  assert.equal((await cli.start({}, null, payload('birinci soru')).done).error, undefined);
+  assert.equal((await cli.start({}, null, payload('ikinci soru')).done).error, undefined);
+  assert.equal(cli.rows().at(-1).cacheEligibility, 'verified_prefix');
+  assert.ok(cli.rows().at(-1).cachePrefixTokens > 0);
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('cached?100:0', '0'));
+  assert.equal((await cli.start({}, null, payload('üçüncü soru')).done).error, 'PLANNER_CACHE_NOT_REUSED');
+});
+
+test('önbellek uygunluğu oluşturma toplamını durağan önek sanmaz; kısa tam girdinin belirteç kanıtını korur', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z');
+  const first = { models: ['claude-haiku-4-5-20251001'], staticPromptHash: 'sistem', toolCatalogHash: 'araçlar',
+    promptHash: 'soru-bir', cacheTailKind: 'single_user', at: new Date(now - 1000).toISOString(), durationMs: 100,
+    usage: { input_tokens: 10, cache_creation_input_tokens: 5000, cache_read_input_tokens: 0 } };
+  const changed = { ...first, promptHash: 'soru-iki', usage: { input_tokens: 6000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  assert.equal(cacheReuseState([first], changed, now).error, 'PLANNER_CACHE_PREFIX_UNVERIFIED');
+  assert.equal(cacheReuseState([first], changed, now).prefixTokens, null);
+  const short = { ...first, usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  const shortState = cacheReuseState([], short, now);
+  assert.equal(shortState.eligibility, 'below_minimum');
+  assert.equal(cacheReuseState([{ ...short, cacheEligibility: shortState.eligibility }], changed, now).error, null);
+  assert.equal(cacheReuseState([{ ...short, models: ['başka-model'], cacheEligibility: 'below_minimum' }], changed, now).eligibility, 'unverified');
+  assert.equal(cacheReuseState([{ ...short, cacheEligibility: 'below_minimum' }, first], { ...changed, promptHash: first.promptHash }, now).error, 'PLANNER_CACHE_NOT_REUSED');
 });

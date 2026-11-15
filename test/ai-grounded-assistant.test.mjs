@@ -809,6 +809,13 @@ test("kanıtlı tur model başlamadan bütün eski yanıtları yeniden yetkilend
   assert.equal(revalidatedBeforeModel, 0, 'earlier answers enter the context as placeholders without per-answer authorization reads');
 });
 
+/**
+ * Önceki sonuç ya da analiz bağlamı olmayan turdaki açıklama kararı veri okunmadan bir kez doğrulanır (`clarify:unconfirmed`):
+ * gerçek model göndergesiz soruda aynı kararı yineler. Sahte model de aynı adımı iki kez döndürür.
+ */
+const confirmedClarify = (step) => [step, step];
+const confirmationSent = (stack) => JSON.stringify(stack.provider.calls.at(-1).messages).includes('clarify:unconfirmed');
+
 /** Sonuç kapsamı metinden değil, gerçek ilk turun doğrulanmış görev listesinden gelir. */
 async function previousTaskSet(stack) {
   const request = { operation: 'list', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_search', collection: 'tasks' },
@@ -871,9 +878,10 @@ test("planlayıcı takip: eksik liste gönderge olmaz; doğrulanmış sınırlı
       assert.deepEqual(first.assistantMessage.evidence, []);
       assert.deepEqual(stack.db.aiMessageEvidence, []);
       const before = stack.db.aiToolLog.length;
-      stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] });
+      stack.provider.enqueue(...confirmedClarify({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] }));
       const second = doneOf(await sendTurn({ turnId: randomUUID(), conversationId: first.conversation.id, expectedSequence: 2, message: 'Bunların kaçı gecikmiş?' }));
       assert.equal(second.assistantMessage.finishReason, 'clarification');
+      assert.ok(confirmationSent(stack), 'göndergesiz soruda açıklama kararı bir kez doğrulanır');
       assert.equal(stack.db.aiToolLog.length, before);
       assert.ok(!stack.provider.calls.at(-1).messages.some(message => message.content?.includes('Önceki doğrulanmış Rota sonuç kapsamı:')));
     }
@@ -1072,12 +1080,13 @@ test("planlayıcı takip: yeni konuşma ve araya giren genel yanıt yapılandır
       await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, source: 'general', message: 'Merhaba' });
     }
     const before = stack.db.aiToolLog?.length || 0;
-    stack.provider.enqueue({ type: 'script', respond: call => {
+    stack.provider.enqueue(...confirmedClarify({ type: 'script', respond: call => {
       assert.ok(!call.messages.some(message => message.content?.includes('Önceki doğrulanmış Rota sonuç kapsamı:')));
       return { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] };
-    } });
+    } }));
     const response = await sendTurn({ turnId: randomUUID(), ...(conversationId ? { conversationId, expectedSequence: 4 } : {}), message: 'Onun sorumlusu kim?' });
     assert.equal(doneOf(response).assistantMessage.finishReason, 'clarification');
+    assert.ok(confirmationSent(stack));
     assert.equal(stack.db.aiToolLog?.length || 0, before);
     assert.deepEqual(doneOf(response).assistantMessage.evidence, []);
   });
@@ -1202,10 +1211,10 @@ test("planlayıcı takip: bozuk/eski kanıt kaydı göndergeyi prose üzerinden 
     mutate(saved);
     row.EvidenceJson = JSON.stringify(saved);
     const before = stack.db.aiToolLog.length;
-    stack.provider.enqueue({ type: 'script', respond: call => {
+    stack.provider.enqueue(...confirmedClarify({ type: 'script', respond: call => {
       assert.ok(!call.messages.some(message => message.content?.includes('Önceki doğrulanmış Rota sonuç kapsamı:')));
       return { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] };
-    } });
+    } }));
     const done = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Takip sorusu' }));
     assert.equal(done.assistantMessage.finishReason, 'clarification');
     assert.equal(stack.db.aiToolLog.length, before);
@@ -1248,7 +1257,7 @@ test("planlayıcı gecikmesi başarıda ve kullanılamamada anlamsal danışmay�
       }
       return embed(input);
     };
-    stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] });
+    stack.provider.enqueue(...confirmedClarify({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] }));
     const done = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Merhaba' }));
     assert.equal(done.assistantMessage.finishReason, 'clarification');
     assert.ok(elapsed > 0, 'real semantic-advice path was exercised');

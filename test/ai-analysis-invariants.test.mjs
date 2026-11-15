@@ -20,6 +20,7 @@ test('planlayıcı nitelendirmesi özgül altyapı nedenini korur ve bilinmeyen 
   assert.equal(valid.infrastructure, null);
   assert.deepEqual(valid.failures, []);
   for (const [change, reason] of [[{ error: 'PLANNER_BUDGET_CALLS' }, 'PLANNER_BUDGET_CALLS'], [{ error: 'PLANNER_BUDGET_TOKENS' }, 'PLANNER_BUDGET_TOKENS'],
+    [{ error: 'PLANNER_CACHE_NOT_REUSED' }, 'PLANNER_CACHE_NOT_REUSED'], [{ error: 'PLANNER_CACHE_PREFIX_UNVERIFIED' }, 'PLANNER_CACHE_PREFIX_UNVERIFIED'],
     [{ models: ['başka model'] }, 'PLANNER_MODEL_UNVERIFIED'], [{ thinking: 'on' }, 'PLANNER_THINKING_ON'], [{ error: 'Gizli ayrıntı' }, 'ADAPTER_ERROR']]) {
     const result = await plannerCase(item, { completeRound: async () => ({ ...reply, ...change }) });
     assert.equal(result.infrastructure, reason);
@@ -189,8 +190,9 @@ test('dönem baskısı yalnızca aynı özne, proje ve nüfusun bugünkü gecikm
 
 test('çakışan tarih onarımı kalan gösterimi değiştiremez; yön ve grafik kaybı da onarım sayılmaz', async (t) => {
   const { phase4eConversation, populationReads } = await import('./helpers/phase4eScenario.mjs');
-  const original = { scope: 'self', focus: ['overview', 'upcoming'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: '2026-10-29' };
-  const corrected = { scope: 'self', focus: original.focus, dateFrom: TODAY, dateTo: original.dateTo };
+  // Tek uçlu tarih göreli ön ayarla çelişir (tam tarih çifti ön ayarın yerine geçer ve onarım gerektirmez).
+  const original = { scope: 'self', focus: ['overview', 'upcoming'], relativeWindow: 'next_7_days', dateTo: '2026-10-29' };
+  const corrected = { scope: 'self', focus: original.focus, dateTo: original.dateTo };
   const plans = [original, { ...corrected, dateTo: '2026-11-29' }, corrected];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', analysis: plans.shift() } }] }) });
   const result = await ask({ text: 'İşlerimi önümüzdeki dönemde değerlendir' });
@@ -217,8 +219,9 @@ test('bütçe onarımı bildirilen yönü sessizce düşüremez', async (t) => {
 
 test('analiz biçim onarımı ikinci grafik türünü düşüremez', async (t) => {
   const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
-  const analysis = { scope: 'self', focus: ['status'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: '2026-10-10' };
-  const fixed = { scope: 'self', focus: ['status'], dateFrom: TODAY, dateTo: '2026-10-10' };
+  // Tek uçlu tarih göreli ön ayarla çelişkisini korur (tam çift de yalnızca eşdeğerse birleşir): onarım turu açılır.
+  const analysis = { scope: 'self', focus: ['status'], relativeWindow: 'next_7_days', dateTo: '2026-10-10' };
+  const fixed = { scope: 'self', focus: ['status'], dateTo: '2026-10-10' };
   const queue = [{ intent: 'rota', language: 'tr', chart: ['bar', 'donut'], analysis },
     { intent: 'rota', language: 'tr', chart: 'bar', analysis: fixed },
     { intent: 'rota', language: 'tr', chart: ['bar', 'donut'], analysis: fixed }];
@@ -227,6 +230,7 @@ test('analiz biçim onarımı ikinci grafik türünü düşüremez', async (t) =
   assert.equal(result.inputs.length, 3);
   assert.equal(result.answer.finishReason, 'stop', result.answer.content);
   assert.deepEqual(result.analysisContext.charts, ['bar', 'donut']);
+  assert.equal(result.analysisContext.dateFrom ?? null, null, 'grafik onarımı tarih alt sınırı ekleyemez');
 });
 
 test('nitelendirme yanlış düzeyi, özneyi, eksik yönü, grafiği ve erken sonucu başarı saymaz', async () => {

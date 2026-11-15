@@ -142,13 +142,25 @@ export function requestSchema() {
  */
 /** Nüfusun boyutları: istek düzeyinde yazılmışlarsa (nüfusta yoksa) nüfusa aittir; biçim kayması anlamı değiştirmez. */
 const POPULATION_KEYS = Object.freeze(['collection', 'sort', 'groupBy', 'depth', 'textFields']);
+/**
+ * Nüfus koşulları (süzgeçler): nüfus nesnesinin içine yazılmışlarsa (süzgeçte yoksa) süzgece aittir; `population.assignee` ile
+ * `filters.assignee` aynı bildirimdir. Süzgeçte aynı anahtar zaten varsa taşınmaz: alan nüfusta kalır ve şema reddeder (iki değerden
+ * biri sessizce seçilmez). Taşınan değer süzgecin bütün doğrulamasından (yetki, güvenilir metin, şema) aynen geçer.
+ */
+const FILTER_KEYS = Object.freeze(['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'teamLevel', 'createdByMe',
+  'milestone', 'text', 'tab', 'workflowStatus', 'source', 'includeEmpty', 'activityScope', 'activityKind']);
 
 export function populationShape(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !raw.population || typeof raw.population !== 'object') return raw;
+  const filters = raw.filters == null ? {} : raw.filters;
+  const plainFilters = filters && typeof filters === 'object' && !Array.isArray(filters);
+  const inPopulation = Array.isArray(raw.population) ? [] : FILTER_KEYS.filter((key) => Object.hasOwn(raw.population, key) && plainFilters && !Object.hasOwn(filters, key));
   const misplaced = POPULATION_KEYS.filter((key) => Object.hasOwn(raw, key) && !Object.hasOwn(raw.population, key));
-  if (!misplaced.length) return raw;
+  if (!misplaced.length && !inPopulation.length) return raw;
   const rest = Object.fromEntries(Object.entries(raw).filter(([key]) => !misplaced.includes(key)));
-  return { ...rest, population: { ...raw.population, ...Object.fromEntries(misplaced.map((key) => [key, raw[key]])) } };
+  const population = Object.fromEntries(Object.entries(raw.population).filter(([key]) => !inPopulation.includes(key)));
+  return { ...rest, population: { ...population, ...Object.fromEntries(misplaced.map((key) => [key, raw[key]])) },
+    ...(inPopulation.length ? { filters: { ...filters, ...Object.fromEntries(inPopulation.map((key) => [key, raw.population[key]])) } } : {}) };
 }
 
 /**
