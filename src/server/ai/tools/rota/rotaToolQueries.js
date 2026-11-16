@@ -4,6 +4,11 @@ import { PERSISTED_TASK_STATUSES, PRIORITIES, LEGACY_PRIORITY_ALIASES, DEFAULT_P
 const STATUS_SQL = `CASE t.Status COLLATE Latin1_General_100_BIN2 ${Object.entries(PERSISTED_TASK_STATUSES).map(([alias, status]) => `WHEN '${alias}' THEN '${status}'`).join(' ')} ELSE 'todo' END`;
 const PRIORITY_SQL = `CASE LOWER(LTRIM(RTRIM(COALESCE(t.Priority, ''))) COLLATE Latin1_General_100_CI_AS) ${Object.entries({ ...Object.fromEntries(Object.keys(PRIORITIES).map((key) => [key, key])), ...LEGACY_PRIORITY_ALIASES }).map(([alias, priority]) => `WHEN '${alias}' THEN '${priority}'`).join(' ')} ELSE '${DEFAULT_PRIORITY_ID}' END`;
 
+// JavaScript trim() ile aynı boşluk kümesi; sabit ikili desen sekme, satır sonu ve Unicode boşluklarını da dışlar.
+const DESCRIPTION_PRESENT_SQL = `PATINDEX(N'%[^' + ${[9, 10, 11, 12, 13, 32, 160, 5760,
+  8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279]
+  .map((code) => `NCHAR(${code})`).join(' + ')} + N']%', COALESCE(t.Description, N'') COLLATE Latin1_General_100_BIN2) > 0`;
+
 /**
  * Rota AI alan araçlarının SABİT SQL metinleri.
  *
@@ -316,7 +321,7 @@ const taskFactColumns = (teamTask) => `
     t.Progress, t.PlannedHours, t.ActualHours, CONVERT(varchar(40), t.Budget) AS Budget, CONVERT(varchar(40), t.Spent) AS Spent,
     t.RecurrenceRule, t.RecurrenceParentTaskId, t.RecurrenceOccurrenceDate,
     t.CreatedAt, t.UpdatedAt, visible.AccessLevel, visible.IdentityBase,
-    CAST(CASE WHEN NULLIF(LTRIM(RTRIM(t.Description)), N'') IS NULL THEN 0 ELSE 1 END AS bit) AS HasDescription,
+    CAST(CASE WHEN NOT (${DESCRIPTION_PRESENT_SQL}) THEN 0 ELSE 1 END AS bit) AS HasDescription,
     CAST(CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END AS bit) AS IsCreator,
     CAST(COALESCE(assignment.IsOwnAssignee, 0) AS bit) AS IsOwnAssignee,
     COALESCE(assignment.DisclosedAssigneeCount, 0) AS DisclosedAssigneeCount,
@@ -383,7 +388,7 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
         WHEN 'actualStart' THEN t.ActualStart
         WHEN 'actualFinish' THEN t.ActualFinish
         WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END IS NOT NULL))
-    AND (@hasDescription = 0 OR NULLIF(LTRIM(RTRIM(t.Description)), N'') IS NOT NULL)
+    AND (@hasDescription = 0 OR ${DESCRIPTION_PRESENT_SQL})
     AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil))
@@ -455,7 +460,7 @@ ${SCOPE_PROJECTS}
 ${visibleTasks()}
   SELECT visible.TaskId, LEFT(t.Description, 401) AS Description
   FROM #AiTasks visible JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
-  WHERE NULLIF(LTRIM(RTRIM(t.Description)), N'') IS NOT NULL;
+  WHERE ${DESCRIPTION_PRESENT_SQL};
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**

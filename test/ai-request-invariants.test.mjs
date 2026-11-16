@@ -192,6 +192,7 @@ test("korumalı metin ölçüsü kendi alanını açar; varlık özelliği araç
   assert.ok(searched.problems.includes('$.metrics[0]:population'));
   // Aşama H: adı verilmemiş görevlerin açıklaması tek görev ayrıntısı değil, özetin not yönüdür; ipucu bunu söyler.
   assert.ok(searched.hints.some((hint) => hint.includes('"focus":["notes"]')));
+  assert.ok(searched.hints.some((hint) => hint.includes('rota_task_detail') && hint.includes('request.entities')));
 
 });
 

@@ -86,7 +86,10 @@ const leafOf = (field) => String(field).split('.').filter((part) => !/^\d+$/.tes
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 /** Kırpma ve temizleme sonrasında da her çubuk doğrulanmış bağlamıyla ayırt edilebilir olmalı. */
-function chartLabels(rows) {
+function chartLabels(rows, locale) {
+  // Kısmi takvim kovası grafikte de adıyla görünür; veri toplama tamlığı tam dönem anlamına gelmez.
+  rows = rows.map((row) => row.entries.some(({ fact }) => fact.semantic?.group?.partial || fact.semantic?.series?.partial)
+    ? { ...row, title: `${row.title} (${locale === 'en' ? 'partial' : 'kısmi'})` } : row);
   const titles = rows.map((row) => answerChartLabel(row.title));
   const labels = rows.map((row, index) => {
     if (titles.indexOf(titles[index]) === titles.lastIndexOf(titles[index])) return titles[index];
@@ -420,7 +423,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         const complete = pageComplete && populationComplete;
         const rowCriteria = [...new Set(described.rows.map((row) => narrativeLabel(row.entries[0].fact, locale).criteria))];
         const criteria = rowCriteria.length === 1 ? rowCriteria[0] : group.envelope.map((fact) => narrativeLabel(fact, locale).criteria).find(Boolean) || '';
-        const labels = chartLabels(described.rows);
+        const labels = chartLabels(described.rows, locale);
         tables.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, group, collection, rows: described.rows.length, columns, complete, criteria, detail: null,
           layout: presentation.layout, requestedLayout: presentation.requestedLayout }));
         viewTables.push({ id, part: ordinal, title: described.head, rows: described.rows.length,

@@ -218,11 +218,11 @@ export function plannerScore(result, expect, today = corpus.today) {
     // Aşama H: geçmiş görünüm isteyen soru (önceki aşamalarda sınırlılık vakası) sıradan güncel durum planıyla karşılanmaz: plan bir
     // geçmiş dönem yönü okur ya da karşılaştırılamayan geçmiş durumu açıkça bildirir.
     if (expect.temporalWindow || expect.temporalCompare) {
-      const window = expectedRange(expect.temporalWindow, BENCHMARK_TODAY);
-      const compare = expectedCompare(expect.temporalCompare, expect.temporalWindow, BENCHMARK_TODAY);
+      const window = expectedRange(expect.temporalWindow, today);
+      const compare = expectedCompare(expect.temporalCompare, expect.temporalWindow, today);
       let unresolved = false;
       if (result.plan?.analysis?.historyUnsupported?.length) {
-        try { const windows = analysisWindows(result.plan.analysis, BENCHMARK_TODAY); unresolved = [window, compare].filter(Boolean).every((wanted) => [windows.range, windows.compare].some((candidate) => candidate?.dateFrom === wanted[0] && candidate?.dateTo === wanted[1])); } catch { unresolved = false; }
+        try { const windows = analysisWindows(result.plan.analysis, today); unresolved = [window, compare].filter(Boolean).every((wanted) => [windows.range, windows.compare].some((candidate) => candidate?.dateFrom === wanted[0] && candidate?.dateTo === wanted[1])); } catch { unresolved = false; }
       }
       for (const range of [window, compare].filter(Boolean)) if (!unresolved && !requests.some((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
         && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('istenen tarihsel dönem okunmadı');
@@ -301,13 +301,14 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
       && request.metrics?.includes('tasks.total') && (measure === 'created' ? !request.filters?.status?.length : request.filters?.status?.length === 1 && request.filters.status[0] === 'done')
       && (measure === 'trend' ? ['date_week', 'date_month'].includes(request.population.groupBy) : !request.population.groupBy);
   const reads = (range) => (atoms.length ? atoms : [null]).every((layer) => (measures.length ? measures : [null]).every((measure) => requests.some((request) =>
-    request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1] && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure)))));
+    (!range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]) && (!expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1) && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
+    && (!expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)))));
   const range = expectedRange(expect.window, today);
   if (range && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
   const prior = expectedCompare(expect.compare, expect.window, today);
   if (prior && !expect.stateComparison && !reads(prior)) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
-  if (expect.windowFrom && !requests.some((request) => request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
-  if (expect.bucket && !requests.some((request) => request.population?.groupBy === `date_${expect.bucket}` || request.filters?.activityView === expect.bucket)) failures.push(`dizi kovası ${expect.bucket} okunmuyor`);
+  if (expect.windowFrom && !reads(range)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
+  if (expect.bucket && !reads(range)) failures.push(`dizi kovası ${expect.bucket} okunmuyor`);
   if (expect.stateComparison && !analysis.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
   return failures;
 }

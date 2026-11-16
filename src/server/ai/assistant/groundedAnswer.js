@@ -803,6 +803,7 @@ function pinAnalysisRepair(turn, plan, details) {
     // Aşama H — karşılaştırma dönemi: çakışan iki yazımdan biri kaldırılabilir; birincil dönem eksikse yalnızca dönem alanları eklenebilir
     // (kapsam ve yönler sabit kalır; var olan geçerli dönem bu yolla değiştirilemez).
     if (path === '$.analysis.compare' && reason === 'conflict') for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
+    if (path === '$.analysis.compareFrom' && reason === 'required') for (const key of ['compareFrom', 'compareTo']) paths.add(key);
     if (path === '$.analysis.compare' && reason === 'window') {
       for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) if ((existing?.raw || plan.analysis)[key] == null) paths.add(key);
     }
@@ -845,8 +846,11 @@ function analysisRepairMatches(turn, plan) {
   const compareConflict = pin.raw.compare && (pin.raw.compareFrom || pin.raw.compareTo);
   const sameCompare = !compareConflict || analysis && (analysis.compare === pin.raw.compare && !analysis.compareFrom && !analysis.compareTo
     || !analysis.compare && analysis.compareFrom === pin.raw.compareFrom && analysis.compareTo === pin.raw.compareTo);
+  // Yarım tarih çifti onarılırken karşılaştırma niyeti silinemez; tam çift ya da özgün adlı dönem korunur.
+  const incompleteCompare = Boolean(pin.raw.compareFrom) !== Boolean(pin.raw.compareTo);
+  const keptCompare = !incompleteCompare || analysis && (analysis.compareFrom && analysis.compareTo || pin.raw.compare && analysis.compare === pin.raw.compare);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
-    && sameCompare && sameWindow && analysisRepairProjection(analysis, pin.paths) === pin.projection
+    && keptCompare && sameCompare && sameWindow && analysisRepairProjection(analysis, pin.paths) === pin.projection
     && stable(repairOmit(submittedPresentation(plan), pin.presentationPaths)) === stable(repairOmit(pin.presentation, pin.presentationPaths))
     && (pin.visual == null || submittedVisual(plan) === pin.visual) && explicitRepairMatches(turn, pin, plan);
 }
@@ -2146,6 +2150,7 @@ function presentationIntent(plan, today) {
     ...(plan?.visual === true && plan?.chart && Array.isArray(plan.charts) && plan.charts.length > 1 ? { charts: Object.freeze([...plan.charts]) } : {}), ...(plan?.table === true ? { table: true } : {}),
     // Türetilen ufuk okumaları yürütmeye aittir; takipte yalnızca bildirilmiş yönler devralınır.
     analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze([...analysis.focus]),
+      ...Object.fromEntries(['relativeWindow', 'dateFrom', 'dateTo', 'compare', 'compareFrom', 'compareTo', 'bucket'].filter((key) => analysis[key] != null).map((key) => [key, analysis[key]])),
       ...(analysis.withSelf ? { withSelf: true } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.rows ? { rows: analysis.rows } : {}), ...(analysis.act ? { act: analysis.act } : {}),
       // Aşama G: çok kapsamlı özetin kapsamları (adlar kullanıcının iletisinden; kimlik yok) ve bütçeye sığmayan dağılım yönleri.
       ...(analysis.also?.length ? { layers: Object.freeze(analysisLayers(analysis).map((layer) => Object.freeze(layer))) } : {}),
@@ -2154,7 +2159,8 @@ function presentationIntent(plan, today) {
       // okumanın kapsamı ve yönü (`sections`). Sunum başlıkları ve takip bağlamı kanıt süzgecinden tahmin yürütmez.
       ...(Number.isInteger(analysis.analysisParts) ? { analysisParts: analysis.analysisParts } : {}), ...(analysis.sections ? { sections: analysis.sections } : {}),
       // Açık isteğin birleştiği özet okumaları: o bölüm açık isteğin koşulunu (ör. tam liste) taşır.
-      ...(analysis.explicitParts?.length ? { explicitParts: analysis.explicitParts } : {}) }) : null,
+      ...(analysis.explicitParts?.length ? { explicitParts: analysis.explicitParts } : {}),
+      ...(analysis.historyUnsupported?.length ? { historyUnsupported: Object.freeze([...analysis.historyUnsupported]) } : {}) }) : null,
     ...(analysis?.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null,
     compare: analysis && (analysis.compare || analysis.compareFrom || analysis.bucket) ? Object.freeze({ ...(analysis.compare ? { compare: analysis.compare } : {}),

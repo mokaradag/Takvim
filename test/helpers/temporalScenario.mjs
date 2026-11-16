@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolveWindow, previousWindow } from '../../src/domain/ai/temporalWindow.js';
 import { answerQuality } from './answerQuality.mjs';
-import { populationReads, renderedCharts } from './phase4eScenario.mjs';
+import { renderedCharts } from './phase4eScenario.mjs';
 
 export const temporalFixture = JSON.parse(readFileSync(new URL('../fixtures/bilgin-temporal-benchmark.json', import.meta.url), 'utf8'));
 export const TEMPORAL_TODAY = temporalFixture.today;
@@ -36,11 +36,26 @@ export const H_FINDING_TEXT = Object.freeze({
     activityTrend: /Recorded activity peaked|there is no activity record; those are unknown/,
     horizonSpread: /within 7 days, \*\*\d+\*\* within 14 days/,
     historyLimit: /cannot be reconstructed/,
-    noteDigest: /descriptions? of (?:the|all)|most recently updated were read|has a description to read/
+    noteDigest: /descriptions? of (?:the|all)|returned were read|has a description to read/
   }
 });
 
 const fold = (text) => String(text).replace(/\\([\\`*_{}[\]()#+.!|<>~:/-])/g, '$1');
+
+/** SQL günlüğünde dönem ve olay ölçüsü birlikte eşleşir; termin okuması tamamlanma kanıtı değildir. */
+function temporalLogMatches(row, range, measure = null) {
+  if (row.ok !== true || !['task-facts', 'activity'].includes(row.query)) return false;
+  const p = row.params;
+  const day = (value) => value == null || !Number.isFinite(new Date(value).getTime()) ? null : new Date(value).toISOString().slice(0, 10);
+  const from = row.query === 'activity' ? day(new Date(p.startUtc).getTime() + 10800000) : day(p.dateFrom);
+  const to = row.query === 'activity' ? day(new Date(p.endUtc).getTime() + 10800000 - 86400000) : day(p.dateTo);
+  if (range && (from !== range[0] || to !== range[1])) return false;
+  if (!measure) return true;
+  if (measure === 'activity') return row.query === 'activity';
+  const statuses = (p.statusCsv || '').split(',').filter(Boolean);
+  return row.query === 'task-facts' && !p.taskIds && p.dateField === (measure === 'created' ? 'createdAt' : 'actualFinish')
+    && (measure === 'created' ? !statuses.length : statuses.length === 1 && statuses[0] === 'done');
+}
 
 /** Beklenen katmanın okuması: kimlik ve yönetim düzeyi aynı istekte korunur. */
 export function temporalRequestMatches(request, layer) {
@@ -77,6 +92,18 @@ export function temporalPopulationViolations(result, analysis, seed) {
   const problems = [];
   for (const read of reads) if (!layers.some((layer) => matches(read, layer))) problems.push('beklenmeyen nüfus okundu');
   for (const layer of layers) if (!reads.some((read) => matches(read, layer))) problems.push(`kapsam okunmadı: ${layer.scope}/${layer.level || ''}`);
+  // Her katmanın her olay ölçüsü her istenen dönemde okunur; çapraz iki okuma dört birleşimi karşılayamaz.
+  const window = analysis.relativeWindow && analysis.relativeWindow !== 'all_time' ? expectedRange(analysis.relativeWindow)
+    : analysis.dateFrom && analysis.dateTo ? expectedRange([analysis.dateFrom, analysis.dateTo]) : null;
+  const prior = analysis.compare ? expectedCompare(analysis.compare, analysis.relativeWindow || window)
+    : analysis.compareFrom && analysis.compareTo ? expectedRange([analysis.compareFrom, analysis.compareTo]) : null;
+  for (const layer of layers) {
+    const measures = [...new Set((layer.focus || analysis.focus || []).filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)))];
+    const range = window || (measures.length ? [shift(measures.includes('trend') ? -89 : -29), TEMPORAL_TODAY] : null);
+    for (const measure of measures) for (const period of [range, ...(measure === 'trend' ? [] : [prior])].filter(Boolean)) {
+      if (!reads.some((read) => matches(read, layer) && temporalLogMatches(read, period, measure))) problems.push(`kapsamın dönem ölçüsü okunmadı: ${layer.scope}/${measure}/${period.join('..')}`);
+    }
+  }
   return problems;
 }
 
@@ -98,11 +125,8 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
   const log = result.log || [];
   const windowSeen = (range) => {
     if (!range) return true;
-    const [dateFrom, dateTo] = range.map((value) => resolveDay(value));
-    const day = (value) => (value == null ? null : new Date(value).toISOString().slice(0, 10));
-    return populationReads(log).some((row) => row.ok === true && day(row.params.dateFrom) === dateFrom && day(row.params.dateTo) === dateTo)
-      || log.some((row) => row.query === 'activity' && row.ok === true && shift(0, new Date(new Date(row.params.startUtc).getTime() + 10800000).toISOString().slice(0, 10)) === dateFrom
-        && new Date(new Date(row.params.endUtc).getTime() + 10800000 - 86400000).toISOString().slice(0, 10) === dateTo);
+    const resolved = range.map((value) => resolveDay(value));
+    return (expect.measures?.length ? expect.measures : [null]).every((measure) => log.some((row) => temporalLogMatches(row, resolved, measure)));
   };
   if (!windowSeen(expect.window)) problems.push(`dönem okunmadı ya da söylenmedi: ${JSON.stringify(expect.window)}`);
   if (!windowSeen(expect.compare)) problems.push(`karşılaştırma dönemi okunmadı ya da söylenmedi: ${JSON.stringify(expect.compare)}`);
@@ -114,7 +138,7 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
   const charts = renderedCharts(result.answer?.content || '');
   for (const type of expect.charts || []) if (!charts.some((chart) => chart.type === type)) problems.push(`grafik yok: ${type}`);
   if (expect.noChart && charts.some((chart) => chart.type === expect.noChart)) problems.push(`grafik çizilmemeliydi: ${expect.noChart}`);
-  if (expect.chartNote && !/grafik için .+ gerekir|chart needs|requires/u.test(content)) problems.push('grafik türü notu yok');
+  if (expect.chartNote && !/(?:grafik|zaman çizelgesi|gösterge kartları) için .+ gerekir|(?:chart|KPI card set|timeline) (?:needs|requires)\b/iu.test(content)) problems.push('grafik türü notu yok');
   // Grafik değerleri sayı, etiketleri boş olmayan metindir; çizgi grafiğin en az üç noktası vardır (tek tük gözlemden eğilim çizilmez).
   for (const chart of charts) {
     if (chart.type === 'line' && (chart.items || []).length < 3) problems.push('çizgi grafik üçten az noktayla çizildi');

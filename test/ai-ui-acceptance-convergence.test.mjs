@@ -513,3 +513,21 @@ test('betikli köprü yazılamayan çağrı kaydından sonra ayakta kalır', asy
   assert.equal(response.status, 500);
   assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
 });
+
+test('not rızası anahtarı gizliyken sürücü veri önkoşulunu bildirir ve soru göndermez', (t) => {
+  const dir = directory(t); mkdirSync(join(dir, 'node_modules', 'playwright'), { recursive: true });
+  writeFileSync(join(dir, 'node_modules', 'playwright', 'index.js'), `
+const fs=require('fs');
+const locator={first(){return this},getByRole(){return this},isVisible:async()=>false,click:async()=>{},getAttribute:async()=> 'true',waitFor:async()=>{},count:async()=>0,fill:async()=>{fs.writeFileSync(process.env.UI_ACCEPTANCE_DIR+'/gonderim','soru');throw Error('soru gönderildi')},screenshot:async()=>{}};
+const page={goto:async()=>{},getByRole:()=>locator,locator:()=>locator,waitForTimeout:async()=>{}};
+exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}),close:async()=>{}})};`);
+  for (const file of ['drive.cjs', 'expectations.cjs']) copyFileSync(resolve(`scripts/ui-acceptance/${file}`), join(dir, file));
+  const scenario = { profile: 'B', port: 8102, appLog: 'app.log', conversations: [{ name: 'rıza', detail: 'balanced', turns: ['Notları oku'], includeText: [0] }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_THEME: '', UI_SCRIPTED: '', UI_ONLY: '' });
+  assert.equal(result.status, 1, result.stderr);
+  const row = JSON.parse(readFileSync(join(dir, 'out', 'B.json')))[0];
+  assert.equal(row.rendered.status, 'driver-error');
+  assert.match(row.rendered.error, /Rota verisi kapalı/);
+  assert.ok(!readdirSync(dir).includes('gonderim'));
+});

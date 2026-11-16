@@ -222,8 +222,10 @@ export function renderEvidenceFact(fact, evidenceId, locale = 'tr') {
 
 /** Yalnızca sunucunun kanonik grup kodları yerelleştirilir; kayıt adları veri olarak kalır. */
 export function canonicalGroupLabel(fact, label, locale = 'tr') {
-  const { groupBy, group } = fact?.semantic || {};
-  if (locale !== 'en' || typeof group?.key !== 'string') return label;
+  const { groupBy, group, series, bucket } = fact?.semantic || {};
+  if (locale !== 'en') return label;
+  if (series && ['week', 'month'].includes(bucket)) return englishBucketLabel(label);
+  if (typeof group?.key !== 'string') return label;
   if (['status', 'priority'].includes(groupBy)) return factPresentation({ field: groupBy, value: group.key }, locale).value;
   if (groupBy === 'deadline') return { done: 'Done', overdue: 'Overdue', no_target_finish: 'No deadline', due_today: 'Due today',
     due_days_1_to_6: 'Due in 1–6 days', due_days_7_to_29: 'Due in 7–29 days', later: 'Due in 30 days or later' }[group.key] || label;

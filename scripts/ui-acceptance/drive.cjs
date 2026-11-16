@@ -172,6 +172,7 @@ function scriptedQuestions() {
       try {
         if ((conversation.includeText || []).includes(turnIndex)) {
           const consent = page.getByRole('switch', { name: 'Notlar ve iletiler' });
+          if (!(await consent.isVisible())) throw new Error('Rota verisi kapalı veya Rota kaynağı seçili değil; not rızası önkoşulu sağlanmadı');
           if ((await consent.getAttribute('aria-checked')) !== 'true') await consent.click();
           if ((await consent.getAttribute('aria-checked')) !== 'true') throw new Error('metin rızası açılamadı');
         }

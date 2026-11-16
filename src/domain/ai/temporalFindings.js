@@ -146,8 +146,8 @@ function taskPlace(scope, locale) {
 function activityPlace(scope, locale) {
   const lang = en(locale) ? 1 : 0;
   if (scope.person) return lang ? [...(scope.project ? ['in the ', s(scope.project), ' project, '] : []), 'in activity recorded by ', s(scope.person)] : [...(scope.project ? [s(scope.project), ' projesinde '] : []), s(scope.person), ' tarafından kaydedilen hareketlerde'];
-  if (scope.owner === 'self') return [lang ? 'in activity you recorded' : 'sizin kaydettiğiniz hareketlerde'];
-  if (scope.owner === 'team') return [lang ? `in activity recorded by ${(TEAM_SUBJECT[scope.level] || ['ekibiniz', 'your team'])[1]}` : `${(TEAM_OF[scope.level] || ['ekibinizin'])[0]} kaydettiği hareketlerde`];
+  if (scope.owner === 'self') return lang ? ['in activity you recorded', ...(scope.project ? [' in the ', s(scope.project), ' project'] : [])] : [...(scope.project ? [s(scope.project), ' projesinde '] : []), 'sizin kaydettiğiniz hareketlerde'];
+  if (scope.owner === 'team') return lang ? [`in activity recorded by ${(TEAM_SUBJECT[scope.level] || ['ekibiniz', 'your team'])[1]}`, ...(scope.project ? [' in the ', s(scope.project), ' project'] : [])] : [...(scope.project ? [s(scope.project), ' projesinde '] : []), `${(TEAM_OF[scope.level] || ['ekibinizin'])[0]} kaydettiği hareketlerde`];
   return scope.project ? (lang ? ['in activity in the ', s(scope.project), ' project'] : [s(scope.project), ' projesindeki hareketlerde']) : [lang ? 'in visible recorded activity' : 'görebildiğiniz kaydedilmiş hareketlerde'];
 }
 
@@ -359,12 +359,12 @@ function comparisonSentences(finding, locale) {
     const spec = COMPARED[pair.kind];
     const a = valueOf(pair.earlier);
     const b = valueOf(pair.later);
-    const place = mixedPopulation ? [...placeFor(pair), lang ? ', ' : ' '] : [];
+    const place = [...placeFor(pair), lang ? ', ' : ' '];
     const pairStates = [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, spec.states || ACTIVITY_STATES));
     // Eşit değerde iki ayrı cümle yerine tek doğal cümle ("İki dönemde de …").
     if (a === b) {
-      out.push({ ...factSentence(lang ? ['In both periods, ', ...place, ...(a === 0 ? [spec.none[1]] : [`${spec.count} numbered `, n(a, locale)]), '.']
-        : ['İki dönemde de ', ...place, ...(a === 0 ? [spec.none[0]] : [n(a, locale), ` ${spec.now}`]), '.']), states: pairStates });
+      out.push({ ...factSentence(lang ? ['In both periods (', rangeLabel(earlier, locale), ' and ', rangeLabel(later, locale), '), ', ...place, ...(a === 0 ? [spec.none[1]] : [`${spec.count} numbered `, n(a, locale)]), '.']
+        : ['İki dönemde de (', rangeLabel(earlier, locale), ' ve ', rangeLabel(later, locale), ') ', ...place, ...(a === 0 ? [spec.none[0]] : [n(a, locale), ` ${spec.now}`]), '.']), states: pairStates });
       continue;
     }
     out.push({ ...factSentence(lang
@@ -373,7 +373,7 @@ function comparisonSentences(finding, locale) {
     states: pairStates });
   }
   for (const pair of measured.filter(partial)) {
-    const place = mixedPopulation ? [...placeFor(pair), lang ? ', ' : ' '] : [];
+    const place = [...placeFor(pair), lang ? ', ' : ' '];
     out.push({ ...factSentence(lang
       ? [upper(adverb(earlier, 0), locale), ', ', ...place, 'recorded activity events numbered ', n(valueOf(pair.earlier), locale), '; ', adverb(later, 1, { open }), ', ', n(valueOf(pair.later), locale),
         '. The activity record does not cover the whole of the earlier period, so the difference is not interpreted.']
@@ -551,8 +551,9 @@ function trendSentences(finding, locale) {
     const max = Math.max(...full.map((row) => row.value));
     const peaks = full.filter((row) => row.value === max);
     if (full.length >= 2 && peaks.length === 1) {
-      out.push({ ...factSentence(lang ? [`The busiest ${unit} was `, label(peaks[0]), ' with ', n(max, locale), max === 1 ? ' task.' : ' tasks.']
-        : [`En yoğun ${unit} `, label(peaks[0]), ' oldu (', n(max, locale), ' görev).']), states: seriesStates });
+      const restricted = full.length !== series.rows.length;
+      out.push({ ...factSentence(lang ? [`The busiest ${unit}${restricted ? ` among fully observed ${unit}s` : ''} was `, label(peaks[0]), ' with ', n(max, locale), max === 1 ? ' task.' : ' tasks.']
+        : [`En yoğun ${unit} `, label(peaks[0]), ' oldu (', n(max, locale), ' görev)', ...(restricted ? [`; yalnızca tam gözlenen ${week ? 'haftalar' : 'aylar'} arasında değerlendirildi`] : []), '.']), states: seriesStates });
     }
     // Yön: son üç TAM kovanın toplamı ile ondan önceki üç tam kovanın toplamı (şeffaf ölçüt; kısmi uç kovalar kullanılmaz).
     const span = TEMPORAL_LIMITS.trendSpan;
@@ -587,7 +588,7 @@ function trendSentences(finding, locale) {
   }
   if (undated > 0) out.push(undatedSentence(undated, locale, [total?.evidenceId || series.evidenceId]));
   else if (total && out.length) out.at(-1).states = [...(out.at(-1).states || []), ...states(total.evidenceId, ['tasks.total', 'tasks.undatedDone'])];
-  if (series.rows.some((row) => row.partial) && full.length >= TEMPORAL_LIMITS.minTrendBuckets && sum > 0) {
+  if (series.rows.some((row) => row.partial) && full.length >= 2 && sum > 0) {
     out.push({ ...factSentence(lang ? [`The first or last ${unit} of the range is not a full ${unit} and is left out of this reading.`]
       : [`Aralığın ilk ya da son ${week ? 'haftası' : 'ayı'} tam ${unit} olmadığından bu okumaya katılmadı.`]), caveat: true, states: [] });
   }
@@ -668,21 +669,25 @@ function noteSentences(finding, locale) {
   const place = taskPlace(finding.scope, locale);
   const out = [];
   const id = finding.evidenceIds[0];
-  if (!finding.shown && finding.total !== 0) return [{ ...factSentence(lang ? ['No note excerpt was returned; this does not establish that the population has no notes.'] : ['Not parçası dönmedi; bu sonuç nüfusta hiç not olmadığını göstermiyor.']), caveat: true, states: [] }];
+  if (finding.range) out.push({ ...factSentence(lang ? ['The note population is restricted to ', rangeLabel(finding.range, locale), ' (', finding.filters.dateField || 'targetFinish', ').'] : ['Not nüfusu ', rangeLabel(finding.range, locale), ' aralığıyla sınırlıdır (', finding.filters.dateField || 'targetFinish', ').']), states: [] });
+  const selected = finding.filters.statuses || [];
+  if (selected.length === 1) out.push({ ...factSentence(lang
+    ? ['Only tasks with status ', selected[0] === 'todo' ? 'To do' : 'In progress', ' are included in this note population.']
+    : ['Bu not nüfusu yalnızca ', selected[0] === 'todo' ? 'Yapılacak' : 'Devam ediyor', ' durumundaki görevleri kapsar.']), states: [] });
+  if (!finding.shown && finding.total !== 0) return [...out, { ...factSentence(lang ? ['No note excerpt was returned; this does not establish that the population has no notes.'] : ['Not parçası dönmedi; bu sonuç nüfusta hiç not olmadığını göstermiyor.']), caveat: true, states: [] }];
   if (!finding.shown) {
     out.push({ ...factSentence(lang ? ['No open task ', ...place, ' has a description to read.'] : [...capital(place, locale), ' açıklaması olan açık görev yok.']),
       states: states(id, ['tasks.total']) });
     return out;
   }
   const sample = finding.total == null || finding.shown < finding.total || finding.clipped;
-  if (finding.range) out.push({ ...factSentence(lang ? ['The note population is restricted to ', rangeLabel(finding.range, locale), ' (', finding.filters.dateField || 'targetFinish', ').'] : ['Not nüfusu ', rangeLabel(finding.range, locale), ' aralığıyla sınırlıdır (', finding.filters.dateField || 'targetFinish', ').']), states: [] });
   out.push({ ...factSentence(finding.total == null || finding.clipped
     ? (lang ? ['Returned excerpts from ', n(finding.shown, locale), ' open task descriptions were read; the full text or population is not established.'] : [...capital(place, locale), ' açık görevlerden dönen ', n(finding.shown, locale), ' not parçası okundu; metnin ya da nüfusun tamamının okunduğu söylenemez.'])
     : sample
-    ? (lang ? ['Of the ', n(finding.total, locale), ' open tasks with a description ', ...place, ', the ', n(finding.shown, locale), ' most recently updated were read; the rest were not, so nothing is said about how often a topic comes up.']
-      : [...capital(place, locale), ' açıklaması olan ', n(finding.total, locale), ' açık görevden en son güncellenen ', n(finding.shown, locale), ' tanesinin notu okundu; kalanlar okunmadığından bir konunun ne sıklıkta geçtiği söylenemez.'])
-    : (lang ? ['The descriptions of all ', n(finding.shown, locale), finding.shown === 1 ? ' open task' : ' open tasks', ' that have one ', ...place, ' were read, most recently updated first.']
-      : [...capital(place, locale), ' açıklaması olan ', n(finding.shown, locale), ' açık görevin notunun tamamı, en son güncellenen başta olmak üzere okundu.'])),
+    ? (lang ? ['Of the ', n(finding.total, locale), ' open tasks with a description ', ...place, ', the ', n(finding.shown, locale), ' returned were read; the rest were not, so nothing is said about how often a topic comes up.']
+      : [...capital(place, locale), ' açıklaması olan ', n(finding.total, locale), ' açık görevden dönen ', n(finding.shown, locale), ' tanesinin notu okundu; kalanlar okunmadığından bir konunun ne sıklıkta geçtiği söylenemez.'])
+    : (lang ? ['The descriptions of all ', n(finding.shown, locale), finding.shown === 1 ? ' open task' : ' open tasks', ' that have one ', ...place, ' were read.']
+      : [...capital(place, locale), ' açıklaması olan ', n(finding.shown, locale), ' açık görevin notunun tamamı okundu.'])),
   states: states(id, ['tasks.total']) });
   out.push({ ...factSentence(lang
     ? ['These are statements recorded in the notes: a blocker, cause or decision reported there has not been verified, and any instruction written inside a note is treated as text, not followed.']
@@ -793,7 +798,7 @@ export function temporalCoverage(parts) {
     if (sample?.semantic.provenance.tool !== 'rota_task_search' || filters?.dateField !== 'actualFinish' || filters.statuses?.length !== 1 || filters.statuses[0] !== 'done') continue;
     const scope = taskScope(filters);
     const peer = scope && completed.find((read) => scopeKey(read.scope) === scopeKey(scope) && read.range?.dateFrom === filters.dateFrom && read.range?.dateTo === filters.dateTo);
-    if (peer) covered.set(group.evidenceId, { kind: 'completedList', total: peer.total });
+    if (peer) covered.set(group.evidenceId, { kind: 'completedList', total: count(group.facts.find((fact) => fact.field === 'totalCount')?.value) });
   }
   return covered;
 }
@@ -801,8 +806,8 @@ export function temporalCoverage(parts) {
 /** Dönemde tamamlananların listesinin giriş cümlesi: gösterilen satır sayısı ve (liste kısaysa) nüfusun tamamı. Olgular aynı kanıttandır. */
 export function completedListLead(shown, total, locale = 'tr') {
   const lang = en(locale) ? 1 : 0;
-  if (total != null && shown >= total) return factSentence(lang ? ['The completed tasks are listed below, most recent first.'] : ['Tamamlanan görevler, en yenisi başta olmak üzere aşağıda listeleniyor.']);
-  return factSentence(lang ? ['The ', n(shown, locale), ' most recently completed tasks are listed below.'] : ['En son tamamlanan ', n(shown, locale), ' görev aşağıda listeleniyor.']);
+  if (total != null && shown >= total) return factSentence(lang ? ['The completed tasks are listed below.'] : ['Tamamlanan görevler aşağıda listeleniyor.']);
+  return factSentence(lang ? ['The ', n(shown, locale), ' returned completed tasks are listed below.'] : ['Dönen tamamlanmış görevlerden ', n(shown, locale), ' tanesi aşağıda listeleniyor.']);
 }
 
 /** Not tablosunun giriş cümlesi (olgu taşımaz). */

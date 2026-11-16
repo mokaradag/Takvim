@@ -594,7 +594,8 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
       // Aşama H: adı verilmemiş BİRDEN ÇOK görevin açıklaması (notlar) tek görev ayrıntısıyla değil, özetin not yönüyle okunur.
       if (metric === 'task.description' && tool.name === 'rota_task_search' && !request.entities.some((entity) => entity.type === 'task')) {
         hints.push('Birden çok görevin notu/açıklaması: request yazma; rota_plan analysis {"scope":…,"focus":["notes"]} yaz (sunucu açık görevlerin notlarını okur)');
-      } else if (selecting.length) hints.push(`${metric}: ${type} özelliği; population.tool ${selecting[0]} ve request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] bildir (ölçüyü SİLME; kimliği sunucu bulur)`);
+      }
+      if (selecting.length) hints.push(`${metric}: ${type} özelliği; population.tool ${selecting[0]} ve request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] bildir (ölçüyü SİLME; kimliği sunucu bulur)`);
       return;
     }
     // Toplam, sayım ve satır alanı nüfus koşullarının tamamını ifade edebilen araçtan gelmelidir;

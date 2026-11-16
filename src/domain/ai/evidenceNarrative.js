@@ -779,7 +779,7 @@ function singleRowSentences(group, collection, row, locale) {
     && !numbers[0].fact.semantic?.group?.partial && !numbers[0].fact.semantic?.series?.partial
     && ['actualFinish', 'createdAt'].includes(numbers[0].fact.semantic?.filters?.dateField)) {
     const count = numbers[0].fact;
-    return [`${strong(escapedFactText(row.subject))}: ${strong(narrativeValue(count, locale))} ${locale === 'en' ? englishTasks(count) : 'görev'}${qualifierText(row.entries, locale)}.`];
+    return [`${strong(escapedFactText(canonicalGroupLabel(count, row.subject, locale)))}: ${strong(narrativeValue(count, locale))} ${locale === 'en' ? englishTasks(count) : 'görev'}${qualifierText(row.entries, locale)}.`];
   }
   const record = recordSentences({ tool: group.tool, kind: rowKind(collection, group.tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale);
   return role && record.length ? [`${role[0][language(locale)]}: ${record[0]}`, ...record.slice(1)] : record;
