@@ -148,8 +148,6 @@ export function normalizedBrief(raw) {
     out.focus = out.focus.filter((item, index) => out.focus.indexOf(item) === index);
   }
   if (out.act != null && !ANALYSIS_ACTS.includes(out.act)) delete out.act;
-  // Aşama H: kova yalnızca eğilim dizisinin boyudur; eğilim yönü yokken hiçbir okumayı değiştirmez (yazılmamış alanla eşdeğerdir).
-  if (out.bucket != null && Array.isArray(out.focus) && ![out, ...(out.also || [])].some((layer) => layer.focus?.includes('trend')) && !['previous', 'row'].includes(out.scope)) delete out.bucket;
   // Aşama G: "kendimi X ile karşılaştır" kendi kapsamı + tek kişi adı + withSelf olarak da yazılır; tek anlamı kişi ile kendinin
   // karşılaştırmasıdır (alanların kendisi kapsamı belirler, cümle yorumlanmaz).
   if (out.scope === 'self' && out.withSelf === true && Array.isArray(out.names) && out.names.length === 1) out.scope = 'person';
@@ -222,6 +220,9 @@ export function normalizedBrief(raw) {
   // Kapsam/alan tutarlılığı: adı verilen projeler portföy değil adlı proje kapsamıdır; satır sırası satır göndergesidir.
   if (out.scope === 'projects' && Array.isArray(out.names) && out.names.length) out.scope = 'project';
   if (out.scope === 'previous' && Array.isArray(out.rows) && out.rows.length) out.scope = 'row';
+  // Kova kararı tüm kapsamların eşdeğer yön yazımları normalleştikten sonra verilir; ek kapsamın aylık tercihi kaybolmaz.
+  const trendLayer = [out, ...(Array.isArray(out.also) ? out.also : [])].some((layer) => Array.isArray(layer?.focus) && layer.focus.includes('trend'));
+  if (out.bucket != null && Array.isArray(out.focus) && !trendLayer && !['previous', 'row'].includes(out.scope)) delete out.bucket;
   return out;
 }
 

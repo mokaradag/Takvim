@@ -645,8 +645,10 @@ test('dönem yanıtı doğrudan açılır, dönemi ve kapsamı söyler, sayılar
   const result = await ask({ text: 'Bu ay ile geçen ayı karşılaştır.', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['completed', 'created', 'activity'], relativeWindow: 'this_month', compare: 'last_month' } } });
   const content = String(result.answer.content);
   const paragraphs = content.split('\n\n');
-  // Açılış karşılaştırmanın kendisidir (yön), ardından sayılar gelir.
-  assert.match(paragraphs[0], /^İki dönem karşılaştırıldığında görebildiğiniz işlerde /);
+  // Karma karşılaştırmada açılış dönemi anlatır; görev ve hareket nüfusu kendi sayısının yanında belirtilir.
+  assert.match(paragraphs[0], /^İki dönem karşılaştırıldığında sonraki dönem /);
+  assert.match(paragraphs[0], /görebildiğiniz işlerde/);
+  assert.match(paragraphs[0], /görebildiğiniz kaydedilmiş hareketlerde/);
   assert.match(paragraphs[0], /henüz bitmediği/);
   assert.doesNotMatch(paragraphs[0], /arttı|azaldı|görev fazla/);
   assert.match(paragraphs[0], /Geçen ay \(Ağustos 2026\)/);
@@ -1107,4 +1109,32 @@ test('tek satırlı kısmi hafta kısa kayıt cümlesinde de kısmi olarak gör�
   const verdict = verifyRequested(ledger, ['data.groups.*.label', 'data.groups.*.count', 'data.groups.*.partial'], { operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'date_week' }, filters });
   assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
   assert.match(JSON.stringify(renderVerifiedNarrative(verdict.presentation.facts)), /[Kk]ısmi/);
+});
+
+test('karma dönem karşılaştırması her ölçünün görev ve işlem yapan nüfusunu ayrı söyler', () => {
+  const periods = [[resolveWindow('last_week', TODAY), { dateFrom: '2026-09-14', dateTo: '2026-09-20' }], [resolveWindow('this_week', TODAY), resolveWindow('last_week', TODAY)]];
+  for (const ranges of periods) for (const values of [[8, 4], [4, 8], [4, 4], [0, 0]]) for (const coverage of ['complete', 'partial']) {
+    const reads = ranges.flatMap((range, index) => {
+      const task = completedRead(`R${index * 2 + 1}`, range, values[index]);
+      task.facts[0].semantic.filters.assignee = 'me';
+      const activity = activityRead(`R${index * 2 + 2}`, range, values[index], { status: index ? coverage : 'complete', firstRecordedDay: '2026-09-16' });
+      activity.facts.forEach((fact) => { fact.semantic.filters.activityScope = 'mine'; });
+      return [task, activity];
+    });
+    const findings = temporalFindings(reads);
+    for (const locale of ['tr', 'en']) {
+      const sentences = temporalSentences(findings, locale);
+      const text = sentences.map((item) => item.plain).join(' ');
+      assert.ok(sentences.some((item) => !item.caveat && (locale === 'tr' ? /sizin kaydettiğiniz hareketlerde/ : /in activity you recorded/).test(item.plain)), text);
+      assert.ok(sentences.some((item) => !item.caveat && (locale === 'tr' ? /kendi işlerinizde/ : /in your own work/).test(item.plain)), text);
+      assert.doesNotMatch(sentences[0].plain, locale === 'tr' ? /kendi işlerinizde.*(?:ve|;) kaydedilen hareket/ : /in your own work.*(?:and|;) recorded activity/);
+    }
+  }
+});
+
+test('ek kapsamın eşdeğer eğilim yazımı normalleştikten sonra aylık kova tercihi korunur', () => {
+  const parts = expandAnalysis(parseAnalysis({ scope: 'self', focus: ['completed'], relativeWindow: 'last_month', bucket: 'month', also: [{ scope: 'team', focus: ['trends'] }] }), { today: TODAY });
+  assert.ok(parts.some((part) => part.population?.groupBy === 'date_month' && part.filters?.assignee === 'team'));
+  assert.equal(parts.some((part) => part.population?.groupBy === 'date_week' && part.filters?.assignee === 'team'), false);
+  assert.throws(() => parseAnalysis({ scope: 'self', focus: ['completed'], bucket: 'month', also: {} }), (error) => error.code === 'INVALID_ARGUMENTS');
 });

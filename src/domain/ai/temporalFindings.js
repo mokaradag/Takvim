@@ -326,6 +326,8 @@ function comparisonSentences(finding, locale) {
   const measured = finding.pairs.filter((pair) => valueOf(pair.earlier) != null && valueOf(pair.later) != null);
   const known = measured.filter((pair) => !partial(pair));
   const unknown = finding.pairs.filter((pair) => !measured.includes(pair));
+  const mixedPopulation = finding.pairs.some((pair) => pair.kind === 'activity') && finding.pairs.some((pair) => pair.kind !== 'activity');
+  const placeFor = (pair) => pair.kind === 'activity' ? activityPlace(finding.scope, locale) : taskPlace(finding.scope, locale);
   const eligible = finding.comparable && windowLength(earlier) === windowLength(later) && !finding.overlap && finding.ranges.every((range) => windowPosition(range, finding.today)?.position === 'past');
   const openNow = open && !finding.overlap;
   // Karşılaştırmanın kendisi önce söylenir (yön); sayılar ardından gelir.
@@ -335,42 +337,47 @@ function comparisonSentences(finding, locale) {
       : ['İki dönem örtüştüğü için sayılar bir değişim olarak değil, yan yana veriliyor.']), states: [] });
   } else if (known.length && eligible) {
     const direction = (pair) => Math.sign(valueOf(pair.later) - valueOf(pair.earlier));
-    const groups = [[1, lang ? 'rose' : 'arttı'], [-1, lang ? 'fell' : 'azaldı'], [0, lang ? 'did not change' : 'değişmedi']]
-      .map(([sign, verb]) => ({ verb, nouns: known.filter((pair) => direction(pair) === sign).map((pair) => COMPARED[pair.kind].noun[lang]) })).filter((group) => group.nouns.length);
-    const clause = (group) => `${joinList(group.nouns.map((noun) => [noun]), locale).join('')} ${group.verb}`;
-    const body = groups.map(clause).join(lang ? '; ' : '; ');
-    const place = known.every((pair) => pair.kind === 'activity') ? activityPlace(finding.scope, locale) : taskPlace(finding.scope, locale);
+    // Aynı dönemdeki görev sorumluluğu ile işlem yapan nüfusu ortak bir özneye bağlanmaz.
+    const populations = [known.filter((pair) => pair.kind !== 'activity'), known.filter((pair) => pair.kind === 'activity')].filter((list) => list.length);
+    const body = populations.flatMap((list, index) => {
+      const groups = [[1, lang ? 'rose' : 'arttı'], [-1, lang ? 'fell' : 'azaldı'], [0, lang ? 'did not change' : 'değişmedi']]
+        .map(([sign, verb]) => ({ verb, nouns: list.filter((pair) => direction(pair) === sign).map((pair) => COMPARED[pair.kind].noun[lang]) })).filter((group) => group.nouns.length);
+      const clause = (group) => `${joinList(group.nouns.map((noun) => [noun]), locale).join('')} ${group.verb}`;
+      return [...(index ? ['; '] : []), ...placeFor(list[0]), lang ? ', ' : ' ', groups.map(clause).join('; ')];
+    });
     // Bitmemiş dönem adıyla anılır ("Bu hafta henüz bitmediği için"); adı yoksa "Sonraki dönem".
     const laterName = windowName(namedWindow(later, finding.today), locale);
     const subject = laterName ? laterName.charAt(0).toLocaleUpperCase(lang ? 'en' : 'tr-TR') + laterName.slice(1) : (lang ? 'The later period' : 'Sonraki dönem');
     const lead = open
-      ? (lang ? [subject, ' is still in progress, so the comparison is provisional: ', ...place, ', ', body, ' so far.']
-        : [subject, ' henüz bitmediği için karşılaştırma şimdilik geçici: ', ...place, ' şu ana kadar ', body, '.'])
-      : (lang ? ['Comparing the two periods ', ...place, ', ', body, '.'] : ['İki dönem karşılaştırıldığında ', ...place, ' ', body, '.']);
+      ? (lang ? [subject, ' is still in progress, so the comparison is provisional: ', ...body, ' so far.']
+        : [subject, ' henüz bitmediği için karşılaştırma şimdilik geçici: ', ...body, '.'])
+      : (lang ? ['Comparing the two periods ', ...body, '.'] : ['İki dönem karşılaştırıldığında ', ...body, '.']);
     out.push({ ...factSentence(lead), states: [] });
   }
-  if (known.length && !eligible && !finding.overlap) out.push({ ...factSentence(open ? (lang ? ['Comparing the two periods, the later period is still in progress; the comparison is provisional and counts are shown side by side.'] : ['İki dönem karşılaştırıldığında ', ...(known.every((pair) => pair.kind === 'activity') ? activityPlace(finding.scope, locale) : taskPlace(finding.scope, locale)), ' sonraki dönem henüz bitmediği için karşılaştırma şimdilik geçici; sayılar yan yana veriliyor.']) : (lang ? ['Comparing the two periods, observation lengths differ; counts are shown side by side.'] : ['İki dönem karşılaştırıldığında gözlem süreleri farklı; sayılar yan yana veriliyor.'])), states: [] });
+  if (known.length && !eligible && !finding.overlap) out.push({ ...factSentence(open ? (lang ? ['Comparing the two periods, the later period is still in progress; the comparison is provisional and counts are shown side by side.'] : ['İki dönem karşılaştırıldığında ', ...(mixedPopulation ? [] : [...placeFor(known[0]), ' ']), 'sonraki dönem henüz bitmediği için karşılaştırma şimdilik geçici; sayılar yan yana veriliyor.']) : (lang ? ['Comparing the two periods, observation lengths differ; counts are shown side by side.'] : ['İki dönem karşılaştırıldığında gözlem süreleri farklı; sayılar yan yana veriliyor.'])), states: [] });
   for (const pair of known) {
     const spec = COMPARED[pair.kind];
     const a = valueOf(pair.earlier);
     const b = valueOf(pair.later);
+    const place = mixedPopulation ? [...placeFor(pair), lang ? ', ' : ' '] : [];
     const pairStates = [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, spec.states || ACTIVITY_STATES));
     // Eşit değerde iki ayrı cümle yerine tek doğal cümle ("İki dönemde de …").
     if (a === b) {
-      out.push({ ...factSentence(lang ? ['In both periods, ', ...(a === 0 ? [spec.none[1]] : [`${spec.count} numbered `, n(a, locale)]), '.']
-        : ['İki dönemde de ', ...(a === 0 ? [spec.none[0]] : [n(a, locale), ` ${spec.now}`]), '.']), states: pairStates });
+      out.push({ ...factSentence(lang ? ['In both periods, ', ...place, ...(a === 0 ? [spec.none[1]] : [`${spec.count} numbered `, n(a, locale)]), '.']
+        : ['İki dönemde de ', ...place, ...(a === 0 ? [spec.none[0]] : [n(a, locale), ` ${spec.now}`]), '.']), states: pairStates });
       continue;
     }
     out.push({ ...factSentence(lang
-      ? [upper(adverb(earlier, 0), locale), `, ${spec.count} numbered `, n(a, locale), '; ', adverb(later, 1, { open }), ', ', n(b, locale), ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']
-      : [upper(adverb(earlier, 0), locale), ' ', n(a, locale), ` ${spec.past}; `, adverb(later, 1, { open }), ' ', n(b, locale), ` ${spec.now}`, ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']),
+      ? [upper(adverb(earlier, 0), locale), ', ', ...place, `${spec.count} numbered `, n(a, locale), '; ', adverb(later, 1, { open }), ', ', n(b, locale), ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']
+      : [upper(adverb(earlier, 0), locale), ' ', ...place, n(a, locale), ` ${spec.past}; `, adverb(later, 1, { open }), ' ', n(b, locale), ` ${spec.now}`, ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']),
     states: pairStates });
   }
   for (const pair of measured.filter(partial)) {
+    const place = mixedPopulation ? [...placeFor(pair), lang ? ', ' : ' '] : [];
     out.push({ ...factSentence(lang
-      ? [upper(adverb(earlier, 0), locale), ', recorded activity events numbered ', n(valueOf(pair.earlier), locale), '; ', adverb(later, 1, { open }), ', ', n(valueOf(pair.later), locale),
+      ? [upper(adverb(earlier, 0), locale), ', ', ...place, 'recorded activity events numbered ', n(valueOf(pair.earlier), locale), '; ', adverb(later, 1, { open }), ', ', n(valueOf(pair.later), locale),
         '. The activity record does not cover the whole of the earlier period, so the difference is not interpreted.']
-      : [upper(adverb(earlier, 0), locale), ' ', n(valueOf(pair.earlier), locale), ' hareket kaydedilmişti; ', adverb(later, 1, { open }), ' ', n(valueOf(pair.later), locale),
+      : [upper(adverb(earlier, 0), locale), ' ', ...place, n(valueOf(pair.earlier), locale), ' hareket kaydedilmişti; ', adverb(later, 1, { open }), ' ', n(valueOf(pair.later), locale),
         ' hareket kaydedildi. Hareket kaydı önceki dönemin tamamını kapsamadığından bu fark yorumlanmadı.']),
     states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ACTIVITY_STATES)) });
   }
