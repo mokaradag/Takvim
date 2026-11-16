@@ -32,7 +32,7 @@ import { concreteCollections, rankedRowIndexes, REQUEST_LIMITS, taskResultScope 
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { layerAspectLabel, PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderLayerOmissions, renderOverlappingSeries, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, analysisWindows, normalizedBrief } from '../tools/analysisPlan.js';
+import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, analysisWindows, normalizedBrief, resolveAnalysisBrief, parseAnalysis } from '../tools/analysisPlan.js';
 import { resolveWindow } from '../../../domain/ai/temporalWindow.js';
 import { caveatPropositions } from '../../../domain/ai/groundedPropositions.js';
 import { expandedAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
@@ -788,7 +788,7 @@ function pinAnalysisRepair(turn, plan, details) {
     const [path, reason] = String(detail).split(':');
     if (path === '$.analysis.also' && reason === 'duplicate') paths.add('__duplicateLayers');
     if (['$.language', '$.chart', '$.charts', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
-    if (path.startsWith('$.analysis.') && !(path === '$.analysis.also' && ['duplicate', 'scope', 'window'].includes(reason)) && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
+    if (path.startsWith('$.analysis.') && !(path === '$.analysis.also' && ['duplicate', 'scope', 'window'].includes(reason)) && !(path === '$.analysis.compare' && reason === 'window') && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
     // Gerçek satır göndergeleri onarımda silinemez; başka kapsamdaki anlamsız alan kaldırılabilir.
     if (path === '$.analysis.rows' && normalizedBrief(existing?.raw || plan.analysis).scope !== 'row') paths.add('rows');
     // Kapsamlar arası dönem çakışması yalnızca dönem alanlarını açar: birincilin dönemi ve her ek kapsamın konumsal dönem alanları
@@ -842,8 +842,11 @@ function analysisRepairMatches(turn, plan) {
   const dateConflict = analysisSchema().properties.relativeWindow.enum.includes(pin.raw.relativeWindow) && (pin.raw.dateFrom || pin.raw.dateTo);
   const sameWindow = !dateConflict || analysis && ((analysis.relativeWindow === pin.raw.relativeWindow || pin.raw.relativeWindow === 'all_time' && !analysis.relativeWindow) && !analysis.dateFrom && !analysis.dateTo
     || !analysis.relativeWindow && analysis.dateFrom === pin.raw.dateFrom && analysis.dateTo === pin.raw.dateTo);
+  const compareConflict = pin.raw.compare && (pin.raw.compareFrom || pin.raw.compareTo);
+  const sameCompare = !compareConflict || analysis && (analysis.compare === pin.raw.compare && !analysis.compareFrom && !analysis.compareTo
+    || !analysis.compare && analysis.compareFrom === pin.raw.compareFrom && analysis.compareTo === pin.raw.compareTo);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
-    && sameWindow && analysisRepairProjection(analysis, pin.paths) === pin.projection
+    && sameCompare && sameWindow && analysisRepairProjection(analysis, pin.paths) === pin.projection
     && stable(repairOmit(submittedPresentation(plan), pin.presentationPaths)) === stable(repairOmit(pin.presentation, pin.presentationPaths))
     && (pin.visual == null || submittedVisual(plan) === pin.visual) && explicitRepairMatches(turn, pin, plan);
 }
@@ -924,7 +927,9 @@ function repairMatches(turn, plan, calls = []) {
 /** Ölçünün gerektirdiği metin ile kazara eklenen nüfus seçeneği ayrıdır. */
 function planNeedsText(turn, plan) {
   // Aşama H: not yönü (analysis.focus notes) korunan metin okur; kullanıcı bu iletide metni açmadıysa okuma yapılmadan rıza istenir.
-  const layers = plan?.analysis && typeof plan.analysis === 'object' && !Array.isArray(plan.analysis) ? [plan.analysis, ...(Array.isArray(plan.analysis.also) ? plan.analysis.also : [])] : [];
+  let resolved = plan?.analysis;
+  try { if (resolved) resolved = resolveAnalysisBrief(parseAnalysis(resolved), { previous: turn.previousAnalysis, today: turn.context.today }); } catch (error) { if (!(error instanceof ToolError)) throw error; }
+  const layers = resolved && typeof resolved === 'object' && !Array.isArray(resolved) ? [resolved, ...(Array.isArray(resolved.also) ? resolved.also : [])] : [];
   if (layers.some((layer) => Array.isArray(layer?.focus) && layer.focus.includes('notes')) && !turn.allowedTextFields.includes('description')) return true;
   return [plan?.request, ...(Array.isArray(plan?.additionalRequests) ? plan.additionalRequests : [])].filter(Boolean).some((raw) => Array.isArray(raw.metrics)
     && raw.metrics.some((metric) => turn.catalog.some((tool) => metricPaths(tool.name, metric).some((path) => {
@@ -1620,7 +1625,7 @@ function completedAnalysisContext(turn, verdict) {
   const prior = turn.previousAnalysis;
   const primary = layered ? intent.layers[0] : null;
   const declared = primary ? primary.scope : intent.scope === 'previous' ? prior?.scope : intent.scope === 'row'
-    ? (first.filters?.assignee === 'me' ? 'self' : first.filters?.assignee === 'team' ? 'team' : persons.length ? 'person' : projects.length ? 'project' : null) : intent.scope;
+    ? (first.filters?.assignee === 'me' || first.filters?.activityScope === 'mine' ? 'self' : first.filters?.assignee === 'team' || first.filters?.activityScope === 'team' ? 'team' : persons.length ? 'person' : projects.length ? 'project' : null) : intent.scope;
   if (!declared) return null;
   const scope = declared;
   const level = scope === 'team' ? (primary ? primary.level : intent.scope === 'previous' ? prior?.level : intent.scope === 'row' ? first.filters?.teamLevel : intent.level) || null : null;
@@ -1735,7 +1740,7 @@ function compositionInput(turn, verdict) {
   const followScope = Boolean(intent && ['previous', 'row'].includes(intent.scope));
   const rowRequest = intent?.scope === 'row' ? answers.find((answer) => answer.request)?.request : null;
   const rowScope = rowRequest?.entities?.some((entity) => entity.type === 'person') ? 'person'
-    : rowRequest?.filters?.assignee === 'me' ? 'self' : rowRequest?.filters?.assignee === 'team' ? 'team'
+    : rowRequest?.filters?.assignee === 'me' || rowRequest?.filters?.activityScope === 'mine' ? 'self' : rowRequest?.filters?.assignee === 'team' || rowRequest?.filters?.activityScope === 'team' ? 'team'
       : turn.previousAnalysis?.rows?.[(intent?.rows?.[0] || 1) - 1]?.type;
   const outlineScope = !followScope ? intent?.scope : intent.scope === 'previous' ? turn.previousAnalysis?.scope : rowScope;
   const relativeWindow = turn.presentationIntent?.relativeWindow;

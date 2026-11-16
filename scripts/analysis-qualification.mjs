@@ -41,7 +41,7 @@ import { executiveBenchmarkSeed, EXEC_PROFILES } from '../test/helpers/executive
 import { answerQuality } from '../test/helpers/answerQuality.mjs';
 import { phase4eConversation, turnViolations, renderedCharts } from '../test/helpers/phase4eScenario.mjs';
 import { temporalBenchmarkSeed, TEMPORAL_PROFILES } from '../test/helpers/temporalBenchmarkSeed.mjs';
-import { expectedCompare, expectedRange, temporalFixture as temporal, temporalViolations } from '../test/helpers/temporalScenario.mjs';
+import { expectedCompare, expectedRange, temporalFixture as temporal, temporalViolations, temporalRequestMatches, temporalPopulationViolations } from '../test/helpers/temporalScenario.mjs';
 import { planCase } from './planner-evaluation.mjs';
 import { completeModelRound } from './planner-followup-qualification.mjs';
 import { qualificationProvider } from './answer-composition-qualification.mjs';
@@ -59,7 +59,7 @@ export const BENCHMARK_TODAY = new Date(NOW.getTime() + 3 * 3600000).toISOString
 const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed: [], firstPass: 0, repairs: 0, escalations: 0, turns: 0, results: [] };
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
-const { analysisSuggestion, resolveAnalysisBrief } = await import('../src/server/ai/tools/analysisPlan.js');
+const { analysisSuggestion, resolveAnalysisBrief, analysisWindows } = await import('../src/server/ai/tools/analysisPlan.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
 // Her çağrı kendi satırlarına sahiptir; önceki ve eşzamanlı koşular yalnızca eklenen defteri paylaşabilir.
 const RUN_ID = randomUUID();
@@ -71,8 +71,8 @@ const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistr
 const scopeOf = (requests) => {
   if (!requests.length) return null;
   const one = (request) => {
-    if (request.filters?.assignee === 'me') return 'self';
-    if (request.filters?.assignee === 'team') return 'team';
+    if (request.filters?.assignee === 'me' || request.filters?.activityScope === 'mine') return 'self';
+    if (request.filters?.assignee === 'team' || request.filters?.activityScope === 'team') return 'team';
     if (request.entities.some((entity) => entity.type === 'person')) return 'person';
     if (request.entities.some((entity) => entity.type === 'project')) return 'project';
     if (request.population?.tool === 'rota_portfolio_summary') return 'projects';
@@ -217,6 +217,16 @@ export function plannerScore(result, expect, today = corpus.today) {
     for (const required of expect.focusAll || []) if (!focus.includes(required)) failures.push(`yön eksik: ${required}`);
     // Aşama H: geçmiş görünüm isteyen soru (önceki aşamalarda sınırlılık vakası) sıradan güncel durum planıyla karşılanmaz: plan bir
     // geçmiş dönem yönü okur ya da karşılaştırılamayan geçmiş durumu açıkça bildirir.
+    if (expect.temporalWindow || expect.temporalCompare) {
+      const window = expectedRange(expect.temporalWindow, BENCHMARK_TODAY);
+      const compare = expectedCompare(expect.temporalCompare, expect.temporalWindow, BENCHMARK_TODAY);
+      let unresolved = false;
+      if (result.plan?.analysis?.historyUnsupported?.length) {
+        try { const windows = analysisWindows(result.plan.analysis, BENCHMARK_TODAY); unresolved = [window, compare].filter(Boolean).every((wanted) => [windows.range, windows.compare].some((candidate) => candidate?.dateFrom === wanted[0] && candidate?.dateTo === wanted[1])); } catch { unresolved = false; }
+      }
+      for (const range of [window, compare].filter(Boolean)) if (!unresolved && !requests.some((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
+        && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('istenen tarihsel dönem okunmadı');
+    }
     if (expect.temporal && !focus.some((item) => ['completed', 'created', 'activity', 'trend'].includes(item)) && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş dönem okunmadı');
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
@@ -282,7 +292,16 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   if (expect.visual && result.plan?.visual !== true) failures.push('görselleştirme bayrağı yok');
   // Dönem, sunucunun çözdüğü somut günlerle karşılaştırılır (adlı dönem ya da eşdeğer tarih çifti aynı günleri verir).
   const requests = result.plan?.requests || [];
-  const reads = (range) => requests.some((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]);
+  const atoms = (wanted || []).flatMap((layer) => layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]);
+  if (atoms.length) for (const request of requests) if (!atoms.some((layer) => temporalRequestMatches(request, layer))) failures.push('beklenmeyen nüfus okundu');
+  const measures = (expect.focusAll || []).filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus));
+  if (!measures.length && expect.focusAny) measures.push(...focus.filter((item) => expect.focusAny.includes(item) && ['completed', 'created', 'activity', 'trend'].includes(item)));
+  const carries = (request, measure) => measure === 'activity' ? request.population?.tool === 'rota_activity_search' && request.filters?.activityView && request.metrics?.includes('activity.events')
+    : request.population?.tool === 'rota_task_analytics' && request.filters?.dateField === (measure === 'created' ? 'createdAt' : 'actualFinish')
+      && request.metrics?.includes('tasks.total') && (measure === 'created' ? !request.filters?.status?.length : request.filters?.status?.length === 1 && request.filters.status[0] === 'done')
+      && (measure === 'trend' ? ['date_week', 'date_month'].includes(request.population.groupBy) : !request.population.groupBy);
+  const reads = (range) => (atoms.length ? atoms : [null]).every((layer) => (measures.length ? measures : [null]).every((measure) => requests.some((request) =>
+    request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1] && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure)))));
   const range = expectedRange(expect.window, today);
   if (range && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
   const prior = expectedCompare(expect.compare, expect.window, today);
@@ -670,7 +689,7 @@ if (direct) {
       t.mock.timers.reset();
       const { test: _named, ...expect } = item.expect;
       const turn = { text: item.text, detail: item.detail || null, includeText: item.includeText === true, requireComposed: item.handling === 'full' && !expect.finish,
-        violations: (result) => temporalViolations(result, expect, { locale: item.plan?.language || 'tr' }) };
+        violations: (result) => [...temporalViolations(result, expect, { locale: item.plan?.language || 'tr' }), ...temporalPopulationViolations(result, item.plan?.analysis, seed)] };
       const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: TEMPORAL_PROFILES[item.profile] });
       // Sunucunun tek olası düzeni (seçim yok) modelin düzen hatası değildir; diğer sunucu düzenleri (geçersiz düzen, sağlayıcı) başarısızlıktır.
       const failures = result.failures.filter((failure) => !/^düzen [a-z]+(?:\/sunucu)?\/NO_CHOICE\//.test(failure));

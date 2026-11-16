@@ -67,7 +67,7 @@ function capped(rows = [], limit) {
 
 export async function readTaskFacts(executor, scope, {
   projectId = null, taskIds = [], wbsId = null, seriesId = null, recurringOnly = false, text = '',
-  openOnly = false, targetFrom = null, targetTo = null, createdByMe = false,
+  openOnly = false, targetFrom = null, targetTo = null, createdByMe = false, hasDescription = false, includeUndated = false,
   statuses = [], priorities = [], milestone = null, deadline = null,
   dateField = null, dateFrom = null, dateTo = null, today = null,
   assigneeMode = 'any', personSicil = null, teamLevel = null, withAssignees = false, maxRows, rosterRows = 0
@@ -89,6 +89,8 @@ export async function readTaskFacts(executor, scope, {
   request.input('dateFrom', sql.Date, dateFrom);
   request.input('dateTo', sql.Date, dateTo);
   request.input('today', sql.Date, today);
+  request.input('hasDescription', sql.Bit, hasDescription ? 1 : 0);
+  request.input('includeUndated', sql.Bit, includeUndated ? 1 : 0);
   request.input('createdByMe', sql.Bit, createdByMe ? 1 : 0);
   request.input('assigneeMode', sql.VarChar(12), assigneeMode);
   request.input('personSicil', sql.Int, personSicil);

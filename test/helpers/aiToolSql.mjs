@@ -272,7 +272,8 @@ function taskFacts(db, params) {
       if (params.deadline === 'due_next_30_days' && !(open && target && target >= today && target <= add(29))) return false;
       if (params.deadline === 'no_target_finish' && !(open && !target)) return false;
     }
-    if (params.dateField) {
+    if (params.hasDescription && !String(task.Description || '').trim()) return false;
+    if (params.dateField && !(params.includeUndated && !day(task.ActualFinish) && status === 'done')) {
       const value = dateValue(task);
       if (!value) return false;
       if (params.dateFrom && value < day(params.dateFrom)) return false;

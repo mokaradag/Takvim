@@ -61,7 +61,8 @@ export function toolFamily(tool) {
 }
 
 export function familyKeys(tool) {
-  return FAMILY_KEYS[FAMILIES[tool]] || [];
+  const keys = FAMILY_KEYS[FAMILIES[tool]] || [];
+  return tool === 'rota_task_analytics' ? keys.filter((key) => key !== 'hasDescription') : keys;
 }
 
 const compact = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item != null && !(Array.isArray(item) && !item.length)));

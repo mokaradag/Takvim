@@ -1339,7 +1339,7 @@
    "id": "h08",
    "text": "Geçen ay ile bu ayı karşılaştır; geçmiş verinin yetersiz olduğu noktaları belirt.",
    "profile": "B",
-   "expect": {"intent": "rota", "temporal": true},
+   "expect": {"intent": "rota", "temporal": true, "temporalWindow": "this_month", "temporalCompare": "last_month"},
    "handling": "limitation",
    "textEntities": []
   },

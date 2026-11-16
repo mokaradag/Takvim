@@ -776,6 +776,7 @@ function singleRowSentences(group, collection, row, locale) {
   // Aşama H: dönem (gerçekleşen bitiş / oluşturulma) dağılımının tek grubu "Kayıt sayısı: **1**" değil "**1** görev" diye okunur.
   const numbers = row.entries.filter(({ fact }) => typeof fact.value === 'number');
   if (group.tool === 'rota_task_analytics' && numbers.length === 1 && /(^|\.)groups\.\d+\.count$/.test(numbers[0].fact.field)
+    && !numbers[0].fact.semantic?.group?.partial && !numbers[0].fact.semantic?.series?.partial
     && ['actualFinish', 'createdAt'].includes(numbers[0].fact.semantic?.filters?.dateField)) {
     const count = numbers[0].fact;
     return [`${strong(escapedFactText(row.subject))}: ${strong(narrativeValue(count, locale))} ${locale === 'en' ? englishTasks(count) : 'görev'}${qualifierText(row.entries, locale)}.`];

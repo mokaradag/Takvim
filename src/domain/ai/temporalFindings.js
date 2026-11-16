@@ -1,5 +1,5 @@
 import { factSentence, formatCount, formatFactDay, formatPercent, strongFact } from './groundedPropositions.js';
-import { englishBucketLabel, comparableWindows, namedWindow, rangeLabel, windowAdverb, windowLength, windowName, windowPhrase, windowPosition, windowsOverlap } from './temporalWindow.js';
+import { englishBucketLabel, comparableWindows, namedWindow, rangeLabel, windowAdverb, windowLength, windowName, windowPhrase, windowPosition, windowsOverlap, monthEnd, shiftDay } from './temporalWindow.js';
 
 /**
  * Aşama H — DÖNEMSEL ve TARİHSEL BULGULAR (saf, belirlenimci).
@@ -33,7 +33,7 @@ const upper = (text, locale) => `${text.charAt(0).toLocaleUpperCase(en(locale) ?
 
 /** Görev nüfusunun yalnızca kapsam (sahip, düzey, proje, kişi) taşıyan süzgeci; başka daraltması olan okuma dönem bulgusu kurmaz. */
 function taskScope(filters) {
-  if (!filters || filters.text || filters.wbsId || filters.priorities?.length || filters.deadline || filters.createdByMe || filters.hasDescription || filters.milestone != null) return null;
+  if (!filters || filters.text || filters.wbsId || filters.priorities?.length || filters.deadline || filters.createdByMe || filters.hasDescription || filters.milestone != null || filters.assignee === 'unassigned') return null;
   const owner = filters.assignee === 'me' ? 'self' : filters.assignee === 'team' ? 'team' : 'all';
   return { owner, level: owner === 'team' ? filters.teamLevel || null : null, projectId: filters.projectId || null, project: typeof filters.project === 'string' ? filters.project : null,
     personSicil: filters.personSicil ?? null, person: typeof filters.person === 'string' && filters.person !== 'Seçilen kişi' ? filters.person : null };
@@ -64,11 +64,11 @@ export function temporalReads(groups) {
     const metricValue = (metric) => { const fact = group.facts.find((item) => item.semantic?.metric === metric && !item.semantic.row); return fact ? fact.value : undefined; };
     const base = { evidenceId: group.evidenceId, part: group.part, today: provenance.today || null, range };
     // Not okuması (rızayla): açıklaması olan açık görevlerin açıklama satırları; sayım nüfusun tamamı, satırlar okunan örnektir.
-    if (tool === 'rota_task_search' && filters.hasDescription === true) {
+    if (tool === 'rota_task_search' && filters.hasDescription === true && filters.statuses?.length && filters.statuses.every((status) => ['todo', 'in_progress'].includes(status))) {
       const scope = taskScope({ ...filters, hasDescription: false });
       const shown = new Set(group.facts.map((fact) => /^data\.tasks\.(\d+)\.description$/.exec(fact.field || '')?.[1]).filter(Boolean)).size;
       const total = group.facts.find((fact) => fact.field === 'totalCount');
-      if (scope) reads.push({ ...base, range: null, kind: 'notes', scope, shown, total: count(total?.value), clipped: group.facts.some((fact) => /\.description$/.test(fact.field || '') && typeof fact.value === 'string' && fact.value.endsWith('…')) });
+      if (scope) reads.push({ ...base, filters, kind: 'notes', scope, shown, total: count(total?.value), clipped: group.facts.some((fact) => /\.descriptionClipped$/.test(fact.field || '') && fact.value === true || /\.description$/.test(fact.field || '') && typeof fact.value === 'string' && fact.value.endsWith('…')) });
       continue;
     }
     if (tool === 'rota_task_analytics') {
@@ -78,7 +78,7 @@ export function temporalReads(groups) {
         .map((fact) => ({ index: Number(fact.field.split('.')[2]), key: fact.semantic.group.key, label: fact.semantic.group.label, partial: fact.semantic.group.partial === true,
           value: count(fact.value), complete: fact.semantic.complete === true && fact.semantic.row?.collectionSize != null })).sort((a, b) => a.index - b.index);
       if (['date_week', 'date_month'].includes(groupBy) && filters.dateField === 'actualFinish' && rows.length) {
-        reads.push({ ...base, kind: 'series', scope, bucket: groupBy === 'date_month' ? 'month' : 'week', rows, collectionComplete: rows.every((row) => row.complete && row.value != null) });
+        reads.push({ ...base, kind: 'series', scope, undated: count(sample.semantic.history?.undatedDone), bucket: groupBy === 'date_month' ? 'month' : 'week', rows, collectionComplete: rows.every((row) => row.complete && row.value != null) });
       } else if (groupBy === 'due_horizon' && rows.length === 3) {
         reads.push({ ...base, kind: 'horizons', scope, rows, collectionComplete: rows.every((row) => row.complete && row.value != null) });
       } else if (!groupBy && filters.dateField === 'actualFinish' && filters.statuses?.length === 1 && filters.statuses[0] === 'done' && metricValue('tasks.total') !== undefined) {
@@ -110,6 +110,17 @@ export function temporalReads(groups) {
   return reads;
 }
 
+/** Kova bitmeden tam gözlem sayılmaz; eski kanıtların tarih anahtarı da denetlenir. */
+function endedBucket(row, bucket, today) {
+  if (!today || !/^\d{4}-\d{2}(?:-\d{2})?$/.test(row.key)) return false;
+  return (bucket === 'month' ? monthEnd(`${row.key.slice(0, 7)}-01`) : shiftDay(row.key, 6)) < today;
+}
+
+/** Oluşturulma okuması silinmiş görevleri içermez. */
+function createdBasisSentence(locale) {
+  return { ...factSentence(en(locale) ? ['Creation counts include only tasks still present today; tasks subsequently deleted are excluded.'] : ['Oluşturulma sayıları yalnızca bugün hâlâ kayıtlı görevleri kapsar; sonradan silinenler sayılmaz.']), caveat: true, states: [] };
+}
+
 /* ── Kapsam ve dönem yazımı ─────────────────────────────────────────── */
 
 const TEAM_OF = Object.freeze({ unit: ['biriminizin', "your unit's"], department: ['bölümünüzün', "your department's"], directorate: ['direktörlüğünüzün', "your directorate's"] });
@@ -129,6 +140,15 @@ function taskPlace(scope, locale) {
   if (scope.owner === 'self') return [lang ? 'in your own work' : 'kendi işlerinizde'];
   if (scope.owner === 'team') return [lang ? `in ${team} work` : `${team} işlerinde`];
   return [lang ? 'in the work you can see' : 'görebildiğiniz işlerde'];
+}
+
+/** Hareket nüfusunun yazımı işlem yapanı belirtir; görev sorumluluğu çıkarılmaz. */
+function activityPlace(scope, locale) {
+  const lang = en(locale) ? 1 : 0;
+  if (scope.person) return lang ? [...(scope.project ? ['in the ', s(scope.project), ' project, '] : []), 'in activity recorded by ', s(scope.person)] : [...(scope.project ? [s(scope.project), ' projesinde '] : []), s(scope.person), ' tarafından kaydedilen hareketlerde'];
+  if (scope.owner === 'self') return [lang ? 'in activity you recorded' : 'sizin kaydettiğiniz hareketlerde'];
+  if (scope.owner === 'team') return [lang ? `in activity recorded by ${(TEAM_SUBJECT[scope.level] || ['ekibiniz', 'your team'])[1]}` : `${(TEAM_OF[scope.level] || ['ekibinizin'])[0]} kaydettiği hareketlerde`];
+  return scope.project ? (lang ? ['in activity in the ', s(scope.project), ' project'] : [s(scope.project), ' projesindeki hareketlerde']) : [lang ? 'in visible recorded activity' : 'görebildiğiniz kaydedilmiş hareketlerde'];
 }
 
 /**
@@ -198,7 +218,7 @@ export function temporalFindings(groups, context = null) {
     }).filter((pair) => pair?.earlier && pair.later);
     if (pairs.length && ranges.length === 2) {
       findings.push({ kind: 'periodComparison', interpretation: 'comparison', scope: entry.scope, filters: {}, today, ranges, pairs,
-        position: windowPosition(ranges[1], today), comparable: comparableWindows(ranges[0], ranges[1]), overlap: windowsOverlap(ranges[0], ranges[1]),
+        position: windowPosition(ranges[1], today), comparable: comparableWindows(ranges[0], ranges[1]) && windowLength(ranges[0]) === windowLength(ranges[1]), overlap: windowsOverlap(ranges[0], ranges[1]),
         evidenceIds: [...new Set(pairs.flatMap((pair) => [pair.earlier.evidenceId, pair.later.evidenceId]))], completeness: completenessOf(pairs.flatMap((pair) => [pair.earlier, pair.later])),
         names: periodNames(ranges, context) });
     } else {
@@ -215,7 +235,7 @@ export function temporalFindings(groups, context = null) {
       const total = entry.reads.find((read) => read.kind === 'completed' && rangeKey(read.range) === rangeKey(seriesRead.range)) || null;
       findings.push({ kind: 'completionTrend', interpretation: 'distribution', scope: entry.scope, filters: {}, today, range: seriesRead.range, series: seriesRead, total,
         position: windowPosition(seriesRead.range, today), evidenceIds: [...new Set([seriesRead.evidenceId, ...(total ? [total.evidenceId] : [])])],
-        completeness: seriesRead.collectionComplete ? (total?.undated ? 'partial' : 'complete') : 'incomplete', names: periodNames([seriesRead.range], context),
+        completeness: seriesRead.collectionComplete ? ((total?.undated ?? seriesRead.undated) ? 'partial' : 'complete') : 'incomplete', names: periodNames([seriesRead.range], context),
         // Özet paragrafı aynı dönemi zaten anlattıysa dizi cümlesi toplamı yinelemez.
         summarized: findings.some((item) => item.kind === 'periodSummary' && item.scope === entry.scope && rangeKey(item.range) === rangeKey(seriesRead.range)) });
     }
@@ -226,8 +246,8 @@ export function temporalFindings(groups, context = null) {
         names: periodNames([activitySeries.range], context) });
     }
     const notes = entry.reads.find((read) => read.kind === 'notes');
-    if (notes) findings.push({ kind: 'noteDigest', interpretation: 'distribution', scope: entry.scope, filters: {}, today, shown: notes.shown, total: notes.total,
-      evidenceIds: [notes.evidenceId], completeness: notes.total != null && notes.shown >= notes.total ? 'complete' : 'sample' });
+    if (notes) findings.push({ kind: 'noteDigest', interpretation: 'distribution', scope: entry.scope, filters: notes.filters, range: notes.range, today, shown: notes.shown, total: notes.total, clipped: notes.clipped,
+      evidenceIds: [notes.evidenceId], completeness: notes.total != null && notes.shown >= notes.total && !notes.clipped ? 'complete' : 'sample' });
     const horizons = entry.reads.find((read) => read.kind === 'horizons');
     if (horizons?.collectionComplete) {
       findings.push({ kind: 'horizonSpread', interpretation: 'distribution', scope: entry.scope, filters: {}, today, bands: horizons.rows.map((row) => row.value),
@@ -239,8 +259,13 @@ export function temporalFindings(groups, context = null) {
     findings.push({ kind: 'historyLimit', interpretation: 'comparison', filters: {}, today, aspects: [...context.unsupportedHistory], ranges: [context.compare, context.window].filter(Boolean),
       evidenceIds: [], completeness: 'unsupported', names: periodNames([context.compare, context.window].filter(Boolean), context) });
   }
+  const memberships = groups.flatMap((group) => {
+    const fact = group.facts.find((item) => item.semantic?.provenance?.tool === 'rota_task_analytics' && ['actualFinish', 'createdAt'].includes(item.semantic?.filters?.dateField) && ['project', 'assignee', 'unit', 'department'].includes(item.semantic?.groupBy));
+    const scope = fact && taskScope(fact.semantic.filters);
+    return scope ? [scopeKey(scope)] : [];
+  });
   const multi = scopes.length > 1;
-  return findings.map((finding) => Object.freeze({ ...finding, ...(multi && finding.scope ? { group: scopeLabel(finding.scope, 'tr'), multi: true } : {}), defaulted: context?.defaulted === true }));
+  return findings.map((finding) => Object.freeze({ ...finding, ...(finding.scope && memberships.includes(scopeKey(finding.scope)) ? { currentMembership: true } : {}), ...(multi && finding.scope ? { group: scopeLabel(finding.scope, 'tr'), multi: true } : {}), defaulted: context?.defaulted === true }));
 }
 
 function completenessOf(reads) {
@@ -282,8 +307,8 @@ function difference(earlier, later, unit, locale, { percent = false } = {}) {
 const COMPARED = Object.freeze({
   completed: { noun: ['tamamlanan iş', 'completed work'], unit: 'görev', past: 'görev tamamlanmıştı', now: 'görev tamamlandı', count: 'completed tasks', none: ['tamamlanan görev yok', 'no task was completed'],
     states: ['tasks.total', 'tasks.undatedDone'] },
-  created: { noun: ['oluşturulan iş', 'newly created work'], unit: 'görev', past: 'yeni görev oluşturulmuştu', now: 'yeni görev oluşturuldu', count: 'newly created tasks',
-    none: ['yeni görev oluşturulmadı', 'no new task was created'], states: ['tasks.total', 'tasks.open', 'tasks.done'] },
+  created: { noun: ['oluşturulan iş', 'newly created work'], unit: 'görev', past: 'yeni görev oluşturulmuştu ve bugün hâlâ kayıtlı', now: 'yeni görev oluşturuldu ve bugün hâlâ kayıtlı', count: 'newly created tasks still present today',
+    none: ['bu dönemde oluşturulmuş ve bugün kayıtlı yeni görev yok', 'no task created in this period is still present today'], states: ['tasks.total', 'tasks.open', 'tasks.done'] },
   activity: { noun: ['kaydedilen hareket', 'recorded activity'], unit: 'hareket', past: 'hareket kaydedilmişti', now: 'hareket kaydedildi', count: 'recorded activity events',
     none: ['hareket kaydedilmedi', 'no activity was recorded'], states: null }
 });
@@ -301,20 +326,20 @@ function comparisonSentences(finding, locale) {
   const measured = finding.pairs.filter((pair) => valueOf(pair.earlier) != null && valueOf(pair.later) != null);
   const known = measured.filter((pair) => !partial(pair));
   const unknown = finding.pairs.filter((pair) => !measured.includes(pair));
-  const eligible = finding.comparable && !finding.overlap && !open;
+  const eligible = finding.comparable && windowLength(earlier) === windowLength(later) && !finding.overlap && finding.ranges.every((range) => windowPosition(range, finding.today)?.position === 'past');
   const openNow = open && !finding.overlap;
   // Karşılaştırmanın kendisi önce söylenir (yön); sayılar ardından gelir.
   if (known.length && finding.overlap) {
     // Örtüşen dönemlerde yön söylenmez (aynı iş iki sayıda da yer alabilir); sayılar yan yana verilir.
     out.push({ ...factSentence(lang ? ['The two periods overlap, so they are shown side by side rather than as a change over time.']
       : ['İki dönem örtüştüğü için sayılar bir değişim olarak değil, yan yana veriliyor.']), states: [] });
-  } else if (known.length) {
+  } else if (known.length && eligible) {
     const direction = (pair) => Math.sign(valueOf(pair.later) - valueOf(pair.earlier));
     const groups = [[1, lang ? 'rose' : 'arttı'], [-1, lang ? 'fell' : 'azaldı'], [0, lang ? 'did not change' : 'değişmedi']]
       .map(([sign, verb]) => ({ verb, nouns: known.filter((pair) => direction(pair) === sign).map((pair) => COMPARED[pair.kind].noun[lang]) })).filter((group) => group.nouns.length);
     const clause = (group) => `${joinList(group.nouns.map((noun) => [noun]), locale).join('')} ${group.verb}`;
     const body = groups.map(clause).join(lang ? '; ' : '; ');
-    const place = taskPlace(finding.scope, locale);
+    const place = known.every((pair) => pair.kind === 'activity') ? activityPlace(finding.scope, locale) : taskPlace(finding.scope, locale);
     // Bitmemiş dönem adıyla anılır ("Bu hafta henüz bitmediği için"); adı yoksa "Sonraki dönem".
     const laterName = windowName(namedWindow(later, finding.today), locale);
     const subject = laterName ? laterName.charAt(0).toLocaleUpperCase(lang ? 'en' : 'tr-TR') + laterName.slice(1) : (lang ? 'The later period' : 'Sonraki dönem');
@@ -324,6 +349,7 @@ function comparisonSentences(finding, locale) {
       : (lang ? ['Comparing the two periods ', ...place, ', ', body, '.'] : ['İki dönem karşılaştırıldığında ', ...place, ' ', body, '.']);
     out.push({ ...factSentence(lead), states: [] });
   }
+  if (known.length && !eligible && !finding.overlap) out.push({ ...factSentence(open ? (lang ? ['Comparing the two periods, the later period is still in progress; the comparison is provisional and counts are shown side by side.'] : ['İki dönem karşılaştırıldığında ', ...(known.every((pair) => pair.kind === 'activity') ? activityPlace(finding.scope, locale) : taskPlace(finding.scope, locale)), ' sonraki dönem henüz bitmediği için karşılaştırma şimdilik geçici; sayılar yan yana veriliyor.']) : (lang ? ['Comparing the two periods, observation lengths differ; counts are shown side by side.'] : ['İki dönem karşılaştırıldığında gözlem süreleri farklı; sayılar yan yana veriliyor.'])), states: [] });
   for (const pair of known) {
     const spec = COMPARED[pair.kind];
     const a = valueOf(pair.earlier);
@@ -336,8 +362,8 @@ function comparisonSentences(finding, locale) {
       continue;
     }
     out.push({ ...factSentence(lang
-      ? [upper(adverb(earlier, 0), locale), `, ${spec.count} numbered `, n(a, locale), '; ', adverb(later, 1, { open }), ', ', n(b, locale), ...difference(a, b, spec.unit, locale, { percent: eligible }), '.']
-      : [upper(adverb(earlier, 0), locale), ' ', n(a, locale), ` ${spec.past}; `, adverb(later, 1, { open }), ' ', n(b, locale), ` ${spec.now}`, ...difference(a, b, spec.unit, locale, { percent: eligible }), '.']),
+      ? [upper(adverb(earlier, 0), locale), `, ${spec.count} numbered `, n(a, locale), '; ', adverb(later, 1, { open }), ', ', n(b, locale), ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']
+      : [upper(adverb(earlier, 0), locale), ' ', n(a, locale), ` ${spec.past}; `, adverb(later, 1, { open }), ' ', n(b, locale), ` ${spec.now}`, ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']),
     states: pairStates });
   }
   for (const pair of measured.filter(partial)) {
@@ -364,6 +390,8 @@ function comparisonSentences(finding, locale) {
         ...(other != null ? ['; öteki dönemde ', n(other, locale), ' hareket kaydedildi'] : []), '.']), caveat: true,
     states: [...states(pair.earlier.evidenceId, ACTIVITY_STATES), ...states(pair.later.evidenceId, ACTIVITY_STATES)] });
   }
+  if (finding.pairs.some((pair) => pair.kind === 'activity')) out.push({ ...factSentence(en(locale) ? ['Activity counts refer to actions by ', ...(finding.scope.owner === 'self' ? ['you'] : finding.scope.owner === 'team' ? [(TEAM_SUBJECT[finding.scope.level] || ['ekibiniz', 'your team'])[1]] : [finding.scope.person || 'the selected visible actors']), ', independently of task assignment.'] : ['Hareket sayıları görev sorumluluğuna göre değil, ', ...(finding.scope.owner === 'self' ? ['sizin'] : finding.scope.owner === 'team' ? [(TEAM_OF[finding.scope.level] || ['ekibinizin'])[0]] : [finding.scope.person || 'görünür işlem yapanların']), ' kaydettiği işlemlere göredir.']), caveat: true, states: [] });
+  if (finding.pairs.some((pair) => pair.kind === 'created')) out.push(createdBasisSentence(locale));
   for (const item of comparisonCaveats(finding, locale, { open })) out.push(item);
   return out;
 }
@@ -414,8 +442,8 @@ function coverageSentence(read, locale) {
 
 function reopenedSentence(read, locale) {
   return { ...factSentence(en(locale)
-    ? [n(read.reopened, locale), read.reopened === 1 ? ' task was' : ' tasks were', ' reopened after being completed in this period; a completion event does not mean the task is complete today.']
-    : ['Bu dönemde ', n(read.reopened, locale), ' görev tamamlandıktan sonra yeniden açıldı; tamamlama hareketi görevin bugün tamamlanmış olduğu anlamına gelmez.']),
+    ? [n(read.reopened, locale), read.reopened === 1 ? ' task was' : ' tasks were', ' reopened in this period after an earlier completion; a completion event does not mean the task is complete today.']
+    : ['Bu dönemde ', n(read.reopened, locale), ' görev önceki tamamlanmasının ardından yeniden açıldı; tamamlama hareketi görevin bugün tamamlanmış olduğu anlamına gelmez.']),
   caveat: true, states: states(read.evidenceId, ['activity.reopenedTasks']) };
 }
 
@@ -447,10 +475,11 @@ function summarySentences(finding, locale) {
     const tail = created.total > 0 && created.done > 0
       ? (lang ? ['; ', n(created.done, locale), ' of them ', created.done === 1 ? 'is' : 'are', ' already complete'] : ['; bunların ', n(created.done, locale), ' tanesi şimdiden tamamlandı']) : [];
     out.push({ ...factSentence(created.total === 0
-      ? (lang ? [...lead(), 'no new task was created.'] : [...lead(), 'yeni görev oluşturulmadı.'])
-      : (lang ? [...lead(), n(created.total, locale), created.total === 1 ? ' new task was created' : ' new tasks were created', ...tail, '.']
-        : [...lead(), n(created.total, locale), ' yeni görev oluşturuldu', ...tail, '.'])), states: states(created.evidenceId, ['tasks.total', 'tasks.done', 'tasks.open']) });
+      ? (lang ? [...lead(), 'no task created in this period is still present today.'] : [...lead(), 'bu dönemde oluşturulmuş ve bugün kayıtlı yeni görev yok.'])
+      : (lang ? [...lead(), n(created.total, locale), created.total === 1 ? ' new task was created and is still present today' : ' new tasks were created and are still present today', ...tail, '.']
+        : [...lead(), n(created.total, locale), ' yeni görev oluşturuldu ve bugün hâlâ kayıtlı', ...tail, '.'])), states: states(created.evidenceId, ['tasks.total', 'tasks.done', 'tasks.open']) });
   }
+  if (created) out.push(createdBasisSentence(locale));
   if (activity) {
     if (activity.events == null) {
       const first = activity.coverage?.firstRecordedDay || null;
@@ -509,12 +538,12 @@ function trendSentences(finding, locale) {
         : [adverb, ' ', ...place, ' ', n(sum, locale), ' görev tamamlandı (gerçekleşen bitiş tarihine göre).'])),
     states: [...seriesStates, ...(total ? states(total.evidenceId, ['tasks.total']) : [])] });
   }
-  const undated = total?.undated || 0;
-  const full = series.rows.filter((row) => !row.partial);
+  const undated = total?.undated ?? series.undated ?? 0;
+  const full = series.rows.filter((row) => !row.partial && endedBucket(row, series.bucket, finding.today));
   if (sum > 0) {
-    const max = Math.max(...series.rows.map((row) => row.value));
-    const peaks = series.rows.filter((row) => row.value === max);
-    if (series.rows.length >= 2 && peaks.length === 1) {
+    const max = Math.max(...full.map((row) => row.value));
+    const peaks = full.filter((row) => row.value === max);
+    if (full.length >= 2 && peaks.length === 1) {
       out.push({ ...factSentence(lang ? [`The busiest ${unit} was `, label(peaks[0]), ' with ', n(max, locale), max === 1 ? ' task.' : ' tasks.']
         : [`En yoğun ${unit} `, label(peaks[0]), ' oldu (', n(max, locale), ' görev).']), states: seriesStates });
     }
@@ -549,7 +578,7 @@ function trendSentences(finding, locale) {
         : ['Bu aralık yalnızca ', n(full.length, locale), ` tam ${unit} içerdiğinden eğilim söylenemez; bunun için daha uzun bir dönem gerekir.`]), caveat: true, states: seriesStates });
     }
   }
-  if (undated > 0) out.push(undatedSentence(undated, locale, [total.evidenceId]));
+  if (undated > 0) out.push(undatedSentence(undated, locale, [total?.evidenceId || series.evidenceId]));
   else if (total && out.length) out.at(-1).states = [...(out.at(-1).states || []), ...states(total.evidenceId, ['tasks.total', 'tasks.undatedDone'])];
   if (series.rows.some((row) => row.partial) && full.length >= TEMPORAL_LIMITS.minTrendBuckets && sum > 0) {
     out.push({ ...factSentence(lang ? [`The first or last ${unit} of the range is not a full ${unit} and is left out of this reading.`]
@@ -565,20 +594,18 @@ function activityTrendSentences(finding, locale) {
   const week = series.bucket === 'week';
   const unit = lang ? (week ? 'week' : 'month') : (week ? 'hafta' : 'ay');
   const label = (row) => s(lang ? englishBucketLabel(row.label) : row.label);
-  const recorded = series.rows.filter((row) => row.recorded && row.value != null);
+  const recorded = series.rows.filter((row) => row.recorded && row.value != null && !row.partial && endedBucket(row, series.bucket, finding.today));
   const out = [];
   const seriesStates = states(series.evidenceId, ['activity.events', 'activity.completionEvents']);
+  const missing = series.rows.filter((row) => !row.recorded || row.value == null).length;
+  if (missing > 0) out.push({ ...factSentence(lang ? ['Some earlier periods have no activity record; those are unknown, not zero.'] : ['Önceki dönemler için hareket kaydı yok; bu kovalar bilinmiyor, sıfır sayılmadı.']), caveat: true, states: seriesStates });
+  if (series.rows.some((row) => row.partial)) out.push({ ...factSentence(lang ? ['Partially recorded or unfinished buckets are excluded from the peak comparison.'] : ['Kısmen kayıtlı ya da bitmemiş kovalar en yoğun dönem karşılaştırmasına katılmadı.']), caveat: true, states: seriesStates });
   if (!recorded.length) return out;
   const max = Math.max(...recorded.map((row) => row.value));
   const peaks = recorded.filter((row) => row.value === max);
   if (max > 0 && recorded.length >= 2 && peaks.length === 1) {
     out.push({ ...factSentence(lang ? [`Recorded activity peaked in the ${unit} of `, label(peaks[0]), ' (', n(max, locale), max === 1 ? ' event).' : ' events).']
       : [`Kaydedilen hareketler en çok `, label(peaks[0]), ` ${unit === 'hafta' ? 'haftasında' : 'ayında'} yoğunlaştı (`, n(max, locale), ' hareket).']), states: seriesStates });
-  }
-  const missing = series.rows.length - recorded.length;
-  if (missing > 0) {
-    out.push({ ...factSentence(lang ? ['For ', n(missing, locale), ` earlier ${unit}${missing === 1 ? '' : 's'} there is no activity record; those are unknown, not zero.`]
-      : ['Dizinin başındaki ', n(missing, locale), ` ${unit} için hareket kaydı yok; bu kovalar bilinmiyor, sıfır sayılmadı.`]), caveat: true, states: seriesStates });
   }
   return out;
 }
@@ -634,13 +661,17 @@ function noteSentences(finding, locale) {
   const place = taskPlace(finding.scope, locale);
   const out = [];
   const id = finding.evidenceIds[0];
+  if (!finding.shown && finding.total !== 0) return [{ ...factSentence(lang ? ['No note excerpt was returned; this does not establish that the population has no notes.'] : ['Not parçası dönmedi; bu sonuç nüfusta hiç not olmadığını göstermiyor.']), caveat: true, states: [] }];
   if (!finding.shown) {
     out.push({ ...factSentence(lang ? ['No open task ', ...place, ' has a description to read.'] : [...capital(place, locale), ' açıklaması olan açık görev yok.']),
       states: states(id, ['tasks.total']) });
     return out;
   }
-  const sample = finding.total != null && finding.shown < finding.total;
-  out.push({ ...factSentence(sample
+  const sample = finding.total == null || finding.shown < finding.total || finding.clipped;
+  if (finding.range) out.push({ ...factSentence(lang ? ['The note population is restricted to ', rangeLabel(finding.range, locale), ' (', finding.filters.dateField || 'targetFinish', ').'] : ['Not nüfusu ', rangeLabel(finding.range, locale), ' aralığıyla sınırlıdır (', finding.filters.dateField || 'targetFinish', ').']), states: [] });
+  out.push({ ...factSentence(finding.total == null || finding.clipped
+    ? (lang ? ['Returned excerpts from ', n(finding.shown, locale), ' open task descriptions were read; the full text or population is not established.'] : [...capital(place, locale), ' açık görevlerden dönen ', n(finding.shown, locale), ' not parçası okundu; metnin ya da nüfusun tamamının okunduğu söylenemez.'])
+    : sample
     ? (lang ? ['Of the ', n(finding.total, locale), ' open tasks with a description ', ...place, ', the ', n(finding.shown, locale), ' most recently updated were read; the rest were not, so nothing is said about how often a topic comes up.']
       : [...capital(place, locale), ' açıklaması olan ', n(finding.total, locale), ' açık görevden en son güncellenen ', n(finding.shown, locale), ' tanesinin notu okundu; kalanlar okunmadığından bir konunun ne sıklıkta geçtiği söylenemez.'])
     : (lang ? ['The descriptions of all ', n(finding.shown, locale), finding.shown === 1 ? ' open task' : ' open tasks', ' that have one ', ...place, ' were read, most recently updated first.']
@@ -676,16 +707,19 @@ export function temporalSentences(findings, locale = 'tr') {
     const built = finding.kind === 'periodComparison' ? comparisonSentences(finding, locale) : finding.kind === 'periodSummary' ? summarySentences(finding, locale)
       : finding.kind === 'completionTrend' ? trendSentences(finding, locale) : finding.kind === 'activityTrend' ? activityTrendSentences(finding, locale)
         : finding.kind === 'horizonSpread' ? horizonSentences(finding, locale) : finding.kind === 'noteDigest' ? noteSentences(finding, locale) : historyLimitSentences(finding, locale);
+    if (finding.currentMembership) built.push({ ...factSentence(en(locale) ? ['Groups reflect current project, assignee or organizational membership; membership during the historical period is unknown.'] : ['Gruplar görevlerin bugünkü proje, sorumlu ya da birim üyeliğine göredir; geçmiş dönemdeki üyelik bilinmiyor.']), caveat: true, states: [] });
     if (finding.defaulted && !noted && built.length && !['horizonSpread', 'historyLimit', 'noteDigest'].includes(finding.kind)) {
       const note = defaultedSentence(finding, locale);
       if (note) built.push(note);
       noted = true;
     }
     const group = finding.multi ? scopeLabel(finding.scope, locale) : null;
-    for (const item of built) {
+    for (const original of built) {
+      const item = original.caveat && group ? { ...original, ...factSentence([group, ': ', ...original.parts]) } : original;
       // Aynı çekince (tarihi kayıtlı olmayan görevler, kayıt başlangıcı, yeniden açma) yanıtta bir kez söylenir.
-      if (item.caveat && said.has(item.markdown)) continue;
-      if (item.caveat) said.add(item.markdown);
+      const caveatKey = JSON.stringify([finding.scope ? scopeKey(finding.scope) : null, item.markdown]);
+      if (item.caveat && said.has(caveatKey)) continue;
+      if (item.caveat) said.add(caveatKey);
       out.push({ finding, ...item, states: Object.freeze([...(item.states || [])]), ...(group != null ? { group } : {}) });
     }
   }
@@ -697,8 +731,8 @@ export function temporalSentences(findings, locale = 'tr') {
   const levels = new Set(plain.filter((item) => item.scope.owner === 'team').map((item) => item.scope.level));
   if (plain.length > 1 && (owners.size > 1 || levels.size > 1)) {
     const last = scoped.at(-1);
-    out.push({ finding: last, ...factSentence(en(locale) ? ['These scopes overlap (the wider scope includes the narrower one), so their counts are compared side by side and never added together.']
-      : ['Bu kapsamlar iç içedir (geniş kapsam dar olanı da içerir); sayılar yan yana okunur, toplanmaz.']), caveat: true, states: Object.freeze([]), group: scopeLabel(last.scope, locale) });
+    out.push({ finding: last, ...factSentence(en(locale) ? ['Scope overlap is not established; counts are shown separately and no combined total is inferred.']
+      : ['Kapsamların örtüşmesi belirlenmiş değildir; sayılar ayrı okunur, birleşik toplam için doğrudan toplanmaz.']), caveat: true, states: Object.freeze([]), group: scopeLabel(last.scope, locale) });
   }
   return out;
 }
@@ -712,7 +746,7 @@ export function comparisonCharts(finding, locale = 'tr') {
   const named = finding.ranges.every((range, index) => finding.names?.[index] || namedWindow(range, finding.today));
   const label = (range, index) => (named ? upper(windowAdverb(range, finding.today, locale, finding.names?.[index] || null).replace(/ \(.*\)$/u, '').replace(/ döneminde$| günü$|^in |^on /u, ''), locale)
     : rangeLabel(range, locale));
-  return finding.pairs.filter((pair) => valueOf(pair.earlier) != null && valueOf(pair.later) != null).map((pair) => ({
+  return finding.pairs.filter((pair) => valueOf(pair.earlier) != null && valueOf(pair.later) != null && (pair.kind !== 'activity' || [pair.earlier, pair.later].every((read) => read.coverage?.status === 'complete'))).map((pair) => ({
     kind: pair.kind, title: titles[pair.kind][lang], evidenceIds: [pair.earlier.evidenceId, pair.later.evidenceId],
     items: [{ label: label(finding.ranges[0], 0), value: valueOf(pair.earlier) }, { label: label(finding.ranges[1], 1), value: valueOf(pair.later) }],
     change: Math.abs(valueOf(pair.later) - valueOf(pair.earlier)) }));

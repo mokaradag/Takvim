@@ -337,6 +337,12 @@ export function factPresentation(fact, locale = 'tr') {
   const qualifierParts = Object.entries(fact.semantic?.filters || {}).filter(([key]) => filterNames[key])
     .map(([key, value]) => ({ key, label: filterNames[key][language], value: qualifierValue(key, value) }))
     .filter((part) => part.value);
+  if (['actualFinish', 'createdAt'].includes(fact.semantic?.filters?.dateField) && ['project', 'assignee', 'unit', 'department'].includes(fact.semantic?.groupBy)) {
+    qualifierParts.push({ key: 'historyMembership', label: locale === 'en' ? 'Grouping' : 'Gruplama', value: locale === 'en' ? 'current membership; historical membership is unavailable' : 'bugünkü üyelik; geçmişteki üyelik bilinmiyor' });
+  }
+  if (fact.semantic?.group?.partial || fact.semantic?.series?.partial) {
+    qualifierParts.push({ key: 'partialBucket', label: locale === 'en' ? 'Coverage' : 'Kapsam', value: locale === 'en' ? 'partial period' : 'kısmi dönem' });
+  }
   const qualifiers = qualifierParts.map((part) => `${part.label}: ${part.value}`).join('; ');
   if (fact.semantic?.countScope === 'selected-tab' && fact.field.startsWith('data.counts.')) value = `${value} (${locale === 'en' ? 'selected tab' : 'seçilen sekme'})`;
   const units = { hours: ['saat', 'hours'], tasks: ['görev', 'tasks'], 'unspecified-currency': ['para birimi belirtilmemiş', 'currency unspecified'],

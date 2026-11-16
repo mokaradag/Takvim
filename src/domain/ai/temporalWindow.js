@@ -84,8 +84,8 @@ export function resolveWindow(window, today) {
     case 'this_month': return { dateFrom: monthStart(today), dateTo: monthEnd(today) };
     case 'last_month': { const from = shiftMonth(today, -1); return { dateFrom: from, dateTo: monthEnd(from) }; }
     default: {
+      if (!Object.hasOwn(ROLLING, window)) return null;
       const span = ROLLING[window];
-      if (!span) return null;
       return span < 0 ? { dateFrom: shiftDay(today, span + 1), dateTo: today } : { dateFrom: today, dateTo: shiftDay(today, span - 1) };
     }
   }
@@ -124,7 +124,7 @@ export function windowPosition(range, today) {
   if (range.dateTo < today) return { position: 'past', length, elapsedDays: length, open: false };
   if (range.dateFrom > today) return { position: 'future', length, elapsedDays: 0, open: true };
   const elapsedDays = dayDistance(range.dateFrom, today) + 1;
-  return { position: 'current', length, elapsedDays, open: elapsedDays < length };
+  return { position: 'current', length, elapsedDays, open: true };
 }
 
 /** Dönemin türü (anlatım ve karşılaştırılabilirlik için): gün, takvim haftası, takvim ayı ya da gün sayılı aralık. */
@@ -170,7 +170,7 @@ export function bucketKey(day, bucket) {
  * aynı okumanın bütün nüfusundandır). Uçlardaki kova aralıkla kesişiyorsa `partial` işaretlenir (tam hafta/ay değildir).
  * Kova sayısı sınırı aşarsa `null` (dizi kurulmaz).
  */
-export function seriesBuckets(range, bucket) {
+export function seriesBuckets(range, bucket, today = null) {
   if (!range || !SERIES_BUCKETS.includes(bucket) || windowLength(range) > SERIES_LIMITS.maxRangeDays) return null;
   const out = [];
   let cursor = bucket === 'month' ? monthStart(range.dateFrom) : weekStart(range.dateFrom);
@@ -178,7 +178,7 @@ export function seriesBuckets(range, bucket) {
     const end = bucket === 'month' ? monthEnd(cursor) : shiftDay(cursor, 6);
     const from = cursor < range.dateFrom ? range.dateFrom : cursor;
     const to = end > range.dateTo ? range.dateTo : end;
-    out.push(Object.freeze({ key: bucketKey(cursor, bucket), dateFrom: from, dateTo: to, partial: from !== cursor || to !== end }));
+    out.push(Object.freeze({ key: bucketKey(cursor, bucket), dateFrom: from, dateTo: to, partial: from !== cursor || to !== end || Boolean(today && to >= today) }));
     if (out.length > SERIES_LIMITS.maxBuckets) return null;
     cursor = shiftDay(end, 1);
   }

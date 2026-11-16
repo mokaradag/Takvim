@@ -1258,7 +1258,7 @@ export function synthesisNarrative(findings, { locale = 'tr', detail = 'balanced
   const whole = TEMPORAL_FINDING_KINDS.includes(leadFinding?.kind);
   // Ayrıntılı ve dengeli yanıtta dönem bulgusunun çekinceleri (kayıt kapsamı, tarihi eksik görev, yeniden açılma) olgu paragrafından
   // ayrı, hemen ardından gelen paragraftır: açılış paragrafı olguları okunur uzunlukta taşır.
-  const lead = short ? sentences.filter((item, index) => index === 0 || item.finding === leadFinding && (item.caveat || whole))
+  const lead = short ? sentences.filter((item, index) => index === 0 || item.finding?.kind === 'historyLimit' || item.caveat && TEMPORAL_FINDING_KINDS.includes(item.finding?.kind) || item.finding === leadFinding && (item.caveat || whole))
     : sentences.filter((item, index) => item.finding === leadFinding && !(whole && item.caveat && index > 0));
   const leadCaveats = short ? [] : sentences.filter((item) => item.finding === leadFinding && !lead.includes(item));
   const rest = short ? [] : [...leadCaveats.map((item) => ({ ...item, group: ' caveats' })), ...sentences.filter((item) => !lead.includes(item) && !leadCaveats.includes(item))];

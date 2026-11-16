@@ -25,6 +25,7 @@ import {
 } from './rotaToolSupport.js';
 import { bucketKey, bucketLabel, seriesBuckets } from '../../../../domain/ai/temporalWindow.js';
 import {
+  addDays,
   assignmentState,
   assigneeView,
   coarseTargetRange,
@@ -114,9 +115,8 @@ export async function requireTeamScope(call, filters) {
 }
 
 /**
- * `historyBasis` (Aşama H): geçmişe dönük dönem okumasında (gerçekleşen bitişe göre tamamlanma) tarih aralığı SQL'de değil
- * bellekte uygulanır; böylece AYNI nüfusun tarihi kayıtlı olmayan tamamlanmış görevleri de sayılabilir (`undatedDone`): bu
- * görevler hiçbir döneme yerleştirilemez ve dönem sayımının tamlık ölçüsüdür. Nüfus koşulları, yetki ve satır sınırı aynıdır.
+ * `historyBasis`: tarih süzgeci SQL'de kalır; yalnızca aynı nüfusun tarihi bulunmayan tamamlanmış görevleri de
+ * tamlık ve son yetki denetimi için alınır. Eski tarihli ilgisiz görevler okuma sınırını tüketmez.
  */
 async function loadFilteredFacts(call, scope, filters, { withAssignees = false, rosterRows = 0, historyBasis = false } = {}) {
   await requireTeamScope(call, filters);
@@ -144,9 +144,11 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
     priorities: filters.priorities,
     milestone: filters.milestone,
     deadline: filters.deadline,
-    dateField: historyBasis ? null : filters.dateField,
-    dateFrom: historyBasis ? null : filters.dateFrom,
-    dateTo: historyBasis ? null : filters.dateTo,
+    dateField: filters.dateField,
+    dateFrom: filters.dateFrom,
+    dateTo: filters.dateTo,
+    includeUndated: historyBasis,
+    hasDescription: filters.hasDescription,
     today: call.today,
     createdByMe: filters.createdByMe,
     assigneeMode: sqlAssigneeMode(filters),
@@ -290,7 +292,7 @@ const taskSearch = {
         ...(filters.projectId ? { project: projectRef(projects.get(filters.projectId), filters.projectId) } : {}),
         tasks: pageFacts.map((fact) => ({
           ...taskItem(fact, { projects: pageProjects, assignees: pageAssignees, today: call.today }),
-          ...(notes.has(fact.id) ? { description: dataText(notes.get(fact.id).text, 400), ...(notes.get(fact.id).clipped ? { descriptionClipped: true } : {}) } : {}),
+          ...(withNotes ? { description: notes.has(fact.id) ? dataText(notes.get(fact.id).text, 400) : null, ...(notes.get(fact.id)?.clipped ? { descriptionClipped: true } : {}) } : {}),
           ...(needle ? { exactTitleMatch: foldText(fact.title).trim() === needle } : {})
         })),
         ...(titleResolution ? {
@@ -305,8 +307,8 @@ const taskSearch = {
         filters
       },
       scope: descriptor,
-      complete: offset + page.length >= sorted.length,
-      truncated: !stableNextCursor && offset + page.length < sorted.length,
+      complete: offset + page.length >= sorted.length && ![...notes.values()].some((note) => note.clipped),
+      truncated: (!stableNextCursor && offset + page.length < sorted.length) || [...notes.values()].some((note) => note.clipped),
       returnedCount: pageFacts.length,
       totalCount: exactTotal,
       nextCursor: stableNextCursor,
@@ -540,13 +542,14 @@ const taskAnalytics = {
     const filters = normalizeTaskFilters(args);
     if (filters.hasDescription) throw invalidArguments(['$.hasDescription:unsupported']);
     const groupBy = args.groupBy || null;
-    const limit = args.limit ?? 10;
     const seriesBucket = SERIES_GROUP_BY[groupBy] || null;
+    const limit = args.limit ?? (seriesBucket ? 25 : 10);
     // Tarih dizisi iki ucu belli bir aralık ister; kova sayısı satır sınırını aşamaz (sessizce kesilmiş dizi eğilim göstermez).
     const buckets = seriesBucket && filters.dateField && filters.dateFrom && filters.dateTo
-      ? seriesBuckets({ dateFrom: filters.dateFrom, dateTo: filters.dateTo }, seriesBucket) : null;
+      ? seriesBuckets({ dateFrom: filters.dateFrom, dateTo: filters.dateTo }, seriesBucket, HISTORY_DATE_FIELDS.includes(filters.dateField) ? call.today : null) : null;
     if (seriesBucket && !(filters.dateField && filters.dateFrom && filters.dateTo)) throw invalidArguments(['$.groupBy:range']);
     if (seriesBucket && (!buckets || buckets.length > limit)) throw invalidArguments(['$.groupBy:buckets']);
+    if (groupBy === 'due_horizon' && !(filters.statuses?.length && filters.statuses.every((status) => status !== 'done') && filters.dateField === 'targetFinish' && filters.dateFrom === call.today && filters.dateTo === addDays(call.today, 29))) throw invalidArguments(['$.groupBy:population']);
     const { scope } = await call.authorization();
     const teamOrganization = filters.assignee === 'team' && ORGANIZATION_GROUP_BY.includes(groupBy);
     // Gerçekleşen bitişe göre dönem okuması: tarihi kayıtlı olmayan tamamlanmış görevler aynı okumada sayılır (tamlık ölçüsü).
@@ -643,7 +646,7 @@ const taskAnalytics = {
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
       }
     }
-    const groupsTruncated = Boolean(groupBy && groupCount > limit || teamOrganization && roster?.truncated);
+    const groupsTruncated = Boolean(groupBy && groupBy !== 'due_horizon' && groupCount > limit || teamOrganization && roster?.truncated);
     const totals = statusTotals(facts, call.today);
     const descriptor = searchedScope(scope, filters.projectId);
     return {

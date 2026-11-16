@@ -138,7 +138,7 @@ const TEAM_SCOPE_SQL = `(@scope = 'team' AND (@isAdmin = 1 OR a.ActorSicil = @si
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil)))`;
 const LEVELED_TEAM_SCOPE_SQL = `(@scope = 'team' AND ((LEN(@teamLevel) = 0 AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil)))
-      OR (LEN(@teamLevel) > 0 AND (a.ActorSicil = @sicil OR EXISTS (
+      OR (LEN(@teamLevel) > 0 AND (EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil AND es.ScopeType = @teamLevel)))))`;
 
 /** Türev deyim: her ek, rapor SQL'inde TAM bir kez bulunan bir çapaya bağlanır; çapa kaybolursa okuma kapalı hata verir. */
@@ -150,16 +150,20 @@ function aggregateActivitySql(statement) {
   DROP TABLE IF EXISTS #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;`],
     ['THEN 1 ELSE 0 END AS CompletionEvent\n  INTO #TaskActivityScope', `THEN 1 ELSE 0 END AS CompletionEvent,\n    ${REOPEN_EVENT_SQL}\n  INTO #TaskActivityScope`],
     [TEAM_SCOPE_SQL, LEVELED_TEAM_SCOPE_SQL],
-    ['MAX(CompletionEvent) AS Completed,', 'MAX(CompletionEvent) AS Completed, MAX(ReopenEvent) AS Reopened,'],
+    ['MAX(CompletionEvent) AS Completed,', `MAX(CompletionEvent) AS Completed, MAX(ReopenEvent) AS Reopened, MIN(CASE WHEN CompletionEvent = 1 THEN OccurredAt END) AS CompletedAt, MIN(CASE WHEN Kind = 'created' THEN OccurredAt END) AS CreatedAt,`],
     ['COUNT(DISTINCT ActorSicil) AS ActorCount, COUNT(DISTINCT CASE WHEN Completed = 1 THEN EntityId END) AS CompletedCount', `COUNT(DISTINCT ActorSicil) AS ActorCount, COUNT(DISTINCT CASE WHEN Completed = 1 THEN EntityId END) AS CompletedCount,
     COUNT(DISTINCT CASE WHEN Created = 1 THEN EntityId END) AS CreatedCount, COUNT(DISTINCT CASE WHEN Deleted = 1 THEN EntityId END) AS DeletedCount,
     COUNT(DISTINCT CASE WHEN Reopened = 1 THEN EntityId END) AS ReopenedCount,
     (SELECT COUNT(*) FROM (SELECT EntityId FROM #TaskActivityGroups GROUP BY EntityId
-      HAVING MAX(Created) = 0 AND MAX(Deleted) = 0 AND MAX(Completed) = 0) updatedOnly) AS UpdatedOnlyCount,
+      HAVING MAX(Created) = 0 AND MAX(Deleted) = 0 AND MAX(Completed) = 0 AND MAX(Reopened) = 0) updatedOnly) AS UpdatedOnlyCount,
     (SELECT MIN(first.OccurredAt) FROM dbo.MR_AuditLog first WHERE first.EntityType = 'TASK') AS FirstRecordedAt`],
-    ['  DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;', `  SELECT CONVERT(char(10), ${ACTIVITY_DAY_SQL}, 23) AS ActivityDay, COUNT(*) AS Events,
-    SUM(CASE WHEN Completed = 1 THEN 1 ELSE 0 END) AS CompletionEvents, SUM(CASE WHEN Created = 1 THEN 1 ELSE 0 END) AS CreationEvents
-  FROM #TaskActivityGroups GROUP BY ${ACTIVITY_DAY_SQL} ORDER BY ActivityDay;
+    ['  DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;', `  SELECT CONVERT(char(10), ${ACTIVITY_DAY_SQL}, 23) AS ActivityDay, SUM(Events) AS Events,
+    SUM(CompletionEvents) AS CompletionEvents, SUM(CreationEvents) AS CreationEvents
+  FROM (
+    SELECT OccurredAt, 1 AS Events, 0 AS CompletionEvents, 0 AS CreationEvents FROM #TaskActivityGroups
+    UNION ALL SELECT CompletedAt, 0, 1, 0 FROM #TaskActivityGroups WHERE CompletedAt IS NOT NULL
+    UNION ALL SELECT CreatedAt, 0, 0, 1 FROM #TaskActivityGroups WHERE CreatedAt IS NOT NULL
+  ) eventDays GROUP BY ${ACTIVITY_DAY_SQL} ORDER BY ActivityDay;
   SELECT DISTINCT t.TaskId, t.ProjectId AS CurrentProjectId
   FROM #TaskActivityGroups g JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, g.EntityId);
   DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;`]

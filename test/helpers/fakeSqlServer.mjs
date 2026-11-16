@@ -1306,7 +1306,13 @@ function runQuery(db, statement, params, { database }) {
   if (aiCredential) return result(aiCredential);
 
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
-  if (sqlText.includes('INTO #TaskActivityScope')) return result(taskActivityRecordsets(db, params));
+  if (sqlText.includes('INTO #TaskActivityScope')) {
+    db.aiToolLog ||= [];
+    const entry = { query: 'activity', params: { ...params } };
+    db.aiToolLog.push(entry);
+    try { const rows = taskActivityRecordsets(db, params); entry.ok = true; return result(rows); }
+    catch (error) { entry.ok = false; throw error; }
+  }
   const identityPermitted = (task, project, person) => Boolean(project?.IsActive && (
     db.systemAdminSicils.includes(Number(params.sicil))
     || (project.SourceType === 'MANUAL' && Number(project.LeadSicil) === Number(params.sicil))

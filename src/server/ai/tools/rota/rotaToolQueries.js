@@ -358,7 +358,7 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
       OR (@deadline = 'due_next_7_days' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 6, @today))
       OR (@deadline = 'due_next_30_days' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 29, @today))
       OR (@deadline = 'no_target_finish' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish IS NULL))
-    AND (@dateField IS NULL OR (
+    AND (@dateField IS NULL OR (@includeUndated = 1 AND t.ActualFinish IS NULL AND ${STATUS_SQL} = 'done') OR (
       (@dateFrom IS NULL OR CASE @dateField
         WHEN 'targetFinish' THEN t.TargetFinish
         WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
@@ -383,6 +383,7 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
         WHEN 'actualStart' THEN t.ActualStart
         WHEN 'actualFinish' THEN t.ActualFinish
         WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END IS NOT NULL))
+    AND (@hasDescription = 0 OR NULLIF(LTRIM(RTRIM(t.Description)), N'') IS NOT NULL)
     AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil))

@@ -27,7 +27,7 @@ import {
 } from './rotaToolSupport.js';
 import { isCompleteTaskView, projectAccess } from './rotaScope.js';
 import { decodeCursor, encodeCursor, istanbulDay, TEAM_LEVELS } from './taskFacts.js';
-import { bucketKey, bucketLabel, SERIES_BUCKETS, seriesBuckets } from '../../../../domain/ai/temporalWindow.js';
+import { bucketKey, bucketLabel, SERIES_BUCKETS, seriesBuckets, shiftDay } from '../../../../domain/ai/temporalWindow.js';
 
 const COORDINATION_SCOPE_NOTE = 'Etkin görevi olan atama kayıtları görev görüntüleme kapsamınıza uymalıdır; etkin görevi olmayan atama kayıtları yalnızca geçmiş katılımınız varsa gösterilir.';
 
@@ -199,6 +199,9 @@ async function activityAggregate(args, call, key) {
   if (args.cursor != null || args.kind || args.taskId) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.view:selector'] });
   if (args.textFields?.length) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.view:textFields'] });
   const bucket = args.view === 'period' ? null : args.view;
+  const requestedRange = { dateFrom: key.dateFrom || (key.period === 'yesterday' ? shiftDay(call.today, -1) : key.period === 'last_7_days' ? shiftDay(call.today, -6) : call.today), dateTo: key.dateTo || key.dateFrom || (key.period === 'yesterday' ? shiftDay(call.today, -1) : call.today) };
+  const buckets = bucket ? seriesBuckets(requestedRange, bucket, call.today) : null;
+  if (bucket && !buckets) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.view:range'] });
   const { auth, scope } = await call.authorization();
   if (key.scope === 'team' && !auth.isExecutive && !auth.isSystemAdmin) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
     message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.'
@@ -225,13 +228,11 @@ async function activityAggregate(args, call, key) {
   const firstRecordedDay = istanbulDay(report.aggregate.firstRecordedAt);
   const status = !firstRecordedDay || firstRecordedDay > range.dateTo ? 'none' : firstRecordedDay > range.dateFrom ? 'partial' : 'complete';
   const known = status !== 'none';
-  const buckets = bucket ? seriesBuckets(range, bucket) : null;
-  if (bucket && !buckets) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.view:range'] });
   let series = null;
-  if (buckets && known) {
+  if (buckets) {
     const byKey = new Map(buckets.map((item) => [item.key, { key: item.key, label: bucketLabel(item, bucket, 'tr'), dateFrom: item.dateFrom, dateTo: item.dateTo,
       // Kayıt başlangıcından önce biten kova bilinmeyendir (sıfır değil); dizide değeri `null` kalır.
-      ...(item.partial ? { partial: true } : {}), ...(firstRecordedDay > item.dateTo ? { events: null, completionEvents: null, creationEvents: null, recorded: false }
+      ...(item.partial || firstRecordedDay && firstRecordedDay > item.dateFrom && firstRecordedDay <= item.dateTo ? { partial: true } : {}), ...(!known || firstRecordedDay > item.dateTo ? { events: null, completionEvents: null, creationEvents: null, recorded: false }
         : { events: 0, completionEvents: 0, creationEvents: 0 }) }]));
     for (const day of report.aggregate.days) {
       const row = byKey.get(bucketKey(day.day, bucket));

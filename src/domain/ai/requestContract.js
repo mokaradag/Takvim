@@ -63,7 +63,7 @@ export const ENTITY_ID_FIELDS = Object.freeze({ project: 'projectId', task: 'tas
 /** Aynı nüfusa birlikte uygulanan mevcut seçiciler; karşılaştırma öznesi değildir. */
 const JOINT_SELECTORS = Object.freeze({
   rota_task_search: ['project', 'person', 'wbs'], rota_task_analytics: ['project', 'person', 'wbs'],
-  rota_workload_summary: ['project', 'person'], rota_wbs_inspect: ['project', 'wbs'], rota_baseline_compare: ['project', 'baseline']
+  rota_activity_search: ['project', 'person'], rota_workload_summary: ['project', 'person'], rota_wbs_inspect: ['project', 'wbs'], rota_baseline_compare: ['project', 'baseline']
 });
 
 export function conjunctiveEntities(request) {
@@ -162,7 +162,7 @@ function pathValues(value, parts) {
  */
 const OMITTED_WHEN_EMPTY = Object.freeze({
   rota_task_search: { tasks: ['keyword', 'targetFinish', 'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'progressPercent',
-    'createdAt', 'updatedAt', 'overdueDays', 'project.code', 'description', 'descriptionClipped'] },
+    'createdAt', 'updatedAt', 'overdueDays', 'project.code'] },
   rota_project_search: { matches: ['code', 'lead'] },
   rota_person_search: { people: ['jobTitle'] },
   rota_portfolio_summary: { projects: ['code'] },

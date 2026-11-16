@@ -340,7 +340,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   // Aşama H: dönem bulgularının anlattığı kanıtlar (gövdede sayım ve "en büyük grup" önermesi yinelenmez).
   const temporalCover = analyst ? temporalCoverage(parts) : new Map();
   const periodCharts = (synthesis?.findings || []).filter((finding) => finding.kind === 'periodComparison').flatMap((finding) => comparisonCharts(finding, locale)
-    .map((chart) => ({ ...chart, finding }))).sort((left, right) => right.change - left.change).slice(0, 2);
+    .map((chart) => ({ ...chart, finding }))).filter((chart) => {
+      const owner = parts.find((part) => part.presentation?.facts?.some((entry) => entry.evidenceId === chart.evidenceIds[1]));
+      return owner && chartAllowed(owner.index + 1);
+    }).sort((left, right) => right.change - left.change).slice(0, 2);
   const comparisonSlots = Math.min(2, (synthesis?.findings || []).filter((finding) => finding.kind === 'subjectComparison').reduce((sum, finding) => sum + Object.keys(finding.metrics).length, 0)
     + periodCharts.length);
   // İki öznenin karşılaştırmasında tek öznenin gösterge kartı yanıltıcıdır (öteki özne kartta yoktur): karşılaştırma çubukları yeter.
@@ -398,8 +401,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       };
       const cover = temporalCover.get(group.evidenceId) || null;
       // Dönemde tamamlananların listesi: sayımı giriş paragrafı söylemiştir; liste kendi giriş cümlesini alır (ölçütlü sayım yinelenmez).
-      const shownRows = new Set(group.facts?.map?.((fact) => /^data\.tasks\.(\d+)\./.exec(fact.field)?.[1]).filter(Boolean) || []).size
-        || new Set(presentation.facts.filter((item) => item.evidenceId === group.evidenceId).map((item) => /^data\.tasks\.(\d+)\./.exec(item.fact?.field || '')?.[1]).filter(Boolean)).size;
+      const shownRows = new Set(presentation.facts.filter((item) => item.evidenceId === group.evidenceId).map((item) => /^data\.tasks\.(\d+)\./.exec(item.fact?.field || '')?.[1]).filter(Boolean)).size;
       // Tek satırlı liste ayrıntı cümlesiyle çizilir (satır o cümlededir): giriş önermesi onu örtmez.
       const countId = cover?.kind === 'completedList' && shownRows > 1
         ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...completedListLead(shownRows, cover.total, locale) })

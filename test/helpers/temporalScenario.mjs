@@ -5,16 +5,16 @@
  * yanıt geçmez.
  */
 import { readFileSync } from 'node:fs';
-import { rangeLabel, resolveWindow, previousWindow } from '../../src/domain/ai/temporalWindow.js';
+import { resolveWindow, previousWindow } from '../../src/domain/ai/temporalWindow.js';
 import { answerQuality } from './answerQuality.mjs';
 import { populationReads, renderedCharts } from './phase4eScenario.mjs';
 
 export const temporalFixture = JSON.parse(readFileSync(new URL('../fixtures/bilgin-temporal-benchmark.json', import.meta.url), 'utf8'));
 export const TEMPORAL_TODAY = temporalFixture.today;
 
-const shift = (offset) => new Date(Date.parse(`${TEMPORAL_TODAY}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
+const shift = (offset, today = TEMPORAL_TODAY) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
 /** `"T"`, `"T-14"`, `"T+3"` → kıyas gününe göre gün. */
-export const resolveDay = (value) => (typeof value === 'string' && /^T(?:[+-]\d+)?$/.test(value) ? shift(Number(value.slice(1) || 0)) : value);
+export const resolveDay = (value, today = TEMPORAL_TODAY) => (typeof value === 'string' && /^T(?:[+-]\d+)?$/.test(value) ? shift(Number(value.slice(1) || 0), today) : value);
 /** Plan ya da beklentideki bütün göreli günleri çözer. */
 export const resolveDays = (value) => JSON.parse(JSON.stringify(value ?? null).replace(/"T([+-]\d+)?"/g, (_, offset) => `"${shift(Number(offset || 0))}"`));
 
@@ -23,7 +23,7 @@ export const H_FINDING_TEXT = Object.freeze({
   tr: {
     periodSummary: /görev tamamlandı \(gerçekleşen bitiş tarihine göre\)|yeni görev oluşturul(du|madı)|hareket kayde(dildi|tti|ttiniz)|tamamlanan görev yok|hareket kayd(edilmedi|etmedi|etmediniz)|hareket kaydı bulunmuyor/,
     periodComparison: /İki dönem karşılaştırıldığında|karşılaştırma şimdilik geçici|İki dönem örtüştüğü|karşılaştırılamıyor|İki dönemde de/,
-    completionTrend: /En yoğun (hafta|ay)|tamamlanma hızı|eğilim söylenemez|eğilim çıkarılmadı|eğilim söylemek için kısa|gerçekleşen bitişi kayıtlı tamamlanan görev yok|görev tamamlandı \(gerçekleşen bitiş tarihine göre\)/,
+    completionTrend: /En yoğun (hafta|ay)|tamamlanma hızı|eğilim söylenemez|eğilim çıkarılmadı|eğilim söylemek için kısa|gerçekleşen bitişi kayıtlı tamamlanan görev yok/,
     activityTrend: /Kaydedilen hareketler en çok|için hareket kaydı yok; bu kovalar bilinmiyor/,
     horizonSpread: /7 gün içinde \*\*\d+\*\*, 14 gün içinde \*\*\d+\*\*, 30 gün içinde \*\*\d+\*\*|önümüzdeki 30 gün içinde .*termini olan açık görev yok/i,
     historyLimit: /yeniden kurulamıyor/,
@@ -32,7 +32,7 @@ export const H_FINDING_TEXT = Object.freeze({
   en: {
     periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
     periodComparison: /Comparing the two periods|comparison is provisional|two periods overlap|cannot be compared|In both periods/,
-    completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn|by recorded actual finish date/,
+    completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn/,
     activityTrend: /Recorded activity peaked|there is no activity record; those are unknown/,
     horizonSpread: /within 7 days, \*\*\d+\*\* within 14 days/,
     historyLimit: /cannot be reconstructed/,
@@ -42,6 +42,44 @@ export const H_FINDING_TEXT = Object.freeze({
 
 const fold = (text) => String(text).replace(/\\([\\`*_{}[\]()#+.!|<>~:/-])/g, '$1');
 
+/** Beklenen katmanın okuması: kimlik ve yönetim düzeyi aynı istekte korunur. */
+export function temporalRequestMatches(request, layer) {
+  const filters = request.filters || {};
+  const entities = request.entities || [];
+  const owner = filters.assignee === 'me' || filters.activityScope === 'mine' ? 'self' : filters.assignee === 'team' || filters.activityScope === 'team' ? 'team'
+    : entities.some((entity) => entity.type === 'person') ? 'person' : entities.some((entity) => entity.type === 'project') ? 'project' : 'all';
+  const scopes = layer.scopeAny || [layer.scope];
+  if (!scopes.some((scope) => scope === owner || scope === 'projects' && owner === 'all')) return false;
+  if ((filters.teamLevel || '') !== (layer.level || '')) return false;
+  const names = entities.filter((entity) => ['person', 'project'].includes(entity.type)).map((entity) => String(entity.query ?? entity.text ?? '').toLocaleLowerCase('tr-TR')).sort();
+  const wanted = (layer.names || []).map((name) => String(name).toLocaleLowerCase('tr-TR')).sort();
+  return JSON.stringify(names) === JSON.stringify(wanted);
+}
+
+/** Altın plan yalnızca kapsam beklentisidir; modelin her başarılı nüfus okuması ayrıca denetlenir. */
+export function temporalPopulationViolations(result, analysis, seed) {
+  if (!analysis || result.answer?.finishReason !== 'stop') return [];
+  const layers = [analysis, ...(analysis.also || [])].flatMap((layer) => (layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]));
+  const reads = (result.log || []).filter((row) => row.ok === true && (row.query === 'activity' || row.query === 'task-facts' && !row.params.taskIds));
+  const matches = (row, layer) => {
+    const p = row.params;
+    const activity = row.query === 'activity';
+    const owner = activity ? p.scope === 'mine' ? 'self' : p.scope === 'team' ? 'team' : 'all' : p.assigneeMode === 'me' ? 'self' : p.assigneeMode === 'team' ? 'team' : 'all';
+    if ((p.teamLevel || '') !== (layer.level || '').toUpperCase()) return false;
+    const person = activity ? p.person : p.personSicil;
+    const wantedPerson = layer.scope === 'person' ? seed.people.find((item) => item.DisplayName === layer.names[0])?.Sicil : null;
+    const projectName = layer.scope === 'project' ? layer.names[0] : layer.within;
+    const wantedProject = projectName ? seed.projects.find((item) => item.ProjectName === projectName)?.ProjectId : null;
+    if (layer.scope === 'person' && wantedPerson == null || projectName && !wantedProject) return false;
+    if (Number(person || 0) !== Number(wantedPerson || 0) || String(p.projectId || '').toLowerCase() !== String(wantedProject || '').toLowerCase()) return false;
+    return ['self', 'team'].includes(layer.scope) ? owner === layer.scope : owner === 'all';
+  };
+  const problems = [];
+  for (const read of reads) if (!layers.some((layer) => matches(read, layer))) problems.push('beklenmeyen nüfus okundu');
+  for (const layer of layers) if (!reads.some((read) => matches(read, layer))) problems.push(`kapsam okunmadı: ${layer.scope}/${layer.level || ''}`);
+  return problems;
+}
+
 /**
  * Turun Aşama H beklentileri; ihlal listesi döner (boş: geçti). `live`: canlı modelin planı altın plandan farklı ama eşdeğer
  * okumalarla aynı dönemi ve bulguları üretebilir; yapısal beklentiler aynen uygulanır.
@@ -50,7 +88,7 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
   const problems = [];
   const content = fold(result.answer?.content || '');
   const finish = result.answer?.finishReason;
-  if (expect.finish ? finish !== expect.finish : finish !== 'stop') problems.push(`bitiş ${finish} ≠ ${expect.finish || 'stop'}`);
+  if (expect.finish ? finish !== expect.finish : !expect.finishNot && finish !== 'stop') problems.push(`bitiş ${finish} ≠ ${expect.finish || 'stop'}`);
   if (expect.finishNot && finish === expect.finishNot) problems.push(`bitiş ${finish} olmamalı`);
   if (finish !== 'stop') {
     for (const pattern of expect.says || []) if (!new RegExp(pattern, 'u').test(content)) problems.push(`beklenen ifade yok: ${pattern}`);
@@ -60,10 +98,11 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
   const log = result.log || [];
   const windowSeen = (range) => {
     if (!range) return true;
-    const [dateFrom, dateTo] = range.map(resolveDay);
-    if (content.includes(rangeLabel({ dateFrom, dateTo }, locale))) return true;
+    const [dateFrom, dateTo] = range.map((value) => resolveDay(value));
     const day = (value) => (value == null ? null : new Date(value).toISOString().slice(0, 10));
-    return populationReads(log).some((row) => day(row.params.dateFrom) === dateFrom && day(row.params.dateTo) === dateTo);
+    return populationReads(log).some((row) => row.ok === true && day(row.params.dateFrom) === dateFrom && day(row.params.dateTo) === dateTo)
+      || log.some((row) => row.query === 'activity' && row.ok === true && shift(0, new Date(new Date(row.params.startUtc).getTime() + 10800000).toISOString().slice(0, 10)) === dateFrom
+        && new Date(new Date(row.params.endUtc).getTime() + 10800000 - 86400000).toISOString().slice(0, 10) === dateTo);
   };
   if (!windowSeen(expect.window)) problems.push(`dönem okunmadı ya da söylenmedi: ${JSON.stringify(expect.window)}`);
   if (!windowSeen(expect.compare)) problems.push(`karşılaştırma dönemi okunmadı ya da söylenmedi: ${JSON.stringify(expect.compare)}`);
@@ -91,7 +130,7 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
 /** Planlayıcı beklentisinin (ayrık küme) somut dönemleri: adlı dönem ya da tarih çifti → `[dateFrom, dateTo]`. */
 export function expectedRange(value, today = TEMPORAL_TODAY) {
   if (!value) return null;
-  if (Array.isArray(value)) return value.map(resolveDay);
+  if (Array.isArray(value)) return value.map((day) => resolveDay(day, today));
   const resolved = resolveWindow(value, today);
   return resolved ? [resolved.dateFrom, resolved.dateTo] : null;
 }
