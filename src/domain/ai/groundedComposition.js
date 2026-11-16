@@ -14,6 +14,7 @@ import { escapedFactText, factPresentation } from './evidenceFacts.js';
 import { analystPropositions, singleSubjectPropositions, caveatPropositions, countProposition, taskCountLead, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tableLeadSentence, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 import { analyticalSynthesis, aspectTitle, framingSentence, nextStepSentence, synthesisNarrative, findingScope } from './analyticalFindings.js';
+import { comparisonCharts, completedListLead, noteListLead, seriesChartTitle, singleRowLead, temporalCoverage } from './temporalFindings.js';
 import { PROSE_LIMITS, checkProse, proseText } from './groundedProse.js';
 
 /** Anlatımın en az önerme sayısı: sayfada bu kadar önerme varsa düzen en az bu kadarını söyler (azsa hepsini). */
@@ -261,7 +262,8 @@ function certaintyProposition(table, title, locale, names) {
  */
 const GROUP_SECTIONS = Object.freeze({ project: ['Proje dağılımı', 'By project'], status: ['Durum dağılımı', 'By status'], assignee: ['Kişilere göre dağılım', 'By person'],
   priority: ['Öncelik dağılımı', 'By priority'], deadline: ['Termin dağılımı', 'By deadline'], target_month: ['Aylara göre terminler', 'Deadlines by month'],
-  department: ['Bölümlere göre dağılım', 'By department'], unit: ['Birimlere göre dağılım', 'By unit'] });
+  department: ['Bölümlere göre dağılım', 'By department'], unit: ['Birimlere göre dağılım', 'By unit'],
+  date_week: ['Haftalık dizi', 'Weekly series'], date_month: ['Aylık dizi', 'Monthly series'], due_horizon: ['Teslim ufukları', 'Delivery horizons'] });
 
 const LAYER_TITLES = Object.freeze({ self: ['Kendi işleriniz', 'Your work'], team: ['Ekibiniz', 'Your team'], unit: ['Biriminiz', 'Your unit'], department: ['Bölümünüz', 'Your department'],
   directorate: ['Direktörlüğünüz', 'Your directorate'], all: ['Görebildiğiniz bütün işler', 'All the work you can see'] });
@@ -334,8 +336,13 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   const derived = [];
   let overflow = false;
   // Aşama F: bölümler arası bulgular (giriş ve sonuç). Yalnızca analitik özet yanıtında; sunucu yazar, model seçmez.
-  const synthesis = analyst ? analyticalSynthesis(parts, { locale, detail: answerDetail, focus: outline?.focus || [] }) : null;
-  const comparisonSlots = Math.min(2, (synthesis?.findings || []).filter((finding) => finding.kind === 'subjectComparison').reduce((sum, finding) => sum + Object.keys(finding.metrics).length, 0));
+  const synthesis = analyst ? analyticalSynthesis(parts, { locale, detail: answerDetail, focus: outline?.focus || [], temporal: outline?.temporal || null }) : null;
+  // Aşama H: dönem bulgularının anlattığı kanıtlar (gövdede sayım ve "en büyük grup" önermesi yinelenmez).
+  const temporalCover = analyst ? temporalCoverage(parts) : new Map();
+  const periodCharts = (synthesis?.findings || []).filter((finding) => finding.kind === 'periodComparison').flatMap((finding) => comparisonCharts(finding, locale)
+    .map((chart) => ({ ...chart, finding }))).sort((left, right) => right.change - left.change).slice(0, 2);
+  const comparisonSlots = Math.min(2, (synthesis?.findings || []).filter((finding) => finding.kind === 'subjectComparison').reduce((sum, finding) => sum + Object.keys(finding.metrics).length, 0)
+    + periodCharts.length);
   // İki öznenin karşılaştırmasında tek öznenin gösterge kartı yanıltıcıdır (öteki özne kartta yoktur): karşılaştırma çubukları yeter.
   const scopedSubjects = new Set(parts.flatMap((part) => (part.presentation?.facts || []).map(({ fact }) => {
     const f = fact?.semantic?.filters || {};
@@ -389,8 +396,16 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         const text = renderEnvelopeSentences(group, { locale, empty: presentation.empty || [], only: ['totalCount'] }).join(' ');
         return text ? { markdown: text, plain: markdownPlainText(text) } : null;
       };
-      const countId = envelopeOnlyGroup(group, presentation.layout)
-        ? propose(ordinal, countProposition(group, totalFact, locale, totalFact ? countFallback() : null)) : null;
+      const cover = temporalCover.get(group.evidenceId) || null;
+      // Dönemde tamamlananların listesi: sayımı giriş paragrafı söylemiştir; liste kendi giriş cümlesini alır (ölçütlü sayım yinelenmez).
+      const shownRows = new Set(group.facts?.map?.((fact) => /^data\.tasks\.(\d+)\./.exec(fact.field)?.[1]).filter(Boolean) || []).size
+        || new Set(presentation.facts.filter((item) => item.evidenceId === group.evidenceId).map((item) => /^data\.tasks\.(\d+)\./.exec(item.fact?.field || '')?.[1]).filter(Boolean)).size;
+      // Tek satırlı liste ayrıntı cümlesiyle çizilir (satır o cümlededir): giriş önermesi onu örtmez.
+      const countId = cover?.kind === 'completedList' && shownRows > 1
+        ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...completedListLead(shownRows, cover.total, locale) })
+        : cover?.kind === 'notes' && shownRows > 1 ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...noteListLead(locale) })
+        : !cover && envelopeOnlyGroup(group, presentation.layout)
+          ? propose(ordinal, countProposition(group, totalFact, locale, totalFact ? countFallback() : null)) : null;
       if (totalFact) entitle(ordinal, group, [totalFact]);
       const multi = new Set(narrativeRowCollections(group, presentation.layout));
       for (const collection of multi) {
@@ -413,7 +428,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         entitle(ordinal, group, rowFacts, partition ? rowFacts[0]?.semantic?.groupBy || null : null);
         // Sayım ölçüsü seçilmemiş listede nüfusun tamamı kanıttaysa sayım, aynı kanıtın zarfından önerme olur.
         const population = populations.get(group.evidenceId) ?? null;
-        if (!countId && !totalFact && population === described.rows.length) {
+        if (!cover && !countId && !totalFact && population === described.rows.length) {
           // Doğal betim süzgeçlerin tamamını ifade edemezse sayım, aynı süzgeçlerin ölçütlü belirlenimci cümlesidir.
           const fallback = (filters) => {
             const subject = filters.projectId && typeof filters.project === 'string' ? filters.project : 'Rota';
@@ -424,7 +439,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           propose(ordinal, populationProposition({ group, described, size: population, locale, fallback }), { table: id });
         }
         // Türetilmiş önermeler bütün sayımlardan sonra eklenir: sınır bir sayımı düşürüp türetilmişi tutamaz.
-        for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population, collection })) derived.push({ ordinal, proposition, table: id });
+        if (!cover) for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population, collection })) derived.push({ ordinal, proposition, table: id });
         // Grafik adayı: satır başına tek, sonlu ve negatif olmayan sayı taşıyan sütun.
         const addChart = (candidate, viewExtra = {}) => {
           if (!chartAllowed(ordinal)) return;
@@ -440,9 +455,12 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         // Termin ayları zaman dizisidir: yalnızca boşluksuz ardışık aylar çizgi olur (çizgi 24 noktaya kadar, çubuk 12'ye kadar).
         const monthly = group.tool === 'rota_task_analytics' && collection.endsWith('groups') && complete && described.rows.every((row) => MONTH.test(row.title))
           && contiguousMonths(described.rows.map((row) => row.title));
+        // Aşama H: tarih dizisi (haftalık/aylık kovalar) süreklidir ve kronolojiktir: çizgi grafik adayıdır. Kova değerlerinden biri
+        // bilinmiyorsa (kayıt başlangıcından önce) aday kurulmaz; tek tük gözlemden eğilim çizilmez.
+        const dated = ['series', 'activitySeries'].includes(cover?.kind) && complete && described.rows.length >= 3;
         described.columns.forEach((column, index) => {
           if (!column.numeric || !labels) return;
-          const rowLimit = monthly ? ANSWER_CHART_LIMITS.maxLineItems : ANSWER_CHART_LIMITS.maxBarItems;
+          const rowLimit = monthly || dated ? ANSWER_CHART_LIMITS.maxLineItems : ANSWER_CHART_LIMITS.maxBarItems;
           if (described.rows.length < ANSWER_CHART_LIMITS.minItems || described.rows.length > rowLimit) return;
           const values = described.rows.map((row) => row.cells[index]);
           if (!values.every((facts) => facts.length === 1 && Number.isFinite(facts[0].value) && facts[0].value >= 0 && facts[0].value <= ANSWER_CHART_LIMITS.maxValue)) return;
@@ -462,13 +480,17 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           // Zaman dizisi: termin ayına göre tam gruplar sıralı dönemlerdir (çizgi); diğer sütunlar kategorik karşılaştırmadır.
           const months = monthly && unit === 'count' && values.every(([fact]) => fact.semantic?.groupBy === 'target_month')
             && described.rows.length <= ANSWER_CHART_LIMITS.maxLineItems;
-          const types = months ? (described.rows.length <= ANSWER_CHART_LIMITS.maxBarItems ? ['line', 'bar'] : ['line'])
-            : distribution && described.rows.length <= ANSWER_CHART_LIMITS.maxBarItems ? ['bar', 'donut'] : ['bar'];
+          const sequence = dated && unit === 'count';
+          const types = months || sequence ? (described.rows.length <= ANSWER_CHART_LIMITS.maxBarItems ? ['line', 'bar'] : ['line'])
+            : distribution && !cover && described.rows.length <= ANSWER_CHART_LIMITS.maxBarItems ? ['bar', 'donut'] : ['bar'];
+          // Dizinin ikinci sütunu (tamamlama hareketi) aynı tabloda ikinci grafik açmaz.
+          if (sequence && index !== described.columns.findIndex((item) => item.numeric)) return;
           // Dağılım ve zaman dizisi grafiği nüfusun sunucu başlığını taşır (ör. "Görevlerinizin durum dağılımı"); diğerleri sütun adını.
           const partTitle = distribution || months ? [...titles.values()].find((item) => item.part === ordinal)?.text : null;
           // Görev gruplarının kayıt sayısı grafikte "Görev sayısı" adını taşır ("Kayıt sayısı" teknik alan adıdır).
           const taskCount = values.every(([fact]) => /(^|\.)groups\.\d+\.count$/.test(fact.field) && ['rota_task_analytics', 'rota_task_search'].includes(group.tool));
-          const title = answerChartLabel(partTitle || (taskCount ? (locale === 'en' ? 'Task count' : 'Görev sayısı') : column.label), ANSWER_CHART_LIMITS.maxTitleChars);
+          const title = answerChartLabel(sequence ? seriesChartTitle(cover, locale) : cover?.kind === 'horizons' ? (locale === 'en' ? 'Open tasks by delivery horizon' : 'Teslim ufkuna göre açık görev')
+            : partTitle || (taskCount ? (locale === 'en' ? 'Task count' : 'Görev sayısı') : column.label), ANSWER_CHART_LIMITS.maxTitleChars);
           addChart({ table: id, column: index, title, unit, evidenceId: group.evidenceId,
             items: months ? described.rows.map((row, position) => ({ label: monthLabel(row.title, locale), value: values[position][0].value })) : items, types },
           { column: columns[index].id });
@@ -497,7 +519,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       }
       // Görev sonucunda sayım, ölçüt listesi yerine doğal cümledir ("Ekibinizde şu anda **1** gecikmiş görev var."). Aşama F:
       // çok satırlı listede de (doğrulanmış anlatımla aynı biçimde); doğal cümle süzgeçleri söyleyemezse ölçütlü cümle kalır.
-      const lead = taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
+      // Aşama H: dönem bulgusunun sayımını söylediği liste boşsa ayrıntı yazılmaz (yokluk girişte söylenmiştir; sayım okuması aynı bölümdedir); tek satırlıysa
+      // ölçütlü sayım cümlesinin yerine satırı tanıtan cümle geçer.
+      if (cover?.kind === 'completedList' && shownRows === 0) continue;
+      const lead = (['completedList', 'notes'].includes(cover?.kind) && shownRows === 1 ? singleRowLead(cover.kind, locale) : null)
+        || taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead });
       if (detailText) {
         if (details.size >= COMPOSITION_LIMITS.maxDetails) { overflow = true; continue; }
@@ -505,7 +531,9 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         const ownedTables = [...tables.values()].filter((table) => table.group === group);
         // Sayım önermesinin yerine geçtiği ayrıntıda zorunlu zarf notları (gösterilen kısım, eksiklik) önermeyle birlikte çizilir.
         const notices = countId ? renderEnvelopeSentences(group, { locale, empty: presentation.empty || [], only: ['returnedCount', 'complete', 'truncated'] }) : [];
+        // Aşama H: boş not okumasının yokluğunu giriş cümlesi söyler; giriş bu kanıtı anıyorsa ayrıntı yeniden yazılmaz.
         details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText, covers: countId, notices: Object.freeze(notices),
+          ...(cover?.kind === 'notes' && shownRows === 0 ? { silent: true } : {}),
           source: Object.freeze({ group, empty: presentation.empty || [], layout: presentation.layout, lead }) }));
         for (const table of ownedTables) tables.set(table.id, Object.freeze({ ...table, detail: id }));
         if (!countId) viewDetails.push({ id, part: ordinal, text: clip(renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, cite: false }), COMPOSITION_LIMITS.maxValueChars) });
@@ -532,6 +560,18 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       charts.set(chartId, Object.freeze({ id: chartId, part: owner.index + 1, ...candidate }));
       viewCharts.push({ id: chartId, part: owner.index + 1, title: candidate.title, types: candidate.types });
     }
+  }
+  // Aşama H — dönem karşılaştırması: her ölçü için iki dönemin doğrulanmış değerinden çubuk grafik adayı (en çok iki; en büyük
+  // fark önce). Bilinmeyen dönem değeriyle aday kurulmaz. Grafik, karşılaştırmanın sonraki dönem okumasının bölümüne bağlanır.
+  for (const period of allowCharts ? periodCharts : []) {
+    const owner = parts.find((item) => item.presentation?.facts?.some((entry) => entry.evidenceId === period.evidenceIds[1]));
+    if (!owner || charts.size >= COMPOSITION_LIMITS.maxCharts + requestedCharts.length || !chartAllowed(owner.index + 1)) continue;
+    const candidate = { table: null, column: null, title: answerChartLabel(period.title, ANSWER_CHART_LIMITS.maxTitleChars), unit: 'count', evidenceId: period.evidenceIds[1],
+      evidenceIds: [...period.evidenceIds], items: period.items.map((item) => ({ label: answerChartLabel(item.label), value: item.value })), types: ['bar'], comparison: true };
+    if (!answerChartFence(chartSpec(candidate, 'bar', locale))) continue;
+    const chartId = `G${charts.size + 1}`;
+    charts.set(chartId, Object.freeze({ id: chartId, part: owner.index + 1, ...candidate }));
+    viewCharts.push({ id: chartId, part: owner.index + 1, title: candidate.title, types: candidate.types });
   }
   // Tamlığı kanıtlanmamış nüfusun sunucu çekincesi her zaman sayfadadır ve anlatılmak ZORUNDADIR (required): akıcı anlatım
   // eksik nüfusu tamamlanmış gibi gösteremez.
@@ -689,7 +729,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
  * önerme. Önerme tabloyla ya da başka bir önermeyle birlikteyse anlatımın seçimi modelindir.
  */
 export function hasCompositionChoice(composition) {
-  const { tables, details, charts, propositions } = composition.render;
+  const { tables, details, charts, propositions, synthesis } = composition.render;
+  // Aşama H: sunucunun girişi bütün sayımları söylediyse (anlatılacak önerme kalmadı) model düzeni yalnızca blok sırasıdır; zayıf
+  // model önermesiz sayfada düzen yerine açıklama yazıp reddediliyordu. Sunucu düzeni kullanılır (model çağrısı yapılmaz).
+  if (!propositions.size && synthesis?.intro) return false;
   return charts.size > 0 || details.size > 1 || tables.size > 1 || propositions.size > 1 || (propositions.size > 0 && tables.size > 0)
     || [...tables.values()].some((table) => !['table', 'list', 'prose'].includes(table.layout));
 }
@@ -1395,7 +1438,9 @@ export function renderComposition(composition, validated) {
     return (detail.source.group.main?.entries || []).filter(({ fact }) => Object.hasOwn(totals, fact.semantic?.metric) && totals[fact.semantic.metric] === fact.value)
       .map(({ fact }) => fact.semantic.metric);
   };
+  const introduced = new Set([...(render.synthesis?.intro?.evidenceIds || []), ...(render.synthesis?.intro?.insights?.evidenceIds || [])]);
   const detailText = (detail) => {
+    if (detail.silent && introduced.has(detail.evidenceId)) return '';
     const omit = new Set([...(stated.get(detail.evidenceId) || []), ...derived(detail)]);
     const entries = detail.source?.group?.main?.entries || [];
     const valueOf = (metric) => entries.find(({ fact }) => fact.semantic?.metric === metric)?.fact.value;
@@ -1665,6 +1710,11 @@ export function renderComposition(composition, validated) {
   } else if (render.closing) {
     // Kanıtlı öncelik yoksa yanıt bir sonraki adım önerisiyle kapanır (olgu taşımaz).
     out.push({ text: render.closing.markdown, part: null, rowBearing: false });
+  }
+  // Aşama H: içeriği girişte anlatıldığı için gövdesi boş kalan bölümün başlığı tek başına çizilmez (başlık olgu taşımaz).
+  for (let index = out.length - 1; index >= 0; index -= 1) {
+    const chunk = out[index];
+    if (chunk.part != null && /^#### /.test(chunk.text) && !out.some((other) => other !== chunk && other.part === chunk.part)) out.splice(index, 1);
   }
   // Son sıraya eklenen ayrıntılar ve tek satırlı düzyazı da görünürdür; takip sırası nihai çizimin sırasıdır.
   const rowParts = [...new Set(out.filter((chunk) => chunk.rowBearing).map((chunk) => chunk.part))];

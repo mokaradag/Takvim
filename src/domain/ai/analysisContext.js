@@ -1,5 +1,6 @@
 import { canonicalActualId } from '../identity/actualId.js';
 import { isIsoDay } from './isoDay.js';
+import { COMPARE_WINDOWS, SERIES_BUCKETS, TEMPORAL_WINDOWS } from './temporalWindow.js';
 
 /**
  * Aşama 4E — takip sorularının SUNUCUYA AİT kanonik analiz bağlamı.
@@ -16,13 +17,30 @@ export const ANALYSIS_CONTEXT_VERSION = 2;
 export const ANALYSIS_CONTEXT_SCOPES = Object.freeze(['self', 'team', 'person', 'project', 'projects', 'all']);
 export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 10, maxFocus: 6, maxPendingFocus: 6 });
 const LEVELS = Object.freeze(['unit', 'department', 'directorate']);
-const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical', 'org', 'milestones']);
-const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow']);
-const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'charts'].includes(key)));
+const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical', 'org', 'milestones',
+  'completed', 'created', 'activity', 'trend', 'horizons', 'notes']);
+/** Aşama H: dönemin türlü alanları (karşılaştırma dönemi ve dizi kovası) yalnızca güncel sürümde saklanır. */
+const TEMPORAL_KEYS = Object.freeze(['compare', 'compareFrom', 'compareTo', 'bucket']);
+const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow',
+  ...TEMPORAL_KEYS]);
+const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'charts', ...TEMPORAL_KEYS].includes(key)));
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
-const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests']);
-const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests'].includes(key)));
+const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests',
+  ...TEMPORAL_KEYS]);
+const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests', ...TEMPORAL_KEYS].includes(key)));
+const WINDOWS = Object.freeze([...TEMPORAL_WINDOWS, 'all_time']);
+/** Dönemin türlü alanları geçerli mi (kapalı sözlük, gerçek günler, tek biçim)? */
+function validTemporal(value) {
+  if (value.relativeWindow != null && (!WINDOWS.includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return false;
+  if (value.compare != null && (!COMPARE_WINDOWS.includes(value.compare) || value.compareFrom || value.compareTo)) return false;
+  if (Boolean(value.compareFrom) !== Boolean(value.compareTo)) return false;
+  for (const key of ['compareFrom', 'compareTo']) if (value[key] != null && !isIsoDay(value[key])) return false;
+  if (value.compareFrom && value.compareTo && value.compareFrom > value.compareTo) return false;
+  return value.bucket == null || SERIES_BUCKETS.includes(value.bucket);
+}
+const temporalFields = (value) => ({ ...(value.compare ? { compare: value.compare } : {}), ...(value.compareFrom ? { compareFrom: value.compareFrom, compareTo: value.compareTo } : {}),
+  ...(value.bucket ? { bucket: value.bucket } : {}) });
 const shortText = (value) => typeof value === 'string' && value.trim().length >= 2 && value.length <= 120;
 const validCharts = (value) => value.charts == null || value.visual === true && Array.isArray(value.charts) && value.charts.length >= 1 && value.charts.length <= 2
   && new Set(value.charts).size === value.charts.length && value.charts.every((type) => CHARTS.includes(type)) && value.chart === value.charts[0];
@@ -47,7 +65,7 @@ export function normalizePendingAnalysis(value) {
     if ((value.scope === 'row') !== (value.rows != null)) return null;
     if (value.rows && (!Array.isArray(value.rows) || !value.rows.length || value.rows.length > 2 || new Set(value.rows).size !== value.rows.length || value.rows.some((row) => !Number.isInteger(row) || row < 1 || row > 10))) return null;
     if (value.act != null && !['explain', 'expand', 'summarize', 'prioritize', 'certainty'].includes(value.act)) return null;
-    if (value.relativeWindow != null && (!['today', 'next_7_days', 'all_time'].includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return null;
+    if (!validTemporal(value)) return null;
     for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && !isIsoDay(value[key])) return null;
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
     for (const key of ['visual', 'table']) if (value[key] != null && typeof value[key] !== 'boolean') return null;
@@ -61,7 +79,7 @@ export function normalizePendingAnalysis(value) {
       ...(value.level ? { level: value.level } : {}), ...(value.withSelf != null ? { withSelf: value.withSelf } : {}), ...(value.within ? { within: value.within } : {}),
       ...(value.rows ? { rows: Object.freeze([...value.rows]) } : {}), ...(value.act ? { act: value.act } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}),
       ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual != null ? { visual: value.visual } : {}), ...(value.chart ? { chart: value.chart } : {}),
-      ...(value.charts ? { charts: Object.freeze([...value.charts]) } : {}), ...(value.table != null ? { table: value.table } : {}) });
+      ...(value.charts ? { charts: Object.freeze([...value.charts]) } : {}), ...(value.table != null ? { table: value.table } : {}), ...temporalFields(value) });
   } catch {
     return null;
   }
@@ -132,7 +150,7 @@ export function normalizeAnalysisContext(value) {
     const within = value.within == null ? null : identity(value.within);
     if (value.within != null && (!within || within.type !== 'project' || !['self', 'team', 'all', 'person', 'projects'].includes(value.scope))) return null;
     if (value.withSelf != null && (value.withSelf !== true || value.scope !== 'person' || subjects.length !== 1)) return null;
-    if (value.relativeWindow != null && (!['today', 'next_7_days', 'all_time'].includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return null;
+    if (!validTemporal(value)) return null;
     const focus = value.focus == null ? [] : value.focus;
     if (!Array.isArray(focus) || focus.length > ANALYSIS_CONTEXT_LIMITS.maxFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
     for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && !isIsoDay(value[key])) return null;
@@ -146,7 +164,7 @@ export function normalizeAnalysisContext(value) {
     return Object.freeze({ v: ANALYSIS_CONTEXT_VERSION, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(value.withSelf ? { withSelf: true } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(within ? { within } : {}), focus: Object.freeze([...focus]),
       ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual ? { visual: true } : {}),
       ...(value.chart ? { chart: value.chart } : {}), ...(value.charts ? { charts: Object.freeze([...value.charts]) } : {}), ...(value.table ? { table: true } : {}), rows,
-      ...(rowPopulation ? { rowPopulation: Object.freeze(rowPopulation) } : {}), ...(pending ? { pending } : {}), ...(value.rowsOnly ? { rowsOnly: true } : {}) });
+      ...(rowPopulation ? { rowPopulation: Object.freeze(rowPopulation) } : {}), ...(pending ? { pending } : {}), ...(value.rowsOnly ? { rowsOnly: true } : {}), ...temporalFields(value) });
   } catch {
     return null;
   }
@@ -162,5 +180,6 @@ export function analysisContextSummary(context) {
   return { scope: context.scope, ...(context.rowsOnly ? { rowsOnly: true } : {}), ...(context.level ? { level: context.level } : {}), subjects: context.subjects.length, ...(context.withSelf ? { withSelf: true } : {}), ...(context.relativeWindow ? { relativeWindow: context.relativeWindow } : {}), ...(context.within ? { withinProject: true } : {}),
     ...(context.focus.length ? { focus: context.focus } : {}),
     ...(context.dateFrom ? { dateFrom: context.dateFrom } : {}), ...(context.dateTo ? { dateTo: context.dateTo } : {}), ...(context.visual ? { visual: true } : {}),
-    ...(context.chart ? { chart: context.chart } : {}), ...(context.charts ? { charts: context.charts } : {}), ...(context.table ? { table: true } : {}), ...(rows ? { rows } : {}) };
+    ...(context.chart ? { chart: context.chart } : {}), ...(context.charts ? { charts: context.charts } : {}), ...(context.table ? { table: true } : {}), ...(rows ? { rows } : {}),
+    ...temporalFields(context) };
 }

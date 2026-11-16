@@ -32,7 +32,8 @@ import { concreteCollections, rankedRowIndexes, REQUEST_LIMITS, taskResultScope 
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { layerAspectLabel, PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderLayerOmissions, renderOverlappingSeries, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, normalizedBrief } from '../tools/analysisPlan.js';
+import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, analysisWindows, normalizedBrief } from '../tools/analysisPlan.js';
+import { resolveWindow } from '../../../domain/ai/temporalWindow.js';
 import { caveatPropositions } from '../../../domain/ai/groundedPropositions.js';
 import { expandedAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
 import { ANALYSIS_CONTEXT_VERSION, analysisContextSummary, normalizeAnalysisContext, normalizePendingAnalysis, withPendingAnalysis } from '../../../domain/ai/analysisContext.js';
@@ -799,6 +800,12 @@ function pinAnalysisRepair(turn, plan, details) {
         layers.forEach((_, index) => paths.add(`also[${index}].${key}`));
       }
     }
+    // Aşama H — karşılaştırma dönemi: çakışan iki yazımdan biri kaldırılabilir; birincil dönem eksikse yalnızca dönem alanları eklenebilir
+    // (kapsam ve yönler sabit kalır; var olan geçerli dönem bu yolla değiştirilemez).
+    if (path === '$.analysis.compare' && reason === 'conflict') for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
+    if (path === '$.analysis.compare' && reason === 'window') {
+      for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) if ((existing?.raw || plan.analysis)[key] == null) paths.add(key);
+    }
     // Çakışan gösterimlerden biri kaldırılabilir; tek geçersiz sınır geçerli kardeşini serbest bırakmaz.
     if (path === '$.analysis.relativeWindow' && ['conflict', 'enum'].includes(reason)) {
       for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) {
@@ -916,6 +923,9 @@ function repairMatches(turn, plan, calls = []) {
 
 /** Ölçünün gerektirdiği metin ile kazara eklenen nüfus seçeneği ayrıdır. */
 function planNeedsText(turn, plan) {
+  // Aşama H: not yönü (analysis.focus notes) korunan metin okur; kullanıcı bu iletide metni açmadıysa okuma yapılmadan rıza istenir.
+  const layers = plan?.analysis && typeof plan.analysis === 'object' && !Array.isArray(plan.analysis) ? [plan.analysis, ...(Array.isArray(plan.analysis.also) ? plan.analysis.also : [])] : [];
+  if (layers.some((layer) => Array.isArray(layer?.focus) && layer.focus.includes('notes')) && !turn.allowedTextFields.includes('description')) return true;
   return [plan?.request, ...(Array.isArray(plan?.additionalRequests) ? plan.additionalRequests : [])].filter(Boolean).some((raw) => Array.isArray(raw.metrics)
     && raw.metrics.some((metric) => turn.catalog.some((tool) => metricPaths(tool.name, metric).some((path) => {
       const field = path.split('.').findLast((part) => part !== '*');
@@ -1669,6 +1679,8 @@ function completedAnalysisContext(turn, verdict) {
     ...(turn.presentationIntent?.relativeWindow ? { relativeWindow: turn.presentationIntent.relativeWindow } : {}),
     ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
     ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
+    // Aşama H: karşılaştırma dönemi ve dizi kovası türlü değerleriyle saklanır (takip dönemi değiştirirken bunlar kaybolmaz).
+    ...(turn.presentationIntent?.compare || {}),
     ...(turn.presentationIntent?.visual ? { visual: true } : {}), ...(turn.presentationIntent?.chart ? { chart: turn.presentationIntent.chart } : {}),
     ...(turn.presentationIntent?.charts ? { charts: turn.presentationIntent.charts } : {}),
     ...(turn.presentationIntent?.table ? { table: true } : {}), rows, ...(rowPopulation ? { rowPopulation } : {}) });
@@ -1728,7 +1740,7 @@ function compositionInput(turn, verdict) {
   const outlineScope = !followScope ? intent?.scope : intent.scope === 'previous' ? turn.previousAnalysis?.scope : rowScope;
   const relativeWindow = turn.presentationIntent?.relativeWindow;
   const outlineWindow = relativeWindow && relativeWindow !== 'all_time'
-    ? { dateFrom: turn.context.today, dateTo: relativeWindow === 'today' ? turn.context.today : addDays(turn.context.today, 6) }
+    ? resolveWindow(relativeWindow, turn.context.today) || {}
     : turn.presentationIntent?.window || {};
   const analysisFollowUp = Boolean(intent && (['previous', 'row'].includes(intent.scope) || intent.act) && turn.previousAnalysis);
   const previousQuestion = continues || analysisFollowUp ? turn.question.previous : null;
@@ -1736,7 +1748,7 @@ function compositionInput(turn, verdict) {
     today: turn.context.today, populations: populationSizes(turn, answers), followUp: intent?.act ? { act: intent.act } : null,
     // Çerçeve cümlesi için özetin kapsamı ve yönleri (olgu değil; adlar kanıttan alınır).
     outline: intent ? { scope: outlineScope, level: intent.level || (rowRequest ? rowRequest.filters?.teamLevel : followScope ? turn.previousAnalysis?.level : null) || null,
-      focus: [...intent.focus], withSelf: intent.withSelf === true, ...outlineWindow, ...(intent.layers ? { layers: intent.layers, ...(intent.sections ? { sections: intent.sections } : {}) } : {}),
+      focus: [...intent.focus], withSelf: intent.withSelf === true, ...outlineWindow, ...(turn.presentationIntent?.temporal ? { temporal: turn.presentationIntent.temporal } : {}), ...(intent.layers ? { layers: intent.layers, ...(intent.sections ? { sections: intent.sections } : {}) } : {}),
       // Daraltma yalnızca özetin (çok kapsamlıda birincil kapsamın) bölümlerinden: yanındaki açık isteğin adlı projesi özeti daraltmaz.
       within: answers.filter((answer) => (!Number.isInteger(intent.analysisParts) || (answer.index ?? 0) < intent.analysisParts)
         && (!intent.layers || intent.sections?.[answer.index ?? 0]?.layer === 0))
@@ -2140,8 +2152,30 @@ function presentationIntent(plan, today) {
       ...(analysis.explicitParts?.length ? { explicitParts: analysis.explicitParts } : {}) }) : null,
     ...(analysis?.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null,
+    compare: analysis && (analysis.compare || analysis.compareFrom || analysis.bucket) ? Object.freeze({ ...(analysis.compare ? { compare: analysis.compare } : {}),
+      ...(analysis.compareFrom && analysis.compareTo ? { compareFrom: analysis.compareFrom, compareTo: analysis.compareTo } : {}), ...(analysis.bucket ? { bucket: analysis.bucket } : {}) }) : null,
+    // Aşama H: özetin somut dönemleri (türlü değerlerden; bkz. `analysisWindows`), modelin bildirdiği dönem adları ve tarihsel sınırlar.
+    temporal: analysis ? temporalIntent(analysis, today) : null,
     // Açıklama sonrasında yeniden yürütülecek kabul edilmiş özet (kimlik taşımaz; adlar kullanıcının kendi iletisindendir).
     pending: analysis ? pendingAnalysis(plan) : null });
+}
+
+/**
+ * Dönem bulgularının anlatım bağlamı: somut birincil ve karşılaştırma dönemi, modelin bildirdiği adlar (yalnızca adlandırma için),
+ * sunucunun açıkça söylediği varsayılan dönem ve ikinci dönemdeki durumu yeniden kurulamayan yönler. Olgu taşımaz.
+ */
+function temporalIntent(analysis, today) {
+  let windows;
+  try { windows = analysisWindows(analysis, today); } catch { return null; }
+  const complete = (range) => (range?.dateFrom && range?.dateTo ? Object.freeze({ dateFrom: range.dateFrom, dateTo: range.dateTo }) : null);
+  const window = complete(windows.range);
+  const compare = complete(windows.compare);
+  if (!window && !compare && !analysis.historyUnsupported?.length) return null;
+  return Object.freeze({ today, window, compare, defaulted: windows.defaulted === true,
+    ...(analysis.relativeWindow && analysis.relativeWindow !== 'all_time' ? { windowName: analysis.relativeWindow } : {}),
+    ...(analysis.compare && analysis.compare !== 'previous' ? { compareName: analysis.compare } : {}),
+    ...(analysis.bucket ? { bucket: analysis.bucket } : {}),
+    ...(analysis.historyUnsupported?.length ? { unsupportedHistory: Object.freeze([...analysis.historyUnsupported]) } : {}) });
 }
 
 /** Bekleyen niyetin plan biçimi: modelin daha önce bildirdiği ve sunucunun kabul ettiği analitik özetin aynısı. */
@@ -2163,6 +2197,8 @@ function pendingAnalysis(plan) {
     ...(analysis.withSelf != null ? { withSelf: analysis.withSelf } : {}), ...(analysis.rows ? { rows: [...analysis.rows] } : {}), ...(analysis.act ? { act: analysis.act } : {}), ...(analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     ...(analysis.names ? { names: [...analysis.names] } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.within ? { within: analysis.within } : {}),
     ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}),
+    ...(analysis.compare ? { compare: analysis.compare } : {}), ...(analysis.compareFrom && analysis.compareTo ? { compareFrom: analysis.compareFrom, compareTo: analysis.compareTo } : {}),
+    ...(analysis.bucket ? { bucket: analysis.bucket } : {}),
     ...(plan.visual != null ? { visual: plan.visual } : {}), ...(plan.chart ? { chart: plan.chart } : {}), ...(plan.charts ? { charts: [...plan.charts] } : {}), ...(plan.table != null ? { table: plan.table } : {}) });
 }
 

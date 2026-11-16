@@ -114,8 +114,22 @@ function joinList(parts, locale) {
   return `${parts.slice(0, -1).join(', ')} ${locale === 'en' ? 'and' : 've'} ${parts.at(-1)}`;
 }
 
+/** Aşama H: tarih dizisi ve teslim ufku tablolarının satır başlığı (kova türü); başka koleksiyonda `null`. */
+const SERIES_HEADS = Object.freeze({ date_week: ['Hafta', 'Week'], date_month: ['Ay', 'Month'], due_horizon: ['Teslim ufku', 'Delivery horizon'], week: ['Hafta', 'Week'], month: ['Ay', 'Month'] });
+function seriesHead(rows, locale) {
+  const semantic = rows[0]?.entries[0]?.fact.semantic;
+  const key = semantic?.series ? semantic.bucket : semantic?.groupBy;
+  return SERIES_HEADS[key]?.[language(locale)] || null;
+}
+
 function labelOf(fact, locale) {
   const parts = fact.field.split('.');
+  // Aşama H: dönem dizisinin sayı sütunu neyi saydığını söyler ("Kayıt sayısı" değil "Tamamlanan görev").
+  if (parts.at(-1) === 'count' && parts.at(-3) === 'groups' && SERIES_HEADS[fact.semantic?.groupBy]) {
+    const basis = fact.semantic.groupBy === 'due_horizon' ? ['Açık görev', 'Open tasks'] : fact.semantic.filters?.dateField === 'createdAt' ? ['Oluşturulan görev', 'Created tasks']
+      : fact.semantic.filters?.dateField === 'actualFinish' ? ['Tamamlanan görev', 'Completed tasks'] : null;
+    if (basis) return basis[language(locale)];
+  }
   if (parts.at(-3) === 'proposedChanges' && ['from', 'to'].includes(parts.at(-1))) {
     const prefix = parts.at(-1) === 'from' ? ['Önceki', 'Original'] : ['Önerilen', 'Proposed'];
     return `${prefix[language(locale)]} ${factLabel(parts.at(-2), locale).toLocaleLowerCase(locale === 'en' ? 'en-US' : 'tr-TR')}`;
@@ -562,7 +576,7 @@ export function describeRowCollection(group, collection, locale = 'tr') {
   const rows = [...(group.collections.get(collection)?.values() || [])];
   const { titleKey, columns, valuesOf, columnLabel, numericColumns } = rowColumns(rows, locale);
   return {
-    head: ROW_NOUNS[collection.split('.').at(-1)]?.[language(locale)] || (locale === 'en' ? 'Record' : 'Kayıt'),
+    head: seriesHead(rows, locale) || ROW_NOUNS[collection.split('.').at(-1)]?.[language(locale)] || (locale === 'en' ? 'Record' : 'Kayıt'),
     rows: rows.map((row) => ({ title: rowTitleText(row, titleKey, valuesOf, locale), titleFacts: titleKey ? valuesOf(row, titleKey) : [], context: rowContext(row), entries: row.entries,
       cells: columns.map((key) => valuesOf(row, key)) })),
     columns: columns.map((key) => ({ key, label: columnLabel(key), numeric: numericColumns.includes(key) }))
@@ -612,7 +626,7 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
   // Açıkça istenen tablo yalnızca ad sütunundan da oluşabilir.
   const table = layout === 'table' || (columns.length >= 1 && layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2));
   if (table) {
-    const head = ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
+    const head = seriesHead(rows, locale) || ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
     const headers = [head, ...columns.map((key) => columnLabel(key).replace(/\|/g, '/'))];
     // Sayı sütunları sağa yaslanır: değerler basamak hizasında okunur.
     const lines = [`| ${headers.join(' | ')} |`, `| ${['---', ...columns.map((key) => (numericColumns.includes(key) ? '---:' : '---'))].join(' | ')} |`];
@@ -759,6 +773,13 @@ export function narrativeGroups(items) {
 /** Tek satırlık koleksiyon bir kayıttır: satırın olguları kayıt cümlesi olarak yazılır. */
 function singleRowSentences(group, collection, row, locale) {
   const role = ROW_ROLES[collection.split('.').at(-1)];
+  // Aşama H: dönem (gerçekleşen bitiş / oluşturulma) dağılımının tek grubu "Kayıt sayısı: **1**" değil "**1** görev" diye okunur.
+  const numbers = row.entries.filter(({ fact }) => typeof fact.value === 'number');
+  if (group.tool === 'rota_task_analytics' && numbers.length === 1 && /(^|\.)groups\.\d+\.count$/.test(numbers[0].fact.field)
+    && ['actualFinish', 'createdAt'].includes(numbers[0].fact.semantic?.filters?.dateField)) {
+    const count = numbers[0].fact;
+    return [`${strong(escapedFactText(row.subject))}: ${strong(narrativeValue(count, locale))} ${locale === 'en' ? englishTasks(count) : 'görev'}${qualifierText(row.entries, locale)}.`];
+  }
   const record = recordSentences({ tool: group.tool, kind: rowKind(collection, group.tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale);
   return role && record.length ? [`${role[0][language(locale)]}: ${record[0]}`, ...record.slice(1)] : record;
 }

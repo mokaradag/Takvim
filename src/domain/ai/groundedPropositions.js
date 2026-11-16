@@ -29,7 +29,7 @@ export const PROPOSITION_TONES = Object.freeze(['info', 'warning', 'success']);
 
 const TASK_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
 /** Dağılım önermesi yalnızca her görevi tek gruba koyan boyutlarda: kişi grupları birbirini dışlamaz. */
-export const EXCLUSIVE_GROUP_BY = Object.freeze(['status', 'priority', 'project', 'deadline', 'target_month']);
+export const EXCLUSIVE_GROUP_BY = Object.freeze(['status', 'priority', 'project', 'deadline', 'target_month', 'date_week', 'date_month', 'due_horizon']);
 const assignmentGroups = (fact) => fact?.semantic?.provenance?.tool === 'rota_task_analytics' && fact.semantic.groupBy === 'assignee';
 /** Örgütsel kırılımda varlık olmayan gruplar (atamasız, açıklanamayan, çözülemeyen, birimi belirsiz, kesik listenin "diğer"i). */
 const ORG_NON_ENTITY = new Set(['other', 'unassigned', 'unresolved', 'undisclosed', 'none', 'no_unit']);
@@ -83,7 +83,7 @@ const DEADLINE = Object.freeze({
 /** Bugüne göre ileri termin pencereleri (sayım cümlesinde sayıdan önce yazılır). */
 const TERM_WINDOWS = new Set(['due_today', 'due_next_7_days', 'due_next_30_days']);
 const FILTER_KEYS = new Set(['text', 'projectId', 'project', 'wbsId', 'statuses', 'priorities', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'assignee',
-  'personSicil', 'person', 'createdByMe', 'milestone', 'teamLevel']);
+  'personSicil', 'person', 'createdByMe', 'milestone', 'teamLevel', 'hasDescription']);
 /** Sunucunun kişi adını çözemediğinde yazdığı genel etiket: doğal özne olarak kullanılmaz. */
 const UNRESOLVED_PERSON = 'Seçilen kişi';
 /** Ekip kapsamının adı (Türkçe yer/iyelik biçimleri, İngilizce iyelik). Düzey yoksa bütün yönetim kapsamı "ekibiniz"dir. */
@@ -102,7 +102,7 @@ function taskPopulation(filters, locale) {
   const f = filters || {};
   // Bilinmeyen süzgecin `false` değeri de bir kısıt olabilir: yalnızca boş değer nötrdür.
   for (const [key, value] of Object.entries(f)) if (!FILTER_KEYS.has(key) && !(value == null || value === '' || (Array.isArray(value) && !value.length))) return null;
-  for (const key of ['text', 'wbsId', 'createdByMe']) if (!neutral(f[key])) return null;
+  for (const key of ['text', 'wbsId', 'createdByMe', 'hasDescription']) if (!neutral(f[key])) return null;
   // Aşama F: sunucunun kimlikle çözdüğü TEK kişi (sorumlu koşulu `person`) doğal öznedir ("**X** sorumluluğunda …"); adı
   // çözülemeyen kişi genel ölçütlü cümlede kalır.
   const person = neutral(f.personSicil) ? null
@@ -211,7 +211,8 @@ function ownerParts(filters, locale, { open = false } = {}) {
 }
 
 const GROUP_NOUNS = Object.freeze({ status: ['Durumlara göre', 'By status'], priority: ['Önceliğe göre', 'By priority'], project: ['Projelere göre', 'By project'],
-  deadline: ['Termine göre', 'By deadline'], target_month: ['Termin ayına göre', 'By deadline month'] });
+  deadline: ['Termine göre', 'By deadline'], target_month: ['Termin ayına göre', 'By deadline month'],
+  date_week: ['Haftalara göre', 'By week'], date_month: ['Aylara göre', 'By month'], due_horizon: ['Teslim ufkuna göre', 'By delivery horizon'] });
 
 /** Desteklenmeyen birim birimsiz iddiaya dönüşmez. Etiket/alan adı yorumlanmaz. */
 function numericValue(value, semantic, locale) {
@@ -226,10 +227,12 @@ function numericValue(value, semantic, locale) {
 function groupPlace(groupBy, label, locale) {
   if (locale === 'en') {
     return { status: ['are in the ', v(label), ' status'], priority: ['have ', v(label), ' priority'], project: ['are in the ', v(label), ' project'],
-      target_month: ['are due in ', v(label)], department: ['are assigned in ', v(label)], unit: ['are assigned in ', v(label)] }[groupBy] || ['are in the ', v(label), ' group'];
+      target_month: ['are due in ', v(label)], department: ['are assigned in ', v(label)], unit: ['are assigned in ', v(label)],
+      date_week: ['fall in the week of ', v(label)], date_month: ['fall in ', v(label)], due_horizon: ['are due in the ', v(label), ' band'] }[groupBy] || ['are in the ', v(label), ' group'];
   }
   return { status: [v(label), ' durumunda'], priority: [v(label), ' öncelikte'], project: [v(label), ' projesinde'], target_month: [v(label), ' termin ayında'],
-    department: [v(label), ' bölümündeki sorumlularda'], unit: [v(label), ' birimindeki sorumlularda'] }[groupBy]
+    department: [v(label), ' bölümündeki sorumlularda'], unit: [v(label), ' birimindeki sorumlularda'],
+    date_week: [v(label), ' haftasında'], date_month: [v(label), ' ayında'], due_horizon: [v(label), ' bandında'] }[groupBy]
     || [v(label), ' grubunda'];
 }
 
@@ -275,7 +278,7 @@ export function countProposition(group, fact, locale, fallback) {
 const countTone = (filters, value) => (filters?.deadline === 'overdue' && value > 0 ? 'warning' : 'info');
 
 const GROUP_TITLES = Object.freeze({ status: ['durum', 'status'], priority: ['öncelik', 'priority'], project: ['proje', 'project'], deadline: ['termin', 'deadline'],
-  target_month: ['termin ayı', 'deadline month'] });
+  target_month: ['termin ayı', 'deadline month'], date_week: ['hafta', 'week'], date_month: ['ay', 'month'], due_horizon: ['teslim ufku', 'delivery horizon'] });
 
 /**
  * Bölümün başlık adayı (ör. "Gecikmiş görevleriniz", "Görevlerinizin durum dağılımı"): yalnızca görev nüfusunun
@@ -740,7 +743,7 @@ const TABLE_ROWS = Object.freeze({ projects: ['Projelerin', 'each project'], peo
 /** Tek boyutlu görev dağılımları: "Görevlerin durumlara göre dağılımı …". */
 // Termin kovaları tamamlanan ve termini olmayan işleri de içerir: tablo "termin aralıkları" değil terminle ilişkili durumlardır.
 const TABLE_DIMENSIONS = Object.freeze({ status: ['durumlara', 'status'], priority: ['önceliklere', 'priority'], deadline: ['termin durumlarına', 'deadline status'],
-  target_month: ['termin aylarına', 'deadline month'] });
+  target_month: ['termin aylarına', 'deadline month'], date_week: ['haftalara', 'week'], date_month: ['aylara', 'month'], due_horizon: ['teslim ufuklarına', 'delivery horizon'] });
 
 /**
  * Aşama G: bölümünde başka cümle olmayan tablonun girişi, tablonun neyi gösterdiğini söyleyen tam cümledir ("Projelerin açık,

@@ -1,3 +1,4 @@
+import { englishBucketLabel } from './temporalWindow.js';
 import { claimableField, evidenceSemantic } from './claimableEvidence.js';
 
 export const FACT_LIMITS = Object.freeze({ maxFacts: 256, maxClaims: 64, maxDepth: 12, maxAnswerChars: 24000 });
@@ -80,6 +81,11 @@ const LABELS = Object.freeze({
   occurredAt: ['İşlem zamanı', 'Event time'], createdAt: ['Oluşturma zamanı', 'Created at'], updatedAt: ['Güncelleme zamanı', 'Updated at'],
   events: ['Hareket sayısı', 'Event count'], tasks: ['Görev sayısı', 'Task count'], people: ['Kişi sayısı', 'Person count'],
   completedTasks: ['Tamamlanan görev sayısı', 'Completed task count'],
+  createdTasks: ['Oluşturulan görev sayısı', 'Created task count'], deletedTasks: ['Silinen görev sayısı', 'Deleted task count'],
+  updatedTasks: ['Yalnızca güncellenen görev sayısı', 'Updated-only task count'], reopenedTasks: ['Yeniden açılan görev sayısı', 'Reopened task count'],
+  completionEvents: ['Tamamlama hareketi', 'Completion events'], creationEvents: ['Oluşturma hareketi', 'Creation events'],
+  undatedDone: ['Gerçekleşen bitişi kayıtlı olmayan tamamlanmış görev', 'Completed tasks without a recorded actual finish'],
+  firstRecordedDay: ['Hareket kaydının ilk günü', 'First recorded activity day'],
   finishSlipped: ['Bitişi kayan görev', 'Tasks with slipped finish'], startSlipped: ['Başlangıcı kayan görev', 'Tasks with slipped start'],
   addedSinceBaseline: ['Baz plandan sonra eklenen görev', 'Tasks added since baseline'],
   missingTasks: ['Artık bulunmayan baz plan görevi', 'Missing baseline tasks'],
@@ -222,6 +228,9 @@ export function canonicalGroupLabel(fact, label, locale = 'tr') {
   if (groupBy === 'deadline') return { done: 'Done', overdue: 'Overdue', no_target_finish: 'No deadline', due_today: 'Due today',
     due_days_1_to_6: 'Due in 1–6 days', due_days_7_to_29: 'Due in 7–29 days', later: 'Due in 30 days or later' }[group.key] || label;
   if (groupBy === 'target_month' && group.key === 'none') return 'No deadline';
+  // Aşama H: tarih dizisinin kova etiketi ve teslim ufku bantları sunucu metnidir.
+  if (['date_week', 'date_month'].includes(groupBy)) return englishBucketLabel(label);
+  if (groupBy === 'due_horizon') return { days_0_6: 'Next 7 days', days_7_13: 'Days 8–14', days_14_29: 'Days 15–30' }[group.key] || label;
   return label;
 }
 
@@ -274,6 +283,7 @@ export function factPresentation(fact, locale = 'tr') {
     : fact.semantic?.nullMeaning === 'over-limit'
       ? (locale === 'en' ? 'Not exact: exceeds the analysis limit' : 'Kesin değil: analiz sınırını aşıyor')
       : fact.semantic?.nullMeaning === 'not-overdue' ? (locale === 'en' ? 'Not overdue' : 'Gecikmemiş')
+      : fact.semantic?.nullMeaning === 'not-recorded' ? (locale === 'en' ? 'No record for this period' : 'Bu dönem için kayıt yok')
         : (locale === 'en' ? 'Not specified' : 'Belirtilmemiş');
   else if (enumValues && leaf !== 'key') value = enumValues[value]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Unknown value' : 'Bilinmeyen değer');
   else if (fact.semantic?.displayValue != null) value = fact.semantic.displayValue;
@@ -295,7 +305,7 @@ export function factPresentation(fact, locale = 'tr') {
     source: ['Proje kaynağı', 'Project source'], includeEmpty: ['Görünür görevi olmayan projeler', 'Projects without visible tasks'],
     statuses: ['Durum', 'Status'], priorities: ['Öncelik', 'Priority'], deadline: ['Termin', 'Deadline'],
     dateField: ['Tarih alanı', 'Date field'], dateFrom: ['İlk tarih', 'First date'], dateTo: ['Son tarih', 'Last date'],
-    assignee: ['Sorumlu', 'Assignee'], personSicil: ['Kişi', 'Person'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'],
+    assignee: ['Sorumlu', 'Assignee'], personSicil: ['Kişi', 'Person'], createdByMe: ['Oluşturduklarım', 'Created by me'], hasDescription: ['Açıklaması olan', 'With a description'], milestone: ['Kilometre taşı', 'Milestone'],
     teamLevel: ['Ekip düzeyi', 'Team level'], depth: ['Derinlik', 'Depth'] };
   const filterValues = { ...values.status, ...values.priority, overdue: ['Gecikmiş', 'Overdue'],
     due_today: ['Bugün', 'Today'], due_next_7_days: ['Bugün dahil yedi gün', 'Seven days including today'],
@@ -319,6 +329,7 @@ export function factPresentation(fact, locale = 'tr') {
       case 'source': return value === 'all' ? null : values.sourceType[value]?.[language] || null;
       case 'includeEmpty': return value === false ? ['Hariç', 'Excluded'][language] : null;
       case 'createdByMe': return value === true ? filterValue(true) : null;
+      case 'hasDescription': return value === true ? filterValue(true) : null;
       case 'depth': return Number.isInteger(value) ? `${value} ${['düzey', value === 1 ? 'level' : 'levels'][language]}` : null;
       default: return (Array.isArray(value) ? value : [value]).map(filterValue).filter(Boolean).join(', ') || null;
     }

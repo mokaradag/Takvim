@@ -19,6 +19,10 @@
  *   G  Aşama G yönetici ve proje zekâsı kıyas kümesi (`test/fixtures/bilgin-executive-benchmark.json`, sentetik): hedefli vakalar
  *      uçtan uca (planlayıcı + düzen model; yönetici sentetik verisi ve vakanın profili; çok turlu vakalar sırayla), bağımsız ayrık
  *      küme (PHASE4E_SET=holdout) yalnızca planlayıcı. Çok kapsamlı vakada her kapsamın kendi nüfusu okunmalıdır.
+ *   H  Aşama H dönemsel, tarihsel ve not farkındalıklı zekâ kıyas kümesi (`test/fixtures/bilgin-temporal-benchmark.json`, sentetik):
+ *      hedefli ve olumsuz vakalar uçtan uca (planlayıcı + düzen model; dönem sentetik verisi ve vakanın profili; metin rızası vakanın
+ *      bildirdiği kadardır), bağımsız ayrık küme (PHASE4E_SET=holdout) yalnızca planlayıcı. Puan nesneldir: okunan dönem ve
+ *      karşılaştırma dönemi, kapsam, bulgu türü, tamlık çekincesi, grafik türü ve izin verilen bitiş (akıcı ama yanlış yanıt geçmez).
  * Derin modele giden her çağrı modele GİTMEZ; sayılır ve başarısızlıktır (zayıf model kabulü güçlü modelle gizlenmez).
  * PHASE4E_CASES=id,… yalnızca o vakaları (başarısızların yeniden koşusu) çalıştırır. Rapor içerik taşımaz.
  * PLANNER_CLAUDE_FORCED_RETRY=1: CLI zorunlu aracı kısıtlı çözümle uygulayamadığı için model zorunlu turda başka bir araç
@@ -36,6 +40,8 @@ import { analysisBenchmarkSeed, BENCH_PROFILES } from '../test/helpers/analysisB
 import { executiveBenchmarkSeed, EXEC_PROFILES } from '../test/helpers/executiveBenchmarkSeed.mjs';
 import { answerQuality } from '../test/helpers/answerQuality.mjs';
 import { phase4eConversation, turnViolations, renderedCharts } from '../test/helpers/phase4eScenario.mjs';
+import { temporalBenchmarkSeed, TEMPORAL_PROFILES } from '../test/helpers/temporalBenchmarkSeed.mjs';
+import { expectedCompare, expectedRange, temporalFixture as temporal, temporalViolations } from '../test/helpers/temporalScenario.mjs';
 import { planCase } from './planner-evaluation.mjs';
 import { completeModelRound } from './planner-followup-qualification.mjs';
 import { qualificationProvider } from './answer-composition-qualification.mjs';
@@ -209,6 +215,9 @@ export function plannerScore(result, expect, today = corpus.today) {
     // yoksa kabul edilen ayrıntılı isteklerin eşdeğer yönleri. Bildirilen ama okunmayan yön sayılmaz.
     const focus = result.plan?.analysis ? [...result.plan.analysis.focus] : requests.flatMap(requestFocus);
     for (const required of expect.focusAll || []) if (!focus.includes(required)) failures.push(`yön eksik: ${required}`);
+    // Aşama H: geçmiş görünüm isteyen soru (önceki aşamalarda sınırlılık vakası) sıradan güncel durum planıyla karşılanmaz: plan bir
+    // geçmiş dönem yönü okur ya da karşılaştırılamayan geçmiş durumu açıkça bildirir.
+    if (expect.temporal && !focus.some((item) => ['completed', 'created', 'activity', 'trend'].includes(item)) && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş dönem okunmadı');
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
     const bounded = requests.filter((request) => request.filters?.dateFrom || request.filters?.dateTo);
@@ -240,6 +249,59 @@ export async function plannerCase(item, { completeRound = completeModelRound, to
     infrastructure: rounds.find((round) => round.infrastructure)?.infrastructure || null, failures };
 }
 
+/**
+ * Aşama H ayrık küme puanı: karar, kabul edilen özetin kapsamı (düzey, adlar, fazlası kabul edilmez) ve yönleri ile kabul edilen
+ * planın OKUDUĞU dönem, karşılaştırma dönemi, dizi kovası ve yeniden kurulamayan geçmiş durum bildirimi.
+ */
+export function temporalPlannerScore(result, expect, today = temporal.today) {
+  const failures = [];
+  const decision = result.decisions.at(-1) || null;
+  const intent = result.outcome === 'planned' ? 'rota' : decision?.intent || result.outcome;
+  if (result.outcome === 'error') failures.push(`hata ${result.error}`);
+  // Metin rızası plan aşamasında verilmemiştir: not sorusunda doğru sonuç ya kabul edilen not planı ya da rıza isteğidir (veri okunmaz).
+  const accepted = expect.intentAny || (expect.needsText ? [expect.intent, 'text_fields'] : [expect.intent]);
+  if (!accepted.includes(intent)) failures.push(`karar ${intent} ≠ ${accepted.join('|')}`);
+  if (expect.reason && decision?.reason !== expect.reason) failures.push(`neden ${decision?.reason} ≠ ${expect.reason}`);
+  if (result.outcome !== 'planned') return failures;
+  // Kapsam, düzey, adlar ve yönler sunucunun KABUL ETTİĞİ özetten okunur (açılım belirlenimcidir ve ayrıca sınanır).
+  const analysis = result.plan?.analysis;
+  if (!analysis) return [...failures, 'özet (analysis) yok'];
+  const declared = analysis.layers || [analysis, ...(analysis.also || [])];
+  const key = (names) => JSON.stringify([...(names || [])].map((name) => containmentText(String(name))).sort());
+  // Kapsamı belirtilmeyen beklenti (ör. geçmiş durum sınırı vakası) kapsamla puanlanmaz.
+  const wanted = expect.layers || (expect.scope || expect.scopeAny ? [{ scope: expect.scope, scopeAny: expect.scopeAny, level: expect.level, names: expect.names }] : null);
+  // Adlar özetin katmanında yoksa kabul edilen isteklerin varlık sorgularıdır (ad kümesi eşit olmalıdır; fazlası kabul edilmez).
+  const entityNames = [...new Set((result.plan?.requests || []).flatMap((request) => (request.entities || []).map((entity) => entity.query).filter((query) => query != null)).map(String))];
+  const matches = (layer, other) => (layer.scopeAny || [layer.scope]).includes(other.scope) && (layer.level || '') === (other.level || '')
+    && (!layer.names?.length || key(layer.names) === key(other.names?.length ? other.names : entityNames));
+  if (wanted) for (const layer of wanted) if (!declared.some((other) => matches(layer, other))) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} bildirilmedi`);
+  if (wanted) for (const other of declared) if (!wanted.some((layer) => matches(layer, other))) failures.push(`beklenmeyen kapsam ${other.scope}${other.level ? `/${other.level}` : ''} bildirildi`);
+  const focus = [...new Set(declared.flatMap((layer) => layer.focus || analysis.focus || []))];
+  for (const required of expect.focusAll || []) if (!focus.includes(required)) failures.push(`yön eksik: ${required}`);
+  if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
+  if (expect.visual && result.plan?.visual !== true) failures.push('görselleştirme bayrağı yok');
+  // Dönem, sunucunun çözdüğü somut günlerle karşılaştırılır (adlı dönem ya da eşdeğer tarih çifti aynı günleri verir).
+  const requests = result.plan?.requests || [];
+  const reads = (range) => requests.some((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]);
+  const range = expectedRange(expect.window, today);
+  if (range && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
+  const prior = expectedCompare(expect.compare, expect.window, today);
+  if (prior && !expect.stateComparison && !reads(prior)) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
+  if (expect.windowFrom && !requests.some((request) => request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
+  if (expect.bucket && !requests.some((request) => request.population?.groupBy === `date_${expect.bucket}` || request.filters?.activityView === expect.bucket)) failures.push(`dizi kovası ${expect.bucket} okunmuyor`);
+  if (expect.stateComparison && !analysis.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
+  return failures;
+}
+
+export async function temporalPlannerCase(item, { completeRound = completeModelRound, today = temporal.today } = {}) {
+  const rounds = [];
+  const result = await planCase({ testCase: { id: 'q', text: item.text }, runTurn: liveTurn(rounds, completeRound), adviceFor: async () => ({ state: 'unavailable', candidates: [] }),
+    now: new Date(`${today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
+  const failures = temporalPlannerScore(result, item.expect, today);
+  return { id: item.id, rounds: rounds.length, firstPass: rounds.length === 1 && !failures.length, analysis: Boolean(result.plan?.analysis),
+    infrastructure: rounds.find((round) => round.infrastructure)?.infrastructure || null, failures };
+}
+
 /* ── Tier C/D/E: konuşma ──────────────────────────────────────────── */
 
 const plannerRouting = (planner, dry) => ({ planner, dry, escalations: 0 });
@@ -255,7 +317,7 @@ export async function conversationCase(t, turns, { plannerModel, composeModel, s
     const before = rounds.length;
     const escalationsBefore = routing.escalations;
     let result;
-    try { result = await ask({ ...turn, scripted: !plannerModel }, { detail: turn.expect?.detail || null }); }
+    try { result = await ask({ ...turn, scripted: !plannerModel }, { detail: turn.detail || turn.expect?.detail || null, ...(turn.includeText ? { includeText: true } : {}) }); }
     catch (error) {
       const infrastructure = rounds.slice(before).find((round) => round.infrastructure)?.infrastructure;
       if (!infrastructure) throw error;
@@ -265,7 +327,8 @@ export async function conversationCase(t, turns, { plannerModel, composeModel, s
     }
     const line = logs.map((row) => (row.includes('"operation":"ai.grounded.turn"') ? JSON.parse(row.slice(row.indexOf('{'))) : null)).filter(Boolean).at(-1);
     const presentation = line?.context?.presentation || null;
-    const failures = turnViolations(result, turn.expect || {}, { live: Boolean(plannerModel) });
+    // Aşama H vakası kendi nesnel denetimini taşır (dönem, bulgu, çekince, grafik); diğer katmanlar kapsam denetimini kullanır.
+    const failures = turn.violations ? turn.violations(result) : turnViolations(result, turn.expect || {}, { live: Boolean(plannerModel) });
     if (routing.escalations > escalationsBefore) failures.push('DEEP_ESCALATION');
     const measured = rounds.slice(before);
     if (measured.some((round) => round.infrastructure)) failures.push(`altyapı ${measured.find((round) => round.infrastructure).infrastructure}`);
@@ -590,6 +653,29 @@ if (direct) {
       if (item.handling === 'partial' && results.at(-1)?.finish !== 'stop' && !item.expect?.finish) failures.push(`kısmi vaka bitişi ${results.at(-1)?.finish}`);
       return { id: item.id, persona: item.persona, handling: item.handling, turns: results, failures };
     });
+  } else if (TIER === 'H' && process.env.PHASE4E_SET === 'holdout') {
+    await runQualificationCases(pick(temporal.holdout), async (_t, item) => {
+      const entry = await temporalPlannerCase(item);
+      if (entry.firstPass) summary.firstPass += 1;
+      summary.repairs += Math.max(0, entry.rounds - 1);
+      summary.turns += 1;
+      return { ...entry, id: item.id };
+    });
+  } else if (TIER === 'H') {
+    // Hedefli ve (soru metniyle koşulabilen) olumsuz vakalar: plan modeldendir, altın plan kullanılmaz.
+    const cases = [...temporal.targeted, ...temporal.adversarial.filter((entry) => entry.plan && !entry.expect.finishNot)];
+    await runQualificationCases(pick(cases), async (t, item) => {
+      t.mock.timers.enable({ apis: ['Date'], now: NOW });
+      const seed = temporalBenchmarkSeed();
+      t.mock.timers.reset();
+      const { test: _named, ...expect } = item.expect;
+      const turn = { text: item.text, detail: item.detail || null, includeText: item.includeText === true, requireComposed: item.handling === 'full' && !expect.finish,
+        violations: (result) => temporalViolations(result, expect, { locale: item.plan?.language || 'tr' }) };
+      const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: TEMPORAL_PROFILES[item.profile] });
+      // Sunucunun tek olası düzeni (seçim yok) modelin düzen hatası değildir; diğer sunucu düzenleri (geçersiz düzen, sağlayıcı) başarısızlıktır.
+      const failures = result.failures.filter((failure) => !/^düzen [a-z]+(?:\/sunucu)?\/NO_CHOICE\//.test(failure));
+      return { id: item.id, capability: item.capability || 'olumsuz', handling: item.handling || null, turns: [result], failures };
+    });
   } else if (TIER === 'E') {
     for (const [id, turns] of pick(E2E_CASES)) {
       test(`senaryo: ${id}`, async (t) => {
@@ -597,5 +683,5 @@ if (direct) {
         record({ id, turns: results, failures: results.flatMap((row, index) => row.failures.map((failure) => `#${index + 1} ${failure}`)) });
       });
     }
-  } else throw new Error('PHASE4E_TIER: B | C | D | E | F | G');
+  } else throw new Error('PHASE4E_TIER: B | C | D | E | F | G | H');
 }

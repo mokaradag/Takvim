@@ -2084,6 +2084,23 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   eklendi; model şeması ve doğrulayıcı 1–6 yön kabul eder ve fiziksel okuma tavanı (`maxParts`) 6'dır. Yukarıdaki 4 sınırı
   Aşama F'nin tarihsel değeridir. Çok kapsamlı özet (`also`, en çok iki ek kapsam) aynı 6 okuma tavanını paylaşır; sığmayan
   dağılım yönü adıyla bildirilir. Ayrıntı: [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §7.
+  **Aşama H güncellemesi (geçerli sözleşme):** geçmiş dönem yönleri `completed` (gerçekleşen bitişe göre tamamlanan), `created`
+  (oluşturulma gününe göre), `activity` (hareket kaydı dönem özeti), `trend` (tamamlanma dizisi; `bucket: week|month`), teslim
+  ufukları `horizons` (7/14/30 gün) ve rızalı `notes` (açık görev açıklamaları) eklendi. Dönem türlüdür: `relativeWindow`
+  (`today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `last_7|14|30_days`, `next_7|14|30_days`, `all_time`)
+  ya da `dateFrom/dateTo`; gün sınırları Türkiye günüdür, takvim haftası pazartesi başlar ve kayan pencereyle (son 7 gün)
+  karıştırılmaz (`src/domain/ai/temporalWindow.js`). İkinci dönem `compare` (`previous` ya da adlı dönem) veya
+  `compareFrom/compareTo`; iki dönem AYNI nüfus tanımıyla okunur (yalnızca dönem ayrışır). `previous`: takvim ayı → önceki
+  ay, takvim haftası → önceki hafta, kayan "son N gün" ve diğer aralıklar → aynı uzunlukta hemen önceki aralık. Veri okunmadan
+  reddedilenler: gelecek dönemde geçmiş yönü (`$.analysis.focus:futureWindow`), dönemsiz karşılaştırma (`compare:window`), aynı
+  dönem (`compare:same`), adı ile tarihleri çelişen karşılaştırma (`compare:conflict`), 366 günü aşan aralık (`dateFrom:range`),
+  eğilimle karşılaştırma (`compare:focus`), geçmiş dönemle `upcoming` (`dateTo:past`). Dönem yazılmayan geçmiş yönü sunucunun
+  AÇIKÇA söylediği varsayılanla okunur (dönem 30 gün, eğilim 90 gün). Yalnızca durum yönleriyle (`overview`, `overdue` …) geçmiş
+  karşılaştırma istenirse bugünkü durum okunur ve geçmiş durumun yeniden kurulamadığı adıyla söylenir (`historyUnsupported`).
+  Takip bağlamı `compare` ve `bucket`ı da devralır; yeni dönemde `previous` yeni döneme göre yeniden kurulur. Bulgular
+  `src/domain/ai/temporalFindings.js` içindedir (dönem özeti, karşılaştırma, eğilim, hareket dizisi, ufuklar, geçmiş durum sınırı,
+  not özeti); yüzde değişim yalnızca eşit uzunluklu, bitmiş, örtüşmeyen dönemlerde ve önceki değer ≥ 4 iken söylenir; kısmi ya da
+  yok hareket kaydında fark yorumlanmaz. Ayrıntı: [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §9.
 - Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
   isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
   tabidir (kullanıcının bu iletisinde geçmeli).

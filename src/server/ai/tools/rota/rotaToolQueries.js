@@ -316,6 +316,7 @@ const taskFactColumns = (teamTask) => `
     t.Progress, t.PlannedHours, t.ActualHours, CONVERT(varchar(40), t.Budget) AS Budget, CONVERT(varchar(40), t.Spent) AS Spent,
     t.RecurrenceRule, t.RecurrenceParentTaskId, t.RecurrenceOccurrenceDate,
     t.CreatedAt, t.UpdatedAt, visible.AccessLevel, visible.IdentityBase,
+    CAST(CASE WHEN NULLIF(LTRIM(RTRIM(t.Description)), N'') IS NULL THEN 0 ELSE 1 END AS bit) AS HasDescription,
     CAST(CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END AS bit) AS IsCreator,
     CAST(COALESCE(assignment.IsOwnAssignee, 0) AS bit) AS IsOwnAssignee,
     COALESCE(assignment.DisclosedAssigneeCount, 0) AS DisclosedAssigneeCount,
@@ -364,21 +365,24 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
         WHEN 'plannedStart' THEN t.PlannedStart
         WHEN 'plannedFinish' THEN t.PlannedFinish
         WHEN 'actualStart' THEN t.ActualStart
-        WHEN 'actualFinish' THEN t.ActualFinish END >= @dateFrom)
+        WHEN 'actualFinish' THEN t.ActualFinish
+        WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END >= @dateFrom)
       AND (@dateTo IS NULL OR CASE @dateField
         WHEN 'targetFinish' THEN t.TargetFinish
         WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
         WHEN 'plannedStart' THEN t.PlannedStart
         WHEN 'plannedFinish' THEN t.PlannedFinish
         WHEN 'actualStart' THEN t.ActualStart
-        WHEN 'actualFinish' THEN t.ActualFinish END <= @dateTo)
+        WHEN 'actualFinish' THEN t.ActualFinish
+        WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END <= @dateTo)
       AND CASE @dateField
         WHEN 'targetFinish' THEN t.TargetFinish
         WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
         WHEN 'plannedStart' THEN t.PlannedStart
         WHEN 'plannedFinish' THEN t.PlannedFinish
         WHEN 'actualStart' THEN t.ActualStart
-        WHEN 'actualFinish' THEN t.ActualFinish END IS NOT NULL))
+        WHEN 'actualFinish' THEN t.ActualFinish
+        WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END IS NOT NULL))
     AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil))
@@ -438,6 +442,19 @@ export const AI_TOOL_TASK_VISIBILITY_SQL = `/* rota-ai-tool:task-visibility */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
   SELECT visible.TaskId, visible.ProjectId, visible.AccessLevel, visible.IdentityBase FROM #AiTasks visible;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+
+/**
+ * Aşama H — görev açıklamaları (yalnızca kullanıcının bu turda serbest metni açtığı ve aracın `description` alanını seçtiği
+ * okumada): verilen görevlerden GÖRÜNÜR olanların açıklaması, sabit uzunlukla kesilmiş (bir fazla karakter kesikliği gösterir).
+ * Görünürlük anlık görüntüyle aynı kuraldır; görünmeyen ya da açıklaması boş görev satır döndürmez. Okuma sayfa boyuyla sınırlıdır.
+ */
+export const AI_TOOL_TASK_NOTES_SQL = `/* rota-ai-tool:task-notes */
+${SCOPE_PROJECTS}
+${visibleTasks()}
+  SELECT visible.TaskId, LEFT(t.Description, 401) AS Description
+  FROM #AiTasks visible JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
+  WHERE NULLIF(LTRIM(RTRIM(t.Description)), N'') IS NOT NULL;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**

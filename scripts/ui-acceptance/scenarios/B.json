@@ -356,6 +356,183 @@
      ]
     }
    ]
+  },
+  {
+   "name": "H1-gecen-hafta",
+   "detail": "balanced",
+   "turns": [
+    "Geçen hafta tamamlanan işleri özetle."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Geçen hafta",
+      "gerçekleşen bitiş tarihine göre"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H2-donem-kiyasi",
+   "detail": "balanced",
+   "turns": [
+    "Bu ay ile geçen ayı karşılaştır."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Geçen ay",
+      "bu ay",
+      "Hareket kaydı"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H2-kiyas-grafigi",
+   "detail": "balanced",
+   "turns": [
+    "Bu hafta ile geçen haftayı tamamlanan iş açısından çubuk grafikle karşılaştır."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "görev tamamlan"
+     ]
+    }
+   ],
+   "expectedCharts": [
+    "bar"
+   ]
+  },
+  {
+   "name": "H3-egilim-cizgisi",
+   "detail": "balanced",
+   "turns": [
+    "Son 90 gündeki görev tamamlanma eğilimini çizgi grafikle göster."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Tamamlanmış"
+     ]
+    }
+   ],
+   "expectedCharts": [
+    "line"
+   ]
+  },
+  {
+   "name": "H3-kayit-oncesi-bilinmiyor",
+   "detail": "balanced",
+   "turns": [
+    "Son üç ayda tamamlanma ve kaydedilen hareket düzeyi nasıl değişti?"
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "bilinmiyor"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H4-teslim-ufuklari",
+   "detail": "balanced",
+   "turns": [
+    "Önümüzdeki 7, 14 ve 30 günlük teslimat yoğunluğunu grafikle karşılaştır."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "7 gün içinde"
+     ]
+    }
+   ],
+   "expectedCharts": [
+    "bar"
+   ]
+  },
+  {
+   "name": "H5-notlar-rizayla",
+   "detail": "balanced",
+   "turns": [
+    "Hangi görevlerde engeller bildirilmiş?"
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "doğrulanmış değildir",
+      "Notlar kayıtlardaki hâliyle"
+     ]
+    }
+   ],
+   "includeText": [
+    0
+   ]
+  },
+  {
+   "name": "H6-ic-ice-kapsam",
+   "detail": "balanced",
+   "turns": [
+    "Bu hafta kendi hareketlerimle ekibimin hareketlerini karşılaştır."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "toplanmaz"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H7-ingilizce",
+   "detail": "balanced",
+   "turns": [
+    "Compare this month with last month."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Last month",
+      "this month"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H2-gecmis-durum-siniri",
+   "detail": "balanced",
+   "turns": [
+    "Geçen haftaya göre gecikmelerim azaldı mı?"
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "yeniden kurulamıyor"
+     ]
+    }
+   ]
   }
  ]
 }

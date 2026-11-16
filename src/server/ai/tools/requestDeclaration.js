@@ -123,10 +123,11 @@ export function requestSchema() {
           status: task.status, priority: task.priority, deadline: task.deadline, dateField: task.dateField,
           dateFrom: task.dateFrom, dateTo: task.dateTo, period: { type: 'string', enum: [...REQUEST_PERIODS] },
           assignee: { type: 'string', enum: ['me', 'unassigned', 'team'], description: 'me = kendi görevleri; team = yönetim kapsamındaki çalışanlar (ekip); unassigned = sorumlusuz.' },
-          teamLevel: task.teamLevel, createdByMe: task.createdByMe, milestone: task.milestone, text: task.text,
+          teamLevel: task.teamLevel, createdByMe: task.createdByMe, milestone: task.milestone, text: task.text, hasDescription: { type: 'boolean' },
           tab: { type: 'string', enum: ['pending', 'sent', 'history'], description: 'Talepler: pending = kararınızı ya da işleminizi bekleyen, sent = sizin gönderdikleriniz, history = sonuçlananlar.' }, workflowStatus: { type: 'string', enum: [...new Set(statuses)] },
           source: { type: 'string', enum: ['corporate', 'manual'] }, includeEmpty: { type: 'boolean' },
-          activityScope: { type: 'string', enum: ['mine', 'team'] }, activityKind: getRotaTool('rota_activity_search').parameters.properties.kind
+          activityScope: { type: 'string', enum: ['mine', 'team'] }, activityKind: getRotaTool('rota_activity_search').parameters.properties.kind,
+          activityView: { type: 'string', enum: getRotaTool('rota_activity_search').parameters.properties.view.enum }
         }
       }
     }
@@ -148,7 +149,7 @@ const POPULATION_KEYS = Object.freeze(['collection', 'sort', 'groupBy', 'depth',
  * biri sessizce seçilmez). Taşınan değer süzgecin bütün doğrulamasından (yetki, güvenilir metin, şema) aynen geçer.
  */
 const FILTER_KEYS = Object.freeze(['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'teamLevel', 'createdByMe',
-  'milestone', 'text', 'tab', 'workflowStatus', 'source', 'includeEmpty', 'activityScope', 'activityKind']);
+  'milestone', 'text', 'tab', 'workflowStatus', 'source', 'includeEmpty', 'activityScope', 'activityKind', 'activityView', 'hasDescription']);
 
 export function populationShape(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !raw.population || typeof raw.population !== 'object') return raw;
@@ -238,7 +239,8 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
   if (DEADLINE_WINDOWS.includes(filters.deadline) && (filters.dateFrom || filters.dateTo || filters.period)
     && (filters.dateField ?? 'targetFinish') === 'targetFinish') problems.push('$.filters.deadline:conflict');
   try {
-    normalizeTaskFilters({ ...filters, ...periodWindow(filters.period, today) });
+    // Hareket nüfusunda ekip düzeyi `activityScope: team` ile bildirilir (görev süzgecindeki `assignee: team` karşılığı).
+    normalizeTaskFilters({ ...filters, ...(filters.activityScope === 'team' && filters.teamLevel && filters.assignee == null ? { assignee: 'team' } : {}), ...periodWindow(filters.period, today) });
   } catch (error) {
     problems.push(...(error.details || ['$.filters:invalid']).map((detail) => detail.replace(/^\$\./, '$.filters.')));
   }
@@ -353,10 +355,18 @@ export function droppedNameHint(names) {
   return `entities: önceki kapsamdan ${names.length} varlık alanı düşürüldü (ENTITY_SCOPE_DROPPED); kullanıcının adlandırdığı bütün kayıtları koru. Birden çok varlıkta ölçüleri bindings ile kendi varlık sırasına bağla.`;
 }
 
+/**
+ * Aşama H: yalnızca sunucunun analitik özet açılımının yazdığı dönem ölçüleri. Şemada geçerlidirler (açılan istek modelin isteğiyle
+ * aynı doğrulamadan geçer) ama planlayıcı yönergesinin sözlüğünde yer almazlar: model dönem sorusunu özetle (analysis) bildirir,
+ * bu ölçüleri kendisi yazmaz; sözlük ve ileti sınırı büyümez.
+ */
+export const SERVER_EXPANDED_METRICS = Object.freeze(['activity.completionEvents', 'activity.creationEvents', 'activity.createdTasks', 'activity.deletedTasks',
+  'activity.updatedTasks', 'activity.reopenedTasks', 'tasks.undatedDone', 'task.note']);
+
 /** Modele verilen kapalı ölçü sözlüğü: kimlikler öneklerine göre gruplanır. */
 export function metricVocabulary() {
   const groups = new Map();
-  for (const metric of Object.keys(METRICS)) {
+  for (const metric of Object.keys(METRICS).filter((id) => !SERVER_EXPANDED_METRICS.includes(id))) {
     const [head, ...rest] = metric.split('.');
     groups.set(head, [...(groups.get(head) || []), rest.join('.')]);
   }

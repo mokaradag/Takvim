@@ -3,9 +3,11 @@ import { createFakeDatabase, createFakeSqlServerDriver } from '../../test/helper
 import { uiSeed } from './uiSeed.mjs';
 import { analysisBenchmarkSeed } from '../../test/helpers/analysisBenchmarkSeed.mjs';
 import { executiveBenchmarkSeed } from '../../test/helpers/executiveBenchmarkSeed.mjs';
+import { temporalBenchmarkSeed } from '../../test/helpers/temporalBenchmarkSeed.mjs';
 // UI_SEED=analysis: Bilgin yönetim analizi kıyas kümesinin sentetik verisi (arayüz kabul verisinin genişletilmiş hâli).
 // UI_SEED=executive: Aşama G yönetici kıyas verisi (örgütsel birimler, kilometre taşları, görünür görevi olmayan kadro üyesi).
-const SEEDS = { analysis: analysisBenchmarkSeed, executive: executiveBenchmarkSeed };
+// UI_SEED=temporal: Aşama H dönem verisi (hareket kaydı ve başlangıç günü, tarihi kayıtlı olmayan tamamlanmış görevler, notlar).
+const SEEDS = { analysis: analysisBenchmarkSeed, executive: executiveBenchmarkSeed, temporal: temporalBenchmarkSeed };
 // Yalnızca tanımlı tohumlar seçilir (ör. "__proto__", "constructor" gibi değerler varsayılan tohuma düşer).
 const db = createFakeDatabase((Object.hasOwn(SEEDS, process.env.UI_SEED || '') ? SEEDS[process.env.UI_SEED] : uiSeed)());
 const statements = db.statements;

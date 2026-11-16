@@ -1,6 +1,6 @@
 /**
  * UI kabul sürücüsü: gerçek MERGEN Rota arayüzünü tarayıcıda kullanır. Senaryo dosyası:
- *   { profile, port, appLog, conversations: [{ name, detail, turns: ["...", ...] }] }
+ *   { profile, port, appLog, conversations: [{ name, detail, turns: ["...", ...], includeText?: [turnIndex, ...] }] }
  * Her konuşma Bilgin'de YENİ konuşmayla başlar; turlar aynı konuşmada yazılıp gönderilir. Ayrıntı ayarı Ayarlar
  * ekranındaki "Yanıt ayrıntısı" denetimiyle değiştirilir. Her tur için görünen yanıt metni, tablolar, grafikler (DOM),
  * ekran görüntüsü, sunucunun tur izi ve köprünün model kaydı saklanır.
@@ -168,7 +168,15 @@ function scriptedQuestions() {
       const tracesBefore = turnTraces().length;
       const started = Date.now();
       let rendered;
-      try { rendered = await ask(page, text); } catch (error) { rendered = { status: 'driver-error', error: String(error.message).slice(0, 200) }; }
+      // Aşama H: `includeText` (tur sıraları) yalnızca o turda "Notlar ve iletiler" anahtarını açar; rıza gönderimden sonra kendiliğinden kapanır.
+      try {
+        if ((conversation.includeText || []).includes(turnIndex)) {
+          const consent = page.getByRole('switch', { name: 'Notlar ve iletiler' });
+          if ((await consent.getAttribute('aria-checked')) !== 'true') await consent.click();
+          if ((await consent.getAttribute('aria-checked')) !== 'true') throw new Error('metin rızası açılamadı');
+        }
+        rendered = await ask(page, text);
+      } catch (error) { rendered = { status: 'driver-error', error: String(error.message).slice(0, 200) }; }
       const ms = Date.now() - started;
       const calls = lines(CALLS).slice(callsBefore).map((line) => JSON.parse(line));
       const trace = turnTraces().slice(tracesBefore).at(-1) || null;

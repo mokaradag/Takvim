@@ -94,6 +94,8 @@ export function createFakeDatabase(seed = {}) {
     SortOrder: task.SortOrder ?? null,
     CreatedBySicil: task.CreatedBySicil ?? null,
     UpdatedBySicil: task.UpdatedBySicil ?? null,
+    // Kayıt anları yalnızca tohumda verildiyse taşınır (dönem okumalarının sınamaları için); verilmeyen tohum eskisi gibi boştur.
+    ...(task.CreatedAt != null ? { CreatedAt: task.CreatedAt } : {}), ...(task.UpdatedAt != null ? { UpdatedAt: task.UpdatedAt } : {}),
     RowVersion: nextVersion()
   }));
   return {

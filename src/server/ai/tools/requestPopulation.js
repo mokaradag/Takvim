@@ -25,13 +25,13 @@ import { containmentText, populationArguments } from './toolScope.js';
  */
 
 const FAMILY_KEYS = Object.freeze({
-  task: ['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'teamLevel', 'createdByMe', 'milestone', 'text'],
+  task: ['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'teamLevel', 'createdByMe', 'milestone', 'text', 'hasDescription'],
   workload: ['assignee', 'teamLevel'],
   projectSearch: ['text'],
   personSearch: ['text'],
   workflow: ['tab', 'workflowStatus', 'dateFrom', 'dateTo', 'period', 'text'],
   portfolio: ['source', 'includeEmpty'],
-  activity: ['dateFrom', 'dateTo', 'period', 'activityScope', 'activityKind'],
+  activity: ['dateFrom', 'dateTo', 'period', 'activityScope', 'activityKind', 'activityView', 'teamLevel'],
   calendar: ['dateFrom', 'dateTo', 'period']
 });
 const FAMILIES = Object.freeze({
@@ -43,7 +43,7 @@ const FAMILIES = Object.freeze({
 const WORKFLOW_TOOLS = new Set(['rota_schedule_requests', 'rota_assignment_requests']);
 const TASK_SORT_RANKS = Object.freeze({
   overdue_days_desc: ['task.overdueDays', 'desc'], target_finish_asc: ['task.targetFinish', 'asc'], target_finish_desc: ['task.targetFinish', 'desc'],
-  planned_start_asc: ['task.plannedStart', 'asc'], updated_desc: ['task.updatedAt', 'desc']
+  planned_start_asc: ['task.plannedStart', 'asc'], updated_desc: ['task.updatedAt', 'desc'], actual_finish_desc: ['task.actualFinish', 'desc']
 });
 const PORTFOLIO_SORT_RANKS = Object.freeze({ overdue_desc: ['tasks.overdue', 'desc'], open_desc: ['tasks.open', 'desc'], due_soon_desc: ['tasks.dueNext7Days', 'desc'] });
 const PERIODS = Object.freeze(['today', 'yesterday', 'last_7_days']);
@@ -81,7 +81,7 @@ export function canonicalFacets(family, values, today) {
       return compact({ status: sorted(filters.statuses), priority: sorted(filters.priorities), deadline: filters.deadline,
         dateField: filters.dateField, dateFrom: filters.dateFrom, dateTo: filters.dateTo,
         assignee: ['me', 'unassigned', 'team'].includes(filters.assignee) ? filters.assignee : null,
-        teamLevel: filters.assignee === 'team' ? filters.teamLevel || null : null, createdByMe: filters.createdByMe || null,
+        teamLevel: filters.assignee === 'team' ? filters.teamLevel || null : null, createdByMe: filters.createdByMe || null, hasDescription: filters.hasDescription || null,
         milestone: filters.milestone, text: searchText(filters.text) });
     }
     case 'projectSearch':
@@ -103,7 +103,9 @@ export function canonicalFacets(family, values, today) {
         period: values.period || values.dateFrom ? 'custom' : undefined }, today);
       const fallback = window.dateFrom === today && window.dateTo === today;
       return compact({ dateFrom: fallback ? null : window.dateFrom, dateTo: fallback ? null : window.dateTo,
-        activityScope: window.scope && window.scope !== 'visible' ? window.scope : null, activityKind: values.kind || null });
+        activityScope: window.scope && window.scope !== 'visible' ? window.scope : null, activityKind: values.kind || null,
+        // Aşama H: dönem özeti görünümü ve ekip düzeyi nüfusun parçasıdır (satır okumasıyla özet birbirinin yerine geçmez).
+        activityView: values.view || null, teamLevel: window.scope === 'team' ? values.teamLevel || null : values.teamLevel ?? null });
     }
     case 'calendar': {
       const window = populationArguments('rota_calendar_inspect', { ...values, ...periodWindow(values.period, today) }, today);
@@ -118,7 +120,8 @@ export function canonicalFacets(family, values, today) {
 /** İstenen koşulların aracın bağımsız değişken adlarına çevirisi. */
 export function declaredValues(family, filters) {
   if (family === 'workflow') return { tab: filters.tab, status: filters.workflowStatus, dateFrom: filters.dateFrom, dateTo: filters.dateTo, period: filters.period, text: filters.text };
-  if (family === 'activity') return { dateFrom: filters.dateFrom, dateTo: filters.dateTo, period: filters.period, scope: filters.activityScope, kind: filters.activityKind };
+  if (family === 'activity') return { dateFrom: filters.dateFrom, dateTo: filters.dateTo, period: filters.period, scope: filters.activityScope, kind: filters.activityKind,
+    view: filters.activityView, teamLevel: filters.teamLevel };
   return filters;
 }
 
@@ -587,7 +590,10 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
       // Varlığın kendi özelliği o varlığı seçen araçtan okunur; sunucu adı kendisi çözer.
       const type = propertyType(metric);
       const selecting = type && RESOLVERS[type] ? carriers(metric).filter((name) => Object.hasOwn(getRotaTool(name).parameters.properties, SELECTOR_PARAMS[type])) : [];
-      if (selecting.length) hints.push(`${metric}: ${type} özelliği; population.tool ${selecting[0]} ve request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] bildir (ölçüyü SİLME; kimliği sunucu bulur)`);
+      // Aşama H: adı verilmemiş BİRDEN ÇOK görevin açıklaması (notlar) tek görev ayrıntısıyla değil, özetin not yönüyle okunur.
+      if (metric === 'task.description' && tool.name === 'rota_task_search' && !request.entities.some((entity) => entity.type === 'task')) {
+        hints.push('Birden çok görevin notu/açıklaması: request yazma; rota_plan analysis {"scope":…,"focus":["notes"]} yaz (sunucu açık görevlerin notlarını okur)');
+      } else if (selecting.length) hints.push(`${metric}: ${type} özelliği; population.tool ${selecting[0]} ve request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] bildir (ölçüyü SİLME; kimliği sunucu bulur)`);
       return;
     }
     // Toplam, sayım ve satır alanı nüfus koşullarının tamamını ifade edebilen araçtan gelmelidir;
@@ -753,7 +759,7 @@ const stableArgs = (value) => JSON.stringify(value, (key, item) => (item && type
 export function readKey(name, args, today) {
   const selectors = selectorsOf(args).map(({ type, id }) => `${type}:${String(id).toLowerCase()}`).sort();
   const represented = new Set([...familyKeys(name), ...(FAMILIES[name] === 'workflow' ? ['status'] : []),
-    ...(FAMILIES[name] === 'activity' ? ['scope', 'kind'] : []), ...Object.values(SELECTOR_PARAMS), 'sort', 'groupBy', 'depth', 'textFields', 'cursor', 'limit']);
+    ...(FAMILIES[name] === 'activity' ? ['scope', 'kind', 'view'] : []), ...Object.values(SELECTOR_PARAMS), 'sort', 'groupBy', 'depth', 'textFields', 'cursor', 'limit']);
   const extra = Object.fromEntries(Object.entries(args).filter(([key]) => !represented.has(key)));
   return `${name}:${stableArgs({ today, facets: canonicalFacets(FAMILIES[name] || null, args, today), selectors,
     dimensions: canonicalDimensions(name, args), extra, cursor: args.cursor ?? null,

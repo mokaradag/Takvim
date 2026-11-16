@@ -52,13 +52,15 @@ test('geçmiş görünüm gerektiren sınırlılık vakası sıradan güncel dur
   const { plannerScore } = await import('../scripts/analysis-qualification.mjs');
   const { readFileSync } = await import('node:fs');
   const fixture = JSON.parse(readFileSync(new URL('./fixtures/bilgin-analysis-benchmark.json', import.meta.url), 'utf8'));
-  const cases = fixture.holdout.filter((row) => row.handling === 'limitation' && row.expect.reason === 'outside_data');
+  // Aşama H ile bu vakalar yanıtlanabilir oldu: beklenti geçmiş dönem okuyan (ya da geçmiş durum sınırını bildiren) plandır.
+  const cases = fixture.holdout.filter((row) => row.handling === 'limitation' && row.expect.temporal === true);
   assert.ok(cases.some((row) => row.id === 'h08'));
   for (const item of cases) {
-    const current = { outcome: 'planned', decisions: [], plan: { analysis: { scope: 'self', focus: ['overview'] },
-      requests: [{ population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, entities: [], metrics: ['tasks.total'] }] } };
-    assert.ok(plannerScore(current, item.expect).length, item.id);
-    assert.deepEqual(plannerScore({ outcome: 'abstained', decisions: [{ intent: 'abstain', reason: 'outside_data' }] }, item.expect), [], item.id);
+    const planned = (analysis) => ({ outcome: 'planned', decisions: [], plan: { analysis,
+      requests: [{ population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, entities: [], metrics: ['tasks.total'] }] } });
+    assert.ok(plannerScore(planned({ scope: 'self', focus: ['overview'] }), item.expect).includes('geçmiş dönem okunmadı'), item.id);
+    assert.equal(plannerScore(planned({ scope: 'self', focus: ['completed'] }), item.expect).includes('geçmiş dönem okunmadı'), false, item.id);
+    assert.equal(plannerScore(planned({ scope: 'self', focus: ['overview'], historyUnsupported: ['overview'] }), item.expect).includes('geçmiş dönem okunmadı'), false, item.id);
     assert.ok(plannerScore({ outcome: 'abstained', decisions: [{ intent: 'abstain', reason: 'write' }] }, item.expect).length, item.id);
   }
 });

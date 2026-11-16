@@ -15,7 +15,8 @@ import {
   AI_TOOL_TASK_FACTS_SQL,
   AI_TOOL_TASK_VISIBILITY_SQL,
   AI_TOOL_WBS_SQL,
-  AI_TOOL_WBS_SELECTOR_SQL
+  AI_TOOL_WBS_SELECTOR_SQL,
+  AI_TOOL_TASK_NOTES_SQL
 } from './rotaToolQueries.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { assigneesByTask, factFromRow } from './taskFacts.js';
@@ -122,6 +123,17 @@ export async function readVisibleTasks(executor, scope, taskIds) {
   const [rows = []] = recordsets(await request.query(AI_TOOL_TASK_VISIBILITY_SQL));
   return new Map(rows.map((row) => [canonicalActualId(row.TaskId), { projectId: canonicalActualId(row.ProjectId),
     identityBase: Boolean(row.IdentityBase), accessLevel: row.AccessLevel }]));
+}
+
+/** Açıklamanın yanıta taşınan en uzun hâli; sorgu bir fazla karakter okur (kesikliği gösterir; bkz. AI_TOOL_TASK_NOTES_SQL `LEFT(…, 401)`). */
+export const TASK_NOTE_CHARS = 400;
+
+/** Görünür görevlerin kesilmiş açıklamaları: `taskId → { text, clipped }` (bkz. AI_TOOL_TASK_NOTES_SQL). */
+export async function readTaskNotes(executor, scope, taskIds) {
+  if (!taskIds.length) return new Map();
+  const request = scoped(executor, scope, { taskIds });
+  const [rows = []] = recordsets(await request.query(AI_TOOL_TASK_NOTES_SQL));
+  return new Map(rows.map((row) => { const text = String(row.Description ?? ''); return [canonicalActualId(row.TaskId), { text: text.slice(0, TASK_NOTE_CHARS), clipped: text.length > TASK_NOTE_CHARS }]; }));
 }
 
 export async function readTaskDetail(executor, scope, taskId) {

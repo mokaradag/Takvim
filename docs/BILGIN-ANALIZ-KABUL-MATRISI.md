@@ -1,4 +1,4 @@
-# Bilgin Analiz Kabul Matrisi (Aşama F–G)
+# Bilgin Analiz Kabul Matrisi (Aşama F–H)
 
 Bu belge [Bilgin Yönetim Analizi Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md)'nın kabul kanıtıdır: Windows VM'de
 sorulan 40 sorunun yetenek matrisi, doğrulanmış kök nedenler, Aşama F çözümleri ve üç kanıt düzeyinin sonuçları. Sorular
@@ -609,3 +609,140 @@ kimliği ve son yetki yeniden doğrulaması değişmedi. Model yetki kararı ver
   üzerinde başarısız olduğu doğrulandı (negatif denetim).
 - Nitelendirme tanı çıktıları (vaka sonuçları, belirteç defteri, plan izleri) yerel ve depo dışıdır; konuşma dökümü, kimlik bilgisi ya
   da kullanıcı verisi işlenmedi. Betik adlarında yasaklı sözcük yoktur.
+
+## 9. Aşama H — dönemsel, tarihsel ve not farkındalıklı zekâ (16 Kasım 2026)
+
+Durum: **SÜRÜYOR** (uygulandı; belirlenimci ve betikli görsel kabul geçti; Haiku 4.5 vekil nitelendirmesi aşağıda; Windows VM
+yeniden oynatması bekliyor). Aşama G'nin canlı model ve VM kapıları da hâlâ doğrulanmadı; H onların yerine geçmez. Uygulanan biçim:
+[Yol Haritası §7.A](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md).
+
+### 9.1 Tarihsel doğruluk sözleşmesi (sunucunun sahibi olduğu)
+
+| Kural | Uygulama | Sınama |
+| --- | --- | --- |
+| Dönem sınırları Türkiye günüdür; takvim haftası pazartesi başlar; kayan pencere takvim dönemine çevrilmez | `temporalWindow.js`; `createdAt` Türkiye gününe SQL'de çevrilir | dönem birimleri, gece yarısı sınırı |
+| İki dönem aynı nüfus tanımıyla okunur | `analysisPlan.js` karşılaştırma okumaları yalnızca dönemle ayrışır | açılım eşitliği |
+| Bilinmeyen ≠ sıfır | hareket özeti kayıt başlangıcından önce `null`; kova `recorded:false` | `none`/`partial` kapsamı, a10 |
+| Kısmi kayıtta fark yorumlanmaz; kayıt öncesi dönemle karşılaştırma kurulmaz | `temporalFindings.js` | birim sınama |
+| Tarihi kayıtlı olmayan tamamlanmış görev sayılır ve söylenir | `history.undatedDone`; nüfus değişmezi bunu içerir | tamlık sınaması |
+| Yeniden açılan görev ayrı sayılır; aynı ilişki kimliğinin kayıtları tek harekettir | hareket toplu sorgusu | a03, a04 |
+| Yüzde değişim: eşit uzunluk, bitmiş, örtüşmeyen dönem ve önceki değer ≥ 4 | `TEMPORAL_LIMITS` | birim sınama |
+| Eğilim: ≥ 6 tam kova (son 3 ↔ önceki 3); kısmi uç kovalar katılmaz; kısa dizide "söylenemez" | `temporalFindings.js` | birim sınama, a16 |
+| Geçmiş DURUM yeniden kurulamaz; bugünkü durum ve sınır söylenir | `historyUnsupported` | t61, a01 |
+| Silinmiş/taşınmış görev ve gizli proje hareketi yalnızca Görev Hareketleri kuralıyla | raporun SQL'inden çapa tabanlı türetim; rapor sorgusu değişmedi | a05, a06, gizli proje |
+| Notlar yalnızca bu iletinin rızasıyla; metin veridir; neden kanıtlanmış sayılmaz | rıza kapısı + `AI_TOOL_TASK_NOTES_SQL` + not özeti çekincesi | a12–a15 |
+| Son açıklama öncesi yetki yeniden denetlenir; yeniden açılışta da | mevcut son denetim | a07/a20, yeniden açılış |
+
+### 9.2 Kıyas kümesi (sentetik)
+
+`test/fixtures/bilgin-temporal-benchmark.json` + `test/helpers/temporalBenchmarkSeed.mjs` (G sentetik verisinin genişletilmesi:
+oluşturulma/güncellenme anları, kayıt başlangıcı T−40 olan hareket kaydı, tarihi kayıtlı olmayan 2 tamamlanmış görev, yeniden açılan
+görev, yinelenen kayıt, silinmiş ve taşınmış görev, görünmeyen proje, çelişen ve enjeksiyonlu notlar). **124 soru:** 62 hedefli
+(H1 12, H2 12, H3 8, H4 8, H5 6, H6 6, H7 4, H8 6; 59 tam, 2 sınır, 1 rıza), 20 olumsuz (aşağıdaki 20 başarısızlık biçimi),
+12 çapraz aşama (F 6, G 6) ve 30 bağımsız ayrık soru (yalnızca planlayıcı puanı; yönerge örneklerinde kullanılmaz, örtüşme sınaması
+var). Bugün sabit: 2026-09-30.
+
+| Olumsuz | Risk | Belirlenimci kanıt |
+| --- | --- | --- |
+| a01 | yeniden kurulamayan tarihsel durum | geçmiş durum sınırı |
+| a02 | kesik hareket kaydının tam sunulması | kapsam çekincesi |
+| a03 | tamamlanıp yeniden açılan görev | yeniden açılma sayımı |
+| a04 | aynı geçişin iki kaydı | bağımsız ayrık sayım |
+| a05 | tarihsel proje üyeliği | rapor satır okumasıyla eşit nüfus |
+| a06 | silinmiş görevin bilgisi | başlık sızmaz, yetkisizde sayılmaz |
+| a07 / a20 | yanıt üretilirken yetki kaybı | son çizimde sayı yok |
+| a08 | dönemi veri dışına uzatma | `dateFrom:range` reddi, veri okunmaz |
+| a09 | onarımın 14 günü 7 güne çevirmesi | dönemi daraltan onarım reddi |
+| a10 | bilinmeyen değerin sıfır yazılması | "bilinmiyor; sıfır sayılmadı" |
+| a11 | karşılaştırılamayan nüfuslar | veri okunmadan ret |
+| a12 | not içinde istem enjeksiyonu | ek okuma yok, gizli proje yok |
+| a13 / a14 | rıza yok / izinsiz metin alanı | açıklama sorgusu çalışmaz; rıza kalıcı değil |
+| a15 | kaynaksız neden uydurma | "açıklaması olan açık görev yok" |
+| a16 | tek tük gözlemden eğilim | çizgi grafik yok, "söylenemez" |
+| a17 | örtüşen kapsamların toplanması | "toplanmaz" |
+| a18 | kısmi sonucun tam sunulması | tamlık çekincesi |
+| a19 | modelin grafiğe değer yazması | yalnızca sunucu adayı çizilir |
+
+### 9.3 Belirlenimci kabul
+
+`test/ai-temporal-intelligence.test.mjs` (Türkçe adlar) — **157/157**: dönem birimleri (hafta, ay, yıl sınırı, artık yıl, önceki
+dönem, kovalar, adlar), kıyas kümesi bütünlüğü ve ayrık küme yalıtımı, plan şeması/yönerge sınırları, her adlı dönem × yön × kapsam
+açılımı, geçersiz dönem retleri, 62 hedefli altın plan uçtan uca, 12 çapraz aşama vakası kendi verisiyle, araç düzeyi (Türkiye günü,
+sürekli dizi, undatedDone, hareket kapsamı none/partial/complete, gizli proje, ekip düzeyi yetkisi, rıza kapısı), bulgu birimleri
+(yüzde payda kuralları, bilinmeyen ≠ sıfır, eğilim kuralları, ek daraltmalı okuma), 19 olumsuz vaka + adlandırılmış olumsuz sınamalar,
+takip devri, doğal düzyazı, 30 ayrık vakanın puanlayıcıyla karşılanabilirliği ve puanlayıcının yanlış planı yakalaması, boş dizi kanıtı,
+önermesiz düzen.
+
+F/G beklentisi değişen ayrık vakalar (bilinçli): F `h05`, `h08`, `h22` ve G `x12` önceki aşamalarda "Rota dışı veri" (abstain) bekliyordu;
+Aşama H ile yanıtlanabilir oldular. Beklenti artık bir geçmiş dönem yönü okuyan ya da geçmiş durum sınırını bildiren plandır
+(`temporal: true`); sıradan güncel durum planı geçmez (`test/ai-analysis-invariants.test.mjs`).
+
+### 9.4 Haiku 4.5 vekil nitelendirmesi (claude-haiku-4-5-20251001, `--effort low`, `MAX_THINKING_TOKENS=0`)
+
+`PHASE4E_TIER=H` (`scripts/analysis-qualification.mjs`): hedefli + olumsuz vakalar uçtan uca (planlayıcı ve düzen model; altın plan
+kullanılmaz; nesnel denetim `temporalViolations`), ayrık küme yalnızca planlayıcı (`temporalPlannerScore`: karar, kabul edilen özetin
+kapsamı/adları/yönleri, okunan dönem ve karşılaştırma dönemi, kova, geçmiş durum bildirimi). Derin modele devir modele gitmez ve
+başarısızlık sayılır; sunucunun tek olası düzeni (`NO_CHOICE`) model hatası sayılmaz. Bütçe: `PLANNER_CLAUDE_MAX_CALLS` ve
+`PLANNER_CLAUDE_MAX_UNCACHED` her koşuda açık, `PLANNER_CLAUDE_REQUIRE_CACHE=1`, `FORCED_RETRY=0`, `NAMED_TOOL=auto`.
+
+| Aşama | Vaka | Geçen | Çağrı | Not |
+| --- | --- | --- | --- | --- |
+| B — duman | 12 | 6 → 8 (düzeltme sonrası) | 21 + 21 | dönem adı (geçen hafta → son 7 gün) ve not isteği sınıfları |
+| C — geniş hedefli + olumsuz | 79 | 46 | 150 | |
+| D — yakınsama (yalnızca başarısızlar) | 33 | 17 | 50 | |
+| E — son doğrulama, hedefli + olumsuz | 79 | **55 (%70)** | 112 | yetenek grubu ayrıntısı aşağıda |
+| E — son doğrulama, ayrık küme (dokunulmamış) | 30 | **14 (%47)**, 12 ilk bildirimde | 35 | ilk denemede 20. soruda hız sınırı → koşu durdu (altyapı), yeniden koşuldu |
+| Ek tanı koşusu (sonradan geri alınan normalleştirmeyle) | 3 | 3 | 6 | geçerli kodun ölçümü değildir; bkz. 9.5 |
+
+Toplam (tanı koşuları dâhil): **468 çağrı**, önbelleksiz girdi 305 930, önbellek yazma 708 378, önbellek okuma 15 026 058, çıktı 92 917
+belirteç; düşünme belirteci **0**; bütün çağrılar `claude-haiku-4-5-20251001` (bir çağrı hız sınırıyla `<synthetic>` döndü ve koşu
+durduruldu). Model kimliği ve düşünmesizlik her çağrıda gözlemden doğrulandı.
+
+Son doğrulamada geçemeyen hedefli/olumsuz vakalar (24) sınıflara göre: planlayıcının istek yoluyla geçersiz bildirimi ve onarımın
+da geçmemesi → `grounding_failed` (t11 geçersiz `deadline` değeri; t17 hareket listesinden sayım; t22 kişiyi düşüren istek; t23–t25
+`all_time` ile tarih çiftini birlikte yazma — önceki aşamaların bilinçli çelişki kuralı korunur, onarım da dönemi değiştirdiği için reddedilir; t39/t41/t43 not isteği; t59 ufuk), bütçe açıklaması (t10, t47, t60: karşılaştırmaya `overview`
+eklenmesiyle 6 okuma sınırının aşılması), plan farkıyla beklenen ifadenin olmaması (t15, t18, t20, t27, t29, t30, a01, a03, a10, a16)
+ve not sorusunda kendi kapsamı seçilmesi (a12). Ayrık kümede baskın sınıf iyeliksiz soruda `scope: self` yazılmasıdır (y02, y06,
+y11, y14, y19, y30); yönerge kuralı genişletildi ama bu sınıf ölçümde sürdü. Ayrık küme yönergeye örnek olarak girmedi.
+
+### 9.5 Canlı koşuların ortaya çıkardığı kök nedenler → düzeltme
+
+| Gözlem | Kök neden | Düzeltme |
+| --- | --- | --- |
+| Boş haftanın eğilimi "Kayıt bulunamadı" | Sıfırla doldurulmuş dizi boş sonuç kanıtı sayılmıyordu; son denetim kanıtı düşürüyordu | Sabit tarih/ufuk kovalarının hepsi sıfırsa kanıtlanmış boş sonuç (`evidenceAuthorization.js`) |
+| Düzen turu derin modele devrediliyordu | Giriş bütün sayımları söyleyince modele önermesiz sayfa gidiyor, model açıklama yazıyordu | Önerme yoksa sunucu düzeni; model çağrısı yok (`hasCompositionChoice`) |
+| Not soruları istekle soruluyor, onarım tek görev ayrıntısına yöneliyordu | İpucu adı verilmemiş görevlerde de ayrıntı aracını öneriyordu | İpucu `analysis focus notes` der; canlıda onarım sonrası not özeti okundu |
+| "Geçen hafta" → son 7 gün | Yönerge takvim dönemi ile kayan pencereyi yeterince ayırmıyordu | DÖNEM kuralı ve örnek |
+| Doğru tarihler + `all_time` reddi (t23–t25) | Model iki dönem alanını birlikte yazıyor | Normalleştirme denendi, önceki aşamaların "çelişki sessizce yorumlanmaz" sözleşmesini bozduğu için **geri alındı**; açık sınıf |
+| Sunucuya özgü ölçü/süzgeç modele görünüyordu | Model şemasında `hasDescription`, `activityView`, sunucu ölçüleri vardı | Model şemasından çıkarıldı (doğrulama tam şemayla) |
+
+### 9.5b Arayüz incelemesinde düzeltilenler
+
+Tek günlük kova "16–16 Kas" → "16 Kas"; not yanıtında "aşağıda aktarılıyor" iki kez söyleniyordu; açılış paragrafı dokuz cümlelik
+bloktu (çekinceler artık ayrı paragraf); "Sonraki dönem bitmedi" iki kez söyleniyordu (bitmemiş dönem adıyla anılır: "Bu hafta henüz
+bitmediği için"); karşılaştırma grafiğinde bir çubuk adla, öteki tarihle etiketleniyordu.
+
+### 9.6 Görsel kabul (gerçek arayüz, betikli planlar)
+
+Gerçek `next build` + SQL ikizi (`UI_SEED=temporal`) + betikli uç (`UI_SCRIPTED=1`, `UI_BENCHMARK` = H kıyas kümesi; `T`, `T-N`
+belirteçleri koşu gününe göre çözülür). Sürücü `includeText` ile yalnızca ilgili turda "Notlar ve iletiler" anahtarını açar. 10 H
+konuşması (geçen hafta, dönem kıyası, kıyas grafiği, eğilim çizgisi, kayıt öncesi bilinmeyen, teslim ufukları, rızalı notlar, iç içe
+kapsam, İngilizce, geçmiş durum sınırı) × 4 görünüm (masaüstü/mobil × açık/koyu) = **40 tur, 0 başarısızlık**; ekran görüntüleri
+incelendi. Koşu günü 16 Kasım 2026 olduğundan dönemler gerçek tarihle çözüldü (bitmemiş ay/hafta geçici karşılaştırma olarak göründü).
+Model kalitesi bu kanıtın kapsamında değildir. Son grafik etiketi düzeltmesinden sonra dört görünüm yeniden koşulmadı (belirlenimci
+sınamalar geçti).
+
+### 9.7 Doğrulama
+
+- Son kodla `npm test -- --test-concurrency=4` **6386/6386** (başarısız, iptal, atlanan 0); `npm run lint` uyarısız;
+  `NEXT_TELEMETRY_DISABLED=1 npm run build` başarılı.
+- Sınır ölçümleri: planlayıcı yönergesi yılın her gününde en çok 32 761 karakter (sınır 32 768); plan şeması 30 915 (sınır 32 000).
+  Model, SQL, süre, sonuç boyu ve araç çağrısı bütçeleri artırılmadı (`ANALYSIS_LIMITS.maxParts` 6, `maxTotalCalls` 12).
+- Yeni uç, tablo, işçi, bağımlılık ya da arka plan işi yok; bütün okumalar salt okunur ve sabit parametreli SQL'dir.
+
+### 9.8 Bilinen sınırlar ve sonraki adım
+
+Not teması etiketlenmez (alıntı); değişiklik metni not özetine katılmaz; tarihsel kurumsal üyelik tutulmaz (bugünkü yönetim kapsamı);
+tek tarihteki geçmiş durum (ör. "geçen pazartesi kaç gecikmiş görevim vardı") planlayıcıca Rota dışı sayılabiliyor; istek yolunda
+zayıf model kişiyi düşürebiliyor (yetki sınırı korunur, yanıt yanlış kapsamda kalır). Windows VM yeniden oynatması (Yol Haritası §11,
+H eki) **bekliyor**; Haiku sonucu VM kabulünün yerine geçmez.

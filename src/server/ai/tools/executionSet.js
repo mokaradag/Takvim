@@ -1,10 +1,11 @@
 import 'server-only';
+import { resolveWindow } from '../../../domain/ai/temporalWindow.js';
 import { randomBytes } from 'node:crypto';
 import { ABSTAIN_REASONS, CLARIFY_REASONS, PLANNER_INTENTS, PLANNER_LIMITS } from '../../../domain/ai/plannerOutcome.js';
 import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments, TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
-import { requestSchema, populationShape } from './requestDeclaration.js';
+import { requestSchema, populationShape, SERVER_EXPANDED_METRICS } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
 import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
@@ -49,8 +50,12 @@ function modelRequestSchema() {
   const withMetric = (property) => (property.items
     ? { ...property, items: { ...property.items, properties: { ...property.items.properties, metric } } }
     : { ...property, properties: { ...property.properties, metric } });
-  return { ...schema, properties: { ...schema.properties, fields: withMetric(schema.properties.fields), bindings: withMetric(schema.properties.bindings),
-    rank: withMetric(schema.properties.rank) } };
+  // Aşama H: yalnızca sunucunun özet açılımının seçtiği ölçüler ve süzgeçler (dönem hareket özeti, not okuması) modele gösterilmez;
+  // model bu okumaları analysis yönleriyle ister (doğrulama tam şemayladır, rıza ve yetki kapıları aynıdır).
+  const { hasDescription: _notes, activityView: _view, ...filters } = schema.properties.filters.properties;
+  const metrics = { ...schema.properties.metrics, items: { ...schema.properties.metrics.items, enum: schema.properties.metrics.items.enum.filter((id) => !SERVER_EXPANDED_METRICS.includes(id)) } };
+  return { ...schema, properties: { ...schema.properties, metrics, filters: { ...schema.properties.filters, properties: filters }, fields: withMetric(schema.properties.fields),
+    bindings: withMetric(schema.properties.bindings), rank: withMetric(schema.properties.rank) } };
 }
 
 /**
@@ -383,7 +388,9 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     if (sections.length > ANALYSIS_LIMITS.maxParts) throw invalidArguments(['$.analysis.focus:requestBudget']);
     const [request, ...additionalRequests] = sections;
     // Bölümlerin özet sahipliği (kapsam ve yön): sunum başlıkları ve takip bağlamı bunu kullanır; açık istek bölümü özetin değildir.
-    const owned = { analysisParts: analysisParts.length, ...(expanded.sections ? { sections: expanded.sections } : {}), ...(merged.length ? { explicitParts: Object.freeze(merged) } : {}) };
+    const owned = { analysisParts: analysisParts.length, ...(expanded.sections ? { sections: expanded.sections } : {}), ...(merged.length ? { explicitParts: Object.freeze(merged) } : {}),
+      // Aşama H: ikinci dönemdeki durumu yeniden kurulamayan yönler (yanıt bunu adıyla söyler).
+      ...(expanded.unsupportedHistory ? { historyUnsupported: expanded.unsupportedHistory } : {}) };
     // Ayrılan yer yüzünden okunmayan yön, ayrı bölüm olarak kalan eşdeğer açık istekle zaten okunuyorsa "gösterilmedi" denmez:
     // yer ayrılmamış açılımda o yönün bütün okumaları kalan açık isteklerce karşılanıyorsa not düşer.
     const satisfied = (item) => {
@@ -586,24 +593,21 @@ function equivalentAnalysisSpelling(plan, today) {
   if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return plan;
   let out = { ...analysis };
   if (Object.hasOwn(out, 'reasoning')) delete out.reasoning;
-  if (today && ['today', 'next_7_days'].includes(out.relativeWindow) && out.dateFrom === today
-    && out.dateTo === (out.relativeWindow === 'today' ? today : new Date(Date.parse(`${today}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10))) {
+  // Aşama H: adlı dönem sözlüğü genişledi (takvim haftası/ayı, kayan pencereler). Adlı dönem, AYNI günleri gösteren tarih çiftiyle
+  // birlikte yazıldıysa çelişki yoktur: ad kalır, tarihler düşer. Karşılaştırma dönemi için de aynı kural geçerlidir.
+  const resolved = today && typeof out.relativeWindow === 'string' ? resolveWindow(out.relativeWindow, today) : null;
+  if (resolved && out.dateFrom === resolved.dateFrom && out.dateTo === resolved.dateTo) {
     delete out.dateFrom;
     delete out.dateTo;
   }
+  const compared = today && typeof out.compare === 'string' && out.compare !== 'previous' ? resolveWindow(out.compare, today) : null;
+  if (compared && out.compareFrom === compared.dateFrom && out.compareTo === compared.dateTo) {
+    delete out.compareFrom;
+    delete out.compareTo;
+  }
   const follow = ['previous', 'row'].includes(out.scope);
   const isDate = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
-  // İstek süzgecinin geçmiş dönem değerleri (`last_7_days`, `yesterday`) özette göreli pencere değildir; aynı günleri gösteren tarih
-  // çiftine çevrilir (türlü değerin eşdeğeri; tarih yazılmışsa çeviri yapılmaz, alan doğrulamada reddedilir).
   const canonical = normalizedBrief(out);
-  const upcoming = [canonical, ...(Array.isArray(canonical.also) ? canonical.also : [])].some((layer) => Array.isArray(layer?.focus) && layer.focus.includes('upcoming'));
-  // Yaklaşan iş geçmiş alt sınırı bugüne çeker; geçmiş göreli pencere bu yönde onarım için reddedilir.
-  if (!follow && !upcoming && today && ['last_7_days', 'yesterday'].includes(out.relativeWindow) && out.dateFrom == null && out.dateTo == null) {
-    const shift = (days) => new Date(Date.parse(`${today}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
-    const [from, to] = out.relativeWindow === 'yesterday' ? [shift(-1), shift(-1)] : [shift(-6), today];
-    const { relativeWindow: _window, ...rest } = out;
-    out = { ...rest, dateFrom: from, dateTo: to };
-  }
   // Gecikme yönünün "dönem yok" yinelemesi (yalnızca gelecek dönemde; bkz. yukarıdaki açıklama).
   if (!follow && today && isDate(out.dateFrom) && out.dateFrom >= today && Array.isArray(out.also) && Array.isArray(out.focus)) {
     const sameScope = (layer) => layer && typeof layer === 'object' && !Array.isArray(layer) && layer.scope === out.scope

@@ -125,7 +125,10 @@ const notificationPaths = () => Object.entries(NOTIFICATION_SOURCES).flatMap(([p
 
 const REGISTRY_ENTRIES = Object.freeze({
   rota_task_search: [...fields('project', PROJECT), ...fields('tasks.*', TASK), ...fields('tasks.*.project', TASK_PROJECT),
-    ['tasks.*.assignees.*.name', p('task.assignees', 'text')]],
+    ['tasks.*.assignees.*.name', p('task.assignees', 'text')],
+    // Aşama H: görev notu (yalnızca rızayla seçilen `description` alanı; kesilmişse işaretiyle). Ölçüsü `task.note`tur ve yalnızca
+    // sunucunun not okumasınca seçilir: `task.description` görevi seçen ayrıntı aracının özelliği olarak kalır (önceki sözleşme).
+    ['tasks.*.description', p('task.note', 'text')], ['tasks.*.descriptionClipped', x('boolean')]],
   rota_task_detail: [...fields('task', TASK), ...fields('task.project', TASK_PROJECT), ['task.assignees.*.name', p('task.assignees', 'text')],
     ['task.description', p('task.description', 'text')], ['task.wbsPath.*', p('task.wbsPath', 'text')], ...fields('task.dates', DATES),
     ...fields('task.hours', { planned: p('task.plannedHours', 'hours'), actual: p('task.actualHours', 'hours') }),
@@ -135,11 +138,15 @@ const REGISTRY_ENTRIES = Object.freeze({
     ...fields('task.dependencies', { predecessorCount: p('task.predecessorCount', 'dependencies'), successorCount: p('task.successorCount', 'dependencies') }),
     ...fields('task.recurrence', { rule: p('recurrence.rule', 'text'), ruleDescription: p('recurrence.rule', 'text'), occurrenceDate: p('recurrence.occurrenceDate', 'date') })],
   rota_task_analytics: [...fields('definitions', { overdue: DEFINITION, dueNext7Days: DEFINITION, completionRatePercent: DEFINITION, today: x('date'), assignee: DEFINITION,
-    organization: DEFINITION }),
+    organization: DEFINITION, history: DEFINITION }),
+    // Aşama H: gerçekleşen bitişe göre dönem okumasının tamlık ölçüsü ve tarih dizisinin tanımı.
+    ['history.basis', x()], ['history.undatedDone', m('tasks.undatedDone', 'tasks')],
+    ...fields('series', { bucket: x(), dateField: x(), dateFrom: x('date'), dateTo: x('date') }),
     ...fields('totals', TOTALS), ...fields('overdueAging.buckets.*', { label: x(), count: m('tasks.overdue', 'tasks') }),
     ['overdueAging.worstOverdueDays', m('tasks.worstOverdueDays', 'days')], ['hours.taskCount', m('tasks.total', 'tasks', 'tasks')], ...hoursPaths(),
     // Grup satırı yalnızca aracın ürettiği sayıları taşır (count, open, overdue, done); bildirilen başka toplam satır ölçüsü değildir.
-    ...fields('groups.*', { label: x(), count: TOTALS.total, open: TOTALS.open, overdue: TOTALS.overdue, done: TOTALS.done }), ['groupCount', m('tasks.groupCount', 'groups')]],
+    ...fields('groups.*', { label: x(), count: TOTALS.total, open: TOTALS.open, overdue: TOTALS.overdue, done: TOTALS.done, dateFrom: x('date'), dateTo: x('date'), partial: x('boolean') }),
+    ['groupCount', m('tasks.groupCount', 'groups')]],
   rota_project_search: [...fields('matches.*', PROJECT), ...fields('matches.*.access', ACCESS), ['ambiguous', x('boolean')]],
   rota_project_detail: [...fields('project', PROJECT), ['project.tags.*', p('project.tags', 'text')], ...fields('access', ACCESS),
     ['access.reasons.*', p('project.accessReasons', 'enum')], ...fields('visibleTasks', TOTALS),
@@ -189,7 +196,12 @@ const REGISTRY_ENTRIES = Object.freeze({
     ...fields('holidays.*', { date: p('calendar.holidayDate', 'date'), name: c('calendar.holidayName'), short: c('calendar.holidayName') })],
   rota_activity_search: [...fields('range', { from: x('date'), to: x('date') }),
     ...fields('summary', { events: m('activity.events', 'events'), tasks: m('activity.tasks', 'tasks'), people: m('activity.people', 'people'),
-      completedTasks: m('activity.completedTasks', 'tasks') }),
+      completedTasks: m('activity.completedTasks', 'tasks'), createdTasks: m('activity.createdTasks', 'tasks'), deletedTasks: m('activity.deletedTasks', 'tasks'),
+      updatedTasks: m('activity.updatedTasks', 'tasks'), reopenedTasks: m('activity.reopenedTasks', 'tasks') }),
+    // Aşama H: dönem özetinin kayıt kapsamı ve haftalık/aylık hareket dizisi.
+    ['aggregate', x('boolean')], ['bucket', x()], ...fields('coverage', { status: x(), firstRecordedDay: x('date') }), ['definitions.recorded', DEFINITION],
+    ...fields('series.*', { label: x(), events: m('activity.events', 'events'), completionEvents: m('activity.completionEvents', 'events'),
+      creationEvents: m('activity.creationEvents', 'events'), dateFrom: x('date'), dateTo: x('date'), partial: x('boolean'), recorded: x('boolean') }),
     ...fields('items.*', { occurredAt: p('activity.occurredAt', 'instant'), actor: p('activity.actor', 'text'), kind: p('activity.kind', 'enum') }),
     ...fields('items.*.task', { title: c('task.title'), available: p('activity.taskAvailable', 'boolean') }),
     ...fields('items.*.project', { name: c('task.project'), code: c('task.project') }), ['items.*.changes.*', p('activity.changes', 'text')],
@@ -313,7 +325,7 @@ const ROW_COLLECTIONS = Object.freeze({
   rota_project_search: ['matches'], rota_project_detail: [], rota_portfolio_summary: ['projects'], rota_wbs_inspect: ['nodes'],
   rota_person_search: ['people'], rota_workload_summary: ['people'], rota_baseline_compare: ['availableBaselines', 'mostSlipped'],
   rota_dependency_inspect: ['predecessors', 'successors', 'mostConnected'], rota_recurrence_inspect: ['series', 'series.next', 'series.*.next'],
-  rota_calendar_inspect: ['holidays'], rota_activity_search: ['items'], rota_schedule_requests: ['items'], rota_assignment_requests: ['items'],
+  rota_calendar_inspect: ['holidays'], rota_activity_search: ['items', 'series'], rota_schedule_requests: ['items'], rota_assignment_requests: ['items'],
   rota_notifications: ['scheduleRequests.latest', 'assignmentCoordination.latest', 'taskEvents.latest'], rota_outlook_status: ['items'],
   rota_data_quality: ['checks', 'completedWithoutActualFinish.examples']
 });
@@ -369,6 +381,7 @@ export function evidenceSemantic(envelope, path, value, label, changeField = nul
   const canonical = parts.slice(1).map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
   const row = rowContext(envelope, parts);
   const group = parts[1] === 'groups' ? envelope.data?.groups?.[Number(parts[2])] : null;
+  const seriesRow = parts[1] === 'series' && Array.isArray(envelope.data?.series) ? envelope.data.series[Number(parts[2])] : null;
   const registered = metricEntry(envelope.tool, parts[0] === 'data' ? canonical : path);
   const measure = registered?.measure || null;
   // Bağımlılık gecikmesinin birimi satırdaki `unit` alanıdır.
@@ -390,7 +403,13 @@ export function evidenceSemantic(envelope, path, value, label, changeField = nul
     displayValue: parts.at(-1) === 'rule' ? parts.slice(1, -1).reduce((data, key) => data?.[key], envelope.data)?.ruleDescription || null : null,
     filters: row?.project ? { ...(envelope.data?.filters || {}), project: row.project } : envelope.data?.filters || null,
     groupBy: envelope.data?.groupBy || null,
-    group: group ? { key: group.key, label: group.label } : null,
+    group: group ? { key: group.key, label: group.label, ...(group.partial ? { partial: true } : {}) } : null,
+    // Aşama H — tarihsel tamlık sözleşmesi olguyla birlikte taşınır (sunum bu bağlamı düşüremez): gerçekleşen bitişe göre dönem
+    // okumasının tarihi kayıtlı olmayan tamamlanmış görev sayısı; hareket özetinin kayıt kapsamı; dizinin kovası ve satırı.
+    history: envelope.data?.history ? { basis: envelope.data.history.basis, undatedDone: envelope.data.history.undatedDone } : null,
+    coverage: envelope.data?.coverage ? { status: envelope.data.coverage.status, firstRecordedDay: envelope.data.coverage.firstRecordedDay ?? null } : null,
+    series: seriesRow ? { key: seriesRow.key, label: seriesRow.label, ...(seriesRow.partial ? { partial: true } : {}), ...(seriesRow.recorded === false ? { recorded: false } : {}) } : null,
+    bucket: envelope.data?.series?.bucket || (typeof envelope.data?.bucket === 'string' ? envelope.data.bucket : null),
     provenance: { tool: envelope.tool, generatedAt: envelope.generatedAt, today: envelope.today },
     complete: envelope.complete === true,
     countScope: envelope.data?.countsScope || null,
@@ -402,6 +421,8 @@ export function evidenceSemantic(envelope, path, value, label, changeField = nul
         // "gecikmemiş"tir. Termini olmayan açık görevde gecikme yargısı kurulamaz: boşluk "belirtilmemiş" kalır.
         : parts.at(-1) === 'overdueDays' && parts[1] === 'tasks' && envelope.data?.tasks?.[Number(parts[2])]?.overdue === false
           && ['todo', 'in_progress'].includes(envelope.data.tasks[Number(parts[2])].status)
-          && envelope.data.tasks[Number(parts[2])].targetFinish != null ? 'not-overdue' : 'unknown'
+          && envelope.data.tasks[Number(parts[2])].targetFinish != null ? 'not-overdue'
+          // Aşama H: kayıt başlangıcından önceki dönemin hareket sayısı bilinmez (sıfır değildir).
+          : envelope.tool === 'rota_activity_search' && envelope.data?.aggregate === true && (envelope.data.coverage?.status === 'none' || seriesRow?.recorded === false) ? 'not-recorded' : 'unknown'
   };
 }

@@ -192,9 +192,14 @@ test('analitik özetin her kapsam × yön × ad × ufuk açılımı sunucu doğr
             assert.throws(() => expandAnalysis(analysis), (error) => error.details.includes('$.analysis.focus:unsupported'));
             continue;
           }
-          for (const [index, raw] of expandAnalysis(analysis).entries()) {
+          // Aşama H: geçmiş dönem yönleri ve teslim ufukları bugüne göre kurulur; bugün verilmeden okuma açılmaz.
+          const historical = ['completed', 'created', 'activity', 'trend', 'horizons'].includes(focus);
+          if (historical) assert.throws(() => expandAnalysis(analysis), (error) => error.details.includes('$.analysis.relativeWindow:required'));
+          for (const [index, raw] of expandAnalysis(analysis, historical ? { today: '2026-10-31' } : {}).entries()) {
             const parsed = parseRequestDeclaration(raw, { textTrusted: () => true, identityTrusted: () => true, today: '2026-10-31', priorParts: index });
-            assert.deepEqual(completeRequest(parsed, [], { today: '2026-10-31' }).problems, [], `${scope}/${focus}/${names?.length}`);
+            // Aşama H: not yönü yalnızca kullanıcının bu turda açtığı serbest metinle okunur; rıza yoksa okuma kabul edilmez.
+            if (focus === 'notes') assert.deepEqual(completeRequest(parsed, [], { today: '2026-10-31' }).problems, ['$.population.textFields:not-authorized']);
+            assert.deepEqual(completeRequest(parsed, [], { today: '2026-10-31', ...(focus === 'notes' ? { allowedTextFields: ['description'] } : {}) }).problems, [], `${scope}/${focus}/${names?.length}`);
             count += 1;
           }
         }

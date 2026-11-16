@@ -99,7 +99,9 @@ export function carrierAvailable(source, field, row = null) {
  */
 const COLLECTION_COMPLETENESS = Object.freeze({
   rota_activity_search: {
-    items: (envelope) => envelope.totalCount === envelope.data?.items?.length && envelope.returnedCount === envelope.data.items.length
+    items: (envelope) => envelope.totalCount === envelope.data?.items?.length && envelope.returnedCount === envelope.data.items.length,
+    // Dönem özetinin dizisi aralığın bütün kovalarını taşır (boş kova sıfırdır); kova sayısı zarfın döndürdüğü satır sayısıdır.
+    series: (envelope) => envelope.data?.aggregate === true && Array.isArray(envelope.data.series) && envelope.returnedCount === envelope.data.series.length
   },
   rota_data_quality: {
     checks: (envelope) => Array.isArray(envelope.data?.checks),

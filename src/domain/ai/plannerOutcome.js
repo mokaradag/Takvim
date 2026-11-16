@@ -136,7 +136,7 @@ export function renderChartUnavailable({ locale = 'tr', substituted = null, type
 const CHART_TYPE_NEEDS = Object.freeze({
   bar: ['karşılaştırılabilir en az iki değer', 'at least two comparable values'],
   donut: ['birbirini dışlayan tam bir dağılım', 'a complete, mutually exclusive distribution'],
-  line: ['ardışık aylara göre bir zaman dizisi', 'a time series over consecutive months'],
+  line: ['ardışık haftalara ya da aylara göre bir zaman dizisi', 'a time series over consecutive weeks or months'],
   stacked: ['satır başına tam bir durum kırılımı', 'a complete status breakdown per row'],
   kpi: ['en az üç başlık göstergesi', 'at least three headline figures'],
   timeline: ['tarihli görev satırları', 'dated task rows']

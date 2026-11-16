@@ -17,13 +17,14 @@ const benchmark = JSON.parse(readFileSync(process.env.UI_BENCHMARK || new URL('.
 // Göreli termin belirteçleri ("T+N") çalıştırma gününe (Türkiye günü) göre çözülür; sentetik veri de aynı güne göre kurulur.
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const shift = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
-const resolved = (plan) => JSON.parse(JSON.stringify(plan).replace(/"T\+(-?\d+)"/g, (_, offset) => `"${shift(Number(offset))}"`));
+// Aşama H kıyas kümesi "T", "T-N" ve "T+N" biçimlerini kullanır; hepsi aynı güne göre çözülür.
+const resolved = (plan) => JSON.parse(JSON.stringify(plan).replace(/"T(?:\+(-?\d+)|(-\d+))?"/g, (_, plus, minus) => `"${shift(Number(plus ?? minus ?? 0))}"`));
 // Aynı soru metni farklı profillerde farklı altın planla geçebilir (ör. g08/g09): UI_PROFILE verilirse yalnızca o profilin vakaları
 // eşlenir. Aynı metne iki farklı plan kalırsa biri sessizce seçilmez: metin çakışma olarak işaretlenir ve yanıt açıklama kararıdır.
 const PROFILE = process.env.UI_PROFILE || null;
 const plans = new Map();
 const collisions = new Set();
-for (const item of [...(benchmark.scenarios || []), ...(benchmark.original || [])]) {
+for (const item of [...(benchmark.scenarios || []), ...(benchmark.original || []), ...(benchmark.targeted || []), ...(benchmark.adversarial || [])]) {
   if (PROFILE && item.profile && item.profile !== PROFILE) continue;
   for (const turn of item.turns || [{ text: item.text, plan: item.plan }]) {
     if (!turn.plan) continue;

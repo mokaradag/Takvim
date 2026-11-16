@@ -162,14 +162,15 @@ function pathValues(value, parts) {
  */
 const OMITTED_WHEN_EMPTY = Object.freeze({
   rota_task_search: { tasks: ['keyword', 'targetFinish', 'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'progressPercent',
-    'createdAt', 'updatedAt', 'overdueDays', 'project.code'] },
+    'createdAt', 'updatedAt', 'overdueDays', 'project.code', 'description', 'descriptionClipped'] },
   rota_project_search: { matches: ['code', 'lead'] },
   rota_person_search: { people: ['jobTitle'] },
   rota_portfolio_summary: { projects: ['code'] },
   rota_baseline_compare: { mostSlipped: ['targetFinish'] },
   rota_schedule_requests: { items: ['decidedAt', 'project.code'] },
   rota_assignment_requests: { items: ['requestedAssigneeOrganization', 'suggestedAssignee', 'targetFinish', 'decidedBy', 'decidedAt', 'project.code'] },
-  rota_activity_search: { items: ['project.code'] },
+  rota_activity_search: { items: ['project.code'], series: ['partial', 'recorded'] },
+  rota_task_analytics: { groups: ['dateFrom', 'dateTo', 'partial'] },
   rota_notifications: { 'taskEvents.latest': ['by'] },
   rota_outlook_status: { items: ['deliveredCalendarDate', 'lastDeliveredAt', 'failure.code', 'failure.message'] }
 });

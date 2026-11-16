@@ -190,7 +190,9 @@ test("korumalı metin ölçüsü kendi alanını açar; varlık özelliği araç
   const searched = complete({ operation: 'value', metrics: ['task.description'], population: { tool: 'rota_task_search' }, filters: { text: 'Radar test planı' } },
     [['rota_task_search', { text: 'Radar test planı' }]], { allowedTextFields: ['description'] });
   assert.ok(searched.problems.includes('$.metrics[0]:population'));
-  assert.ok(searched.hints.includes('task.description: task özelliği; population.tool rota_task_detail ve request.entities: [{"type":"task","text":"<kullanıcının yazdığı ad>"}] bildir (ölçüyü SİLME; kimliği sunucu bulur)'));
+  // Aşama H: adı verilmemiş görevlerin açıklaması tek görev ayrıntısı değil, özetin not yönüdür; ipucu bunu söyler.
+  assert.ok(searched.hints.some((hint) => hint.includes('"focus":["notes"]')));
+
 });
 
 test("seçiciye bağlı koleksiyon okuma biçimini izler; görev seçili tekrar tek seridir", () => {

@@ -188,6 +188,7 @@ function factRow(db, scope, entry, params = {}) {
     RecurrenceOccurrenceDate: task.RecurrenceOccurrenceDate,
     CreatedAt: task.CreatedAt ?? null,
     UpdatedAt: task.UpdatedAt ?? null,
+    HasDescription: String(task.Description ?? '').trim() ? 1 : 0,
     AccessLevel: entry.AccessLevel,
     IdentityBase: entry.IdentityBase,
     IsCreator: Number(task.CreatedBySicil) === scope.sicil ? 1 : 0,
@@ -241,6 +242,8 @@ function taskFacts(db, params) {
       case 'plannedFinish': return day(task.PlannedFinish);
       case 'actualStart': return day(task.ActualStart);
       case 'actualFinish': return day(task.ActualFinish);
+      // SQL: kayıt anının Türkiye günü (UTC → Turkey Standard Time).
+      case 'createdAt': return task.CreatedAt ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(task.CreatedAt)) : null;
       default: return null;
     }
   };
@@ -559,6 +562,9 @@ function outlook(db, params) {
 const HANDLERS = Object.freeze({
   'task-facts': taskFacts,
   'task-visibility': taskVisibility,
+  // Görünür görevlerin kesilmiş açıklamaları (SQL: LEFT(Description, 401); boş açıklama satır döndürmez).
+  'task-notes': (db, params) => [[...scopeOf(db, params).visible.values()].filter(({ task }) => String(task.Description ?? '').trim())
+    .map(({ task }) => ({ TaskId: upper(task.TaskId), Description: String(task.Description).slice(0, 401) }))],
   'task-detail': taskDetail,
   'project-search': projectSearch,
   portfolio,

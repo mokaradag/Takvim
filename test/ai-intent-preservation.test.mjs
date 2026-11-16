@@ -61,7 +61,8 @@ test('isteğe bağlı bütçe son birleşimde kalan farklı sınır ve düzenler
 
 for (const sibling of ['dateFrom', 'dateTo']) test(`geçersiz dönem onarımı mevcut geçerli sınırı koruyarak eksik sınırı doldurur: ${sibling}`, async (t) => {
   const dates = { dateFrom: '2026-11-15', dateTo: '2026-11-28' };
-  const analysis = { scope: 'self', focus: ['status'], relativeWindow: 'next_14_days', [sibling]: dates[sibling] };
+  // Aşama H: `next_14_days` artık sözlüktedir; sözlük dışı pencere olarak hiç tanımlanmamış bir değer kullanılır.
+  const analysis = { scope: 'self', focus: ['status'], relativeWindow: 'next_21_days', [sibling]: dates[sibling] };
   const queue = [call({ intent: 'rota', language: 'tr', analysis }), call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], ...dates } })];
   const { ask } = phase4eConversation(t, { planner: () => queue.shift() });
   const result = await ask({ text: 'Belirtilen dönemdeki görev durumumu göster' });
