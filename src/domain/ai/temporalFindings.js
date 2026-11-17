@@ -333,7 +333,6 @@ function comparisonSentences(finding, locale) {
   const mixedPopulation = finding.pairs.some((pair) => pair.kind === 'activity') && finding.pairs.some((pair) => pair.kind !== 'activity');
   const placeFor = (pair) => pair.kind === 'activity' ? activityPlace(finding.scope, locale) : taskPlace(finding.scope, locale);
   const eligible = finding.comparable && windowLength(earlier) === windowLength(later) && !finding.overlap && finding.ranges.every((range) => windowPosition(range, finding.today)?.position === 'past');
-  const openNow = open && !finding.overlap;
   // Karşılaştırmanın kendisi önce söylenir (yön); sayılar ardından gelir.
   if (known.length && finding.overlap) {
     // Örtüşen dönemlerde yön söylenmez (aynı iş iki sayıda da yer alabilir); sayılar yan yana verilir.

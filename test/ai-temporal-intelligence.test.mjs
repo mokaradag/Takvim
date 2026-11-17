@@ -1818,7 +1818,8 @@ test('kırpılmış tek tamamlanma satırı dönemde yalnızca bir görev varmı
     const composition = buildComposition({ parts: [total, list].map((verdict, index) => ({ index, presentation: verdict.presentation })), analyst: true, locale, today: TODAY });
     const text = renderComposition(composition, defaultComposition(composition)).text;
     assert.doesNotMatch(text, /Tamamlanan görev şudur|This is the completed task/);
-    assert.match(text, /20/);
+    const expected = results[1].totalCount;
+    assert.match(text.replaceAll('**', ''), new RegExp(`\\b${expected}\\s+${locale === 'tr' ? 'görev' : 'tasks?'}\\b`));
   }
 });
 
