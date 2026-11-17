@@ -807,7 +807,8 @@ function pinAnalysisRepair(turn, plan, details) {
       for (const key of ['compareFrom', 'compareTo']) if ((existing?.raw || plan.analysis)[key] == null) paths.add(key);
     }
     if (path === '$.analysis.compare' && reason === 'window') {
-      for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) if ((existing?.raw || plan.analysis)[key] == null) paths.add(key);
+      for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) if ((existing?.raw || plan.analysis)[key] == null
+        || key === 'relativeWindow' && (existing?.raw || plan.analysis)[key] === 'all_time') paths.add(key);
     }
     // Çakışan gösterimlerden biri kaldırılabilir; tek geçersiz sınır geçerli kardeşini serbest bırakmaz.
     if (path === '$.analysis.relativeWindow' && ['conflict', 'enum'].includes(reason)) {

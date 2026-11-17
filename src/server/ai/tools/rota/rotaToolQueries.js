@@ -364,7 +364,8 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
       OR (@deadline = 'due_next_30_days' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 29, @today))
       OR (@deadline = 'no_target_finish' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish IS NULL))
     AND (@dateField IS NULL OR (@includeUndated = 1 AND t.ActualFinish IS NULL AND ${STATUS_SQL} = 'done') OR (
-      (@dateFrom IS NULL OR CASE @dateField
+      (@dateField <> 'actualFinish' OR t.ActualFinish <= @today)
+      AND (@dateFrom IS NULL OR CASE @dateField
         WHEN 'targetFinish' THEN t.TargetFinish
         WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
         WHEN 'plannedStart' THEN t.PlannedStart

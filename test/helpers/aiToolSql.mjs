@@ -274,6 +274,7 @@ function taskFacts(db, params) {
     }
     if (params.hasDescription && !String(task.Description || '').trim()) return false;
     if (params.dateField && !(params.includeUndated && !day(task.ActualFinish) && status === 'done')) {
+      if (params.dateField === 'actualFinish' && (!params.today || day(task.ActualFinish) > day(params.today))) return false;
       const value = dateValue(task);
       if (!value) return false;
       if (params.dateFrom && value < day(params.dateFrom)) return false;

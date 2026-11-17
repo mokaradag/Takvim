@@ -153,8 +153,8 @@ export function plannerScore(result, expect, today = corpus.today) {
       && (request.population?.tool === 'rota_portfolio_summary' || Boolean((layer.dateFrom || layer.dateTo || analysis?.dateFrom || analysis?.dateTo || expect.window)
         && request.population?.tool === 'rota_task_analytics' && request.population.groupBy === 'project'
         && !request.entities?.length && !request.filters?.assignee && (request.filters?.dateFrom || request.filters?.dateTo)));
-    const readsLayer = (layer, request) => (layer.scope === 'self' ? request.filters?.assignee === 'me' && !request.entities?.length
-      : layer.scope === 'team' ? request.filters?.assignee === 'team' && !request.entities?.length && (request.filters?.teamLevel || '') === (layer.level || '')
+    const readsLayer = (layer, request) => (layer.scope === 'self' ? scopeOf([request]) === 'self' && !request.entities?.length
+      : layer.scope === 'team' ? scopeOf([request]) === 'team' && !request.entities?.length && (request.filters?.teamLevel || '') === (layer.level || '')
         : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope && sameName(layer, entity)) && !request.filters?.assignee
           && request.entities.every((entity) => entity.type === layer.scope && expect.layers.some((expected) => expected.scope === entity.type && sameName(expected, entity)))
           : layer.scope === 'projects' ? portfolioRead(layer, request)
@@ -197,7 +197,7 @@ export function plannerScore(result, expect, today = corpus.today) {
       && requests.every((request) => ['person', 'self'].includes(scopeOf([request])));
     if (expect.withSelf === true && !pairedSelf) failures.push('kendiyle karşılaştırma eksik');
     if (expect.scope !== undefined && scope !== expect.scope && !pairedSelf) failures.push(`kapsam ${scope} ≠ ${expect.scope}`);
-    const teamRequests = requests.filter((request) => request.filters?.assignee === 'team');
+    const teamRequests = requests.filter((request) => scopeOf([request]) === 'team');
     if (expect.level && (!teamRequests.length || !teamRequests.every((request) => request.filters?.teamLevel === expect.level))) failures.push(`düzey ${expect.level} her ekip isteğinde değil`);
     const names = (values) => JSON.stringify([...new Set(values.map((value) => containmentText(String(value))))].sort());
     if (expect.names && names(requests.flatMap((request) => (request.entities || []).map((entity) => entity.query).filter((query) => query != null))) !== names(expect.names)) failures.push('ad kümesi beklenenle aynı değil');
@@ -305,16 +305,25 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
       && request.metrics?.includes('tasks.total') && (measure === 'created' ? !filters.status?.length : filters.status?.length === 1 && filters.status[0] === 'done')
       && (measure === 'trend' ? ['date_week', 'date_month'].includes(request.population.groupBy) : !request.population.groupBy);
   };
-  const reads = (range) => (atoms.length ? atoms : [null]).every((layer) => (measures.length ? measures : [null]).every((measure) => requests.some((request) =>
+  const reads = (range, wantedMeasures = measures, primary = true) => (atoms.length ? atoms : [null]).every((layer) => (wantedMeasures.length ? wantedMeasures : [null]).every((measure) => requests.some((request) =>
     (!range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]) && (!expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1) && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
-    && (!expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)))));
+    && (!primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)))));
   const range = expectedRange(expect.window, today);
-  if (range && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
+  if (range && !expect.stateComparison && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
   const prior = expectedCompare(expect.compare, expect.window, today);
-  if (prior && !expect.stateComparison && !reads(prior)) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
+  if (prior && !expect.stateComparison && !reads(prior, measures.filter((measure) => measure !== 'trend'), false)) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
   if (expect.windowFrom && !reads(range)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
   if (expect.bucket && !reads(range)) failures.push(`dizi kovası ${expect.bucket} okunmuyor`);
   if (expect.stateComparison && !analysis.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
+  if (expect.stateComparison && analysis.historyUnsupported?.length) {
+    let matches = false;
+    try {
+      const windows = analysisWindows(analysis, today);
+      matches = [range, prior].every((wanted, index) => !wanted || [windows.range, windows.compare][index]?.dateFrom === wanted[0]
+        && [windows.range, windows.compare][index]?.dateTo === wanted[1]);
+    } catch { matches = false; }
+    if (!matches) failures.push('istenen geçmiş durum dönemleri bildirilmedi');
+  }
   return failures;
 }
 

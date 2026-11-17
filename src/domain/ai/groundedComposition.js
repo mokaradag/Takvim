@@ -527,7 +527,8 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       // Aşama H: dönem bulgusunun sayımını söylediği liste boşsa ayrıntı yazılmaz (yokluk girişte söylenmiştir; sayım okuması aynı bölümdedir); tek satırlıysa
       // ölçütlü sayım cümlesinin yerine satırı tanıtan cümle geçer.
       if (cover?.kind === 'completedList' && shownRows === 0) continue;
-      const lead = (['completedList', 'notes'].includes(cover?.kind) && shownRows === 1 ? singleRowLead(cover.kind, locale) : null)
+      const singleRow = shownRows === 1 && (cover?.kind === 'notes' || cover?.kind === 'completedList' && cover.total === 1);
+      const lead = (singleRow ? singleRowLead(cover.kind, locale) : null)
         || taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead });
       if (detailText) {

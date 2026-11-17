@@ -152,10 +152,11 @@ export function normalizedBrief(raw) {
   // karşılaştırmasıdır (alanların kendisi kapsamı belirler, cümle yorumlanmaz).
   if (out.scope === 'self' && out.withSelf === true && Array.isArray(out.names) && out.names.length === 1) out.scope = 'person';
   if (Array.isArray(out.also)) {
-    // Özet dönem taşımıyorsa ek kapsamdaki "dönem yok" yazımı (`relativeWindow: all_time`) anlam eklemez: alanın yokluğuyla eşdeğerdir.
+    // Durum yönünde dönem taşımayan özetin ek kapsamındaki `all_time` alan yokluğuyla eşdeğerdir; tarihsel niyet korunur.
     // Özetin dönemi varken ek kapsamın ayrı dönemi temsil edilemez; alan kalır ve doğrulama reddeder (dönem sessizce düşmez).
     const unwindowed = !out.dateFrom && !out.dateTo && (out.relativeWindow == null || out.relativeWindow === 'all_time');
-    out.also = out.also.map((item) => (item && typeof item === 'object' && !Array.isArray(item) ? normalizedLayer(item, unwindowed) : item));
+    out.also = out.also.map((item) => (item && typeof item === 'object' && !Array.isArray(item)
+      ? normalizedLayer(item, unwindowed && !(Array.isArray(out.focus) && out.focus.some((focus) => TEMPORAL_FOCUS.includes(focus)))) : item));
     // Aynı kapsamın yinelenen yazımı tek kapsamdır; ama yazımın taşıdığı yönler düşmez, kapsamın yönlerine katılır (yapısal
     // birleştirme). Birincil yönler, yönü yazılmamış ek kapsamların da yönleridir: birincile yön katılmadan önce bu kapsamlara
     // özgün birincil yönler açıkça yazılır (başka kapsamın okuması değişmez).
@@ -240,12 +241,12 @@ function layerApplicable(focus, scope) {
 /** Ek kapsamın yazım normalleştirmesi: birincil özetle aynı yapısal kurallar (yön yazımı, adlı proje kapsamı). */
 function normalizedLayer(raw, unwindowed = false) {
   const out = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null));
-  if (unwindowed && out.relativeWindow === 'all_time') delete out.relativeWindow;
   if (Array.isArray(out.focus)) {
     out.focus = out.focus.map((item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item
       : ANALYSIS_FOCUS.find((known) => known === `${item}s` || `${known}s` === item) || item));
     out.focus = out.focus.filter((item, index) => out.focus.indexOf(item) === index);
   }
+  if (unwindowed && out.relativeWindow === 'all_time' && (out.focus == null || Array.isArray(out.focus) && !out.focus.some((focus) => TEMPORAL_FOCUS.includes(focus)))) delete out.relativeWindow;
   if (out.scope === 'projects' && Array.isArray(out.names) && out.names.length) out.scope = 'project';
   return out;
 }

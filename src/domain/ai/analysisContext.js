@@ -19,6 +19,7 @@ export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 
 const LEVELS = Object.freeze(['unit', 'department', 'directorate']);
 const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical', 'org', 'milestones',
   'completed', 'created', 'activity', 'trend', 'horizons', 'notes']);
+const LEGACY_FOCUS = Object.freeze(FOCUS.slice(0, 12));
 /** Aşama H: dönemin türlü alanları (karşılaştırma dönemi ve dizi kovası) yalnızca güncel sürümde saklanır. */
 const TEMPORAL_KEYS = Object.freeze(['compare', 'compareFrom', 'compareTo', 'bucket']);
 const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow',
@@ -120,9 +121,11 @@ function identities(value, max, { unique = true, positional = false } = {}) {
 export function normalizeAnalysisContext(value) {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value) || ![1, ANALYSIS_CONTEXT_VERSION].includes(value.v) || Object.keys(value).some((key) => !KEYS.has(key))) return null;
-    if (value.v === 1 && (Object.keys(value).some((key) => !VERSION_ONE_KEYS.has(key)) || value.focus?.length > 3)) return null;
+    if (value.v === 1 && (Object.keys(value).some((key) => !VERSION_ONE_KEYS.has(key)) || value.focus?.length > 3
+      || Array.isArray(value.focus) && value.focus.some((focus) => !LEGACY_FOCUS.includes(focus)))) return null;
     if (value.v === 1 && value.pending && (Object.keys(value.pending).some((key) => !VERSION_ONE_PENDING_KEYS.includes(key))
-      || !ANALYSIS_CONTEXT_SCOPES.includes(value.pending.scope) || value.pending.focus?.length > 3)) return null;
+      || !ANALYSIS_CONTEXT_SCOPES.includes(value.pending.scope) || value.pending.focus?.length > 3
+      || Array.isArray(value.pending.focus) && value.pending.focus.some((focus) => !LEGACY_FOCUS.includes(focus)))) return null;
     const pending = value.pending == null ? null : normalizePendingAnalysis(value.pending);
     if (value.pending != null && !pending) return null;
     // Yalnızca bekleyen niyet (önceki analiz yokken açıklama): takip öznesi değildir; `scope` boştur.

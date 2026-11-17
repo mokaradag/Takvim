@@ -580,6 +580,10 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     problems.push('$.filters.activityView:required');
     hints.push('Düzeyli hareket özeti için analysis kapsamı team, level ve activity yönünü kullanın');
   }
+  if (tool.name === 'rota_activity_search' && request.filters.activityView && request.filters.activityKind) {
+    problems.push('$.filters.activityKind:unsupported');
+    hints.push('Toplu hareket görünümünde activityKind verilmez; tür süzgeci için activityView kaldırılır');
+  }
   if (requestTextFields(request).some((field) => !allowedTextFields.includes(field))) {
     problems.push('$.population.textFields:not-authorized');
     hints.push('population.textFields: kullanıcı bu turda serbest metni açmadı; bu alan okunamaz (sunucu kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister)');

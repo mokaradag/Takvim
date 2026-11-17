@@ -174,7 +174,7 @@ function aggregateActivitySql(statement) {
   ) eventDays GROUP BY ${ACTIVITY_DAY_SQL} ORDER BY ActivityDay;
   SELECT DISTINCT t.TaskId, t.ProjectId AS CurrentProjectId
   FROM #TaskActivityGroups g JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, g.EntityId);
-  DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;`]
+  DROP TABLE #TaskActivityGroups, #TaskActivityScope;`]
   ];
   let out = statement;
   for (const [anchor, replacement] of edits) {

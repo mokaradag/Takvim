@@ -44,10 +44,11 @@ export function temporalBenchmarkSeed() {
   const at = (offset, hour = 9) => new Date(Date.parse(`${day(offset)}T00:00:00Z`) + (hour - 3) * 3600000).toISOString();
   const offsetOf = (value) => Math.round((Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
   const audit = [];
+  let auditId = 0;
   const person = (sicil) => seed.people.find((item) => item.Sicil === sicil)?.DisplayName || `Çalışan ${sicil}`;
   const push = (offset, hour, actor, action, taskId, projectId, before, after, correlation = null) => audit.push({
-    AuditId: audit.length + 1, OccurredAt: at(offset, hour), ActorSicil: actor, ActorDisplayName: person(actor), ActionCode: action, EntityType: 'TASK', EntityId: taskId,
-    ProjectId: projectId, CorrelationId: correlation || `25000000-0000-4000-8000-${String(audit.length + 1).padStart(12, '0')}`,
+    AuditId: ++auditId, OccurredAt: at(offset, hour), ActorSicil: actor, ActorDisplayName: person(actor), ActionCode: action, EntityType: 'TASK', EntityId: taskId,
+    ProjectId: projectId, CorrelationId: correlation || `25000000-0000-4000-8000-${String(auditId).padStart(12, '0')}`,
     BeforeJson: before ? JSON.stringify(before) : null, AfterJson: after ? JSON.stringify(after) : null });
   const assigneeOf = (taskId) => seed.taskAssignees.find((entry) => entry.TaskId === taskId)?.Sicil ?? P.B;
   seed.tasks.forEach((task, index) => {

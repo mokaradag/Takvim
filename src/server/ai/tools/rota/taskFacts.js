@@ -302,6 +302,7 @@ export function matchesTaskFilters(fact, filters, { today, assignees = new Map()
   if (filters.dateField) {
     const value = dateFieldValue(fact, filters.dateField);
     if (!value) return false;
+    if (filters.dateField === 'actualFinish' && (!today || value > today)) return false;
     if (filters.dateFrom && value < filters.dateFrom) return false;
     if (filters.dateTo && value > filters.dateTo) return false;
   }

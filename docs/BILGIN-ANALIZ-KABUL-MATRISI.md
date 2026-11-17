@@ -681,7 +681,7 @@ Dönem ve kapsam beklentilerinin kesinleştirilmesi: F `h05` özgün sorudaki **
 
 Dönem kabulü her kapsam ve ölçüyü aynı başarılı okumada doğrular; eğilim için ayrıca aynı nüfusa ve döneme ait toplam ile tarih dizisi kanıtı gerekir. Dönem hareket özeti sayfalı hareket listesiyle karşılanamaz. Yasak metin ve rızasız not sorgusu denetimleri başarısız ya da açıklama isteyen yanıtta da çalışır. Boş dizi üzerinde geçen grafik, takip ve kalıcılık denetimleri gerçek kanıtın varlığını zorunlu tutar.
 
-17 Kasım 2026 kök neden doğrulaması: 23 yeni Türkçe regresyonla birlikte tam paket **6474/6474**, dönemsel paket **244/244**, ilgili analiz/istek/açıklama/arayüz altyapısı paketi **644/644** geçti; lint ve üretim derlemesi başarılı. Linux ACL kontrolleri için geçici dizin ACL destekleyen çalışma alanına alındı; sınamalar veya beklentiler atlanmadı. Yedi üretim modülündeki düzeltmeler okuma bütçesini artırmaz; toplu hareket sorgusu sayaçları SQL durum geçişlerinden üretirken not taşıyan ayrıntı JSON'unu sunucuya döndürmez. Yeni bağımlılık, uç nokta veya yetki yolu yoktur.
+Önceki koşu kaydı (17 Kasım 2026; kaydı taşıyan commit: `0d38c07b862b159db7595bf3b724473cf50c3aba`): 23 yeni Türkçe regresyonla birlikte tam paket **6474/6474**, dönemsel paket **244/244**, ilgili analiz/istek/açıklama/arayüz altyapısı paketi **644/644** geçti; lint ve üretim derlemesi başarılı. Linux ACL kontrolleri için geçici dizin ACL destekleyen çalışma alanına alındı; sınamalar veya beklentiler atlanmadı. Yedi üretim modülündeki düzeltmeler okuma bütçesini artırmaz; toplu hareket sorgusu sayaçları SQL durum geçişlerinden üretirken not taşıyan ayrıntı JSON'unu sunucuya döndürmez. Yeni bağımlılık, uç nokta veya yetki yolu yoktur.
 
 Bu koşuda tarayıcılı arayüz kabulü Chromium'un Unix soketi kısıtına takıldı; başarılı sayılmadı. Haiku 4.5 düşük efor/düşünmesiz tek vaka denemesi sağlayıcı altyapı hatasıyla durdu (**0 API çağrısı**, model sonucu yok); önceki canlı puanların yerine geçmez. Gerçek Windows/SQL VM yeniden oynatması ve canlı model kabulü beklemeye devam eder.
 
@@ -742,11 +742,20 @@ sınamalar geçti).
 
 ### 9.7 Doğrulama
 
-- Son kodla `npm test -- --test-concurrency=4` **6386/6386** (başarısız, iptal, atlanan 0); `npm run lint` uyarısız;
-  `NEXT_TELEMETRY_DISABLED=1 npm run build` başarılı.
+- İlk uygulama kaydındaki **6386/6386** ve §9.3'teki **6474/6474** önceki koşulara aittir; güncel kodun sonucu olarak kullanılamaz. Güncel koşunun sürümü, komutları ve sonuçları aşağıdaki tarihli kayıtta birlikte verilir.
 - Sınır ölçümleri: planlayıcı yönergesi yılın her gününde en çok 32 761 karakter (sınır 32 768); plan şeması 30 915 (sınır 32 000).
   Model, SQL, süre, sonuç boyu ve araç çağrısı bütçeleri artırılmadı (`ANALYSIS_LIMITS.maxParts` 6, `maxTotalCalls` 12).
 - Yeni uç, tablo, işçi, bağımlılık ya da arka plan işi yok; bütün okumalar salt okunur ve sabit parametreli SQL'dir.
+
+#### 17 Kasım 2026 — yakınsama koşusu
+
+Başlangıç sürümü: `0d38c07b862b159db7595bf3b724473cf50c3aba`; aşağıdaki kayıt bu sürümün üzerine eklenen tek düzeltme commit'ine aittir. Önceki §9.3 kaydıyla aynı koşu değildir.
+
+- Linux, Node **24.22.1**: `npm test -- --test-concurrency=1` **6494/6494**; başarısız, iptal ve atlanan **0**. Geçici dizin için `TMPDIR`, `TMP` ve `TEMP` aynı ACL destekleyen çalışma dizinine ayarlandı. İlk denemede iç alt süreç `/tmp` dizinine döndüğü için ACL kapısı başarısızdı; beklenti değiştirilmeden ortam düzeltilip tam paket yeniden çalıştırıldı.
+- Tam koşudan sonra yalnızca H puanlayıcısının durum karşılaştırmasında bildirilen dönemleri de eşleştiren son denetimi eklendi; bu yardımcıyı kullanan bütün dosya yeniden çalıştırıldı: `node --test --test-concurrency=1 test/ai-temporal-intelligence.test.mjs` **264/264**. Tam paket ve son hedefli koşu ayrı kanıtlardır.
+- **20** yeni Türkçe regresyon: özgün başlangıç sürümünde **19** başarısızlık, önceden düzeltilmiş tarihsel kırılımı koruyan **1** başarı; düzeltmelerle tamamı geçti. Tam paket mevcut F/G kontrollerini, H dosyası hedefli ve ayrık plan kontrollerini içerir. Sentetik kimlik, nüfus, dönem, kova, not ve ufuk kanıtları ayrıca denetlenir.
+- `npm run lint`: uyarı ve hata yok. `NEXT_TELEMETRY_DISABLED=1 npm run build`: başarılı. Yeni dosya, bağımlılık, uç nokta, kalıcı durum veya yetki yolu eklenmedi.
+- SQL Server/Windows VM ve canlı Haiku kabulü bu ortamda çalıştırılamadı. SQL yürütmesi yerine üretilen sorgunun geçici tablo yaşam döngüsü ve parametreli SQL ikizi sınandı; bu kanıt canlı SQL kabulü değildir. Önceki 40 turluk tarayıcı kabulü bu commit için yeniden çalıştırılmış sayılmaz. Canlı kapılar **bekliyor**.
 
 ### 9.8 Bilinen sınırlar ve sonraki adım
 

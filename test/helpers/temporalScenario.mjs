@@ -52,6 +52,8 @@ function temporalLogMatches(row, range, measure = null) {
   if (range && (from !== range[0] || to !== range[1])) return false;
   if (!measure) return true;
   if (measure === 'activity') return row.query === 'activity' && p.teamLevel !== undefined;
+  if (p.priorityCsv || p.milestone != null || p.text || p.wbsId || p.seriesId || p.recurringOnly || p.assigneeMode === 'unassigned'
+    || p.createdByMe || p.hasDescription || p.openOnly || p.deadline || p.targetFrom || p.targetTo) return false;
   const statuses = (p.statusCsv || '').split(',').filter(Boolean);
   return row.query === 'task-facts' && !p.taskIds && p.dateField === (measure === 'created' ? 'createdAt' : 'actualFinish')
     && (measure === 'created' ? !statuses.length : statuses.length === 1 && statuses[0] === 'done');
@@ -83,7 +85,11 @@ export function temporalPopulationViolations(result, analysis, seed) {
     const p = row.params;
     const activity = row.query === 'activity';
     const owner = activity ? p.scope === 'mine' ? 'self' : p.scope === 'team' ? 'team' : 'all' : p.assigneeMode === 'me' ? 'self' : p.assigneeMode === 'team' ? 'team' : 'all';
-    if ((p.teamLevel || '') !== (layer.level || '').toUpperCase()) return false;
+    if (String(p.teamLevel || '').toUpperCase() !== (layer.level || '').toUpperCase()) return false;
+    if (activity ? p.kind || p.taskIdText || p.directorate || p.department || p.unit
+      : p.priorityCsv || p.priorities?.length || p.milestone != null && !layer.focus?.includes('milestones') || p.text || p.wbsId || p.seriesId || p.recurringOnly
+        || p.assigneeMode === 'unassigned' || p.createdByMe
+        || p.hasDescription && !layer.focus?.includes('notes')) return false;
     const person = activity ? p.person : p.personSicil;
     const wantedPerson = layer.scope === 'person' ? seed.people.find((item) => item.DisplayName === layer.names[0])?.Sicil : null;
     const projectName = layer.scope === 'project' ? layer.names[0] : layer.within;
@@ -114,8 +120,26 @@ export function temporalPopulationViolations(result, analysis, seed) {
           return item.tool === 'rota_task_analytics' && matches({ query: 'task-facts', params: { ...filters, assigneeMode: filters.assignee } }, layer)
             && filters.dateField === 'actualFinish' && filters.statuses?.join() === 'done' && filters.dateFrom === period[0] && filters.dateTo === period[1];
         });
-        if (!evidence.some((item) => ['date_week', 'date_month'].includes(item.data.groupBy)) || !evidence.some((item) => !item.data.groupBy)) problems.push(`eğilim dizisi ya da toplamı okunmadı: ${layer.scope}`);
+        const bucket = layer.bucket || analysis.bucket;
+        if (!evidence.some((item) => bucket ? item.data.groupBy === `date_${bucket}` : ['date_week', 'date_month'].includes(item.data.groupBy)) || !evidence.some((item) => !item.data.groupBy)) problems.push(`eğilim dizisi ya da toplamı okunmadı: ${layer.scope}`);
       }
+    }
+    for (const kind of ['notes', 'horizons'].filter((kind) => layer.focus?.includes(kind))) {
+      const evidence = (result.evidence || []).filter((item) => {
+        const filters = item.data?.filters || {};
+        return matches({ query: 'task-facts', params: { ...filters, assigneeMode: filters.assignee } }, layer);
+      });
+      const open = (filters) => filters.statuses?.length === 2 && ['todo', 'in_progress'].every((status) => filters.statuses.includes(status));
+      const noteIds = new Set((result.log || []).filter((row) => row.query === 'task-notes' && row.ok === true).flatMap((row) => String(row.params.taskIds || '').toLowerCase().split(',')));
+      const seen = kind === 'notes' ? evidence.some((item) => item.ok === true && item.tool === 'rota_task_search' && item.data.filters.hasDescription && open(item.data.filters)
+        && reads.some((read) => matches(read, layer) && read.params.hasDescription)
+        && (item.complete === true && item.totalCount === 0 && item.data.tasks?.length === 0 || item.data.tasks?.length > 0
+          && item.data.tasks.every((task) => typeof task.description === 'string' && noteIds.has(String(task.taskId).toLowerCase()))))
+        : evidence.some((item) => item.ok === true && item.complete === true && item.tool === 'rota_task_analytics' && item.data.groupBy === 'due_horizon' && open(item.data.filters)
+          && item.data.filters.dateField === 'targetFinish' && item.data.filters.dateFrom === TEMPORAL_TODAY && item.data.filters.dateTo === shift(29)
+          && ['days_0_6', 'days_7_13', 'days_14_29'].every((key) => item.data.groups?.some((group) => group.key === key && Number.isSafeInteger(group.count) && group.count >= 0))
+          && reads.some((read) => matches(read, layer) && read.params.dateField === 'targetFinish' && read.params.dateFrom === TEMPORAL_TODAY && read.params.dateTo === shift(29)));
+      if (!seen) problems.push(`${kind === 'notes' ? 'not' : 'teslim ufku'} kanıtı okunmadı: ${layer.scope}`);
     }
   }
   return problems;

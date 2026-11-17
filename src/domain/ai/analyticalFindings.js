@@ -809,7 +809,7 @@ function introOrder(findings, locale, focus = []) {
   const temporal = temporalSentences(findings, locale);
   if (temporal.length) {
     const others = findings.filter((item) => !TEMPORAL_FINDING_KINDS.includes(item.kind));
-    const rest = others.length ? introOrder(others, locale, focus).map((item) => ({ ...item, group: item.group ?? '\u0000state' })) : [];
+    const rest = others.length ? withScopeLead(introOrder(others, locale, focus), others, locale).map((item) => ({ ...item, group: item.group ?? '\u0000state' })) : [];
     return [...temporal, ...rest];
   }
   // Aşama G: bütün bulgular tek kapsamı paylaşıyorsa kapsam bir kez, ilk cümlenin doğal girişiyle söylenir ("Ekibinizin işlerine

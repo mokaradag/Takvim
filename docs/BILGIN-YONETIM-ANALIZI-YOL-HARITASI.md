@@ -595,13 +595,14 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 
 **Aşama H eki (dönem soruları):** aynı yordam, şu farklarla uygulanır.
 
-1. Soru listesi: [Kabul Matrisi §9.6](BILGIN-ANALIZ-KABUL-MATRISI.md) hedef sorularının (t01–t62) özel ortamdaki proje/kişi
+1. Soru listesi: [Kabul Matrisi §9.2](BILGIN-ANALIZ-KABUL-MATRISI.md) hedef sorularının (t01–t62) özel ortamdaki proje/kişi
    adlarıyla yazımı; ayrık küme (y01–y30) bu turda sorulmaz, ayrı bir turda yalnızca bir kez sorulur.
 2. Not soruları (H5) yalnızca sohbet kutusunda "Notlar ve iletiler" anahtarı **o iletide** açıkken sorulur; anahtar kapalıyken
    aynı soru bir kez daha sorulup rıza isteği (veri okunmadan) doğrulanır.
 3. Her yanıtta denetlenir: dönem adı ve tarih aralığı yazılıyor mu; karşılaştırmada iki dönem de adlandırılıyor mu; hareket
-   kaydının başlangıcından önceki dönem "bilinmiyor" diye mi söyleniyor (sıfır değil); gerçekleşen bitişi olmayan tamamlanmış
-   görev çekincesi var mı; yüzde değişim yalnızca bitmiş ve eşit uzunluktaki dönemde mi veriliyor.
+   kaydının başlangıcından önceki dönem "bilinmiyor" diye mi söyleniyor (sıfır değil); tamamlanma geçmişi okunan yanıtta gerçekleşen
+   bitişi kayıtlı olmayan görev varsa ilgili çekince var mı; yüzde değişim yalnızca bitmiş, eşit uzunlukta ve örtüşmeyen
+   dönemlerde, önceki dönemin sayısı en az 4 olduğunda mı veriliyor.
 4. JSON günlükte `ai.grounded.turn` kaydının `context.parts`, `context.presentation` ve `sqlQueries` değerleri tabloya yazılır;
    hareket dönem özeti için Görev Hareketleri raporundaki aynı aralığın sayısı elle karşılaştırılır (aynı gizlilik sınırı).
 5. Sonuç §13 ve Kabul Matrisi §9'a tarihli kayıt olarak eklenir; koşulmadıysa H VM kabulü **bekliyor** kalır.
@@ -752,3 +753,10 @@ sınıflar Kabul Matrisi §9). Durum **SÜRÜYOR**; TAMAMLANDI işaretlenmedi.
   dönem sorusunda `scope: self` sınıfı (ayrık kümede baskın) ve istek yolunda kişiyi düşüren plan için sunucu tarafı içerme denetimi
   tasarımı; (3) karşılaştırmada `overview` eklenince 6 okuma sınırının aşılması (bütçe açıklaması yerine durum yönünün tek okumayla
   paylaşılması değerlendirilebilir); (4) tek tarihteki geçmiş durum sorusunun "Rota dışı" yerine geçmiş durum sınırıyla yanıtlanması.
+
+
+### 2026-11-17 — kök neden yakınsaması
+
+Başlangıç commit'i `0d38c07b862b159db7595bf3b724473cf50c3aba` üzerine tek düzeltme: toplu hareket sorgusunun geçici tablo temizliği, geleceğe yazılmış bitişlerin dışlanması, sürümlü bağlam ve dönem onarımı, kapsamı koruyan anlatım, bağımsız kabul kanıtı ve doğru dönem/kova beklentileri. Dört diff dışı bulgunun üçü ortak düzeltmelerle giderildi; tarihsel çok kapsamlı kırılımın mevcut düzeltmesi regresyonla doğrulandı.
+
+Koşu kanıtı [Kabul Matrisi §9.7](BILGIN-ANALIZ-KABUL-MATRISI.md): tam paket **6494/6494**, ardından son H puanlayıcı denetimiyle dönemsel paket **264/264**; lint uyarısız ve üretim derlemesi başarılı. İlk ACL ortam hatası başarılı sayılmadı; geçici dizin değişkenleri düzeltilerek tam paket yeniden koşuldu. Eski **6386** ve **6474** toplamları bu koşunun sonucu değildir. Windows/SQL VM, canlı Haiku ve bu commit'in tarayıcı kabulü **bekliyor**; durum **SÜRÜYOR**.

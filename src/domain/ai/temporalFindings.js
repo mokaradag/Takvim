@@ -65,6 +65,7 @@ export function temporalReads(groups) {
     const base = { evidenceId: group.evidenceId, part: group.part, today: provenance.today || null, range };
     // Not okuması (rızayla): açıklaması olan açık görevlerin açıklama satırları; sayım nüfusun tamamı, satırlar okunan örnektir.
     if (tool === 'rota_task_search' && filters.hasDescription === true && filters.statuses?.length && filters.statuses.every((status) => ['todo', 'in_progress'].includes(status))) {
+      if (Boolean(filters.dateFrom) !== Boolean(filters.dateTo)) continue;
       const scope = taskScope({ ...filters, hasDescription: false });
       const shown = new Set(group.facts.map((fact) => /^data\.tasks\.(\d+)\.description$/.exec(fact.field || '')?.[1]).filter(Boolean)).size;
       const total = group.facts.find((fact) => fact.field === 'totalCount');
@@ -131,7 +132,8 @@ function taskPlace(scope, locale) {
   const team = (TEAM_OF[scope.level] || ['ekibinizin', "your team's"])[lang];
   if (scope.person) return lang ? [...(scope.project ? ['in the ', s(scope.project), ' project, '] : []), 'in the work assigned to ', s(scope.person)]
     : [...(scope.project ? [s(scope.project), ' projesinde '] : []), s(scope.person), ' sorumluluğundaki işlerde'];
-  if (scope.personSicil != null) return lang ? ['in the selected person\'s work'] : ['seçilen kişinin sorumluluğundaki işlerde'];
+  if (scope.personSicil != null) return lang ? [...(scope.project ? ['in the ', s(scope.project), ' project, '] : []), 'in the selected person\'s work']
+    : [...(scope.project ? [s(scope.project), ' projesinde '] : []), 'seçilen kişinin sorumluluğundaki işlerde'];
   if (scope.project) {
     if (scope.owner === 'self') return lang ? ['in your own work in the ', s(scope.project), ' project'] : [s(scope.project), ' projesindeki kendi işlerinizde'];
     if (scope.owner === 'team') return lang ? [`in ${team} work in the `, s(scope.project), ' project'] : [s(scope.project), ` projesindeki ${team} işlerinde`];
@@ -309,7 +311,7 @@ const COMPARED = Object.freeze({
   completed: { noun: ['tamamlanan iş', 'completed work'], unit: 'görev', past: 'görev tamamlanmıştı', now: 'görev tamamlandı', count: 'completed tasks', none: ['tamamlanan görev yok', 'no task was completed'],
     states: ['tasks.total', 'tasks.undatedDone'] },
   created: { noun: ['oluşturulan iş', 'newly created work'], unit: 'görev', past: 'yeni görev oluşturulmuştu ve bugün hâlâ kayıtlı', now: 'yeni görev oluşturuldu ve bugün hâlâ kayıtlı', count: 'newly created tasks still present today',
-    none: ['bu dönemde oluşturulmuş ve bugün kayıtlı yeni görev yok', 'no task created in this period is still present today'], states: ['tasks.total', 'tasks.open', 'tasks.done'] },
+    none: ['bu dönemde oluşturulmuş ve bugün kayıtlı yeni görev yok', 'no task created in this period is still present today'], states: ['tasks.total'] },
   activity: { noun: ['kaydedilen hareket', 'recorded activity'], unit: 'hareket', past: 'hareket kaydedilmişti', now: 'hareket kaydedildi', count: 'recorded activity events',
     none: ['hareket kaydedilmedi', 'no activity was recorded'], states: ['activity.events'] }
 });
@@ -396,7 +398,7 @@ function comparisonSentences(finding, locale) {
         ...(other != null ? ['; in the other period ', n(other, locale), other === 1 ? ' activity event was recorded' : ' activity events were recorded'] : []), '.']
       : ['Kaydedilen hareketler karşılaştırılamıyor: ', windowPhrase(missing[0], finding.today, locale), ' için hareket kaydı yok', ...begins, '. Bu dönem bilinmiyor; sıfır sayılmadı',
         ...(other != null ? ['; öteki dönemde ', n(other, locale), ' hareket kaydedildi'] : []), '.']), caveat: true,
-    states: [...states(pair.earlier.evidenceId, ACTIVITY_STATES), ...states(pair.later.evidenceId, ACTIVITY_STATES)] });
+    states: [...states(pair.earlier.evidenceId, ['activity.events']), ...states(pair.later.evidenceId, ['activity.events'])] });
   }
   if (finding.pairs.some((pair) => pair.kind === 'activity')) out.push({ ...factSentence(en(locale) ? ['Activity counts refer to actions by ', ...(finding.scope.owner === 'self' ? ['you'] : finding.scope.owner === 'team' ? [(TEAM_SUBJECT[finding.scope.level] || ['ekibiniz', 'your team'])[1]] : [finding.scope.person || 'the selected visible actors']), ', independently of task assignment.'] : ['Hareket sayıları görev sorumluluğuna göre değil, ', ...(finding.scope.owner === 'self' ? ['sizin'] : finding.scope.owner === 'team' ? [(TEAM_OF[finding.scope.level] || ['ekibinizin'])[0]] : [finding.scope.person || 'görünür işlem yapanların']), ' kaydettiği işlemlere göredir.']), caveat: true, states: [] });
   if (finding.pairs.some((pair) => pair.kind === 'created')) out.push(createdBasisSentence(locale));
@@ -504,8 +506,8 @@ function summarySentences(finding, locale) {
         [activity.deleted, lang ? ['task deleted', 'tasks deleted'] : 'görev silindi'], [activity.updated, lang ? ['task only updated', 'tasks only updated'] : 'görev yalnızca güncellendi']]
         .filter(([value]) => value > 0).map(([value, label]) => [n(value, locale), ` ${Array.isArray(label) ? label[value === 1 ? 0 : 1] : label}`]);
       const counts = Object.assign(lang
-        ? [n(activity.events, locale), activity.events === 1 ? ' activity event on ' : ' activity events on ', n(activity.tasks, locale), activity.tasks === 1 ? ' task' : ' tasks']
-        : [n(activity.tasks, locale), ' görev üzerinde ', n(activity.events, locale), ' hareket'], { plural: activity.events !== 1 });
+        ? [n(activity.events, locale), activity.events === 1 ? ' activity event' : ' activity events', ...(activity.tasks != null ? [' on ', n(activity.tasks, locale), activity.tasks === 1 ? ' task' : ' tasks'] : [])]
+        : [...(activity.tasks != null ? [n(activity.tasks, locale), ' görev üzerinde '] : []), n(activity.events, locale), ' hareket'], { plural: activity.events !== 1 });
       // Kaç kişinin kaydettiği yalnızca birden çok kişinin olabildiği kapsamda (görünür işler, ekip, proje) bilgi taşır.
       const people = activity.people > 0 && !(finding.scope.owner === 'self' || finding.scope.personSicil != null)
         ? (lang ? ['; ', n(activity.people, locale), activity.people === 1 ? ' person' : ' people', ' recorded them'] : ['; hareketleri ', n(activity.people, locale), ' kişi kaydetti']) : [];

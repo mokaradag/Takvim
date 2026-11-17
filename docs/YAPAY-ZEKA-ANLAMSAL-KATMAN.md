@@ -2087,9 +2087,10 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   **Aşama H güncellemesi (geçerli sözleşme):** geçmiş dönem yönleri `completed` (gerçekleşen bitişe göre tamamlanan), `created`
   (oluşturulma gününe göre), `activity` (hareket kaydı dönem özeti), `trend` (tamamlanma dizisi; `bucket: week|month`), teslim
   ufukları `horizons` (7/14/30 gün) ve rızalı `notes` (açık görev açıklamaları) eklendi. Dönem türlüdür: `relativeWindow`
-  (`today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `last_7|14|30_days`, `next_7|14|30_days`, `all_time`)
+  (`today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `last_7|14|30_days`, `next_7|14|30_days`)
   ya da `dateFrom/dateTo`; gün sınırları Türkiye günüdür, takvim haftası pazartesi başlar ve kayan pencereyle (son 7 gün)
-  karıştırılmaz (`src/domain/ai/temporalWindow.js`). İkinci dönem `compare` (`previous` ya da adlı dönem) veya
+  karıştırılmaz (`src/domain/ai/temporalWindow.js`). `all_time` yalnızca dönemsiz durum yönlerinde kullanılır; tarihsel yönlerde
+  desteklenmez (`$.analysis.relativeWindow:unsupported`) ve açık, sınırlı dönem istenir. İkinci dönem `compare` (`previous` ya da adlı dönem) veya
   `compareFrom/compareTo`; iki dönem AYNI nüfus tanımıyla okunur (yalnızca dönem ayrışır). `previous`: takvim ayı → önceki
   ay, takvim haftası → önceki hafta, kayan "son N gün" ve diğer aralıklar → aynı uzunlukta hemen önceki aralık. Veri okunmadan
   reddedilenler: gelecek dönemde geçmiş yönü (`$.analysis.focus:futureWindow`), dönemsiz karşılaştırma (`compare:window`), aynı
