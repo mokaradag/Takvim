@@ -26,7 +26,7 @@ import {
   visibleTaskReference
 } from './rotaToolSupport.js';
 import { isCompleteTaskView, projectAccess } from './rotaScope.js';
-import { decodeCursor, encodeCursor, istanbulDay, TEAM_LEVELS } from './taskFacts.js';
+import { decodeCursor, encodeCursor, TEAM_LEVELS } from './taskFacts.js';
 import { bucketKey, bucketLabel, SERIES_BUCKETS, seriesBuckets, shiftDay } from '../../../../domain/ai/temporalWindow.js';
 
 const COORDINATION_SCOPE_NOTE = 'Etkin görevi olan atama kayıtları görev görüntüleme kapsamınıza uymalıdır; etkin görevi olmayan atama kayıtları yalnızca geçmiş katılımınız varsa gösterilir.';
@@ -190,8 +190,8 @@ const activitySearch = {
  *
  * Tarihsel doğruluk sözleşmesi:
  *   - Sayılar KAYDEDİLEN hareketlerdir (denetim kaydı); dönemin bütün faaliyeti olduğu iddia edilmez.
- *   - `coverage`: denetim kaydının ilk günü. Dönem bu günden önce başlıyorsa `partial` (o kısım için kayıt yok); dönemin tamamı
- *     kayıttan önceyse ya da hiç kayıt yoksa `none` ve sayılar `null`dır: bilinmeyen değer sıfır olarak verilmez.
+ *   - `coverage`: bu kapsamın kayıt başlangıcı ve tamlığı kanıtlanamaz; gözlem varsa `partial`, yoksa `none` ve sayılar `null`dır.
+ *     Kanıtsız kovalar sıfırla doldurulmaz; başka kapsamdaki kayıtlar bu karara veya görünür üstveriye katılmaz.
  *   - Tamamlanan/oluşturulan/silinen/yeniden açılan sayıları AYRIK görevdir: aynı görevin yinelenen geçişi tek sayılır. Dönemde
  *     tamamlanıp yeniden açılan görev `reopenedTasks` içinde de görünür; görevin bugünkü durumu bu sayılardan çıkarılamaz.
  */
@@ -225,18 +225,17 @@ async function activityAggregate(args, call, key) {
   }
   call.notePopulation?.(report.aggregate.population);
   const range = { dateFrom: report.range.from, dateTo: report.range.to };
-  const firstRecordedDay = istanbulDay(report.aggregate.firstRecordedAt);
-  const status = !firstRecordedDay || firstRecordedDay > range.dateTo ? 'none' : firstRecordedDay > range.dateFrom ? 'partial' : 'complete';
-  const known = status !== 'none';
+  const known = report.total > 0;
+  const status = known ? 'partial' : 'none';
   let series = null;
   if (buckets) {
     const byKey = new Map(buckets.map((item) => [item.key, { key: item.key, label: bucketLabel(item, bucket, 'tr'), dateFrom: item.dateFrom, dateTo: item.dateTo,
-      // Kayıt başlangıcından önce biten kova bilinmeyendir (sıfır değil); dizide değeri `null` kalır.
-      ...(item.partial || firstRecordedDay && firstRecordedDay > item.dateFrom && firstRecordedDay <= item.dateTo ? { partial: true } : {}), ...(!known || firstRecordedDay > item.dateTo ? { events: null, completionEvents: null, creationEvents: null, recorded: false }
-        : { events: 0, completionEvents: 0, creationEvents: 0 }) }]));
+      // Başlangıcı kanıtlanmayan kayıtta her kova kısmi, gözlenmeyen kova bilinmeyendir.
+      partial: true, events: null, completionEvents: null, creationEvents: null, recorded: false }]));
     for (const day of report.aggregate.days) {
       const row = byKey.get(bucketKey(day.day, bucket));
-      if (!row || row.events == null) continue;
+      if (!row) continue;
+      if (row.events == null) Object.assign(row, { events: 0, completionEvents: 0, creationEvents: 0, recorded: true });
       row.events += day.events; row.completionEvents += day.completionEvents; row.creationEvents += day.creationEvents;
     }
     series = [...byKey.values()];
@@ -251,7 +250,7 @@ async function activityAggregate(args, call, key) {
       summary: known ? { events: report.total, tasks: report.summary.tasks, people: report.summary.people, completedTasks: report.summary.completed,
         createdTasks: report.aggregate.created, deletedTasks: report.aggregate.deleted, updatedTasks: report.aggregate.updatedOnly, reopenedTasks: report.aggregate.reopened }
         : { events: null, tasks: null, people: null, completedTasks: null, createdTasks: null, deletedTasks: null, updatedTasks: null, reopenedTasks: null },
-      coverage: { status, firstRecordedDay },
+      coverage: { status, firstRecordedDay: null },
       ...(series ? { bucket, series } : {}),
       definitions: { recorded: 'Sayılar görev hareket kaydına (oluşturma, güncelleme, tamamlama, silme) dayanır; kaydedilmemiş faaliyeti kapsamaz. Aynı görev bir dönemde her türde bir kez sayılır.' }
     },

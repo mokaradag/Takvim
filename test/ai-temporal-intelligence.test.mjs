@@ -303,7 +303,7 @@ test('hareket özeti: yinelenen kayıt tek hareket, yeniden açılan görev ayr�
   const { stack, sicil, seed } = toolStack(t, 'B');
   const lastWeek = resolveWindow('last_week', TODAY);
   const week = (await callRotaTool(stack, sicil, 'rota_activity_search', { view: 'period', ...lastWeek })).result;
-  assert.equal(week.data.coverage.status, 'complete');
+  assert.deepEqual(week.data.coverage, { status: 'partial', firstRecordedDay: null }, 'gözlenen hareket kayıt tamlığını kanıtlamaz');
   assert.equal(week.data.summary.reopenedTasks, 1, 'tamamlanıp yeniden açılan görev');
   assert.equal(week.data.summary.deletedTasks, 1, 'silinmiş görevin hareketi kayıttadır');
   assert.equal(week.data.items, undefined, 'dönem özeti satır döndürmez');
@@ -311,14 +311,14 @@ test('hareket özeti: yinelenen kayıt tek hareket, yeniden açılan görev ayr�
   const month = (await callRotaTool(stack, sicil, 'rota_activity_search', { view: 'period', dateFrom: shift(AUDIT_START_OFFSET), dateTo: TODAY })).result;
   const visibleRows = seed.auditLog.filter((row) => row.ProjectId !== HIDDEN_PROJECT).length;
   assert.ok(month.data.summary.events < visibleRows, `${month.data.summary.events} < ${visibleRows}`);
-  // Kaydın başlamadığı dönem: sayılar null (sıfır değil); kısmen kapsanan dönem `partial`.
+  // Kanıtsız dönem: sayılar null (sıfır değil); gözlenen hareketler kayıt tamlığını kanıtlamaz.
   const before = (await callRotaTool(stack, sicil, 'rota_activity_search', { view: 'period', dateFrom: shift(-80), dateTo: shift(-61) })).result;
   assert.equal(before.data.coverage.status, 'none');
   assert.deepEqual(Object.values(before.data.summary), Array(8).fill(null));
   assert.equal(before.totalCount, null);
   const partial = (await callRotaTool(stack, sicil, 'rota_activity_search', { view: 'week', dateFrom: shift(-55), dateTo: shift(-20) })).result;
   assert.equal(partial.data.coverage.status, 'partial');
-  assert.equal(partial.data.coverage.firstRecordedDay, shift(AUDIT_START_OFFSET));
+  assert.equal(partial.data.coverage.firstRecordedDay, null);
   assert.ok(partial.data.series.some((row) => row.recorded === false && row.events === null), 'kayıt öncesi kova bilinmeyendir');
   assert.ok(partial.data.series.some((row) => Number.isSafeInteger(row.events)));
 });
@@ -669,7 +669,8 @@ test('dönem yanıtı doğrudan açılır, dönemi ve kapsamı söyler, sayılar
   assert.equal(numbers.length, 1);
   for (const value of numbers) assert.equal(content.split(`**${value}** görev tamamlandı`).length, 2, `${value} bir kez söylenir`);
   // Olgu ile yorum ayrıdır: kayıt kapsamı ve tarihi eksik görevler açık çekincedir.
-  assert.match(content, /Hareket kaydı \*\*21 Ağustos 2026\*\* tarihinde başladığından/);
+  assert.match(content, /Hareket kaydının bu kapsam için başlangıcı ve tamlığı doğrulanamadı/);
+  assert.doesNotMatch(content, /21 Ağustos 2026|tarihinde başladığından/);
 });
 
 test('kısa ayrıntıda da dönemin olgu cümleleri birlikte kalır; okumalar gövdede ölçütlü ayrıntı satırına dönüşmez', async (t) => {
@@ -1973,5 +1974,50 @@ test('çok kapsamlı yanıtta yalnız Sicil ile seçilen kişinin başlığı ki
       }
       assert.ok(sentences.some((item) => item.group === (locale === 'tr' ? 'Görebildiğiniz işler' : 'Visible work')));
     }
+  }
+});
+
+test('yetkisiz hareket tarihi proje, kişi, kişisel ve ekip özetinin kapsam bilgisini değiştiremez', async (t) => {
+  const original = seeded(t);
+  const changed = structuredClone(original);
+  const hidden = changed.auditLog.find((row) => row.ProjectId === HIDDEN_PROJECT);
+  assert.ok(hidden);
+  hidden.OccurredAt = '2020-01-01T10:00:00.000Z';
+  for (const selectors of [{}, { scope: 'mine' }, { scope: 'team', teamLevel: 'unit' }, { projectId: TEMPORAL_PROJECTS.KAP, personSicil: P.B }]) {
+    const args = { view: 'week', dateFrom: shift(-55), dateTo: TODAY, ...selectors };
+    const read = async (seed) => {
+      const { stack, sicil } = toolStack(t, 'B', structuredClone(seed));
+      const result = (await callRotaTool(stack, sicil, 'rota_activity_search', args)).result;
+      assert.equal(result.ok, true);
+      const sql = stack.db.statements.find((row) => row.params.teamLevel !== undefined).sql;
+      return { result, sql };
+    };
+    const before = await read(original), after = await read(changed);
+    assert.deepEqual(after.result.data.coverage, before.result.data.coverage, 'görünmeyen tarihten üstveri türetilemez');
+    assert.deepEqual(after.result.data.summary, before.result.data.summary);
+    assert.deepEqual(after.result.data.series, before.result.data.series);
+    assert.doesNotMatch(before.sql, /MIN\(first\.OccurredAt\).*dbo\.MR_AuditLog first/);
+    assert.match(before.sql, /CAST\(NULL AS datetime2\) AS FirstRecordedAt/);
+  }
+});
+
+test('başlangıcı kanıtlanamayan hareket kaydı kısmi kalır; kanıtsız kovalar sıfıra çevrilmez', async (t) => {
+  const { stack, sicil } = toolStack(t, 'B');
+  const range = { dateFrom: shift(-89), dateTo: TODAY };
+  const result = (await callRotaTool(stack, sicil, 'rota_activity_search', { view: 'week', ...range })).result;
+  assert.equal(result.ok, true);
+  assert.ok(result.data.summary.events > 0, 'yetkili gözlemler kaybolmaz');
+  assert.deepEqual(result.data.coverage, { status: 'partial', firstRecordedDay: null });
+  const observed = result.data.series.filter((row) => row.events != null);
+  const unknown = result.data.series.filter((row) => row.events == null);
+  assert.ok(observed.length > 0);
+  assert.ok(unknown.length > 0);
+  assert.ok(observed.every((row) => row.recorded === true && row.partial === true));
+  assert.ok(unknown.every((row) => row.recorded === false && row.completionEvents === null && row.creationEvents === null));
+  const reads = [activityRead('R1', range, result.data.summary.events, result.data.coverage)];
+  for (const locale of ['tr', 'en']) {
+    const text = temporalSentences(temporalFindings(reads), locale).map((item) => item.plain).join(' ');
+    assert.match(text, locale === 'tr' ? /başlangıcı ve tamlığı doğrulanamadı/ : /start and completeness.*cannot be verified/);
+    assert.doesNotMatch(text, /tarihinde başladı|records begin on|records begin.*—/);
   }
 });

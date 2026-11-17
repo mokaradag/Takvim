@@ -90,7 +90,6 @@ export function taskActivityRecordsets(db, params) {
       const flags = touched.get(id) || { Created: false, Deleted: false, Completed: false, Reopened: false };
       touched.set(id, { Created: flags.Created || g.Created, Deleted: flags.Deleted || g.Deleted, Completed: flags.Completed || g.Completed, Reopened: flags.Reopened || g.Reopened });
     }
-    const first = db.auditLog.filter((row) => row.EntityType === 'TASK').map((row) => new Date(row.OccurredAt).getTime()).sort((a, b) => a - b)[0];
     const istanbul = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' });
     const days = new Map();
     for (const g of grouped) {
@@ -107,7 +106,7 @@ export function taskActivityRecordsets(db, params) {
       .filter(Boolean).map((task) => ({ TaskId: task.TaskId, CurrentProjectId: task.ProjectId }));
     return [actors, projectOptions, [{ ...summary, CreatedCount: tasksOf((g) => g.Created).size, DeletedCount: tasksOf((g) => g.Deleted).size,
       ReopenedCount: tasksOf((g) => g.Reopened).size, UpdatedOnlyCount: [...touched.values()].filter((flags) => !flags.Created && !flags.Deleted && !flags.Completed && !flags.Reopened).length,
-      FirstRecordedAt: first == null ? null : new Date(first).toISOString() }], [],
+      FirstRecordedAt: null }], [],
       [...days.values()].sort((a, b) => a.ActivityDay.localeCompare(b.ActivityDay)), population];
   }
   return [actors, projectOptions, [summary], grouped.slice(Page * params.pageSize, (Page + 1) * params.pageSize)

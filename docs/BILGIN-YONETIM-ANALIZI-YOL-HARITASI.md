@@ -483,9 +483,10 @@ Windows VM yeniden oynatması bekliyor; Aşama G'nin canlı model ve VM kapılar
 - **Araç genişlemeleri (salt okunur, sabit parametreli SQL):** `rota_task_analytics` (`createdAt` tarih alanı, `date_week`/
   `date_month` sürekli dizi, `due_horizon`, `history.undatedDone`), `rota_task_search` (`actual_finish_desc`, rızalı
   `description` ve `hasDescription`), `rota_activity_search` (`view: period|week|month` toplu dönem özeti; Görev Hareketleri
-  sorgusunun çapa tabanlı türevi; kayıt kapsamı `none|partial|complete`; ekip düzeyi `teamLevel`).
-- **Tarihsel doğruluk sözleşmesi** (sunucu): bilinmeyen değer `null`dır ve sıfır yazılmaz; kayıt başlangıcından önceki dönemin
-  karşılaştırması kurulmaz; kısmi kayıtta fark yorumlanmaz; gerçekleşen bitişi kayıtlı olmayan tamamlanmış görevler sayılır ve
+  sorgusunun çapa tabanlı türevi; kayıt kapsamı sözlüğü `none|partial|complete`; ekip düzeyi `teamLevel`). Kapsama ait kayıt
+  başlangıcı ve tamlığı kanıtlanamadığından üretimde `firstRecordedDay: null`, gözlem varsa `partial`, yoksa `none` döner.
+- **Tarihsel doğruluk sözleşmesi** (sunucu): bilinmeyen değer `null`dır ve sıfır yazılmaz; kanıtsız hareket dönemi/kova bilinmez,
+  kısmi kayıtta fark yorumlanmaz; gerçekleşen bitişi kayıtlı olmayan tamamlanmış görevler sayılır ve
   söylenir; yeniden açılan görev ayrıca sayılır; aynı ilişki kimliğinin kayıtları tek harekettir; yüzde değişim yalnızca eşit
   uzunlukta, bitmiş, örtüşmeyen dönemlerde ve önceki değer ≥ 4 iken; eğilim yalnızca ≥ 6 tam kovayla (son 3 ↔ önceki 3);
   geçmiş DURUM (ör. geçen haftaki gecikme) yeniden kurulamaz ve bu adıyla söylenir.
@@ -600,7 +601,7 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 2. Not soruları (H5) yalnızca sohbet kutusunda "Notlar ve iletiler" anahtarı **o iletide** açıkken sorulur; anahtar kapalıyken
    aynı soru bir kez daha sorulup rıza isteği (veri okunmadan) doğrulanır.
 3. Her yanıtta denetlenir: dönem adı ve tarih aralığı yazılıyor mu; karşılaştırmada iki dönem de adlandırılıyor mu; hareket
-   kaydının başlangıcından önceki dönem "bilinmiyor" diye mi söyleniyor (sıfır değil); tamamlanma geçmişi okunan yanıtta gerçekleşen
+   kaydının başlangıcı ve tamlığı doğrulanamadığında bu sınır açıklanıyor mu, kanıtsız dönem "bilinmiyor" diye mi söyleniyor (sıfır değil); tamamlanma geçmişi okunan yanıtta gerçekleşen
    bitişi kayıtlı olmayan görev varsa ilgili çekince var mı; yüzde değişim yalnızca bitmiş, eşit uzunlukta ve örtüşmeyen
    dönemlerde, önceki dönemin sayısı en az 4 olduğunda mı veriliyor.
 4. JSON günlükte `ai.grounded.turn` kaydının `context.parts`, `context.presentation` ve `sqlQueries` değerleri tabloya yazılır;

@@ -373,9 +373,9 @@ function comparisonSentences(finding, locale) {
     const place = [...placeFor(pair), lang ? ', ' : ' '];
     out.push({ ...factSentence(lang
       ? [upper(adverb(earlier, 0), locale), ', ', ...place, 'recorded activity events totalled ', n(valueOf(pair.earlier), locale), '; ', adverb(later, 1, { open }), ', ', n(valueOf(pair.later), locale),
-        '. The activity record does not cover the whole of the earlier period, so the difference is not interpreted.']
+        '. The periods cannot be compared because the completeness of activity records cannot be established; the difference is not interpreted.']
       : [upper(adverb(earlier, 0), locale), ' ', ...place, n(valueOf(pair.earlier), locale), ' hareket kaydedilmişti; ', adverb(later, 1, { open }), ' ', n(valueOf(pair.later), locale),
-        ' hareket kaydedildi. Hareket kaydı önceki dönemin tamamını kapsamadığından bu fark yorumlanmadı.']),
+        ' hareket kaydedildi. Kayıt tamlığı doğrulanamadığı için dönemler karşılaştırılamıyor; bu fark yorumlanmadı.']),
     states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ['activity.events'])) });
   }
   for (const pair of unknown) {
@@ -449,6 +449,9 @@ function undatedSentence(undated, locale, evidenceIds) {
 
 function coverageSentence(read, locale) {
   const first = read.coverage.firstRecordedDay;
+  if (!first) return { ...factSentence(en(locale)
+    ? ['The start and completeness of activity records for this scope cannot be verified; counts include only observed activity.']
+    : ['Hareket kaydının bu kapsam için başlangıcı ve tamlığı doğrulanamadı; sayılar yalnızca gözlenen hareketleri kapsıyor.']), caveat: true, states: [] };
   return { ...factSentence(en(locale)
     ? ['Activity records begin on ', s(formatFactDay(first, locale)), ', so the part of the period before that date is not reflected in these counts.']
     : ['Hareket kaydı ', s(formatFactDay(first, locale)), ' tarihinde başladığından dönemin bu tarihten önceki bölümü sayılara yansımıyor.']), caveat: true, states: [] };

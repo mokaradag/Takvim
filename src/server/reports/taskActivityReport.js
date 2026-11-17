@@ -126,7 +126,7 @@ export const TASK_ACTIVITY_SQL = `
  *   - yeniden açma olayı (tamamlanmış durumdan çıkış) ve türlere göre AYRIK görev sayıları (oluşturulan, silinen, yalnızca
  *     güncellenen, yeniden açılan): aynı görevin bir dönemdeki yinelenen geçişleri tek sayılır;
  *   - Türkiye gününe göre günlük hareket sayıları (çağıran haftalık/aylık kovalara toplar);
- *   - denetim kaydının başlangıcı (`FirstRecordedAt`): dönem bu andan önceye uzanıyorsa o kısım için kayıt yoktur — sıfır değildir;
+ *   - denetim kaydının başlangıcı (`FirstRecordedAt`) doğrulanmış bir kapsam kaynağı olmadığından bilinmez; küresel kayıt tarihi okunmaz;
  *   - ekip kapsamının kurumsal düzeyi (`@teamLevel`): görev olgularındaki düzey kuralının aynısı; düzeyde yönetilen çalışan yoksa
  *     nüfus yoktur ve okuma kapalı reddedilir ("0 hareket" yanıltıcı olurdu).
  * Okuma sınırı aynıdır: `analyzedActivityLimit` + 1 yoklaması (20 000 + 1) aşılırsa "sonuç çok büyük".
@@ -164,7 +164,7 @@ function aggregateActivitySql(statement) {
     COUNT(DISTINCT CASE WHEN Reopened = 1 THEN EntityId END) AS ReopenedCount,
     (SELECT COUNT(*) FROM (SELECT EntityId FROM #TaskActivityGroups GROUP BY EntityId
       HAVING MAX(Created) = 0 AND MAX(Deleted) = 0 AND MAX(Completed) = 0 AND MAX(Reopened) = 0) updatedOnly) AS UpdatedOnlyCount,
-    (SELECT MIN(first.OccurredAt) FROM dbo.MR_AuditLog first WHERE first.EntityType = 'TASK') AS FirstRecordedAt`],
+    CAST(NULL AS datetime2) AS FirstRecordedAt`],
     ['  DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;', `  SELECT CONVERT(char(10), ${ACTIVITY_DAY_SQL}, 23) AS ActivityDay, SUM(Events) AS Events,
     SUM(CompletionEvents) AS CompletionEvents, SUM(CreationEvents) AS CreationEvents
   FROM (

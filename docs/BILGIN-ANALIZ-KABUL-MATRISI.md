@@ -622,7 +622,7 @@ yeniden oynatması bekliyor). Aşama G'nin canlı model ve VM kapıları da hâl
 | --- | --- | --- |
 | Dönem sınırları Türkiye günüdür; takvim haftası pazartesi başlar; kayan pencere takvim dönemine çevrilmez | `temporalWindow.js`; `createdAt` Türkiye gününe SQL'de çevrilir | dönem birimleri, gece yarısı sınırı |
 | İki dönem aynı nüfus tanımıyla okunur | `analysisPlan.js` karşılaştırma okumaları yalnızca dönemle ayrışır | açılım eşitliği |
-| Bilinmeyen ≠ sıfır | hareket özeti kayıt başlangıcından önce `null`; kova `recorded:false` | `none`/`partial` kapsamı, a10 |
+| Bilinmeyen ≠ sıfır | kanıtsız hareket dönemi/kova `null`, `recorded:false`; başlangıç bilinmez, gözlenen kayıt kısmi kalır | `none`/`partial` kapsamı, a10, kapsam izolasyonu |
 | Kısmi kayıtta fark yorumlanmaz; kayıt öncesi dönemle karşılaştırma kurulmaz | `temporalFindings.js` | birim sınama |
 | Tarihi kayıtlı olmayan tamamlanmış görev sayılır ve söylenir | `history.undatedDone`; nüfus değişmezi bunu içerir | tamlık sınaması |
 | Yeniden açılan görev ayrı sayılır; aynı ilişki kimliğinin kayıtları tek harekettir | hareket toplu sorgusu | a03, a04 |
@@ -636,7 +636,7 @@ yeniden oynatması bekliyor). Aşama G'nin canlı model ve VM kapıları da hâl
 ### 9.2 Kıyas kümesi (sentetik)
 
 `test/fixtures/bilgin-temporal-benchmark.json` + `test/helpers/temporalBenchmarkSeed.mjs` (G sentetik verisinin genişletilmesi:
-oluşturulma/güncellenme anları, kayıt başlangıcı T−40 olan hareket kaydı, tarihi kayıtlı olmayan 2 tamamlanmış görev, yeniden açılan
+oluşturulma/güncellenme anları, ilk sentetik olayı T−40 olan hareket kaydı (bu olay kayıt tamlığını kanıtlamaz), tarihi kayıtlı olmayan 2 tamamlanmış görev, yeniden açılan
 görev, yinelenen kayıt, silinmiş ve taşınmış görev, görünmeyen proje, çelişen ve enjeksiyonlu notlar). **124 soru:** 62 hedefli
 (H1 12, H2 12, H3 8, H4 8, H5 6, H6 6, H7 4, H8 6; 59 tam, 2 sınır, 1 rıza), 20 olumsuz (aşağıdaki 20 başarısızlık biçimi),
 12 çapraz aşama (F 6, G 6) ve 30 bağımsız ayrık soru (yalnızca planlayıcı puanı; yönerge örneklerinde kullanılmaz, örtüşme sınaması
@@ -759,11 +759,18 @@ Başlangıç sürümü: `0d38c07b862b159db7595bf3b724473cf50c3aba`; kayıt sür�
 
 #### 17 Kasım 2026 — ek inceleme bulguları
 
-Başlangıç sürümü: `16bc411f12c734ca0443249a4c2755fde85d5cf2`; aşağıdaki sonuçlar bu kaydı içeren ek düzeltme commit'inin çalışma ağacına aittir.
+Başlangıç sürümü: `16bc411f12c734ca0443249a4c2755fde85d5cf2`; kayıt sürümü: `d2a678659f7e2c56a00e43dc52c148f49dc7cbe5`. Aşağıdaki sonuçlar bu sürüme aittir.
 
 - Linux, Node **24.22.1**: aynı `TMPDIR`/`TMP`/`TEMP` ayarıyla `npm test -- --test-concurrency=1` **6500/6500**; başarısız, iptal ve atlanan **0**. Dönemsel dosyanın tamamı ayrıca **270/270** geçti; F/G ve H kontrolleri tam pakette korundu.
 - Üç yeni Türkçe davranış testi düzeltme öncesinde başarısız oldu, düzeltmelerle geçti: 400/401 Unicode kod noktası sınırındaki notlar ve kesiklik bilgisi; bilinmeyen tamamlanma/oluşturulma sayıları ve ölçü kimlikleri; Sicil ile seçilen kişinin çok kapsamlı başlığı. Son iki konu iki dilde, kişi başlığı proje var/yok durumlarında sınandı. Ulaşılamayan karşılaştırma dalı kaldırıldı; açık dönem uyarısı mevcut regresyonla doğrulandı.
 - `npm run lint`: uyarı ve hata yok. `NEXT_TELEMETRY_DISABLED=1 npm run build`: başarılı. Yeni bağımlılık, dosya veya yetki yolu eklenmedi. Canlı SQL Server/Windows VM ve Haiku kabulü çalıştırılmadı; Unicode SQL sınırı sorgu sözleşmesi ve belirlenimci SQL ikiziyle doğrulandı.
+
+#### 17 Kasım 2026 — hareket kaydı kapsamının gizliliği
+
+Başlangıç sürümü: `d2a678659f7e2c56a00e43dc52c148f49dc7cbe5`; bu kaydı içeren düzeltme commit'inin çalışma ağacı sınandı. Küresel ilk hareket tarihi kaldırıldı; kayıt başlangıcı ve tamlığı kanıtlanamadığında gözlemler kısmi, kanıtsız dönem ve kovalar bilinmeyen kalır.
+
+- Linux, Node **24.22.1**, aynı geçici dizin ayarları: `npm test -- --test-concurrency=1` **6502/6502**, başarısız/iptal/atlanan **0**; dönemsel dosya ayrıca **272/272**. İki yeni regresyon eski davranışta başarısız oldu; düzeltmeyle proje/kişi, kişisel ve ekip kapsamlarının gizli tarihten bağımsızlığı ve iki dilde belirsizlik açıklaması doğrulandı.
+- `npm run lint` ve `NEXT_TELEMETRY_DISABLED=1 npm run build`: başarılı. Önceki küresel tarihi zorunlu tutan beklentiler kaldırılıp belirsizlik açıklaması ve tarihin açıklanmaması zorunlu kılındı. F/G ve H kontrolleri korundu. Yeni kaynak, bağımlılık, dosya veya yetki yolu eklenmedi; canlı SQL/VM ve model kabulü çalıştırılmadı.
 
 ### 9.8 Bilinen sınırlar ve sonraki adım
 
