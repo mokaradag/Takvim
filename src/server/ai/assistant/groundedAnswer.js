@@ -788,7 +788,7 @@ function pinAnalysisRepair(turn, plan, details) {
     const [path, reason] = String(detail).split(':');
     if (path === '$.analysis.also' && reason === 'duplicate') paths.add('__duplicateLayers');
     if (['$.language', '$.chart', '$.charts', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
-    if (path.startsWith('$.analysis.') && !(path === '$.analysis.also' && ['duplicate', 'scope', 'window'].includes(reason)) && !(path === '$.analysis.compare' && reason === 'window') && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
+    if (path.startsWith('$.analysis.') && !(path === '$.analysis.also' && ['duplicate', 'scope', 'window'].includes(reason)) && !(path === '$.analysis.compare' && reason === 'window') && !(path === '$.analysis.compareFrom' && reason === 'required') && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
     // Gerçek satır göndergeleri onarımda silinemez; başka kapsamdaki anlamsız alan kaldırılabilir.
     if (path === '$.analysis.rows' && normalizedBrief(existing?.raw || plan.analysis).scope !== 'row') paths.add('rows');
     // Kapsamlar arası dönem çakışması yalnızca dönem alanlarını açar: birincilin dönemi ve her ek kapsamın konumsal dönem alanları
@@ -803,7 +803,9 @@ function pinAnalysisRepair(turn, plan, details) {
     // Aşama H — karşılaştırma dönemi: çakışan iki yazımdan biri kaldırılabilir; birincil dönem eksikse yalnızca dönem alanları eklenebilir
     // (kapsam ve yönler sabit kalır; var olan geçerli dönem bu yolla değiştirilemez).
     if (path === '$.analysis.compare' && reason === 'conflict') for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
-    if (path === '$.analysis.compareFrom' && reason === 'required') for (const key of ['compareFrom', 'compareTo']) paths.add(key);
+    if (path === '$.analysis.compareFrom' && reason === 'required') {
+      for (const key of ['compareFrom', 'compareTo']) if ((existing?.raw || plan.analysis)[key] == null) paths.add(key);
+    }
     if (path === '$.analysis.compare' && reason === 'window') {
       for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) if ((existing?.raw || plan.analysis)[key] == null) paths.add(key);
     }
@@ -935,7 +937,7 @@ function planNeedsText(turn, plan) {
   try { if (resolved) resolved = resolveAnalysisBrief(parseAnalysis(resolved), { previous: turn.previousAnalysis, today: turn.context.today }); } catch (error) { if (!(error instanceof ToolError)) throw error; }
   const layers = resolved && typeof resolved === 'object' && !Array.isArray(resolved) ? [resolved, ...(Array.isArray(resolved.also) ? resolved.also : [])] : [];
   if (layers.some((layer) => Array.isArray(layer?.focus) && layer.focus.includes('notes')) && !turn.allowedTextFields.includes('description')) return true;
-  return [plan?.request, ...(Array.isArray(plan?.additionalRequests) ? plan.additionalRequests : [])].filter(Boolean).some((raw) => Array.isArray(raw.metrics)
+  return [plan?.request, ...(Array.isArray(plan?.additionalRequests) ? plan.additionalRequests : [])].filter(Boolean).some((raw) => raw.filters?.hasDescription === true && !turn.allowedTextFields.includes('description') || Array.isArray(raw.metrics)
     && raw.metrics.some((metric) => turn.catalog.some((tool) => metricPaths(tool.name, metric).some((path) => {
       const field = path.split('.').findLast((part) => part !== '*');
       return EVIDENCE_TEXT_FIELDS.includes(field) && !turn.allowedTextFields.includes(field);

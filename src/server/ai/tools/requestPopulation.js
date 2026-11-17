@@ -255,7 +255,7 @@ function propertyCarrier(request, metric, selected = null) {
 
 /** İsteğin veri okunmadan açtığı korumalı metin alanları: nüfusunki ve varlık özelliği okumalarınınki. */
 export function requestTextFields(request) {
-  const fields = [...(request.population?.textFields || []), ...request.metrics.flatMap((metric) =>
+  const fields = [...(request.population?.textFields || []), ...(request.filters?.hasDescription ? ['description'] : []), ...request.metrics.flatMap((metric) =>
     [...new Set(request.fields.filter((field) => field.metric === metric).map((field) => field.tool)), null]
       .flatMap((tool) => propertyCarrier(request, metric, tool)?.textFields || []))];
   return [...new Set(fields)].sort();
@@ -570,6 +570,15 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   if (population.depth && tool.name !== 'rota_wbs_inspect') {
     problems.push('$.population.depth:unsupported');
     hints.push('population.depth yalnızca rota_wbs_inspect nüfusundadır (collection nodes)');
+  }
+  // Notun varlığını süzen nüfus da o iletinin açıklama rızasını açıkça taşır.
+  if (request.filters.hasDescription && !population.textFields?.includes('description')) {
+    problems.push('$.population.textFields:required');
+    hints.push('hasDescription için population.textFields: ["description"] zorunludur; yalnızca o iletinin rızasıyla okunur');
+  }
+  if (tool.name === 'rota_activity_search' && request.filters.teamLevel && !request.filters.activityView) {
+    problems.push('$.filters.activityView:required');
+    hints.push('Düzeyli hareket özeti için analysis kapsamı team, level ve activity yönünü kullanın');
   }
   if (requestTextFields(request).some((field) => !allowedTextFields.includes(field))) {
     problems.push('$.population.textFields:not-authorized');

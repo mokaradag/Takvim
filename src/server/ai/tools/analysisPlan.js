@@ -411,7 +411,7 @@ export function analysisWindows(analysis, today = null) {
   if (analysis.compare || analysis.compareFrom) {
     if (!range?.dateFrom || !range?.dateTo) throw invalidArguments(['$.analysis.compare:window']);
     compare = analysis.compareFrom ? { dateFrom: analysis.compareFrom, dateTo: analysis.compareTo }
-      : analysis.compare === 'previous' ? previousWindow(range, { rolling: /^last_\d+_days$/.test(analysis.relativeWindow || '') }) : today ? resolveWindow(analysis.compare, today) : null;
+      : analysis.compare === 'previous' ? previousWindow(range, { rolling: defaulted || /^last_\d+_days$/.test(analysis.relativeWindow || '') }) : today ? resolveWindow(analysis.compare, today) : null;
     if (!compare) throw invalidArguments(['$.analysis.compare:window']);
     if (compare.dateFrom === range.dateFrom && compare.dateTo === range.dateTo) throw invalidArguments(['$.analysis.compare:same']);
     if (today && (compare.dateFrom > today || /^next_/.test(analysis.compare || ''))) throw invalidArguments(['$.analysis.focus:futureWindow']);
@@ -888,7 +888,8 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
   const budget = Math.max(layers.length, ANALYSIS_LIMITS.maxParts - reserve);
   // Aşama H: bütün kapsamlar yalnızca geçmiş dönem yönü soruyorsa karşılaştırılan ölçüler dönem okumalarının kendisidir; bugünkü
   // durumun özet okuması eklenmez (soru dönemi sorar, okuma bütçesi dönem okumalarına kalır).
-  const temporalOnly = layers.every((layer) => layer.focus.every((focus) => TEMPORAL_FOCUS.includes(focus)));
+  const temporalOnly = layers.every((layer) => layer.focus.every((focus) => TEMPORAL_FOCUS.includes(focus)
+    || HISTORY_GROUP_FOCUS.includes(focus) && Boolean(historyGroups(focus, { ...analysis, ...layer }, scopeBase(layer), layer.focus))));
   const parts = temporalOnly ? [] : layers.map((layer) => {
     const base = scopeBase(layer);
     return request({ operation: 'value', metrics: [...LAYER_METRICS], population: { tool: 'rota_task_analytics' },
@@ -1050,9 +1051,11 @@ function selfComparison(focus, analysis, base, today, chart) {
   // İki özne de aynı yönün aynı nüfus sözleşmesiyle okunur; kimlik yalnızca sunucunun çözümünden gelir.
   const sides = [base, self].map((side) => {
     const read = focus === 'overdue' ? overdueBase(side, analysis, today) : side;
+    const historical = HISTORY_GROUP_FOCUS.includes(focus) && historyGroups(focus, { ...analysis, scope: 'self', withSelf: false }, side, analysis.focus);
+    if (historical) return historical;
     return metrics && !(chart === 'timeline' && focus === 'overdue')
       ? request({ operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, ...(read.entities.length ? { entities: read.entities } : {}), filters: read.filters })
-      : (HISTORY_GROUP_FOCUS.includes(focus) && historyGroups(focus, { ...analysis, scope: 'self', withSelf: false }, side, analysis.focus)) || focusRequest(focus, { ...analysis, scope: 'self', withSelf: false }, side, today);
+      : focusRequest(focus, { ...analysis, scope: 'self', withSelf: false }, side, today);
   });
   // Kapsamda anlamı olmayan yön (null) boş okumaya dönüşmez: açılım planı reddeder ve model yönü düzeltir. Geçerli boş sonuç ([]) kalır.
   if (sides.some((side) => side == null)) return null;
@@ -1101,7 +1104,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
   const parts = [];
   const seen = new Set();
   // Yalnızca geçmiş dönem (ve ufuk) yönleri soruluyorsa bugünkü durumun bütünleyici okumaları eklenmez: soru dönemi sorar.
-  const historical = declared.every((focus) => TEMPORAL_FOCUS.includes(focus) || ['horizons', 'notes'].includes(focus) || (HISTORY_GROUP_FOCUS.includes(focus) && declared.some((item) => COMPARABLE_FOCUS.includes(item))));
+  const historical = declared.every((focus) => TEMPORAL_FOCUS.includes(focus) || ['horizons', 'notes'].includes(focus) || (HISTORY_GROUP_FOCUS.includes(focus) && Boolean(historyGroups(focus, analysis, base, declared))));
   for (const focus of declared) {
     const produced = produce(focus);
     if (!produced) throw invalidArguments(['$.analysis.focus:unsupported']);

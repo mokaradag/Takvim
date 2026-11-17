@@ -296,10 +296,15 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   if (atoms.length) for (const request of requests) if (!atoms.some((layer) => temporalRequestMatches(request, layer))) failures.push('beklenmeyen nüfus okundu');
   const measures = (expect.focusAll || []).filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus));
   if (!measures.length && expect.focusAny) measures.push(...focus.filter((item) => expect.focusAny.includes(item) && ['completed', 'created', 'activity', 'trend'].includes(item)));
-  const carries = (request, measure) => measure === 'activity' ? request.population?.tool === 'rota_activity_search' && request.filters?.activityView && request.metrics?.includes('activity.events')
-    : request.population?.tool === 'rota_task_analytics' && request.filters?.dateField === (measure === 'created' ? 'createdAt' : 'actualFinish')
-      && request.metrics?.includes('tasks.total') && (measure === 'created' ? !request.filters?.status?.length : request.filters?.status?.length === 1 && request.filters.status[0] === 'done')
+  const carries = (request, measure) => {
+    const filters = request.filters || {};
+    if (request.entities?.some((entity) => !['person', 'project'].includes(entity.type))) return false;
+    if (measure === 'activity') return request.population?.tool === 'rota_activity_search' && filters.activityView && !filters.activityKind && request.metrics?.includes('activity.events');
+    if (['priority', 'deadline', 'text', 'milestone'].some((key) => filters[key] != null && !(Array.isArray(filters[key]) && !filters[key].length)) || filters.createdByMe || filters.hasDescription) return false;
+    return request.population?.tool === 'rota_task_analytics' && filters.assignee !== 'unassigned' && filters.dateField === (measure === 'created' ? 'createdAt' : 'actualFinish')
+      && request.metrics?.includes('tasks.total') && (measure === 'created' ? !filters.status?.length : filters.status?.length === 1 && filters.status[0] === 'done')
       && (measure === 'trend' ? ['date_week', 'date_month'].includes(request.population.groupBy) : !request.population.groupBy);
+  };
   const reads = (range) => (atoms.length ? atoms : [null]).every((layer) => (measures.length ? measures : [null]).every((measure) => requests.some((request) =>
     (!range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]) && (!expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1) && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
     && (!expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)))));
@@ -690,7 +695,7 @@ if (direct) {
       t.mock.timers.reset();
       const { test: _named, ...expect } = item.expect;
       const turn = { text: item.text, detail: item.detail || null, includeText: item.includeText === true, requireComposed: item.handling === 'full' && !expect.finish,
-        violations: (result) => [...temporalViolations(result, expect, { locale: item.plan?.language || 'tr' }), ...temporalPopulationViolations(result, item.plan?.analysis, seed)] };
+        violations: (result) => [...temporalViolations(result, expect, { locale: item.plan?.language || 'tr', includeText: item.includeText === true }), ...temporalPopulationViolations(result, item.plan?.analysis, seed)] };
       const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: TEMPORAL_PROFILES[item.profile] });
       // Sunucunun tek olası düzeni (seçim yok) modelin düzen hatası değildir; diğer sunucu düzenleri (geçersiz düzen, sağlayıcı) başarısızlıktır.
       const failures = result.failures.filter((failure) => !/^düzen [a-z]+(?:\/sunucu)?\/NO_CHOICE\//.test(failure));

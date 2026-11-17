@@ -15,6 +15,7 @@ import {
   dataText,
   ID_PROPERTY,
   LIMIT_PROPERTY,
+  effectivePageSize,
   notFound,
   PERSON_SICIL_PROPERTY,
   projectIndex,
@@ -535,7 +536,7 @@ const taskAnalytics = {
         type: 'string', enum: [...GROUP_BY],
         description: 'Gruplama boyutu: status, priority, project, assignee (bir görev birden çok sorumluda sayılabilir), deadline (termin kovası), target_month (termin ayı), department/unit (sorumlunun bölümü/birimi; bir görev birden çok birimde sayılabilir), date_week/date_month (dateField\'e göre haftalık/aylık dizi; dateFrom+dateTo zorunlu), due_horizon (7/14/30 günlük teslim bantları).'
       },
-      limit: LIMIT_PROPERTY(25, 10)
+      limit: LIMIT_PROPERTY(25, 10, { date_week: 25, date_month: 25 })
     }
   },
   async handler(args, call) {
@@ -543,7 +544,7 @@ const taskAnalytics = {
     if (filters.hasDescription) throw invalidArguments(['$.hasDescription:unsupported']);
     const groupBy = args.groupBy || null;
     const seriesBucket = SERIES_GROUP_BY[groupBy] || null;
-    const limit = args.limit ?? (seriesBucket ? 25 : 10);
+    const limit = effectivePageSize(taskAnalytics.parameters.properties.limit, args);
     // Tarih dizisi iki ucu belli bir aralık ister; kova sayısı satır sınırını aşamaz (sessizce kesilmiş dizi eğilim göstermez).
     const buckets = seriesBucket && filters.dateField && filters.dateFrom && filters.dateTo
       ? seriesBuckets({ dateFrom: filters.dateFrom, dateTo: filters.dateTo }, seriesBucket, HISTORY_DATE_FIELDS.includes(filters.dateField) ? call.today : null) : null;

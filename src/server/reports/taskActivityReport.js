@@ -138,7 +138,7 @@ const TEAM_SCOPE_SQL = `(@scope = 'team' AND (@isAdmin = 1 OR a.ActorSicil = @si
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil)))`;
 const LEVELED_TEAM_SCOPE_SQL = `(@scope = 'team' AND ((LEN(@teamLevel) = 0 AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil)))
-      OR (LEN(@teamLevel) > 0 AND (EXISTS (
+      OR (LEN(@teamLevel) > 0 AND a.ActorSicil <> @sicil AND (EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil AND es.ScopeType = @teamLevel)))))`;
 
 /** Türev deyim: her ek, rapor SQL'inde TAM bir kez bulunan bir çapaya bağlanır; çapa kaybolursa okuma kapalı hata verir. */
@@ -150,6 +150,14 @@ function aggregateActivitySql(statement) {
   DROP TABLE IF EXISTS #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;`],
     ['THEN 1 ELSE 0 END AS CompletionEvent\n  INTO #TaskActivityScope', `THEN 1 ELSE 0 END AS CompletionEvent,\n    ${REOPEN_EVENT_SQL}\n  INTO #TaskActivityScope`],
     [TEAM_SCOPE_SQL, LEVELED_TEAM_SCOPE_SQL],
+    // Sayaçlar durum geçişlerinden SQL'de hesaplanır; toplu okumada not taşıyan ayrıntı JSON'u sunucuya çıkmaz.
+    [`SELECT * INTO #TaskActivityPage FROM #TaskActivityGroups ORDER BY OccurredAt DESC, LastAuditId DESC
+    OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+  SELECT g.LastAuditId AS GroupId, g.OccurredAt AS GroupOccurredAt, g.Completed, g.Deleted, g.Created, g.EventCount, e.*
+  FROM #TaskActivityPage g
+  ${ACTIVITY_DETAIL_APPLY}
+  ORDER BY g.OccurredAt DESC, g.LastAuditId DESC, e.AuditId;`, 'SELECT TOP (0) AuditId FROM #TaskActivityScope;'],
+
     ['MAX(CompletionEvent) AS Completed,', `MAX(CompletionEvent) AS Completed, MAX(ReopenEvent) AS Reopened, MIN(CASE WHEN CompletionEvent = 1 THEN OccurredAt END) AS CompletedAt, MIN(CASE WHEN Kind = 'created' THEN OccurredAt END) AS CreatedAt,`],
     ['COUNT(DISTINCT ActorSicil) AS ActorCount, COUNT(DISTINCT CASE WHEN Completed = 1 THEN EntityId END) AS CompletedCount', `COUNT(DISTINCT ActorSicil) AS ActorCount, COUNT(DISTINCT CASE WHEN Completed = 1 THEN EntityId END) AS CompletedCount,
     COUNT(DISTINCT CASE WHEN Created = 1 THEN EntityId END) AS CreatedCount, COUNT(DISTINCT CASE WHEN Deleted = 1 THEN EntityId END) AS DeletedCount,

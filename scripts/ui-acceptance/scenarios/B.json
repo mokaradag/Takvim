@@ -386,8 +386,7 @@
      "outcome": "grounded",
      "requires": [
       "Geçen ay",
-      "bu ay",
-      "Hareket kaydı"
+      "bu ay"
      ]
     }
    ]

@@ -11,8 +11,8 @@ export function taskActivityRecordsets(db, params) {
   if (aggregate && params.scope === 'team' && level && !db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil !== params.sicil && scope.ScopeType === level)) {
     const error = new Error('AI_TOOL_SCOPE_UNAVAILABLE'); error.number = 51002; throw error;
   }
-  const inTeam = (id) => (!level && Number(id) === params.sicil) || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id)
-    && (!level || scope.ScopeType === level));
+  const inTeam = (id) => (!level && Number(id) === params.sicil) || (Number(id) !== params.sicil && db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id)
+    && (!level || scope.ScopeType === level)));
   const historicallyVisible = (id) => Number(id) === params.sicil || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id));
   const deletions = new Map();
   for (const event of db.auditLog) {
@@ -82,8 +82,6 @@ export function taskActivityRecordsets(db, params) {
   const summary = { Total: grouped.length, Page, TaskCount: new Set(grouped.map((g) => g.events[0].EntityId)).size,
     ActorCount: new Set(grouped.map((g) => g.events[0].ActorSicil)).size,
     CompletedCount: new Set(grouped.filter((g) => g.Completed).map((g) => g.events[0].EntityId)).size };
-  const pageRows = () => grouped.slice(Page * params.pageSize, (Page + 1) * params.pageSize)
-    .flatMap(({ events, ...group }) => events.slice(0, 100).map((row) => ({ ...row, ...group })));
   if (aggregate) {
     const tasksOf = (test) => new Set(grouped.filter(test).map((g) => g.events[0].EntityId));
     const touched = new Map();
@@ -109,7 +107,7 @@ export function taskActivityRecordsets(db, params) {
       .filter(Boolean).map((task) => ({ TaskId: task.TaskId, CurrentProjectId: task.ProjectId }));
     return [actors, projectOptions, [{ ...summary, CreatedCount: tasksOf((g) => g.Created).size, DeletedCount: tasksOf((g) => g.Deleted).size,
       ReopenedCount: tasksOf((g) => g.Reopened).size, UpdatedOnlyCount: [...touched.values()].filter((flags) => !flags.Created && !flags.Deleted && !flags.Completed && !flags.Reopened).length,
-      FirstRecordedAt: first == null ? null : new Date(first).toISOString() }], pageRows(),
+      FirstRecordedAt: first == null ? null : new Date(first).toISOString() }], [],
       [...days.values()].sort((a, b) => a.ActivityDay.localeCompare(b.ActivityDay)), population];
   }
   return [actors, projectOptions, [summary], grouped.slice(Page * params.pageSize, (Page + 1) * params.pageSize)

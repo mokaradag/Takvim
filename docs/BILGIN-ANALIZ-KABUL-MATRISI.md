@@ -677,6 +677,14 @@ F/G beklentisi değişen ayrık vakalar (bilinçli): F `h05`, `h08`, `h22` ve G 
 Aşama H ile yanıtlanabilir oldular. Beklenti artık bir geçmiş dönem yönü okuyan ya da geçmiş durum sınırını bildiren plandır
 (`temporal: true`); sıradan güncel durum planı geçmez (`test/ai-analysis-invariants.test.mjs`).
 
+Dönem ve kapsam beklentilerinin kesinleştirilmesi: F `h05` özgün sorudaki **bu hafta** aralığını, `h22` **bu hafta / geçen hafta** karşılaştırmasını zorunlu tutar. G `x12` bölüm kapsamını ve iki çeyreğin tarihlerini koruyan bir plan ister; açıklamasız çekimserlik tarihsel durum sınırını göstermediğinden kabul edilmez. Ayrık sorular ve veri kümesi değiştirilmedi; yalnızca bu soruların mevcut sözleşmesini eksik denetleyen beklentiler sıkılaştırıldı. H `t57` dönem belirtmediğinden altın planın gerekçesiz 56 günlük aralığı kaldırıldı; üretimin açıklanan 90 günlük eğilim varsayılanı geçerlidir. Arayüzün H2 ay karşılaştırmasında yalnız kısmi kayıt durumunda çıkan “Hareket kaydı” ifadesi zorunlu değildir; dönem adları zorunlu kalır.
+
+Dönem kabulü her kapsam ve ölçüyü aynı başarılı okumada doğrular; eğilim için ayrıca aynı nüfusa ve döneme ait toplam ile tarih dizisi kanıtı gerekir. Dönem hareket özeti sayfalı hareket listesiyle karşılanamaz. Yasak metin ve rızasız not sorgusu denetimleri başarısız ya da açıklama isteyen yanıtta da çalışır. Boş dizi üzerinde geçen grafik, takip ve kalıcılık denetimleri gerçek kanıtın varlığını zorunlu tutar.
+
+17 Kasım 2026 kök neden doğrulaması: 23 yeni Türkçe regresyonla birlikte tam paket **6474/6474**, dönemsel paket **244/244**, ilgili analiz/istek/açıklama/arayüz altyapısı paketi **644/644** geçti; lint ve üretim derlemesi başarılı. Linux ACL kontrolleri için geçici dizin ACL destekleyen çalışma alanına alındı; sınamalar veya beklentiler atlanmadı. Yedi üretim modülündeki düzeltmeler okuma bütçesini artırmaz; toplu hareket sorgusu sayaçları SQL durum geçişlerinden üretirken not taşıyan ayrıntı JSON'unu sunucuya döndürmez. Yeni bağımlılık, uç nokta veya yetki yolu yoktur.
+
+Bu koşuda tarayıcılı arayüz kabulü Chromium'un Unix soketi kısıtına takıldı; başarılı sayılmadı. Haiku 4.5 düşük efor/düşünmesiz tek vaka denemesi sağlayıcı altyapı hatasıyla durdu (**0 API çağrısı**, model sonucu yok); önceki canlı puanların yerine geçmez. Gerçek Windows/SQL VM yeniden oynatması ve canlı model kabulü beklemeye devam eder.
+
 ### 9.4 Haiku 4.5 vekil nitelendirmesi (claude-haiku-4-5-20251001, `--effort low`, `MAX_THINKING_TOKENS=0`)
 
 `PHASE4E_TIER=H` (`scripts/analysis-qualification.mjs`): hedefli + olumsuz vakalar uçtan uca (planlayıcı ve düzen model; altın plan
