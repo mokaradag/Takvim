@@ -1857,3 +1857,16 @@ test('eğilim kabulü küçük harfli düzeyi tanır ve yanlış aylık kovayı 
   result.evidence[1] = evidence('date_month');
   assert.ok(temporalPopulationViolations(result, analysis, {}).length);
 });
+
+test('karşılaştırılamayan notların adı çekincede iki dilde korunur', async (t) => {
+  for (const language of ['tr', 'en']) {
+    const result = await conversation(t, 'B').ask({ text: 'Bu ay ile geçen ayı karşılaştır.', plan: {
+      intent: 'rota', language, analysis: { scope: 'all', focus: ['notes'], relativeWindow: 'this_month', compare: 'last_month' }
+    } }, { includeText: true });
+    assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+    const sentence = result.answer.content.split('\n').find((line) => /yeniden kurulamıyor|cannot be reconstructed/.test(line));
+    assert.ok(sentence, result.answer.content);
+    const label = language === 'tr' ? 'görev notları' : 'task notes';
+    assert.ok(sentence.includes(label), sentence);
+  }
+});

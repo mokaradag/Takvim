@@ -289,7 +289,8 @@ const ASPECT_NAMES = Object.freeze({
   overview: ['genel sayılar', 'overall counts'], status: ['durum dağılımı', 'status breakdown'], priority: ['öncelik dağılımı', 'priority breakdown'],
   deadlines: ['termin dağılımı', 'deadline spread'], overdue: ['gecikmeler', 'overdue work'], upcoming: ['yaklaşan teslimatlar', 'upcoming deliveries'],
   workload: ['iş yükü', 'workload'], projects: ['proje dağılımı', 'project spread'], schedule: ['aylara göre terminler', 'deadlines by month'], critical: ['kritik işler', 'critical work'],
-  org: ['alt birim dağılımı', 'sub-unit breakdown'], milestones: ['kilometre taşları', 'milestones']
+  org: ['alt birim dağılımı', 'sub-unit breakdown'], milestones: ['kilometre taşları', 'milestones'],
+  notes: ['görev notları', 'task notes']
 });
 
 function joinList(items, locale) {
