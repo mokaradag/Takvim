@@ -176,7 +176,7 @@ test('plan şeması ve planlayıcı yönergesi mevcut sınırların içinde kal�
   assert.deepEqual(analysis.relativeWindow.enum, [...TEMPORAL_WINDOWS, 'all_time']);
   assert.deepEqual(analysis.compare.enum, ['previous', ...TEMPORAL_WINDOWS]);
   for (const focus of [...TEMPORAL_FOCUS, 'horizons', 'notes']) assert.ok(analysis.focus.items.enum.includes(focus), focus);
-  // Ağ geçidinin tek ileti sınırı (32 KiB) yükseltilmedi: yönerge yılın her gününde sınırın altındadır.
+  // Ağ geçidinin tek ileti sınırı (32 768 UTF-16 kod birimi) yükseltilmedi: yönerge yılın her gününde sınırın altındadır.
   for (let offset = 0; offset < 370; offset += 7) assert.ok(groundedSystemPrompt(new Date(NOW.getTime() + offset * 86400000)).length <= 32 * 1024);
   // Her örnek plan sunucu doğrulamasından geçer; dönem örnekleri adlı pencere kullanır.
   for (const [question, plan] of plannerExamples(NOW)) assert.equal(reject(plan), null, question);
@@ -1723,13 +1723,18 @@ test('karşılaştırma yalnızca söylenen oluşturulma ve hareket ölçülerin
   assert.equal(stated.some((item) => ['tasks.open', 'tasks.done', 'activity.completedTasks'].includes(item.metric)), false);
 });
 
-test('tek sınırla okunan not özeti daraltılmamış nüfus gibi sunulmaz', () => {
+test('tek sınırdaki not özeti atlanır; iki sınırdaki tarih çekincesi korunur', () => {
   for (const key of ['dateFrom', 'dateTo']) {
     const filters = { statuses: ['todo', 'in_progress'], hasDescription: true, dateField: 'createdAt', [key]: '2026-08-01' };
     const group = { part: 1, evidenceId: 'R1', facts: [fact('rota_task_search', filters, 'totalCount', 1), fact('rota_task_search', filters, 'data.tasks.0.description', 'Not')] };
     for (const locale of ['tr', 'en']) {
       const sentences = temporalSentences(temporalFindings([group]), locale);
-      assert.ok(!sentences.length || sentences.some((item) => /2026/.test(item.plain)), 'tek sınır belirtilir ya da özet kurulmaz');
+      assert.equal(sentences.length, 0, 'tek sınırla dönem özeti kurulmaz');
+      const bounded = { ...group, facts: group.facts.map((item) => ({ ...item, semantic: { ...item.semantic,
+        filters: { ...filters, dateFrom: '2026-08-01', dateTo: '2026-08-31' } } })) };
+      const stated = temporalSentences(temporalFindings([bounded]), locale);
+      assert.ok(stated.length > 0, 'iki sınırla not özeti üretilir');
+      assert.ok(stated.some((item) => /2026/.test(item.plain)), 'iki sınırın dönemi açıklanır');
     }
   }
 });
@@ -1869,4 +1874,38 @@ test('karşılaştırılamayan notların adı çekincede iki dilde korunur', asy
     const label = language === 'tr' ? 'görev notları' : 'task notes';
     assert.ok(sentence.includes(label), sentence);
   }
+});
+
+test('İngilizce karşılaştırma eşit, farklı ve kısmi sayımları doğal ifadeyle aktarır', () => {
+  const prior = resolveWindow('last_month', TODAY), current = resolveWindow('this_month', TODAY);
+  const cases = [
+    [completedRead('R1', prior, 5), completedRead('R2', current, 5)],
+    [completedRead('R1', prior, 5), completedRead('R2', current, 8)],
+    [activityRead('R1', prior, 9, { status: 'partial', firstRecordedDay: '2026-08-15' }), activityRead('R2', current, 4)]
+  ];
+  for (const reads of cases) {
+    const text = temporalSentences(temporalFindings(reads), 'en').map((item) => item.plain).join(' ');
+    assert.doesNotMatch(text, /\bnumbered\b/);
+    assert.match(text, /totalled (?:5|9)/);
+  }
+});
+
+test('SQL iç süzgeçleri görev araçlarından kanıtın anlamsal süzgecine sızamaz', async (t) => {
+  const { normalizeTaskFilters } = await import('../src/server/ai/tools/rota/taskFacts.js');
+  const { stack, sicil } = toolStack(t, 'B');
+  const fields = { openOnly: true, seriesId: DELETED_TASK, recurringOnly: true, targetFrom: shift(-10), targetTo: TODAY };
+  const args = { status: ['done'], dateField: 'actualFinish', ...resolveWindow('last_week', TODAY) };
+  for (const key of Object.keys(fields)) {
+    assert.equal(Object.hasOwn(normalizeTaskFilters({ ...args, ...fields }), key), false, key);
+    for (const tool of ['rota_task_search', 'rota_task_analytics']) {
+      const error = await refusal(stack, sicil, tool, { ...args, [key]: fields[key] });
+      assert.equal(error?.code, 'INVALID_ARGUMENTS', `${tool}/${key}`);
+    }
+  }
+  assert.equal((stack.db.aiToolLog || []).some((row) => row.query === 'task-facts'), false, 'tanınmayan alan SQL öncesi reddedilir');
+  const { evidenceSemantic } = await import('../src/domain/ai/claimableEvidence.js');
+  const result = (await callRotaTool(stack, sicil, 'rota_task_analytics', args)).result;
+  assert.equal(result.ok, true);
+  const semantic = evidenceSemantic(result, 'data.totals.total', result.data.totals.total, 'Görev sayısı');
+  for (const key of Object.keys(fields)) assert.equal(Object.hasOwn(semantic.filters, key), false, key);
 });

@@ -367,19 +367,19 @@ function comparisonSentences(finding, locale) {
     const pairStates = [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, spec.states || ACTIVITY_STATES));
     // Eşit değerde iki ayrı cümle yerine tek doğal cümle ("İki dönemde de …").
     if (a === b) {
-      out.push({ ...factSentence(lang ? ['In both periods (', rangeLabel(earlier, locale), ' and ', rangeLabel(later, locale), '), ', ...place, ...(a === 0 ? [spec.none[1]] : [`${spec.count} numbered `, n(a, locale)]), '.']
+      out.push({ ...factSentence(lang ? ['In both periods (', rangeLabel(earlier, locale), ' and ', rangeLabel(later, locale), '), ', ...place, ...(a === 0 ? [spec.none[1]] : [`${spec.count} totalled `, n(a, locale)]), '.']
         : ['İki dönemde de (', rangeLabel(earlier, locale), ' ve ', rangeLabel(later, locale), ') ', ...place, ...(a === 0 ? [spec.none[0]] : [n(a, locale), ` ${spec.now}`]), '.']), states: pairStates });
       continue;
     }
     out.push({ ...factSentence(lang
-      ? [upper(adverb(earlier, 0), locale), ', ', ...place, `${spec.count} numbered `, n(a, locale), '; ', adverb(later, 1, { open }), ', ', n(b, locale), ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']
+      ? [upper(adverb(earlier, 0), locale), ', ', ...place, `${spec.count} totalled `, n(a, locale), '; ', adverb(later, 1, { open }), ', ', n(b, locale), ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']
       : [upper(adverb(earlier, 0), locale), ' ', ...place, n(a, locale), ` ${spec.past}; `, adverb(later, 1, { open }), ' ', n(b, locale), ` ${spec.now}`, ...(eligible ? difference(a, b, spec.unit, locale, { percent: true }) : []), '.']),
     states: pairStates });
   }
   for (const pair of measured.filter(partial)) {
     const place = [...placeFor(pair), lang ? ', ' : ' '];
     out.push({ ...factSentence(lang
-      ? [upper(adverb(earlier, 0), locale), ', ', ...place, 'recorded activity events numbered ', n(valueOf(pair.earlier), locale), '; ', adverb(later, 1, { open }), ', ', n(valueOf(pair.later), locale),
+      ? [upper(adverb(earlier, 0), locale), ', ', ...place, 'recorded activity events totalled ', n(valueOf(pair.earlier), locale), '; ', adverb(later, 1, { open }), ', ', n(valueOf(pair.later), locale),
         '. The activity record does not cover the whole of the earlier period, so the difference is not interpreted.']
       : [upper(adverb(earlier, 0), locale), ' ', ...place, n(valueOf(pair.earlier), locale), ' hareket kaydedilmişti; ', adverb(later, 1, { open }), ' ', n(valueOf(pair.later), locale),
         ' hareket kaydedildi. Hareket kaydı önceki dönemin tamamını kapsamadığından bu fark yorumlanmadı.']),
