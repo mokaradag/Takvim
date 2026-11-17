@@ -742,20 +742,28 @@ sınamalar geçti).
 
 ### 9.7 Doğrulama
 
-- İlk uygulama kaydındaki **6386/6386** ve §9.3'teki **6474/6474** önceki koşulara aittir; güncel kodun sonucu olarak kullanılamaz. Güncel koşunun sürümü, komutları ve sonuçları aşağıdaki tarihli kayıtta birlikte verilir.
+- İlk uygulama kaydındaki **6386/6386** ve §9.3'teki **6474/6474** önceki koşulara aittir; güncel kodun sonucu olarak kullanılamaz. Koşuların sürümleri, komutları ve sonuçları aşağıdaki tarihli kayıtlarda birlikte verilir.
 - Sınır ölçümleri: planlayıcı yönergesi yılın her gününde en çok 32 761 karakter (sınır 32 768); plan şeması 30 915 (sınır 32 000).
   Model, SQL, süre, sonuç boyu ve araç çağrısı bütçeleri artırılmadı (`ANALYSIS_LIMITS.maxParts` 6, `maxTotalCalls` 12).
 - Yeni uç, tablo, işçi, bağımlılık ya da arka plan işi yok; bütün okumalar salt okunur ve sabit parametreli SQL'dir.
 
 #### 17 Kasım 2026 — yakınsama koşusu
 
-Başlangıç sürümü: `0d38c07b862b159db7595bf3b724473cf50c3aba`; aşağıdaki kayıt bu sürümün üzerine eklenen tek düzeltme commit'ine aittir. Önceki §9.3 kaydıyla aynı koşu değildir.
+Başlangıç sürümü: `0d38c07b862b159db7595bf3b724473cf50c3aba`; kayıt sürümü: `d299bdff9dcea7141a2277a02cff8a2e6dbe1ca5`. Önceki §9.3 kaydıyla aynı koşu değildir; sonraki düzeltmelerin sonucu olarak da kullanılamaz.
 
 - Linux, Node **24.22.1**: `npm test -- --test-concurrency=1` **6494/6494**; başarısız, iptal ve atlanan **0**. Geçici dizin için `TMPDIR`, `TMP` ve `TEMP` aynı ACL destekleyen çalışma dizinine ayarlandı. İlk denemede iç alt süreç `/tmp` dizinine döndüğü için ACL kapısı başarısızdı; beklenti değiştirilmeden ortam düzeltilip tam paket yeniden çalıştırıldı.
 - Tam koşudan sonra yalnızca H puanlayıcısının durum karşılaştırmasında bildirilen dönemleri de eşleştiren son denetimi eklendi; bu yardımcıyı kullanan bütün dosya yeniden çalıştırıldı: `node --test --test-concurrency=1 test/ai-temporal-intelligence.test.mjs` **264/264**. Tam paket ve son hedefli koşu ayrı kanıtlardır.
 - **20** yeni Türkçe regresyon: özgün başlangıç sürümünde **19** başarısızlık, önceden düzeltilmiş tarihsel kırılımı koruyan **1** başarı; düzeltmelerle tamamı geçti. Tam paket mevcut F/G kontrollerini, H dosyası hedefli ve ayrık plan kontrollerini içerir. Sentetik kimlik, nüfus, dönem, kova, not ve ufuk kanıtları ayrıca denetlenir.
 - `npm run lint`: uyarı ve hata yok. `NEXT_TELEMETRY_DISABLED=1 npm run build`: başarılı. Yeni dosya, bağımlılık, uç nokta, kalıcı durum veya yetki yolu eklenmedi.
 - SQL Server/Windows VM ve canlı Haiku kabulü bu ortamda çalıştırılamadı. SQL yürütmesi yerine üretilen sorgunun geçici tablo yaşam döngüsü ve parametreli SQL ikizi sınandı; bu kanıt canlı SQL kabulü değildir. Önceki 40 turluk tarayıcı kabulü bu commit için yeniden çalıştırılmış sayılmaz. Canlı kapılar **bekliyor**.
+
+#### 17 Kasım 2026 — ek inceleme bulguları
+
+Başlangıç sürümü: `16bc411f12c734ca0443249a4c2755fde85d5cf2`; aşağıdaki sonuçlar bu kaydı içeren ek düzeltme commit'inin çalışma ağacına aittir.
+
+- Linux, Node **24.22.1**: aynı `TMPDIR`/`TMP`/`TEMP` ayarıyla `npm test -- --test-concurrency=1` **6500/6500**; başarısız, iptal ve atlanan **0**. Dönemsel dosyanın tamamı ayrıca **270/270** geçti; F/G ve H kontrolleri tam pakette korundu.
+- Üç yeni Türkçe davranış testi düzeltme öncesinde başarısız oldu, düzeltmelerle geçti: 400/401 Unicode kod noktası sınırındaki notlar ve kesiklik bilgisi; bilinmeyen tamamlanma/oluşturulma sayıları ve ölçü kimlikleri; Sicil ile seçilen kişinin çok kapsamlı başlığı. Son iki konu iki dilde, kişi başlığı proje var/yok durumlarında sınandı. Ulaşılamayan karşılaştırma dalı kaldırıldı; açık dönem uyarısı mevcut regresyonla doğrulandı.
+- `npm run lint`: uyarı ve hata yok. `NEXT_TELEMETRY_DISABLED=1 npm run build`: başarılı. Yeni bağımlılık, dosya veya yetki yolu eklenmedi. Canlı SQL Server/Windows VM ve Haiku kabulü çalıştırılmadı; Unicode SQL sınırı sorgu sözleşmesi ve belirlenimci SQL ikiziyle doğrulandı.
 
 ### 9.8 Bilinen sınırlar ve sonraki adım
 

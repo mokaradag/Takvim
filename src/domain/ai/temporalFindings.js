@@ -1,5 +1,5 @@
 import { factSentence, formatCount, formatFactDay, formatPercent, strongFact } from './groundedPropositions.js';
-import { englishBucketLabel, comparableWindows, namedWindow, rangeLabel, windowAdverb, windowLength, windowName, windowPhrase, windowPosition, windowsOverlap, monthEnd, shiftDay } from './temporalWindow.js';
+import { englishBucketLabel, comparableWindows, namedWindow, rangeLabel, windowAdverb, windowLength, windowPhrase, windowPosition, windowsOverlap, monthEnd, shiftDay } from './temporalWindow.js';
 
 /**
  * Aşama H — DÖNEMSEL ve TARİHSEL BULGULAR (saf, belirlenimci).
@@ -177,7 +177,7 @@ function activityClause(scope, locale, counts) {
 /** Kapsamın kısa adı (çok kapsamlı yanıtta paragraf grubu; olgu değildir). */
 function scopeLabel(scope, locale) {
   const lang = en(locale) ? 1 : 0;
-  const base = scope.person || (scope.owner === 'self' ? ['Kendi işleriniz', 'Your work'][lang]
+  const base = scope.person || (scope.personSicil != null ? ['Seçilen kişi', 'Selected person'][lang] : null) || (scope.owner === 'self' ? ['Kendi işleriniz', 'Your work'][lang]
     : scope.owner === 'team' ? ({ unit: ['Biriminiz', 'Your unit'], department: ['Bölümünüz', 'Your department'], directorate: ['Direktörlüğünüz', 'Your directorate'] }[scope.level] || ['Ekibiniz', 'Your team'])[lang]
       : scope.project ? null : ['Görebildiğiniz işler', 'Visible work'][lang]);
   return [base, scope.project].filter(Boolean).join(' · ');
@@ -348,13 +348,7 @@ function comparisonSentences(finding, locale) {
       const clause = (group) => `${joinList(group.nouns.map((noun) => [noun]), locale).join('')} ${group.verb}`;
       return [...(index ? ['; '] : []), ...placeFor(list[0]), lang ? ', ' : ' ', groups.map(clause).join('; ')];
     });
-    // Bitmemiş dönem adıyla anılır ("Bu hafta henüz bitmediği için"); adı yoksa "Sonraki dönem".
-    const laterName = windowName(namedWindow(later, finding.today), locale);
-    const subject = laterName ? laterName.charAt(0).toLocaleUpperCase(lang ? 'en' : 'tr-TR') + laterName.slice(1) : (lang ? 'The later period' : 'Sonraki dönem');
-    const lead = open
-      ? (lang ? [subject, ' is still in progress, so the comparison is provisional: ', ...body, ' so far.']
-        : [subject, ' henüz bitmediği için karşılaştırma şimdilik geçici: ', ...body, '.'])
-      : (lang ? ['Comparing the two periods ', ...body, '.'] : ['İki dönem karşılaştırıldığında ', ...body, '.']);
+    const lead = lang ? ['Comparing the two periods ', ...body, '.'] : ['İki dönem karşılaştırıldığında ', ...body, '.'];
     out.push({ ...factSentence(lead), states: [] });
   }
   if (known.length && !eligible && !finding.overlap) out.push({ ...factSentence(open ? (lang ? ['Comparing the two periods, the later period is still in progress; the comparison is provisional and counts are shown side by side.'] : ['İki dönem karşılaştırıldığında ', ...(mixedPopulation ? [] : [...placeFor(known[0]), ' ']), 'sonraki dönem henüz bitmediği için karşılaştırma şimdilik geçici; sayılar yan yana veriliyor.']) : (lang ? ['Comparing the two periods, observation lengths differ; counts are shown side by side.'] : ['İki dönem karşılaştırıldığında gözlem süreleri farklı; sayılar yan yana veriliyor.'])), states: [] });
@@ -388,6 +382,16 @@ function comparisonSentences(finding, locale) {
     const both = valueOf(pair.earlier) == null && valueOf(pair.later) == null;
     const missing = valueOf(pair.earlier) == null ? [earlier, 0] : [later, 1];
     const other = both ? null : valueOf(pair.earlier) == null ? valueOf(pair.later) : valueOf(pair.earlier);
+    if (pair.kind !== 'activity') {
+      const spec = COMPARED[pair.kind];
+      out.push({ ...factSentence(lang
+        ? ['Counts of ', spec.count, ' cannot be compared: ', ...(both ? ['both periods are unknown, not zero']
+          : ['the count for ', windowPhrase(missing[0], finding.today, locale), ' is unknown, not zero; the other period has ', n(other, locale), ' tasks']), '.']
+        : [upper(spec.noun[0], locale), ' sayıları karşılaştırılamıyor: ', ...(both ? ['iki dönemin de görev sayısı bilinmiyor; sıfır sayılmadı']
+          : [windowPhrase(missing[0], finding.today, locale), ' için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde ', n(other, locale), ' görev var']), '.']), caveat: true,
+      states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ['tasks.total'])) });
+      continue;
+    }
     const first = (pair.earlier.coverage || pair.later.coverage)?.firstRecordedDay || null;
     const begins = first ? (lang ? [' (records begin on ', s(formatFactDay(first, locale)), ')'] : [' (kayıtlar ', s(formatFactDay(first, locale)), ' tarihinde başlıyor)']) : [];
     out.push({ ...factSentence(both

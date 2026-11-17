@@ -459,7 +459,7 @@ ${visibleTasks()}
 export const AI_TOOL_TASK_NOTES_SQL = `/* rota-ai-tool:task-notes */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
-  SELECT visible.TaskId, LEFT(t.Description, 401) AS Description
+  SELECT visible.TaskId, LEFT(t.Description COLLATE Latin1_General_100_CI_AS_SC, 401) AS Description
   FROM #AiTasks visible JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
   WHERE ${DESCRIPTION_PRESENT_SQL};
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;

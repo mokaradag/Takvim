@@ -1910,3 +1910,68 @@ test('SQL iç süzgeçleri görev araçlarından kanıtın anlamsal süzgecine s
   const semantic = evidenceSemantic(result, 'data.totals.total', result.data.totals.total, 'Görev sayısı');
   for (const key of Object.keys(fields)) assert.equal(Object.hasOwn(semantic.filters, key), false, key);
 });
+
+test('not sınırı Unicode kod noktalarını bölmez ve kesiklik yalnızca dört yüz karakter aşılınca bildirilir', async (t) => {
+  const { AI_TOOL_TASK_NOTES_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+  for (const [description, expected, clipped] of [
+    ['a'.repeat(399) + '😀', 'a'.repeat(399) + '😀', false],
+    ['a'.repeat(399) + '😀x', 'a'.repeat(399) + '😀', true],
+    ['😀'.repeat(400), '😀'.repeat(400), false],
+    ['😀'.repeat(401), '😀'.repeat(400), true]
+  ]) {
+    const seed = seeded(t);
+    for (const task of seed.tasks.filter((row) => row.Description)) task.Description = description;
+    const { stack, sicil } = toolStack(t, 'B', seed);
+    const notes = (await callRotaTool(stack, sicil, 'rota_task_search', { hasDescription: true, textFields: ['description'], limit: 50 })).result;
+    assert.equal(notes.ok, true);
+    assert.ok(notes.data.tasks.length > 0);
+    assert.notEqual(notes.data.textClipped, true, 'temizleme notu ikinci kez kısaltmaz');
+    for (const note of notes.data.tasks) {
+      assert.equal(note.description, expected);
+      assert.equal(Boolean(note.descriptionClipped), clipped);
+      assert.equal(note.description.isWellFormed(), true);
+    }
+  }
+  assert.match(AI_TOOL_TASK_NOTES_SQL, /LEFT\(t\.Description COLLATE Latin1_General_100_CI_AS_SC, 401\)/, 'SQL de aynı kod noktası sınırında bir fazla karakter okur');
+});
+
+test('bilinmeyen tamamlanma ve oluşturulma sayısı hareket diye anlatılmaz ve sıfıra dönüştürülmez', () => {
+  const prior = resolveWindow('last_month', TODAY), current = resolveWindow('this_month', TODAY);
+  for (const kind of ['completed', 'created']) for (const totals of [[null, 5], [5, null], [null, null]]) {
+    const reads = totals.map((total, index) => {
+      const read = completedRead(`R${index + 1}`, index ? current : prior, total);
+      if (kind === 'created') Object.assign(read.facts[0].semantic.filters, { dateField: 'createdAt', statuses: [] });
+      return read;
+    });
+    const comparison = temporalFindings(reads).filter((item) => item.kind === 'periodComparison');
+    assert.equal(comparison.length, 1);
+    for (const locale of ['tr', 'en']) {
+      const sentences = temporalSentences(comparison, locale);
+      const text = sentences.map((item) => item.plain).join(' ');
+      assert.match(text, locale === 'tr' ? /bilinmiyor; sıfır sayılmadı/ : /unknown, not zero/);
+      assert.match(text, kind === 'completed' ? /[Tt]amamlanan|[Cc]ompleted/ : /[Oo]luşturulan|[Cc]reated/);
+      assert.doesNotMatch(text, /hareket|activity|%|arttı|azaldı|\b0 görev|\b0 tasks/);
+      if (totals.includes(5)) assert.match(text, /\b5\b/);
+      const consumed = sentences.flatMap((item) => item.states || []);
+      assert.deepEqual(consumed, [{ evidenceId: 'R1', metric: 'tasks.total' }, { evidenceId: 'R2', metric: 'tasks.total' }]);
+    }
+  }
+});
+
+test('çok kapsamlı yanıtta yalnız Sicil ile seçilen kişinin başlığı kişi ve proje kısıtını korur', () => {
+  for (const project of [null, 'Alpha']) {
+    const person = completedRead('R1', resolveWindow('last_week', TODAY), 2);
+    Object.assign(person.facts[0].semantic.filters, { personSicil: 123, ...(project ? { projectId: 'proje', project } : {}) });
+    const all = completedRead('R2', resolveWindow('last_week', TODAY), 8);
+    for (const locale of ['tr', 'en']) {
+      const sentences = temporalSentences(temporalFindings([person, all]), locale);
+      const selected = sentences.filter((item) => item.finding.scope?.personSicil === 123);
+      assert.ok(selected.length > 0);
+      for (const item of selected) {
+        assert.equal(item.group, (locale === 'tr' ? 'Seçilen kişi' : 'Selected person') + (project ? ` · ${project}` : ''));
+        assert.doesNotMatch(item.plain, /123/);
+      }
+      assert.ok(sentences.some((item) => item.group === (locale === 'tr' ? 'Görebildiğiniz işler' : 'Visible work')));
+    }
+  }
+});

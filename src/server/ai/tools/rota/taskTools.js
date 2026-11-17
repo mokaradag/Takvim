@@ -7,7 +7,7 @@ import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { invalidArguments, TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, projectAccess } from './rotaScope.js';
-import { readTaskDetail, readTaskFacts, readTaskNotes, readWbsSelector, TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
+import { readTaskDetail, readTaskFacts, readTaskNotes, readWbsSelector, TASK_NOTE_CHARS, TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
 import {
   accessExplanation,
   CURSOR_PROPERTY,
@@ -293,7 +293,8 @@ const taskSearch = {
         ...(filters.projectId ? { project: projectRef(projects.get(filters.projectId), filters.projectId) } : {}),
         tasks: pageFacts.map((fact) => ({
           ...taskItem(fact, { projects: pageProjects, assignees: pageAssignees, today: call.today }),
-          ...(withNotes ? { description: notes.has(fact.id) ? dataText(notes.get(fact.id).text, 400) : null, ...(notes.get(fact.id)?.clipped ? { descriptionClipped: true } : {}) } : {}),
+          // Depoda kod noktası sınırı uygulanır; temizleme, çift birimli Unicode karakterlerini yeniden kesmez.
+          ...(withNotes ? { description: notes.has(fact.id) ? dataText(notes.get(fact.id).text, TASK_NOTE_CHARS * 2) : null, ...(notes.get(fact.id)?.clipped ? { descriptionClipped: true } : {}) } : {}),
           ...(needle ? { exactTitleMatch: foldText(fact.title).trim() === needle } : {})
         })),
         ...(titleResolution ? {

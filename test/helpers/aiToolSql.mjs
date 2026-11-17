@@ -564,9 +564,9 @@ function outlook(db, params) {
 const HANDLERS = Object.freeze({
   'task-facts': taskFacts,
   'task-visibility': taskVisibility,
-  // Görünür görevlerin kesilmiş açıklamaları (SQL: LEFT(Description, 401); boş açıklama satır döndürmez).
+  // Görünür görevlerin kesilmiş açıklamaları (SQL: SC sıralamasıyla 401 kod noktası; boş açıklama satır döndürmez).
   'task-notes': (db, params) => [[...scopeOf(db, params).visible.values()].filter(({ task }) => String(task.Description ?? '').trim())
-    .map(({ task }) => ({ TaskId: upper(task.TaskId), Description: String(task.Description).slice(0, 401) }))],
+    .map(({ task }) => ({ TaskId: upper(task.TaskId), Description: Array.from(String(task.Description)).slice(0, 401).join('') }))],
   'task-detail': taskDetail,
   'project-search': projectSearch,
   portfolio,
