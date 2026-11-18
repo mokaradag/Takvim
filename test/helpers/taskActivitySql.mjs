@@ -11,7 +11,8 @@ export function taskActivityRecordsets(db, params) {
   if (aggregate && params.scope === 'team' && level && !db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil !== params.sicil && scope.ScopeType === level)) {
     const error = new Error('AI_TOOL_SCOPE_UNAVAILABLE'); error.number = 51002; throw error;
   }
-  const inTeam = (id) => (!level && Number(id) === params.sicil) || (Number(id) !== params.sicil && db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id)
+  // Dönem özeti türevinde ekip yöneticinin kendi hareketlerini içermez (rapor SQL'inin düzeysiz ekip kuralı ise içerir).
+  const inTeam = (id) => (!aggregate && Number(id) === params.sicil) || (Number(id) !== params.sicil && db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id)
     && (!level || scope.ScopeType === level)));
   const historicallyVisible = (id) => Number(id) === params.sicil || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id));
   const deletions = new Map();
@@ -23,7 +24,7 @@ export function taskActivityRecordsets(db, params) {
   let rows = db.auditLog.filter((row) => row.EntityType === 'TASK' && ['CREATE', 'UPDATE', 'DELETE'].includes(row.ActionCode))
     .filter((row) => new Date(row.OccurredAt) >= params.startUtc && new Date(row.OccurredAt) < params.endUtc)
     .filter((row) => (!params.projectId || key(row.ProjectId) === key(params.projectId)) && (!params.taskIdText || key(row.EntityId) === key(params.taskIdText)))
-    .filter((row) => params.scope === 'visible' || (params.scope === 'mine' ? row.ActorSicil === params.sicil : (params.isAdmin && !level) || inTeam(row.ActorSicil)))
+    .filter((row) => params.scope === 'visible' || (params.scope === 'mine' ? row.ActorSicil === params.sicil : (params.isAdmin && !level && !(aggregate && row.ActorSicil === params.sicil)) || inTeam(row.ActorSicil)))
     .flatMap((row) => {
       const task = db.tasks.find((task) => key(task.TaskId) === key(row.EntityId));
       const project = db.projects.find((project) => key(project.ProjectId) === key(row.ProjectId));
@@ -80,7 +81,8 @@ export function taskActivityRecordsets(db, params) {
     return { events, GroupId: last.AuditId, GroupOccurredAt: latest, Completed, Deleted, Created, Reopened: events.some((row) => row.Reopened), EventCount: events.length,
       kind: Deleted ? 'deleted' : Created ? 'created' : Completed ? 'completed' : 'updated' };
   }).filter((group) => !params.kind || group.kind === params.kind)
-    .sort((a, b) => String(b.GroupOccurredAt).localeCompare(String(a.GroupOccurredAt)) || b.GroupId - a.GroupId);
+    // SQL zaman damgasını sayısal sıralar: karışık ISO metni ve Date değerleri metin olarak karşılaştırılmaz.
+    .sort((a, b) => instant(b.GroupOccurredAt) - instant(a.GroupOccurredAt) || b.GroupId - a.GroupId);
   if (params.evidenceSnapshotLimit != null && grouped.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   const Page = Math.min(params.page, Math.max(0, Math.ceil(grouped.length / params.pageSize) - 1));
   const summary = { Total: grouped.length, Page, TaskCount: new Set(grouped.map((g) => g.events[0].EntityId)).size,

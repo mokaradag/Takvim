@@ -533,23 +533,42 @@ exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}
   assert.ok(!readdirSync(dir).includes('gonderim'));
 });
 
-test('betikli uç göreli günü yalnızca tarih alanlarında çözer; "T" adlı proje adı değişmez', async (t) => {
+// Köprü sınamaya verilen SABİT günle çalışır (gece yarısı yarışı yok); gün devri ayrı sınamada 409 olarak denetlenir.
+async function scriptedBridge(t, benchmark, env = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'rota-kopru-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const benchmark = { targeted: [{ id: 'k1', profile: 'B', text: 'T projesinde dün ve bugün neler tamamlandı?',
-    plan: { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['T'], focus: ['completed'], dateFrom: 'T-1', dateTo: 'T' } } }] };
   writeFileSync(join(dir, 'benchmark.json'), JSON.stringify(benchmark));
-  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: '', UI_PROFILE: 'B', UI_BENCHMARK: join(dir, 'benchmark.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: '', UI_PROFILE: 'B', UI_BENCHMARK: join(dir, 'benchmark.json'), ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => child.kill());
-  const port = await new Promise((done, fail) => {
+  return new Promise((done, fail) => {
     const timer = setTimeout(() => fail(new Error('betikli uç açılmadı')), 5000); let output = '';
     child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) { clearTimeout(timer); done(Number(match[1])); } });
   });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: benchmark.targeted[0].text }] }) });
+}
+
+const bridgeBenchmark = { targeted: [{ id: 'k1', profile: 'B', text: 'T projesinde dün ve bugün neler tamamlandı?',
+  plan: { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['T'], focus: ['completed'], dateFrom: 'T-1', dateTo: 'T' } } }] };
+
+test('betikli uç göreli günü yalnızca tarih alanlarında çözer; "T" adlı proje adı değişmez', async (t) => {
+  const port = await scriptedBridge(t, bridgeBenchmark, { BRIDGE_TODAY: '2026-09-30' });
+  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
   const plan = JSON.parse((await response.json()).choices[0].message.tool_calls[0].function.arguments);
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   assert.deepEqual(plan.analysis.names, ['T']);
-  assert.equal(plan.analysis.dateTo, today);
+  assert.equal(plan.analysis.dateTo, '2026-09-30');
+  // Başlangıç da çözülür: bir önceki İstanbul günü (çözülmeden geçen "T-1" kabul edilmez).
+  assert.equal(plan.analysis.dateFrom, '2026-09-29');
+});
+
+test('betikli uç gün devrinde boş 409 döndürür (eski güne göre çözülmüş plan verilmez)', async (t) => {
+  const port = await scriptedBridge(t, bridgeBenchmark, { BRIDGE_TODAY: '2000-01-01', BRIDGE_ENFORCE_DAY: '1' });
+  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
+  assert.equal(response.status, 409);
+  assert.equal(await response.text(), '');
+  // Koşu tohumu ve betikli ucu tek günle başlatır: uç gün değişimini denetler, tohumlar aynı günü okur.
+  const runner = readFileSync(join(root, 'scripts/ui-acceptance/run.sh'), 'utf8');
+  assert.match(runner, /UI_RUN_DAY=\$\(TZ=Europe\/Istanbul date \+%F\)/);
+  assert.match(runner, /BRIDGE_TODAY=\$UI_RUN_DAY BRIDGE_ENFORCE_DAY=1 /);
+  for (const seed of ['scripts/ui-acceptance/uiSeed.mjs', 'test/helpers/temporalBenchmarkSeed.mjs']) assert.match(readFileSync(join(root, seed), 'utf8'), /process\.env\.UI_RUN_DAY/, seed);
 });
 
 test('görsel kabulün dönem denetimi sunucunun aralık yazımını bekler ve daha kısa dönemi geçirmez', async () => {
@@ -559,4 +578,6 @@ test('görsel kabulün dönem denetimi sunucunun aralık yazımını bekler ve d
   const trace = { outcome: 'grounded' };
   assert.deepEqual(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(90)} döneminde` }, trace), []);
   assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(30)} döneminde` }, trace).length);
+  // Aynı soneki taşıyan daha kısa dönem (80 gün) de geçmez.
+  assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler 1${periodLabel(90)} döneminde` }, trace).length);
 });

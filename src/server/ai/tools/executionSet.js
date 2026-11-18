@@ -1,5 +1,5 @@
 import 'server-only';
-import { resolveWindow } from '../../../domain/ai/temporalWindow.js';
+import { previousWindow, resolveWindow } from '../../../domain/ai/temporalWindow.js';
 import { randomBytes } from 'node:crypto';
 import { ABSTAIN_REASONS, CLARIFY_REASONS, PLANNER_INTENTS, PLANNER_LIMITS } from '../../../domain/ai/plannerOutcome.js';
 import { parseToolArguments } from './toolArguments.js';
@@ -551,12 +551,21 @@ function layeredAnalysis(plan, today = null) {
   const [primary, ...rest] = items;
   // Dönemler eşdeğer yazımları normalleştirildikten sonra karşılaştırılır: adlı dönemle aynı günleri gösteren tarih çifti ad sayılır
   // (ör. bugün 30 Eylül iken `this_month` + 1–30 Eylül ile yalnızca `this_month`). Farklı günleri kapsayan katmanlar reddedilir.
+  // Geçerli dönemler ÇÖZÜLMÜŞ gün çiftleriyle karşılaştırılır: adlı dönem ile aynı günleri gösteren tarih çifti (farklı katmanlarda da)
+  // aynı dönemdir; birincilin yazımı korunur. Kendi içinde çelişen ad + tarih çifti ve bugünü bilinmeyen ad yazıldığı gibi kalır.
   const window = (item) => {
-    const named = today && typeof item.relativeWindow === 'string' ? resolveWindow(item.relativeWindow, today) : null;
-    const same = Boolean(named && item.dateFrom === named.dateFrom && item.dateTo === named.dateTo);
-    return JSON.stringify([same ? null : item.dateFrom ?? null, same ? null : item.dateTo ?? null, item.relativeWindow === 'all_time' ? null : item.relativeWindow ?? null]);
+    const name = typeof item.relativeWindow === 'string' && item.relativeWindow !== 'all_time' ? item.relativeWindow : null;
+    let named = null;
+    try { named = today && name ? resolveWindow(name, today) : null; } catch { named = null; }
+    const dated = item.dateFrom != null || item.dateTo != null;
+    if (name && (!named || (dated && !(item.dateFrom === named.dateFrom && item.dateTo === named.dateTo)))) return JSON.stringify([item.dateFrom ?? null, item.dateTo ?? null, name]);
+    return JSON.stringify(named ? [named.dateFrom, named.dateTo, null] : [item.dateFrom ?? null, item.dateTo ?? null, null]);
   };
   if (rest.some((item) => window(item) !== window(primary))) throw invalidArguments(['$.analysis.also:window']);
+  // Açıkça yazılmış "tüm zamanlar" dönem verilmemesiyle aynı değildir: birincil dönemsizse ek katmanın `all_time` bildirimi korunur
+  // (tarihsel yönde reddedilir; sessizce varsayılan 30 güne dönüşmez).
+  const primaryWindowed = primary.relativeWindow != null || primary.dateFrom != null || primary.dateTo != null;
+  const explicitAllTime = !primaryWindowed && rest.some((item) => item.relativeWindow === 'all_time');
   // Ek öğede ek kapsamın taşıyamadığı bir alan (daraltma, kendiyle karşılaştırma, satır, takip eylemi, iç içe ek kapsam) ya da
   // birincilde kendi `also` alanı varsa çeviri o koşulu sessizce düşürür: plan reddedilir (model düzeltir). Dönem yukarıda
   // birincille aynı olduğu doğrulandı; sunum alanları birincilinkiyle aynıysa anlam taşımaz.
@@ -573,7 +582,7 @@ function layeredAnalysis(plan, today = null) {
   const languages = [...new Set(items.filter((item) => Object.hasOwn(item, 'language')).map((item) => item.language))];
   if (languages.length > 1 || (languages.length && plan.language != null && plan.language !== languages[0])) throw invalidArguments(['$.analysis.also:scope']);
   const { language: _language, ...head } = primary;
-  return { ...plan, ...(languages.length && plan.language == null ? { language: languages[0] } : {}), analysis: { ...head, also: rest.map(layer) } };
+  return { ...plan, ...(languages.length && plan.language == null ? { language: languages[0] } : {}), analysis: { ...head, ...(explicitAllTime ? { relativeWindow: 'all_time' } : {}), also: rest.map(layer) } };
 }
 
 /**
@@ -608,6 +617,14 @@ function equivalentAnalysisSpelling(plan, today) {
   }
   const compared = today && typeof out.compare === 'string' && out.compare !== 'previous' ? resolveWindow(out.compare, today) : null;
   if (compared && out.compareFrom === compared.dateFrom && out.compareTo === compared.dateTo) {
+    delete out.compareFrom;
+    delete out.compareTo;
+  }
+  // "Bir önceki eşdeğer dönem" ile aynı günleri gösteren karşılaştırma çifti de çelişki değildir (birincil dönemin kuralıyla çözülür).
+  const isIsoDay = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const primaryRange = resolved || (isIsoDay(out.dateFrom) && isIsoDay(out.dateTo) && out.dateFrom <= out.dateTo ? { dateFrom: out.dateFrom, dateTo: out.dateTo } : null);
+  const preceding = out.compare === 'previous' && primaryRange ? previousWindow(primaryRange, { rolling: /^last_\d+_days$/.test(out.relativeWindow || '') }) : null;
+  if (preceding && out.compareFrom === preceding.dateFrom && out.compareTo === preceding.dateTo) {
     delete out.compareFrom;
     delete out.compareTo;
   }

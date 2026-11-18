@@ -347,8 +347,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       const owner = parts.find((part) => part.presentation?.facts?.some((entry) => entry.evidenceId === chart.evidenceIds[1]));
       return owner && chartAllowed(owner.index + 1);
     }).sort((left, right) => right.change - left.change).slice(0, 2);
-  const comparisonSlots = Math.min(2, (synthesis?.findings || []).filter((finding) => finding.kind === 'subjectComparison').reduce((sum, finding) => sum + Object.keys(finding.metrics).length, 0)
-    + periodCharts.length);
+  const subjectWanted = (synthesis?.findings || []).filter((finding) => finding.kind === 'subjectComparison').reduce((sum, finding) => sum + Object.keys(finding.metrics).length, 0);
+  const comparisonSlots = Math.min(2, subjectWanted + periodCharts.length);
+  // Ayrılan karşılaştırma yuvalarından biri dönem karşılaştırmasınındır (ikisi de varsa): özne çubukları sayfayı doldurup dönem
+  // karşılaştırması grafiğini sessizce düşüremez.
+  const periodReserve = periodCharts.length && subjectWanted ? 1 : 0;
   // İki öznenin karşılaştırmasında tek öznenin gösterge kartı yanıltıcıdır (öteki özne kartta yoktur): karşılaştırma çubukları yeter.
   const scopedSubjects = new Set(parts.flatMap((part) => (part.presentation?.facts || []).map(({ fact }) => {
     const f = fact?.semantic?.filters || {};
@@ -402,11 +405,16 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         const text = renderEnvelopeSentences(group, { locale, empty: presentation.empty || [], only: ['totalCount'] }).join(' ');
         return text ? { markdown: text, plain: markdownPlainText(text) } : null;
       };
-      const cover = temporalCover.get(group.evidenceId) || null;
+      const covered = temporalCover.get(group.evidenceId) || null;
+      // Dizi kapsaması yalnızca diziyi anlatan bölümde geçerlidir (aynı kanıtı yeniden kullanan sıralama bölümü onu devralmaz).
+      const cover = covered && (covered.part == null || covered.part === ordinal) ? covered : null;
       // Dönemde tamamlananların listesi: sayımı giriş paragrafı söylemiştir; liste kendi giriş cümlesini alır (ölçütlü sayım yinelenmez).
       const shownRows = new Set(presentation.facts.filter((item) => item.evidenceId === group.evidenceId).map((item) => /^data\.tasks\.(\d+)\./.exec(item.fact?.field || '')?.[1]).filter(Boolean)).size;
       // Tek satırlı liste ayrıntı cümlesiyle çizilir (satır o cümlededir): giriş önermesi onu örtmez.
-      const countId = cover?.kind === 'completedList' && shownRows > 1
+      // Liste giriş cümlesi yalnızca listenin doğrulanmış toplamı girişin söylediği sayıyla aynıysa kullanılır; farklıysa (iki okuma
+      // arasında yeni tamamlanan görev) listenin kendi sayımı ayrıntıda kalır.
+      const listAgrees = cover?.kind !== 'completedList' || (cover.total != null && cover.total === cover.aggregate);
+      const countId = cover?.kind === 'completedList' && shownRows > 1 && listAgrees
         ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...completedListLead(shownRows, cover.total, locale) })
         : cover?.kind === 'notes' && shownRows > 1 ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...noteListLead(locale) })
         : !cover && envelopeOnlyGroup(group, presentation.layout)
@@ -493,8 +501,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           const sequence = dated && unit === 'count';
           const types = months || sequence ? (described.rows.length <= ANSWER_CHART_LIMITS.maxBarItems ? ['line', 'bar'] : ['line'])
             : distribution && !cover && described.rows.length <= ANSWER_CHART_LIMITS.maxBarItems ? ['bar', 'donut'] : ['bar'];
-          // Dizinin ikinci sütunu (tamamlama hareketi) aynı tabloda ikinci grafik açmaz.
-          if (sequence && index !== described.columns.findIndex((item) => item.numeric)) return;
+          // Dizi grafiği, dizinin KENDİ ölçüsünün sütunudur (kova sayısı ya da hareket sayısı), seçim sırasındaki ilk sayısal sütun değil:
+          // başlık dizinin ölçüsünü adlandırır, başka ölçü (ör. açık görev) o başlıkla çizilmez. Diğer sütunlar ikinci grafik açmaz.
+          const seriesColumn = described.columns.findIndex((item, position) => item.numeric
+            && described.rows.every((row) => row.cells[position]?.length === 1 && /(^|\.)(?:groups\.\d+\.count|series\.\d+\.events)$/.test(row.cells[position][0].field || '')));
+          if (sequence && index !== seriesColumn) return;
           // Dağılım ve zaman dizisi grafiği nüfusun sunucu başlığını taşır (ör. "Görevlerinizin durum dağılımı"); diğerleri sütun adını.
           const partTitle = distribution || months ? [...titles.values()].find((item) => item.part === ordinal)?.text : null;
           // Görev gruplarının kayıt sayısı grafikte "Görev sayısı" adını taşır ("Kayıt sayısı" teknik alan adıdır).
@@ -533,8 +544,14 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       // Aşama H: dönem bulgusunun sayımını söylediği liste boşsa ayrıntı yazılmaz (yokluk girişte söylenmiştir; sayım okuması aynı bölümdedir); tek satırlıysa
       // ölçütlü sayım cümlesinin yerine satırı tanıtan cümle geçer.
       // Boş liste, giriş paragrafı da sıfır söylediyse yazılmaz; sayım bir tamamlanma bildirip liste boş döndüyse boş sonuç ayrıntıda kalır.
-      if (cover?.kind === 'completedList' && shownRows === 0 && cover.aggregate === 0) continue;
-      const singleRow = shownRows === 1 && (cover?.kind === 'notes' || cover?.kind === 'completedList' && cover.total === 1);
+      // Arama kendisi de boş sonucu kanıtlamalıdır (`totalCount: 0`): iki okuma arasında tamamlanan görevin aramadaki sayısı, girişin
+      // eski sıfırı yüzünden düşürülmez.
+      if (cover?.kind === 'completedList' && shownRows === 0 && cover.aggregate === 0 && cover.total === 0) continue;
+      // Notu tanıtan cümle yalnızca gerçekten dönen boş olmayan açıklamada kullanılır: iki okuma arasında boşaltılmış açıklamanın görev
+      // satırı görünür kalır ama "notu okunan görev" denmez.
+      const noteRead = presentation.facts.some((item) => item.evidenceId === group.evidenceId && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '')
+        && typeof item.fact.value === 'string' && item.fact.value.trim());
+      const singleRow = shownRows === 1 && (cover?.kind === 'notes' && noteRead || cover?.kind === 'completedList' && cover.total === 1 && listAgrees);
       const lead = (singleRow ? singleRowLead(cover.kind, locale) : null)
         || taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead });
@@ -563,7 +580,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     const owner = parts.find((item) => item.presentation?.facts?.some((entry) => entry.evidenceId === compared.evidenceIds[0]));
     const ordered = Object.entries(compared.metrics).sort(([, left], [, right]) => Math.abs(right[0] - right[1]) - Math.abs(left[0] - left[1])).slice(0, 2);
     for (const [metric, values] of ordered) {
-      if (!owner || charts.size >= COMPOSITION_LIMITS.maxCharts + requestedCharts.length) break;
+      if (!owner || charts.size >= COMPOSITION_LIMITS.maxCharts + requestedCharts.length - periodReserve) break;
       const items = compared.subjects.map((subject, index) => ({ label: answerChartLabel(subject.type === 'self' ? (locale === 'en' ? 'You' : 'Siz') : subject.name), value: values[index] }));
       const candidate = { table: null, column: null, title: answerChartLabel([comparisonChartTitle(metric, locale), findingScope(compared, locale)].filter(Boolean).join(' · '), ANSWER_CHART_LIMITS.maxTitleChars), unit: 'count',
         evidenceId: compared.evidenceIds[0], evidenceIds: [...compared.evidenceIds], items, types: ['bar'], comparison: true };

@@ -276,6 +276,11 @@ export function factPresentation(fact, locale = 'tr') {
   const workflowStatuses = statusDomain === 'schedule' ? scheduleStatuses : statusDomain === 'coordination' ? coordinationStatuses
     : { ...scheduleStatuses, ...coordinationStatuses, PENDING: ['Bekliyor', 'Pending'] };
   Object.assign(values.status, workflowStatuses);
+  // Aşama H: hareket kaydı kapsamının durumu görev durumu değildir; kendi sözlüğüyle gösterilir (görev durumu etiketleri değişmez).
+  if (tool === 'rota_activity_search' && /^data\.coverage\.status$/.test(fact.field)) {
+    values.status = { complete: ['Kayıt tam', 'Fully recorded'], partial: ['Kayıt kısmi: başlangıcı ve tamlığı doğrulanamıyor', 'Partially recorded: start and completeness unverified'],
+      none: ['Kayıt yok: sayı bilinmiyor, sıfır değil', 'No records: count unknown, not zero'] };
+  }
   const semanticLeaf = fact.changeField || (leaf === 'key' ? fact.semantic?.groupBy : leaf);
   // Gecikme birimi tablosu yalnızca bağımlılık gecikmesine uygulanır; kişinin birimi (organizasyon) serbest addır.
   const lagUnit = semanticLeaf === 'unit' && fact.field.split('.').includes('lag');

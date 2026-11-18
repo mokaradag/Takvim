@@ -340,6 +340,8 @@ test('dönem tek kavramdır: adlı dönem aynı günlerin okumasına açılır; 
   const reads = result.log.filter((row) => row.query === 'task-facts' && row.ok === true && !row.params.taskIds);
   assert.ok(reads.length > 0);
   assert.ok(reads.every((row) => row.params.dateFrom && row.params.dateTo && day(row.params.dateFrom) === '2026-07-01' && day(row.params.dateTo) === '2026-09-30'), JSON.stringify(reads.map((row) => row.params)));
+  // Aynı sınırlarla başka tarih alanı (ör. oluşturulma) başka nüfustur: durum okuması termin alanındadır.
+  assert.ok(reads.every((row) => row.params.dateField === 'targetFinish'), JSON.stringify(reads.map((row) => row.params.dateField)));
 });
 
 test('dönem onarımı kapsamı değiştiremez: pencere açılsa da kapsam ve yönler sabittir', async (t) => {

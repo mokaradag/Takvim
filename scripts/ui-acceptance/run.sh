@@ -49,13 +49,17 @@ probe_port() {
   node --input-type=module -e 'import net from "node:net"; const s=net.createServer(); s.on("error",()=>process.exit(1)); s.listen(Number(process.argv[1]),"127.0.0.1",()=>s.close());' "$1"
 }
 export BRIDGE_PORT=${BRIDGE_PORT:-18731}
+# Koşunun tek Türkiye günü: tohum (UI_RUN_DAY) ve betikli uç (BRIDGE_TODAY) aynı günü kullanır; koşu sırasında gün değişirse uç 409 döner
+# ve koşu başarısız olur (bir gün kaymış sonuç sessizce raporlanmaz).
+export UI_RUN_DAY
+UI_RUN_DAY=$(TZ=Europe/Istanbul date +%F)
 probe_port "$BRIDGE_PORT"
 if [ "$SCRIPTED" = 1 ]; then
   # Tek profilli koşuda altın planlar o profille eşlenir (aynı soru metni farklı profillerde farklı plan taşıyabilir).
   SCRIPTED_PROFILE=''
   set -- $PROFILES
   if [ "$#" = 1 ]; then SCRIPTED_PROFILE=$1; fi
-  BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" UI_PROFILE=$SCRIPTED_PROFILE node "$HERE/scriptedBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
+  BRIDGE_TODAY=$UI_RUN_DAY BRIDGE_ENFORCE_DAY=1 BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" UI_PROFILE=$SCRIPTED_PROFILE node "$HERE/scriptedBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
 else
   BRIDGE_LEDGER="$UI_ACCEPTANCE_DIR/ledger.jsonl" BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" BRIDGE_MAX_CALLS=$BRIDGE_MAX_CALLS BRIDGE_MAX_UNCACHED=${BRIDGE_MAX_UNCACHED:-$DEFAULT_MAX_UNCACHED} \
     node "$HERE/modelBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &

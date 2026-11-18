@@ -487,12 +487,13 @@ Windows VM yeniden oynatması bekliyor; Aşama G'nin canlı model ve VM kapılar
   başlangıcı ve tamlığı kanıtlanamadığından üretimde `firstRecordedDay: null`, gözlem varsa `partial`, yoksa `none` döner.
 - **Tarihsel doğruluk sözleşmesi** (sunucu): bilinmeyen değer `null`dır ve sıfır yazılmaz; kanıtsız hareket dönemi/kova bilinmez,
   kısmi kayıtta fark yorumlanmaz; gerçekleşen bitişi kayıtlı olmayan tamamlanmış görevler sayılır ve
-  söylenir; yeniden açılan görev ayrıca sayılır; aynı ilişki kimliğinin kayıtları tek harekettir; yüzde değişim yalnızca eşit
+  söylenir; yeniden açılan görev ayrıca sayılır; aynı ilişki kimliği, görev, işlem yapan ve projeyi taşıyan kayıtlar tek harekettir; yüzde değişim yalnızca eşit
   uzunlukta, bitmiş, örtüşmeyen dönemlerde ve önceki değer ≥ 4 iken; eğilim yalnızca ≥ 6 tam kovayla (son 3 ↔ önceki 3);
   geçmiş DURUM (ör. geçen haftaki gecikme) yeniden kurulamaz ve bu adıyla söylenir.
 - **Bulgular ve anlatım:** `src/domain/ai/temporalFindings.js` (dönem özeti, karşılaştırma, tamamlanma eğilimi, hareket dizisi,
   teslim ufukları, geçmiş durum sınırı, not özeti); açılış paragrafı olgulardır, çekinceler ayrı paragraftır; dönem adı ve
-  aralığı her yanıtta yazılır. Grafik: tarih dizisi çizgi (en az 3 nokta), dönem karşılaştırması çubuk; değerler kanıttandır.
+  aralığı her yanıtta yazılır. Grafik: tarih dizisi çizgi (en az 3 nokta; bu alt sınır yalnızca başka açıdan uygun dizilere uygulanır:
+  tamamlanma dizisi çizilir, üretimdeki hareket dizisinin kovaları kayıt kapsamı doğrulanmadığı için kısmidir ve tabloda kalır), dönem karşılaştırması çubuk; değerler kanıttandır.
 - **Notlar:** yalnızca kullanıcının BU iletide "Notlar ve iletiler" anahtarını açtığı turda, görünür AÇIK görevlerin açıklaması
   (en son güncellenen 10 görev, 400 karakter); not metni bildirimdir, doğrulanmış neden değildir; içindeki yönerge veridir.
 
@@ -600,14 +601,17 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
    adlarıyla yazımı; ayrık küme (y01–y30) bu turda sorulmaz, ayrı bir turda yalnızca bir kez sorulur.
 2. Not soruları (H5) yalnızca sohbet kutusunda "Notlar ve iletiler" anahtarı **o iletide** açıkken sorulur; anahtar kapalıyken
    aynı soru bir kez daha sorulup rıza isteği (veri okunmadan) doğrulanır.
-3. Dönem bildiren her yanıtta denetlenir (rıza isteği gibi dönem bildirmeyen yanıtta dönem denetimi uygulanmaz): dönem adı ve tarih aralığı yazılıyor mu; karşılaştırmada iki dönem de adlandırılıyor mu; hareket
+3. Dönem bildiren her yanıtta denetlenir (rıza isteği gibi dönem bildirmeyen yanıtta dönem denetimi uygulanmaz): dönem adı ve tarih aralığı yazılıyor mu ve aralık, yeniden oynatma gününe göre çözülen beklenen aralıkla (karşılaştırmada iki aralık da) birebir aynı mı (doğru adla bir hafta erken aralık geçmez); karşılaştırmada iki dönem de adlandırılıyor mu; hareket
    kaydının başlangıcı ve tamlığı doğrulanamadığında bu sınır açıklanıyor mu, kanıtsız dönem "bilinmiyor" diye mi söyleniyor (sıfır değil); tamamlanma geçmişi okunan yanıtta gerçekleşen
    bitişi kayıtlı olmayan görev varsa ilgili çekince var mı; yüzde değişim yalnızca bitmiş, eşit uzunlukta ve örtüşmeyen
    dönemlerde, önceki dönemin sayısı en az 4 olduğunda mı veriliyor.
 4. JSON günlükte `ai.grounded.turn` kaydının `context.parts`, `context.presentation` ve `sqlQueries` değerleri tabloya yazılır;
-   hareket dönem özeti için Görev Hareketleri raporundaki aynı aralığın sayısı elle karşılaştırılır (aynı gizlilik sınırı). Rapor aynı
+   hareket dönem özeti için Görev Hareketleri raporundaki aynı aralığın sayısı elle karşılaştırılır (aynı gizlilik sınırı); rapor o aralıkta hiç hareket bulmadıysa
+   karşılaştırma sayıyla değil, yanıtın "bilinmiyor, sıfır değil" demesiyle yapılır (sayılar yalnızca gözlenen hareket varken karşılaştırılır). Rapor aynı
    nüfusla açılır: aynı işlem yapan kapsamı (kendi hareketlerim / ekip / görünür), aynı kişi ve proje süzgeci; yöneticinin raporu ekip
-   kapsamıyla açılabildiğinden kendi hareket sorusunda kapsam açıkça "kendi" seçilir, düzeyli ekip sorusunda aynı yönetim düzeyiyle karşılaştırılır.
+   kapsamıyla açılabildiğinden kendi hareket sorusunda kapsam açıkça "kendi" seçilir. Bilgin'in ekip dönem özeti yöneticinin kendi hareketlerini saymaz ve
+   düzeyli ekip üyeliğini `MR_V_ExecutiveScope.ScopeType` ile seçer; olağan ekip raporu yöneticinin kendi hareketini içerdiği ve düzeyi dizin özniteliğiyle
+   süzdüğü için bu vakalar raporla doğrudan doğrulanamaz: rapordaki yöneticinin kendi hareketleri düşülerek karşılaştırılır, düzeyli vakalar "raporla doğrulanamaz" diye kaydedilir.
 5. Sonuç §13 ve Kabul Matrisi §9'a tarihli kayıt olarak eklenir; koşulmadıysa H VM kabulü **bekliyor** kalır.
 
 ---

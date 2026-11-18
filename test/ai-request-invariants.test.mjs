@@ -190,9 +190,13 @@ test("korumalı metin ölçüsü kendi alanını açar; varlık özelliği araç
   const searched = complete({ operation: 'value', metrics: ['task.description'], population: { tool: 'rota_task_search' }, filters: { text: 'Radar test planı' } },
     [['rota_task_search', { text: 'Radar test planı' }]], { allowedTextFields: ['description'] });
   assert.ok(searched.problems.includes('$.metrics[0]:population'));
-  // Aşama H: adı verilmemiş görevlerin açıklaması tek görev ayrıntısı değil, özetin not yönüdür; ipucu bunu söyler.
-  assert.ok(searched.hints.some((hint) => hint.includes('"focus":["notes"]')));
+  // Başlığıyla tek görev adlandıran istek bütün açık görevlerin not ipucunu almaz; görev kapsamlı onarım (ayrıntı + varlık) önerilir.
+  assert.equal(searched.hints.some((hint) => hint.includes('"focus":["notes"]')), false);
   assert.ok(searched.hints.some((hint) => hint.includes('rota_task_detail') && hint.includes('request.entities')));
+  // Aşama H: adı verilmemiş görevlerin açıklaması tek görev ayrıntısı değil, özetin not yönüdür; ipucu bunu söyler.
+  const unnamed = complete({ operation: 'value', metrics: ['task.description'], population: { tool: 'rota_task_search' }, filters: {} },
+    [['rota_task_search', {}]], { allowedTextFields: ['description'] });
+  assert.ok(unnamed.hints.some((hint) => hint.includes('"focus":["notes"]')));
 
 });
 

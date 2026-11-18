@@ -53,14 +53,19 @@ export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = nu
     // `descriptionClipped` taşır ve yanıt metnin tamamının okunmadığını söyler.
     const notes = (policy?.rows || []).flatMap((path) => collections(current.data, path.split('.'))).flat()
       .filter((row) => row && typeof row.description === 'string' && Array.from(row.description).length > NOTE_FLOOR);
-    if (notes.length) {
-      for (const row of notes) {
-        const characters = Array.from(row.description);
-        row.description = characters.slice(0, Math.max(NOTE_FLOOR, Math.floor(characters.length / 2))).join('');
-        row.descriptionClipped = true;
-      }
-      continue;
+    // Her kısaltma ayrı denenir: yalnızca bayrak dâhil UTF-8 boyutunu gerçekten küçültüyorsa uygulanır ve ardından sınır yeniden
+    // denetlenir (yeterli olan ilk kısaltmadan sonra diğer notlar bütün kalır). Baştaki boşluk alıntının yerini tutmaz.
+    let shortened = false;
+    for (const row of notes) {
+      const characters = Array.from(row.description.replace(/^\s+/u, ''));
+      const next = { ...row, description: characters.slice(0, Math.max(NOTE_FLOOR, Math.floor(characters.length / 2))).join(''), descriptionClipped: true };
+      if (Buffer.byteLength(JSON.stringify(next), 'utf8') >= Buffer.byteLength(JSON.stringify(row), 'utf8')) continue;
+      Object.assign(row, next);
+      shortened = true;
+      const fitted = JSON.stringify({ ...current, factScope });
+      if (Buffer.byteLength(fitted, 'utf8') <= maxBytes) return fitted;
     }
+    if (shortened) continue;
     const candidates = (policy?.trim || []).flatMap((path) => collections(current.data, path.split('.')))
       .filter((list) => list.length > 0).sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length);
     const largest = candidates[0];

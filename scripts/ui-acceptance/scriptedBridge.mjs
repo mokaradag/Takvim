@@ -16,7 +16,9 @@ const CALLS = process.env.BRIDGE_CALLS || null;
 const benchmark = JSON.parse(readFileSync(process.env.UI_BENCHMARK || new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
 // Göreli termin belirteçleri ("T+N") çalıştırma gününe (Türkiye günü) göre çözülür; sentetik veri de aynı güne göre kurulur.
 const istanbulDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const today = istanbulDay();
+// `BRIDGE_TODAY`: yalnızca sınamada sabit gün (köprü ile sınama kahini aynı saati kullanır); verilmezse bugünün Türkiye günü.
+const FIXED_DAY = /^\d{4}-\d{2}-\d{2}$/.test(process.env.BRIDGE_TODAY || '') ? process.env.BRIDGE_TODAY : null;
+const today = FIXED_DAY || istanbulDay();
 const shift = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
 // Aşama H kıyas kümesi "T", "T-N" ve "T+N" biçimlerini kullanır; hepsi aynı güne göre çözülür.
 // Yalnızca tarih alanları çözülür: "T" adlı bir proje ya da metin değeri tarihe çevrilmez.
@@ -73,7 +75,8 @@ http.createServer((request, response) => {
     // Düzen iletisi bozuk JSON ya da çizilemeyen görünüm taşıyabilir: hata ucu sonlandırmaz, istemci hatası (400) olarak döner.
     // Göreli altın planlar başlangıç gününe çözüldü: Türkiye gün sınırını aşan yeniden oynatma bayat dönem okurdu. Yanıt verilmez;
     // koşu yeniden başlatılmalıdır (uygulama ve sentetik veri de yeni güne göre kurulur).
-    if (istanbulDay() !== today) {
+    // Gün değişimi denetimi sabit günde yalnızca açıkça istenirse (`BRIDGE_ENFORCE_DAY=1`, devir sınaması) uygulanır.
+    if ((!FIXED_DAY || process.env.BRIDGE_ENFORCE_DAY === '1') && istanbulDay() !== today) {
       process.stderr.write(`betikli uç ${today} gününe göre çözüldü; Türkiye günü değişti, koşuyu yeniden başlatın\n`);
       response.writeHead(409).end();
       return;

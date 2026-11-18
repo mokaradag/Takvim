@@ -69,6 +69,13 @@ for (const sibling of ['dateFrom', 'dateTo']) test(`geçersiz dönem onarımı m
   assert.equal(result.answer.finishReason, 'stop', result.answer.content);
   assert.equal(result.inputs.length, 2);
   assert.ok(result.log.some((row) => row.query === 'task-facts'));
+  // Eksik sınırı eklerken verilmiş sınırı değiştiren onarım reddedilir ve görev okuması yapılmaz.
+  const moved = { ...dates, [sibling]: sibling === 'dateFrom' ? '2026-11-16' : '2026-11-27' };
+  const rejectQueue = [call({ intent: 'rota', language: 'tr', analysis }), call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], ...moved } })];
+  t.mock.timers.reset();
+  const rejected = await phase4eConversation(t, { planner: () => rejectQueue.shift() }).ask({ text: 'Belirtilen dönemdeki görev durumumu göster' });
+  assert.notEqual(rejected.answer.finishReason, 'stop', rejected.answer.content);
+  assert.equal(rejected.log.some((row) => row.query === 'task-facts' && !row.params.taskIds), false);
 });
 
 for (const failure of ['metin', 'kesilme', 'geçersiz-plan', 'boş-yanıt']) test(`güvenli ilk açıklama kullanılamayan doğrulama çıktısında korunur: ${failure}`, async (t) => {

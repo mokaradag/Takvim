@@ -403,6 +403,11 @@
      "outcome": "grounded",
      "requires": [
       "görev tamamlan"
+     ],
+     "chartTitle": "Tamamlanan görev",
+     "chartItems": [
+      "Geçen hafta",
+      "Bu hafta"
      ]
     }
    ],
@@ -423,7 +428,8 @@
      "requires": [
       "Tamamlanmış"
      ],
-     "periodDays": 90
+     "periodDays": 90,
+     "chartMinItems": 12
     }
    ],
    "expectedCharts": [
@@ -441,7 +447,9 @@
     {
      "outcome": "grounded",
      "requires": [
-      "bilinmiyor"
+      "bilinmiyor",
+      "görev tamamlandı",
+      "hareket"
      ]
     }
    ]
@@ -458,6 +466,11 @@
      "outcome": "grounded",
      "requires": [
       "7 gün içinde"
+     ],
+     "chartItems": [
+      "Önümüzdeki 7 gün",
+      "8–14. gün",
+      "15–30. gün"
      ]
     }
    ],
@@ -477,7 +490,8 @@
      "outcome": "grounded",
      "requires": [
       "doğrulanmış değildir",
-      "Notlar kayıtlardaki hâliyle"
+      "Notlar kayıtlardaki hâliyle",
+      "Tedarikçi onayı bekleniyor"
      ]
     }
    ],
@@ -497,6 +511,10 @@
      "outcome": "grounded",
      "requires": [
       "toplanmaz"
+     ],
+     "matches": [
+      "siz .*hareket kaydettiniz|sizin kaydettiğiniz hareketlerde kayıt bulunmuyor",
+      "ekibiniz .*hareket kaydetti|ekibinizin kaydettiği hareketlerde kayıt bulunmuyor"
      ]
     }
    ]

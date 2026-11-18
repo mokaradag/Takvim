@@ -17,7 +17,9 @@ export const METRIC_DEFINITIONS = Object.freeze({
   // kayıtlı tarihe dayanır.
   historyBasis: Object.freeze({
     actualFinish: 'Dönem sayımı, bugün tamamlanmış durumda olan görevlerin kayıtlı gerçekleşen bitiş tarihine dayanır; gerçekleşen bitişi kayıtlı olmayan tamamlanmış görev hiçbir döneme yerleştirilemez. Tamamlandıktan sonra yeniden açılan görev tamamlanmış sayılmaz.',
-    createdAt: 'Dönem sayımı, o dönemde oluşturulmuş ve bugün kayıtlı olan görevlere dayanır; sonradan silinen görev sayılmaz.'
+    createdAt: 'Dönem sayımı, o dönemde oluşturulmuş ve bugün kayıtlı olan görevlere dayanır; sonradan silinen görev sayılmaz.',
+    // Yalnızca tamamlanmış durum süzülmediğinde: tarih süzgeci ile durum süzgeci ayrı anlatılır.
+    actualFinishAnyStatus: 'Dönem süzgeci görevin kayıtlı gerçekleşen bitiş tarihine uygulanır; durum süzgeci görevin bugünkü durumudur. Gerçekleşen bitişi kayıtlı olup bugün tamamlanmamış görev de seçilen duruma göre sayılabilir.'
   }),
   baseline: Object.freeze({
     varianceDays: 'Güncel planlanan bitiş ile baz plandaki planlanan bitiş arasındaki takvim günü farkı; pozitif değer kaymadır.',

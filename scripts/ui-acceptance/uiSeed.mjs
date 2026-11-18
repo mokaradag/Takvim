@@ -13,7 +13,9 @@ const tid = (n) => `21000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 export const PROJ = Object.freeze({ ALTYAPI: pid(1), MOBIL: pid(2), AMBAR: pid(3), SIBER: pid(4), PORTAL: pid(5), EGITIM: pid(6), ARGE: pid(7) });
 const CAL = '41000000-0000-4000-8000-000000000001';
 
+// `UI_RUN_DAY`: koşunun tek günü (run.sh); tohum ve betikli uç aynı günü kullanır. Verilmezse bugünün Türkiye günü.
 function todayIso() {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(process.env.UI_RUN_DAY || '')) return process.env.UI_RUN_DAY;
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 const d = (offset) => new Date(Date.parse(`${todayIso()}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);

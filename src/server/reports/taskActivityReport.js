@@ -136,9 +136,11 @@ const REOPEN_EVENT_SQL = `CASE WHEN COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'
 const ACTIVITY_DAY_SQL = `CONVERT(date, OccurredAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time')`;
 const TEAM_SCOPE_SQL = `(@scope = 'team' AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil)))`;
-const LEVELED_TEAM_SCOPE_SQL = `(@scope = 'team' AND ((LEN(@teamLevel) = 0 AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
+// Dönem özetinde ekip, görev olgularındaki ekip kuralı gibi yöneticinin KENDİ hareketlerini içermez (düzeyli ya da düzeysiz):
+// "ekibinizin kaydettiği hareket" sayısı ile ekip görev sayıları aynı nüfusu anlatır.
+const LEVELED_TEAM_SCOPE_SQL = `(@scope = 'team' AND a.ActorSicil <> @sicil AND ((LEN(@teamLevel) = 0 AND (@isAdmin = 1 OR EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil)))
-      OR (LEN(@teamLevel) > 0 AND a.ActorSicil <> @sicil AND (EXISTS (
+      OR (LEN(@teamLevel) > 0 AND (EXISTS (
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil AND es.ScopeType = @teamLevel)))))`;
 
 /** Türev deyim: her ek, rapor SQL'inde TAM bir kez bulunan bir çapaya bağlanır; çapa kaybolursa okuma kapalı hata verir. */

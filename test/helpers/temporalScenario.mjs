@@ -5,7 +5,7 @@
  * yanıt geçmez.
  */
 import { readFileSync } from 'node:fs';
-import { resolveWindow, previousWindow } from '../../src/domain/ai/temporalWindow.js';
+import { namedWindow, previousWindow, rangeLabel, resolveWindow, windowName } from '../../src/domain/ai/temporalWindow.js';
 import { answerQuality } from './answerQuality.mjs';
 import { renderedCharts } from './phase4eScenario.mjs';
 
@@ -27,7 +27,8 @@ export const H_FINDING_TEXT = Object.freeze({
     activityTrend: /Kaydedilen hareketler en çok|için hareket kaydı yok; bu kovalar bilinmiyor/,
     horizonSpread: /7 gün içinde \*\*\d+\*\*, 14 gün içinde \*\*\d+\*\*, 30 gün içinde \*\*\d+\*\*|önümüzdeki 30 gün içinde .*termini olan açık görev yok/i,
     historyLimit: /yeniden kurulamıyor/,
-    noteDigest: /açık görevin notu(?:nun tamamı)?|tanesinin notu okundu|açıklaması olan açık görev yok/
+    // Kesilmiş notların alıntı cümlesi de geçerli not özetidir (okuma ve açıklama doğruysa eksik bulgu sayılmaz).
+    noteDigest: /açık görevin notu(?:nun tamamı)?|tanesinin notu okundu|açıklaması olan açık görev yok|not parçası okundu/
   },
   en: {
     periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events? (?:was|were) recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
@@ -36,7 +37,7 @@ export const H_FINDING_TEXT = Object.freeze({
     activityTrend: /Recorded activity peaked|no activity record; those are unknown/,
     horizonSpread: /within 7 days, \*\*\d+\*\* within 14 days|In the next 30 days, no open task is due/,
     historyLimit: /cannot be reconstructed/,
-    noteDigest: /descriptions? of (?:the|all)|returned were read|has a description to read/
+    noteDigest: /descriptions? of (?:the|all)|returned were read|has a description to read|Returned excerpts from/
   }
 });
 
@@ -63,7 +64,9 @@ function temporalLogMatches(row, range, measure = null) {
   // Yaklaşan teslim: hedef bitişe göre açık görevler (tamamlanan iş okuması bu kanıtın yerine geçmez).
   if (measure === 'upcoming') {
     const open = (p.statusCsv || '').split(',').filter(Boolean);
-    return row.query === 'task-facts' && !p.taskIds && (p.dateField == null || p.dateField === 'targetFinish') && open.length === 2 && ['todo', 'in_progress'].every((status) => open.includes(status));
+    // Pencereyi daraltan ek süzgeç (ör. yalnızca bugün teslim, öncelik, kilometre taşı, metin) teslim penceresinin tamamını okumaz.
+    const narrowed = p.deadline || p.priorityCsv || p.milestone != null || p.text || p.wbsId || p.seriesId || p.recurringOnly || p.createdByMe || p.hasDescription || p.assigneeMode === 'unassigned';
+    return row.query === 'task-facts' && !p.taskIds && !narrowed && (p.dateField == null || p.dateField === 'targetFinish') && open.length === 2 && ['todo', 'in_progress'].every((status) => open.includes(status));
   }
   if (p.priorityCsv || p.milestone != null || p.text || p.wbsId || p.seriesId || p.recurringOnly || p.assigneeMode === 'unassigned'
     || p.createdByMe || p.hasDescription || p.openOnly || p.deadline || p.targetFrom || p.targetTo) return false;
@@ -92,8 +95,13 @@ export function temporalRequestMatches(request, layer) {
 
 /** Altın plan yalnızca kapsam beklentisidir; modelin her başarılı nüfus okuması ayrıca denetlenir. */
 export function temporalPopulationViolations(result, analysis, seed) {
+  // Açıkça yazılan "tüm zamanlar" tarihsel yönde desteklenmez: sınırlı bir dönemle verilen başarılı yanıt geçmez (dönemsizlikten ayrıdır).
+  if (analysis?.relativeWindow === 'all_time' && [analysis, ...(analysis.also || [])].some((layer) => (layer.focus || analysis.focus || []).some((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)))
+    && result.answer?.finishReason === 'stop') return ['tüm zamanlar tarihsel isteği sınırlı dönemle yanıtlandı'];
   if (!analysis || result.answer?.finishReason !== 'stop') return [];
-  const layers = [analysis, ...(analysis.also || [])].map((layer) => ({ ...layer, focus: layer.focus || analysis.focus })).flatMap((layer) => (layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]));
+  // Kendiyle karşılaştırma (`withSelf`) iki nüfustur: adlı kişinin yanında kullanıcının kendi katmanı aynı dönem, yön ve daraltmayla puanlanır.
+  const selfLayer = analysis.withSelf ? [{ scope: 'self', focus: analysis.focus, ...(analysis.within ? { within: analysis.within } : {}) }] : [];
+  const layers = [analysis, ...selfLayer, ...(analysis.also || [])].map((layer) => ({ ...layer, focus: layer.focus || analysis.focus })).flatMap((layer) => (layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]));
   const reads = (result.log || []).filter((row) => row.ok === true && (row.query === 'activity' || row.query === 'task-facts' && !row.params.taskIds));
   const matches = (row, layer) => {
     const p = row.params;
@@ -141,8 +149,10 @@ export function temporalPopulationViolations(result, analysis, seed) {
       }
     }
     // Dönemli yaklaşan teslim istendiyse açık görevlerin hedef bitiş okuması zorunludur (bugünden başlar).
-    if (layer.focus?.includes('upcoming') && window) {
-      const upcoming = [window[0] < TEMPORAL_TODAY ? TEMPORAL_TODAY : window[0], window[1]];
+    // Yalnızca sonu verilen yaklaşan iş ufku da bugünden o güne okunur (sunucunun `upcomingFrom` kuralı); varsayılan yedi günlük okuma geçmez.
+    const upcomingWindow = window || (analysis.dateTo && !analysis.dateFrom ? expectedRange([TEMPORAL_TODAY, analysis.dateTo]) : null);
+    if (layer.focus?.includes('upcoming') && upcomingWindow) {
+      const upcoming = [upcomingWindow[0] < TEMPORAL_TODAY ? TEMPORAL_TODAY : upcomingWindow[0], upcomingWindow[1]];
       if (!reads.some((read) => matches(read, layer) && temporalLogMatches(read, upcoming, 'upcoming'))) problems.push(`yaklaşan teslim okunmadı: ${layer.scope}/${upcoming.join('..')}`);
     }
     for (const kind of ['notes', 'horizons'].filter((kind) => layer.focus?.includes(kind))) {
@@ -152,10 +162,13 @@ export function temporalPopulationViolations(result, analysis, seed) {
       });
       const open = (filters) => filters.statuses?.length === 2 && ['todo', 'in_progress'].every((status) => filters.statuses.includes(status));
       const noteIds = new Set((result.log || []).filter((row) => row.query === 'task-notes' && row.ok === true).flatMap((row) => String(row.params.taskIds || '').toLowerCase().split(',')));
-      const seen = kind === 'notes' ? evidence.some((item) => item.ok === true && item.tool === 'rota_task_search' && item.data.filters.hasDescription && open(item.data.filters)
-        && reads.some((read) => matches(read, layer) && read.params.hasDescription)
+      // Not okuması açık görev notlarının tamamıdır: tarih süzgeci taşıyan not araması (kanıtta ya da okumada) nüfusu daraltır ve geçmez.
+      // Okunan not boş olmayan metindir (yalnızca boşluk dönen açıklama okunmuş not sayılmaz).
+      const undated = (filters) => !filters?.dateFrom && !filters?.dateTo;
+      const seen = kind === 'notes' ? evidence.some((item) => item.ok === true && item.tool === 'rota_task_search' && item.data.filters.hasDescription && open(item.data.filters) && undated(item.data.filters)
+        && reads.some((read) => matches(read, layer) && read.params.hasDescription && undated(read.params))
         && (item.complete === true && item.totalCount === 0 && item.data.tasks?.length === 0 || item.data.tasks?.length > 0
-          && item.data.tasks.every((task) => typeof task.description === 'string' && noteIds.has(String(task.taskId).toLowerCase()))))
+          && item.data.tasks.every((task) => typeof task.description === 'string' && task.description.trim() && noteIds.has(String(task.taskId).toLowerCase()))))
         : evidence.some((item) => item.ok === true && item.complete === true && item.tool === 'rota_task_analytics' && item.data.groupBy === 'due_horizon' && open(item.data.filters)
           && item.data.filters.dateField === 'targetFinish' && item.data.filters.dateFrom === TEMPORAL_TODAY && item.data.filters.dateTo === shift(29)
           && ['days_0_6', 'days_7_13', 'days_14_29'].every((key) => item.data.groups?.some((group) => group.key === key && Number.isSafeInteger(group.count) && group.count >= 0))
@@ -195,19 +208,32 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
     if (!H_FINDING_TEXT[locale === 'en' ? 'en' : 'tr'][kind]?.test(content)) problems.push(`bulgu yok: ${kind}`);
   }
   for (const pattern of expect.says || []) if (!new RegExp(pattern, 'u').test(content)) problems.push(`beklenen ifade yok: ${pattern}`);
+  // "Hangileri devam ediyor" sorusu bugünkü durum okumasını ister (durum dağılımı kanıtı): yalnızca tamamlanma özeti geçmez.
+  if (expect.statusRead && !(result.evidence || []).some((item) => item.ok === true && item.tool === 'rota_task_analytics' && item.data?.groupBy === 'status')) problems.push('durum okuması yok');
 
   const charts = renderedCharts(result.answer?.content || '');
   for (const type of expect.charts || []) if (!charts.some((chart) => chart.type === type)) problems.push(`grafik yok: ${type}`);
   if (expect.noChart && charts.some((chart) => chart.type === expect.noChart)) problems.push(`grafik çizilmemeliydi: ${expect.noChart}`);
   if (expect.chartNote && !/(?:grafik|zaman çizelgesi|gösterge kartları) için .+ gerekir|(?:chart|KPI card set|timeline) (?:needs|requires)\b/iu.test(content)) problems.push('grafik türü notu yok');
   // Dönem karşılaştırması çubukları: her çubuk kendi döneminin kanıttaki sayısıdır (önce → sonra); yer değiştirmiş sayılar geçmez.
-  if (expect.window && expect.compare && (expect.measures || []).includes('completed')) {
-    const total = (range) => (result.evidence || []).find((item) => item.ok === true && item.tool === 'rota_task_analytics' && !item.data?.groupBy
-      && item.data?.filters?.dateField === 'actualFinish' && item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1])?.data?.totals?.total;
+  // Her grafik kendi ölçüsüyle (başlık) eşleştirilir ve her çubuğun etiketi ile değeri AYNI döneme aittir (etiketler yer değiştirmiş
+  // ya da oluşturulma grafiği tamamlanma sayılarıyla sınanmış grafik geçmez).
+  if (expect.window && expect.compare) {
     const periods = [expect.compare, expect.window].map((range) => range.map((value) => resolveDay(value))).sort((a, b) => a[0].localeCompare(b[0]));
-    const counts = periods.map(total);
-    for (const chart of charts.filter((item) => item.type === 'bar' && item.items?.length === 2)) {
-      if (!counts.every(Number.isFinite) || chart.items.map((item) => item.value).join() !== counts.join()) problems.push('karşılaştırma çubukları dönem sayılarıyla eşleşmiyor');
+    const english = result.locale === 'en';
+    const names = periods.map((range) => windowName(namedWindow({ dateFrom: range[0], dateTo: range[1] }, TEMPORAL_TODAY), english ? 'en' : 'tr'));
+    const labels = periods.map((range, index) => (names.every(Boolean) ? names[index] : rangeLabel({ dateFrom: range[0], dateTo: range[1] }, english ? 'en' : 'tr')).toLocaleLowerCase('tr'));
+    const specs = { completed: ['actualFinish', /^(Tamamlanan görev|Completed tasks)/], created: ['createdAt', /^(Oluşturulan görev|Created tasks)/] };
+    for (const [measure, [dateField, title]] of Object.entries(specs).filter(([measure]) => (expect.measures || []).includes(measure))) {
+      const total = (range) => (result.evidence || []).find((item) => item.ok === true && item.tool === 'rota_task_analytics' && !item.data?.groupBy
+        && item.data?.filters?.dateField === dateField && item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1])?.data?.totals?.total;
+      const counts = periods.map(total);
+      // Karşılaştırma grafiği başlığından tanınır (çubuk sayısından değil): fazladan çubuklu grafik denetimden kaçamaz, tam iki çubuk gerekir.
+      for (const chart of charts.filter((item) => item.type === 'bar' && title.test(String(item.title || '')))) {
+        if (chart.items?.length !== 2) { problems.push('karşılaştırma grafiği iki dönem çubuğu taşımıyor'); continue; }
+        if (!counts.every(Number.isFinite) || chart.items.map((item) => item.value).join() !== counts.join()) problems.push('karşılaştırma çubukları dönem sayılarıyla eşleşmiyor');
+        if (chart.items.some((item, index) => !String(item.label || '').toLocaleLowerCase('tr').startsWith(labels[index]))) problems.push('karşılaştırma çubuğunun etiketi dönemiyle eşleşmiyor');
+      }
     }
   }
   // Grafik değerleri sayı, etiketleri boş olmayan metindir; çizgi grafiğin en az üç noktası vardır (tek tük gözlemden eğilim çizilmez).

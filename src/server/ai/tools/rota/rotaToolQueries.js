@@ -5,9 +5,11 @@ const STATUS_SQL = `CASE t.Status COLLATE Latin1_General_100_BIN2 ${Object.entri
 const PRIORITY_SQL = `CASE LOWER(LTRIM(RTRIM(COALESCE(t.Priority, ''))) COLLATE Latin1_General_100_CI_AS) ${Object.entries({ ...Object.fromEntries(Object.keys(PRIORITIES).map((key) => [key, key])), ...LEGACY_PRIORITY_ALIASES }).map(([alias, priority]) => `WHEN '${alias}' THEN '${priority}'`).join(' ')} ELSE '${DEFAULT_PRIORITY_ID}' END`;
 
 // JavaScript trim() ile aynı boşluk kümesi; sabit ikili desen sekme, satır sonu ve Unicode boşluklarını da dışlar.
-const DESCRIPTION_PRESENT_SQL = `PATINDEX(N'%[^' + ${[9, 10, 11, 12, 13, 32, 160, 5760,
+// Açıklamanın boşluk olmayan ilk karakterinin konumu (yoksa 0): varlık süzgeci ve alıntının başlangıcı AYNI boşluk kümesini kullanır.
+const DESCRIPTION_TEXT_START_SQL = `PATINDEX(N'%[^' + ${[9, 10, 11, 12, 13, 32, 160, 5760,
   8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279]
-  .map((code) => `NCHAR(${code})`).join(' + ')} + N']%', COALESCE(t.Description, N'') COLLATE Latin1_General_100_BIN2) > 0`;
+  .map((code) => `NCHAR(${code})`).join(' + ')} + N']%', COALESCE(t.Description, N'') COLLATE Latin1_General_100_BIN2)`;
+const DESCRIPTION_PRESENT_SQL = `${DESCRIPTION_TEXT_START_SQL} > 0`;
 
 /**
  * Rota AI alan araçlarının SABİT SQL metinleri.
@@ -459,7 +461,8 @@ ${visibleTasks()}
 export const AI_TOOL_TASK_NOTES_SQL = `/* rota-ai-tool:task-notes */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
-  SELECT visible.TaskId, LEFT(t.Description COLLATE Latin1_General_100_CI_AS_SC, 401) AS Description
+  -- Alıntı ilk boşluk olmayan karakterden başlar: baştaki boşluklar 400 kod noktalık alıntıyı tüketmez (önceki karakterler BMP boşluklarıdır).
+  SELECT visible.TaskId, SUBSTRING(t.Description COLLATE Latin1_General_100_CI_AS_SC, ${DESCRIPTION_TEXT_START_SQL}, 401) AS Description
   FROM #AiTasks visible JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
   WHERE ${DESCRIPTION_PRESENT_SQL};
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;

@@ -158,7 +158,7 @@ export function plannerScore(result, expect, today = corpus.today) {
         : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope && sameName(layer, entity)) && !request.filters?.assignee
           && request.entities.every((entity) => entity.type === layer.scope && expect.layers.some((expected) => expected.scope === entity.type && sameName(expected, entity)))
           : layer.scope === 'projects' ? portfolioRead(layer, request)
-            : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary');
+            : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary' && scopeOf([request]) === 'all');
     // Çok adlı katmanın her öznesi ayrı nüfus ve yön kanıtı gerektirir.
     const subjects = expect.layers.flatMap((layer) => layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]);
     const reads = (layer) => requests.some((request) => readsLayer(layer, request));
@@ -227,20 +227,26 @@ export function plannerScore(result, expect, today = corpus.today) {
       for (const range of [window, compare].filter(Boolean)) if (!unresolved && !requests.some((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
         && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('istenen tarihsel dönem okunmadı');
       // Karşılaştırmada iki dönem AYNI ölçü, araç ve nüfusla okunur (ör. bu haftanın tamamlananı ile geçen haftanın oluşturulanı geçmez).
+      // Hareket okumasının işlem yapan nüfusu (`activityScope`: mine/visible/team) da nüfusun parçasıdır: iki dönem aynı kapsamla okunur.
       const measureKey = (request) => JSON.stringify([request.filters?.activityView ? 'activity' : request.filters?.dateField, request.population?.tool, request.filters?.assignee ?? null,
-        request.filters?.teamLevel ?? null, (request.entities || []).map((entity) => `${entity.type}:${entity.query ?? entity.text ?? entity.id}`).sort()]);
+        request.filters?.activityScope ?? null, request.filters?.teamLevel ?? null, (request.entities || []).map((entity) => `${entity.type}:${entity.query ?? entity.text ?? entity.id}`).sort()]);
       const keysAt = (range) => new Set(requests.filter((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
         && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField))).map(measureKey));
       if (window && compare && !unresolved && ![...keysAt(window)].some((key) => keysAt(compare).has(key))) failures.push('iki dönem aynı ölçüyle okunmuyor');
     }
     if (expect.temporal && !focus.some((item) => ['completed', 'created', 'activity', 'trend'].includes(item)) && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş dönem okunmadı');
+    // "Durum iyileşti mi" sorusu geçmiş DURUMU sorar: dönemlerin tamamlanma sayıları bunu kanıtlamaz; durum yönünün geçmiş sınırı
+    // (`historyUnsupported`) bildirilmelidir (sayımlar ek bağlam olabilir).
+    if (expect.historyLimit && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
     // Dönemdeki gelişmeleri bugünkü durumdan ayırmayı isteyen soru (`currentState`): dönemde gözlenen olay okuması ile ayrı, dönemsiz
     // bugünkü durum okuması birlikte gerekir; geçmiş durum sınırı bildirimi olay okumasının yerine geçmez.
     if (expect.currentState) {
       const window = expectedRange(expect.temporalWindow, today);
       if (!requests.some((request) => window && request.filters?.dateFrom === window[0] && request.filters?.dateTo === window[1]
         && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('dönemdeki gelişmeler okunmadı');
-      if (!requests.some((request) => request.population?.tool !== 'rota_activity_search' && !request.filters?.dateFrom && !request.filters?.dateTo && !request.filters?.dateField)) failures.push('güncel durum ayrı okunmadı');
+      // Bugünkü durum okuması görev durumunu okuyan araçtandır (takvim, çalışma isteği ya da hareket okuması bugünkü görev durumu değildir).
+      if (!requests.some((request) => ['rota_task_analytics', 'rota_task_search', 'rota_workload_summary'].includes(request.population?.tool)
+        && !request.filters?.dateFrom && !request.filters?.dateTo && !request.filters?.dateField)) failures.push('güncel durum ayrı okunmadı');
     }
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
@@ -326,7 +332,11 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   // ölçüler (kendi için hareket, ekip için tamamlanan) geçmez.
   const ownMeasures = (layer, fallback, compared) => (layer?.focus && !expect.focusAll && !expect.focusAny
     ? layer.focus.filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus) && !(compared && focus === 'trend')) : fallback);
-  const reads = (range, wantedMeasures = measures, primary = true) => (atoms.length ? atoms : [null]).every((layer) => { const own = ownMeasures(layer, wantedMeasures, !primary); return (own.length ? own : [null]).every((measure) => requests.some((request) =>
+  // Karşılaştırma döneminde yalnızca eğilim isteyen katmanın ölçüsü kalmaz: o katman için önceki dönem okuması aranmaz (birincil eğilim
+  // denetimi ve diğer katmanların iki dönemi korunur).
+  const reads = (range, wantedMeasures = measures, primary = true) => (atoms.length ? atoms : [null]).every((layer) => { const own = ownMeasures(layer, wantedMeasures, !primary);
+    if (!primary && layer?.focus && !own.length && layer.focus.includes('trend')) return true;
+    return (own.length ? own : [null]).every((measure) => requests.some((request) =>
     (!range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1])
     // Dönem başlangıcı beklentisi yalnızca birincil dönemindir; karşılaştırma dönemi kendi başlangıcıyla okunur.
     && (!primary || !expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1) && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
@@ -339,6 +349,10 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   if (range && prior && !expect.stateComparison && !measures.length && !['completed', 'created', 'activity'].some((measure) => reads(range, [measure]) && reads(prior, [measure], false))) failures.push('iki dönem aynı ölçüyle okunmuyor');
   if (expect.windowFrom && !reads(range)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
   if (expect.bucket && !reads(range)) failures.push(`dizi kovası ${expect.bucket} okunmuyor`);
+  // Birincil eğilim dizisi tarihi kayıtlı olmayan tamamlanmışları söyleyemez: aynı dönem ve nüfusun gruplanmamış tamlık okuması
+  // (`tasks.undatedDone`) gerekir. Karşılaştırma dönemi için eğilim dizisi istenmez.
+  if (range && measures.includes('trend') && !(atoms.length ? atoms : [null]).every((layer) => requests.some((request) => carries(request, 'completed')
+    && request.metrics?.includes('tasks.undatedDone') && request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1] && (!layer || temporalRequestMatches(request, layer))))) failures.push('eğilimin tamlık okuması yok');
   if (expect.stateComparison && !analysis.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
   if (expect.stateComparison && analysis.historyUnsupported?.length) {
     let matches = false;

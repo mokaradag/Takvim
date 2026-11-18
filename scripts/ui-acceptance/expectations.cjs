@@ -1,5 +1,6 @@
 // Senaryonun açık beklentileri görülmüş metin ve bu turun sunucu sonucu üzerinde denetlenir; dil yorumu yapılmaz.
-function semanticFailures(expected, rendered, trace) {
+// `now`: turun gönderildiği an; dönem etiketi ekran görüntüsü sonrasındaki saatle değil, sunucunun dönemi çözdüğü günle beklenir.
+function semanticFailures(expected, rendered, trace, now = new Date()) {
   // Bu paket Rota senaryolarıdır; farklı bir sonuç açıkça belirtilmedikçe kanıtlı yanıt gerekir.
   expected = { outcome: 'grounded', ...expected };
   const failures = [];
@@ -12,8 +13,20 @@ function semanticFailures(expected, rendered, trace) {
   if (expected.maxEvidence != null && (!Number.isSafeInteger(trace?.evidence) || trace.evidence > expected.maxEvidence)) failures.push('beklenen kanıt sınırı aşıldı');
   for (const text of expected.requires || []) if (!String(rendered.text || '').includes(text)) failures.push(`zorunlu görünür metin yok: ${text}`);
   for (const text of expected.forbids || []) if (String(rendered.text || '').includes(text)) failures.push(`yasak görünür metin var: ${text}`);
+  // Seçenekli zorunlu metin (`matches`: düzenli ifade kaynakları): ör. kapsamın hareket sayısı YA DA açık kayıt sınırı.
+  for (const source of expected.matches || []) if (!new RegExp(source, 'u').test(String(rendered.text || ''))) failures.push(`zorunlu görünür ifade yok: ${source}`);
   // Bugün dâhil son N günün aralığı (Türkiye günü) yanıtta görünmelidir: daha kısa bir dönemin grafiği dönem denetimini geçmez.
-  if (Number.isSafeInteger(expected.periodDays) && !String(rendered.text || '').includes(periodLabel(expected.periodDays))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays)}`);
+  // Dönem etiketi bütün olarak aranır: "13 Temmuz – 30 Eylül" metni "3 Temmuz – 30 Eylül" beklentisini sonek eşleşmesiyle geçmez.
+  if (Number.isSafeInteger(expected.periodDays) && !new RegExp(`(^|[^0-9])${periodLabel(expected.periodDays, now).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(String(rendered.text || ''))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays, now)}`);
+  // Grafik beklentileri AYNI görünür grafikte aranır: başlıktaki ölçü (`chartTitle`), bütün etiketler (`chartItems`) ve en az nokta sayısı
+  // (`chartMinItems`, ör. 90 günlük haftalık dizinin kovaları). Düzyazıda doğru olup başka bir grafik çizen yanıt geçmez.
+  const chartExpected = expected.chartTitle || Array.isArray(expected.chartItems) || Number.isSafeInteger(expected.chartMinItems);
+  if (chartExpected && !(rendered.charts || []).some((chart) => chart.visible
+    && (!expected.chartTitle || String(chart.title || '').includes(expected.chartTitle))
+    && (!Array.isArray(expected.chartItems) || expected.chartItems.every((label) => (chart.items || []).some((item) => String(item).includes(label))))
+    && (!Number.isSafeInteger(expected.chartMinItems) || (chart.items || []).length >= expected.chartMinItems))) {
+    failures.push(`istenen grafik içeriği görünmüyor: ${[expected.chartTitle, ...(expected.chartItems || []), expected.chartMinItems].filter((item) => item != null).join(' | ')}`);
+  }
   return failures;
 }
 const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];

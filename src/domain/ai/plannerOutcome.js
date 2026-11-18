@@ -136,7 +136,8 @@ export function renderChartUnavailable({ locale = 'tr', substituted = null, type
 const CHART_TYPE_NEEDS = Object.freeze({
   bar: ['karşılaştırılabilir en az iki değer', 'at least two comparable values'],
   donut: ['birbirini dışlayan tam bir dağılım', 'a complete, mutually exclusive distribution'],
-  line: ['ardışık haftalara ya da aylara göre bir zaman dizisi', 'a time series over consecutive weeks or months'],
+  // Çizgi en az üç ardışık kova ister (bkz. groundedComposition dizi adayı): iki kovalı dizi "dizi yok" diye anlatılmaz.
+  line: ['en az üç ardışık hafta ya da aydan oluşan bir zaman dizisi', 'a time series of at least three consecutive weeks or months'],
   stacked: ['satır başına tam bir durum kırılımı', 'a complete status breakdown per row'],
   kpi: ['en az üç başlık göstergesi', 'at least three headline figures'],
   timeline: ['tarihli görev satırları', 'dated task rows']

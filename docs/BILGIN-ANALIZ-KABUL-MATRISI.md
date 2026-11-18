@@ -625,7 +625,7 @@ yeniden oynatması bekliyor). Aşama G'nin canlı model ve VM kapıları da hâl
 | Bilinmeyen ≠ sıfır | kanıtsız hareket dönemi/kova `null`, `recorded:false`; başlangıç bilinmez, gözlenen kayıt kısmi kalır | `none`/`partial` kapsamı, a10, kapsam izolasyonu |
 | Kısmi kayıtta fark yorumlanmaz; kayıt öncesi dönemle karşılaştırma kurulmaz | `temporalFindings.js` | birim sınama |
 | Tarihi kayıtlı olmayan tamamlanmış görev sayılır ve söylenir | `history.undatedDone`; nüfus değişmezi bunu içerir | tamlık sınaması |
-| Yeniden açılan görev ayrı sayılır; aynı ilişki kimliğinin kayıtları tek harekettir | hareket toplu sorgusu | a03, a04 |
+| Yeniden açılan görev ayrı sayılır; aynı ilişki kimliği, görev, işlem yapan ve projeyi taşıyan kayıtlar tek harekettir | hareket toplu sorgusu | a03, a04 |
 | Yüzde değişim: eşit uzunluk, bitmiş, örtüşmeyen dönem ve önceki değer ≥ 4 | `TEMPORAL_LIMITS` | birim sınama |
 | Eğilim: ≥ 6 tam kova (son 3 ↔ önceki 3); kısmi uç kovalar katılmaz; kısa dizide "söylenemez" | `temporalFindings.js` | birim sınama, a16 |
 | Geçmiş DURUM yeniden kurulamaz; bugünkü durum ve sınır söylenir | `historyUnsupported` | t61, a01 |

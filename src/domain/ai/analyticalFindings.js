@@ -1261,7 +1261,10 @@ export function synthesisNarrative(findings, { locale = 'tr', detail = 'balanced
   // Çok kapsamlı dönem yanıtında her istenen kapsamın aynı türdeki sayımı kısa yanıtta da kalır; çekince yalnızca sayımı söylenen
   // bulgunun çekincesidir (söylenmeyen bir sayıyı niteleyen çekince yazılmaz).
   const kept = new Set([leadFinding, ...(whole ? sentences.map((item) => item.finding).filter((finding) => finding?.multi && finding.kind === leadFinding.kind) : [])]);
-  const lead = short ? sentences.filter((item, index) => index === 0 || item.finding?.kind === 'historyLimit' || kept.has(item.finding) && (item.caveat || whole))
+  // Not okumasının çekincesi (not tarihinin dönemi karşılamaması, not içeriğinin doğrulanmış olgu olmaması) not metni gövdede
+  // gösterildikçe kısa yanıtta da kalır: kısa yanıt uzun yanıtla çelişmez.
+  const lead = short ? sentences.filter((item, index) => index === 0 || item.finding?.kind === 'historyLimit' || (item.finding?.kind === 'noteDigest' && item.caveat) || item.basis === 'created'
+    || kept.has(item.finding) && (item.caveat || whole))
     : sentences.filter((item, index) => item.finding === leadFinding && !(whole && item.caveat && index > 0));
   const leadCaveats = short ? [] : sentences.filter((item) => item.finding === leadFinding && !lead.includes(item));
   const rest = short ? [] : [...leadCaveats.map((item) => ({ ...item, group: ' caveats' })), ...sentences.filter((item) => !lead.includes(item) && !leadCaveats.includes(item))];

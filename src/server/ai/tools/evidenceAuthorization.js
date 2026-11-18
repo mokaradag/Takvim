@@ -498,8 +498,10 @@ export function savedEvidenceRequirements(entry, auth, { exact = false } = {}) {
   if (!entry.taskReferences.length && !exact) return null;
   // Aşama H: gerçekleşen bitişe göre dönem okuması, sayılan görevlerin yanında AYNI nüfusun tarihi kayıtlı olmayan tamamlanmış
   // görevlerini de sayar (`history.undatedDone`); nüfus bu ikisinin toplamıdır ve eşitlik aynı kesinlikle aranır.
-  const undated = entry.tool === 'rota_task_analytics' && data.history ? data.history.undatedDone : 0;
-  if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters || !Number.isSafeInteger(undated) || undated < 0
+  // Sayısı bilinmeyen (`null`, okuma sınırı nedeniyle doğrulanmamış) tarihsiz görevler nüfusa kaydedilmez; toplamlar açık tam sayı olmalıdır.
+  const undated = entry.tool === 'rota_task_analytics' && data.history ? (data.history.undatedDone === null ? 0 : data.history.undatedDone) : 0;
+  const exactCount = (value) => Number.isSafeInteger(value) && value >= 0;
+  if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters || !exactCount(undated) || !exactCount(data.totals.total) || !exactCount(payload.totalCount)
     || data.totals.total + undated !== entry.taskReferences.length || payload.totalCount + undated !== entry.taskReferences.length)) return null;
   if (entry.tool === 'rota_workload_summary' && (!Array.isArray(data.people) || data.openTaskCount !== entry.taskReferences.length)) return null;
   if (entry.tool === 'rota_task_search' && (!Array.isArray(data.tasks) || payload.totalCount !== entry.taskReferences.length)) return null;

@@ -133,7 +133,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
     call.noteProjects?.([filters.projectId]);
   }
   const range = coarseTargetRange(filters, call.today);
-  const result = await call.sql((executor) => readTaskFacts(executor, scope, {
+  const readFacts = (includeUndated) => call.sql((executor) => readTaskFacts(executor, scope, {
     projectId: filters.projectId,
     taskIds: call.taskIds || [],
     wbsId: filters.wbsId,
@@ -148,7 +148,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
     dateField: filters.dateField,
     dateFrom: filters.dateFrom,
     dateTo: filters.dateTo,
-    includeUndated: historyBasis,
+    includeUndated,
     hasDescription: filters.hasDescription,
     today: call.today,
     createdByMe: filters.createdByMe,
@@ -159,12 +159,22 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
     maxRows: TOOL_LIMITS.maxAnalyzedTasks,
     rosterRows
   }));
+  // Tarihi kayıtlı olmayan tamamlanmış görevler dar dönem okumasının satır sınırını tüketirse (SQL hazırlama sınırı ya da
+  // kesiklik) dönem sonucu yine kullanılabilir: okuma onlarsız, AYNI sınırla bir kez yinelenir ve sayıları sıfır değil
+  // BİLİNMİYOR (`null`) bildirilir. Dönemin kendisi sınırı aşıyorsa yineleme de aşar ve sonuç eskisi gibi "çok büyük" döner.
+  const tooLarge = (error) => error instanceof ToolError && error.code === TOOL_ERROR_CODES.RESULT_TOO_LARGE;
+  let undatedKnown = historyBasis;
+  let result = await readFacts(historyBasis).catch((error) => { if (historyBasis && tooLarge(error)) return null; throw error; });
+  if (historyBasis && (!result || result.truncated)) {
+    result = await readFacts(false);
+    undatedKnown = false;
+  }
   if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
   const facts = result.facts.filter((fact) => matchesTaskFilters(fact, filters, {
     today: call.today, assignees: result.assignees, sicil: call.sicil
   }));
   // Aynı nüfusun (tarih aralığı dışındaki bütün koşullar) tarihi kayıtlı olmayan tamamlanmış görevleri.
-  const undated = historyBasis ? result.facts.filter((fact) => fact.status === 'done' && !dateFieldValue(fact, filters.dateField)
+  const undated = undatedKnown ? result.facts.filter((fact) => fact.status === 'done' && !dateFieldValue(fact, filters.dateField)
     && matchesTaskFilters(fact, { ...filters, dateField: null, dateFrom: null, dateTo: null }, { today: call.today, assignees: result.assignees, sicil: call.sicil })) : [];
   // Toplamlar sonuçta listelenmeyen görevlere de dayanır: sayılan nüfus son yetki
   // denetiminde yeniden doğrulanmak üzere (modele gitmeden) kaydedilir.
@@ -178,7 +188,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
       .items.find((person) => person.sicil === filters.personSicil)?.name;
     filters.person = resolved && resolved !== String(filters.personSicil) ? dataText(resolved, 120) : 'Seçilen kişi';
   }
-  return { facts, projects, assignees: result.assignees, roster: result.roster || null, ...(historyBasis ? { undatedDone: undated.length } : {}) };
+  return { facts, projects, assignees: result.assignees, roster: result.roster || null, ...(historyBasis ? { undatedDone: undatedKnown ? undated.length : null } : {}) };
 }
 
 function filterHighlights(filters) {
@@ -558,6 +568,8 @@ const taskAnalytics = {
       ? seriesBuckets({ dateFrom: filters.dateFrom, dateTo: filters.dateTo }, seriesBucket, HISTORY_DATE_FIELDS.includes(filters.dateField) ? call.today : null) : null;
     if (seriesBucket && !(filters.dateField && filters.dateFrom && filters.dateTo)) throw invalidArguments(['$.groupBy:range']);
     if (seriesBucket && (!buckets || buckets.length > limit)) throw invalidArguments(['$.groupBy:buckets']);
+    // Üç teslim bandı birlikte bir sonuçtur: üçten küçük açık sınır istenen satır sayısını aşan sonuç döndürürdü; reddedilir.
+    if (groupBy === 'due_horizon' && args.limit != null && args.limit < 3) throw invalidArguments(['$.limit:horizon']);
     if (groupBy === 'due_horizon' && !(filters.statuses?.length && filters.statuses.every((status) => status !== 'done') && filters.dateField === 'targetFinish' && filters.dateFrom === call.today && filters.dateTo === addDays(call.today, 29))) throw invalidArguments(['$.groupBy:population']);
     const { scope } = await call.authorization();
     const teamOrganization = filters.assignee === 'team' && ORGANIZATION_GROUP_BY.includes(groupBy);
@@ -673,7 +685,8 @@ const taskAnalytics = {
           today: call.today,
           ...(groupBy === 'assignee' ? { assignee: METRIC_DEFINITIONS.assigneeGrouping } : {}),
           ...(ORGANIZATION_GROUP_BY.includes(groupBy) ? { organization: METRIC_DEFINITIONS.organizationGrouping } : {}),
-          ...(HISTORY_DATE_FIELDS.includes(filters.dateField) ? { history: METRIC_DEFINITIONS.historyBasis[filters.dateField] } : {})
+          ...(HISTORY_DATE_FIELDS.includes(filters.dateField) ? { history: filters.dateField === 'actualFinish' && !(filters.statuses?.length === 1 && filters.statuses[0] === 'done')
+            ? METRIC_DEFINITIONS.historyBasis.actualFinishAnyStatus : METRIC_DEFINITIONS.historyBasis[filters.dateField] } : {})
         }
       },
       scope: descriptor,

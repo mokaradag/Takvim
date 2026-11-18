@@ -1524,7 +1524,7 @@
    "id": "h22",
    "text": "Geçen haftaya göre durum daha iyi mi?",
    "profile": "B",
-   "expect": {"intent": "rota", "temporal": true, "temporalWindow": "this_week", "temporalCompare": "last_week"},
+   "expect": {"intent": "rota", "temporal": true, "temporalWindow": "this_week", "temporalCompare": "last_week", "historyLimit": true},
    "handling": "limitation",
    "textEntities": []
   },

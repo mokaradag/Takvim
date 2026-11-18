@@ -64,7 +64,10 @@ test('geçmiş görünüm gerektiren sınırlılık vakası sıradan güncel dur
     const periodReads = periods.map(([dateFrom, dateTo]) => ({ population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me', status: ['done'], dateField: 'actualFinish', dateFrom, dateTo }, entities: [], metrics: ['tasks.total'] }));
     assert.ok(plannerScore(planned({ scope: 'self', focus: ['overview'] }), item.expect, today).includes('geçmiş dönem okunmadı'), item.id);
     // Olumlu denetimler bütün puanlayıcıdan geçer: istenen dönemleri okuyan tamamlanma planı (ayrı güncel durum okumasıyla).
-    assert.deepEqual(plannerScore(planned({ scope: 'self', focus: ['completed'] }, [...periodReads, current]), item.expect, today), [], item.id);
+    // Durum iyileşmesi soran vakada (`historyLimit`) dönem sayımlarının yanında geçmiş durum sınırı da bildirilir.
+    const limit = item.expect.historyLimit ? { historyUnsupported: ['overview'] } : {};
+    assert.deepEqual(plannerScore(planned({ scope: 'self', focus: ['completed'], ...limit }, [...periodReads, current]), item.expect, today), [], item.id);
+    if (item.expect.historyLimit) assert.ok(plannerScore(planned({ scope: 'self', focus: ['completed'] }, [...periodReads, current]), item.expect, today).includes('geçmiş durum sınırı bildirilmedi'), item.id);
     // Dönemsiz okuma istenen dönemi karşılamaz.
     assert.ok(plannerScore(planned({ scope: 'self', focus: ['completed'] }), item.expect, today).includes('istenen tarihsel dönem okunmadı'), item.id);
     // Bildirilen dönemlerle geçmiş durum sınırı yalnızca dönemdeki gelişmeleri ayrıca istemeyen soruda yeterlidir.

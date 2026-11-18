@@ -167,6 +167,7 @@ function scriptedQuestions() {
       const callsBefore = lines(CALLS).length;
       const tracesBefore = turnTraces().length;
       const started = Date.now();
+      const sentAt = new Date(started);
       let rendered;
       // Aşama H: `includeText` (tur sıraları) yalnızca o turda "Notlar ve iletiler" anahtarını açar; rıza gönderimden sonra kendiliğinden kapanır.
       try {
@@ -191,7 +192,7 @@ function scriptedQuestions() {
       // kabulü uygulanır; değişken tek başına model denetimini kapatmaz.
       const scripted = process.env.UI_SCRIPTED === '1' && calls.length > 0 && calls.every((call) => call.scripted === true);
       // Betikli kipte yalnızca canlı model gereksinimleri atlanır; yeniden yürütme ve düzen çağrısı kanıtı her iki kipte denetlenir.
-      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? scriptedFailures(expected, trace, calls) : modelFailures(expected, trace, calls))];
+      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace, sentAt), ...(scripted ? scriptedFailures(expected, trace, calls) : modelFailures(expected, trace, calls))];
       // "any": türü belirtilmemiş grafik isteği; görünür herhangi bir grafik yeterlidir.
       if (expectedChart && !rendered.charts?.some((chart) => (expectedChart === 'any' || chart.type === expectedChart) && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');

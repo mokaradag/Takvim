@@ -195,7 +195,10 @@ test('analitik özetin her kapsam × yön × ad × ufuk açılımı sunucu doğr
           // Aşama H: geçmiş dönem yönleri ve teslim ufukları bugüne göre kurulur; bugün verilmeden okuma açılmaz.
           const historical = ['completed', 'created', 'activity', 'trend', 'horizons'].includes(focus);
           if (historical) assert.throws(() => expandAnalysis(analysis), (error) => error.details.includes('$.analysis.relativeWindow:required'));
-          for (const [index, raw] of expandAnalysis(analysis, historical ? { today: '2026-10-31' } : {}).entries()) {
+          const expanded = expandAnalysis(analysis, historical ? { today: '2026-10-31' } : {});
+          // Desteklenen her vaka en az bir istek üretir: boş açılım rıza ve sözleşme denetimlerini sessizce atlatmaz.
+          assert.ok(expanded.length > 0, `${scope}/${focus}/${names?.length}/${window ? 'dönemli' : 'dönemsiz'}`);
+          for (const [index, raw] of expanded.entries()) {
             const parsed = parseRequestDeclaration(raw, { textTrusted: () => true, identityTrusted: () => true, today: '2026-10-31', priorParts: index });
             // Aşama H: not yönü yalnızca kullanıcının bu turda açtığı serbest metinle okunur; rıza yoksa okuma kabul edilmez.
             if (focus === 'notes') assert.deepEqual(completeRequest(parsed, [], { today: '2026-10-31' }).problems, ['$.population.textFields:not-authorized']);

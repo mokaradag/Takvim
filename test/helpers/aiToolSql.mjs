@@ -566,7 +566,7 @@ const HANDLERS = Object.freeze({
   'task-visibility': taskVisibility,
   // Görünür görevlerin kesilmiş açıklamaları (SQL: SC sıralamasıyla 401 kod noktası; boş açıklama satır döndürmez).
   'task-notes': (db, params) => [[...scopeOf(db, params).visible.values()].filter(({ task }) => String(task.Description ?? '').trim())
-    .map(({ task }) => ({ TaskId: upper(task.TaskId), Description: Array.from(String(task.Description)).slice(0, 401).join('') }))],
+    .map(({ task }) => ({ TaskId: upper(task.TaskId), Description: Array.from(String(task.Description).replace(/^\s+/u, '')).slice(0, 401).join('') }))],
   'task-detail': taskDetail,
   'project-search': projectSearch,
   portfolio,

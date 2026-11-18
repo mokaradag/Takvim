@@ -102,6 +102,10 @@ const activitySearch = {
     if (period === 'custom' && !args.dateFrom) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.dateFrom:required'] });
     if (period !== 'custom' && (args.dateFrom || args.dateTo)) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.period:custom'] });
     if (args.dateFrom && args.dateTo && args.dateFrom > args.dateTo) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.dateFrom:reversed'] });
+    // Raporun 366 günlük sınırı (satır ve dönem özeti görünümü için) proje ya da veri okunmadan uygulanır: hata önceliği tarihtir.
+    if (args.dateFrom && args.dateTo && (Date.parse(`${args.dateTo}T00:00:00Z`) - Date.parse(`${args.dateFrom}T00:00:00Z`)) / 86400000 > 365) {
+      throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.dateFrom:range'] });
+    }
     const pageSize = args.limit ?? 10;
     const key = { period, dateFrom: args.dateFrom || null, dateTo: args.dateTo || null, scope: args.scope || 'visible', projectId: args.projectId || null,
       taskId: args.taskId || null, personSicil: args.personSicil ?? null, kind: args.kind || null, pageSize };

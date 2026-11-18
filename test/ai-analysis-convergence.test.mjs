@@ -694,6 +694,26 @@ test('iki haftalık ayrık vaka gecikme ve yaklaşan teslimat okumalarını ayr�
   assert.ok(score([overdue, { ...upcoming, filters: { ...upcoming.filters, dateTo: '2026-10-06' } }]).length);
 });
 
+test('dönemsel nitelendirme: iki dönem aynı hareket kapsamıyla, bugünkü durum görev aracıyla, bütün işler ekip okumasıyla karşılanmaz', async () => {
+  const { plannerScore } = await import('../scripts/analysis-qualification.mjs');
+  const { resolveWindow } = await import('../src/domain/ai/temporalWindow.js');
+  const score = (requests, expect) => plannerScore({ outcome: 'planned', decisions: [], plan: { requests: requests.map((request) => ({ entities: [], ...request })) } }, expect, TODAY);
+  const thisMonth = resolveWindow('this_month', TODAY);
+  const lastMonth = resolveWindow('last_month', TODAY);
+  const activity = (range, activityScope) => ({ population: { tool: 'rota_activity_search' }, filters: { activityView: 'period', activityScope, ...range } });
+  const h08 = { intent: 'rota', temporal: true, temporalWindow: 'this_month', temporalCompare: 'last_month' };
+  assert.ok(score([activity(thisMonth, 'mine'), activity(lastMonth, 'visible')], h08).includes('iki dönem aynı ölçüyle okunmuyor'));
+  assert.ok(!score([activity(thisMonth, 'mine'), activity(lastMonth, 'mine')], h08).includes('iki dönem aynı ölçüyle okunmuyor'));
+  const thisWeek = resolveWindow('this_week', TODAY);
+  const h05 = { intent: 'rota', temporal: true, temporalWindow: 'this_week', currentState: true };
+  const completed = { population: { tool: 'rota_task_analytics' }, filters: { status: ['done'], dateField: 'actualFinish', ...thisWeek } };
+  assert.ok(score([completed, { population: { tool: 'rota_calendar_inspect' }, filters: {} }], h05).includes('güncel durum ayrı okunmadı'));
+  assert.ok(!score([completed, { population: { tool: 'rota_task_analytics' }, filters: {} }], h05).includes('güncel durum ayrı okunmadı'));
+  const layered = { intent: 'rota', layers: [{ scope: 'all' }, { scope: 'team' }] };
+  const team = { population: { tool: 'rota_task_analytics' }, filters: { activityScope: 'team' } };
+  assert.ok(score([team], layered).some((failure) => /all/.test(failure)), JSON.stringify(score([team], layered)));
+});
+
 test('özetle birleşen açık istek boş varlıkları ve koleksiyon yazımını eşdeğer sayar; bozuk alanlar kaybolmaz', () => {
   const base = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overdue'] } };
   const generated = unpack(base).additionalRequests?.find((item) => item.filters?.deadline === 'overdue') || unpack(base).request;

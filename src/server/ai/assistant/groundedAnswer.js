@@ -32,7 +32,7 @@ import { concreteCollections, rankedRowIndexes, REQUEST_LIMITS, taskResultScope 
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { layerAspectLabel, PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderLayerOmissions, renderOverlappingSeries, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, analysisWindows, normalizedBrief, resolveAnalysisBrief, parseAnalysis } from '../tools/analysisPlan.js';
+import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, analysisWindows, normalizedBrief, pinnedWindowFields, resolveAnalysisBrief, parseAnalysis } from '../tools/analysisPlan.js';
 import { resolveWindow } from '../../../domain/ai/temporalWindow.js';
 import { caveatPropositions } from '../../../domain/ai/groundedPropositions.js';
 import { expandedAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
@@ -806,6 +806,9 @@ function pinAnalysisRepair(turn, plan, details) {
     // Tek özne ya da birincilden farklı ikinci dönem isteyen ret, ikinci dönemin iki gösterimini de açar: sorunu çıkaran tarih çifti de
     // kaldırılabilir (yalnızca `compare` açılırsa çift sabit kalır ve onarım sonuçsuz döner).
     if (path === '$.analysis.compare' && ['scope', 'same'].includes(reason)) for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
+    // Yönle desteklenmeyen karşılaştırma: ipucu karşılaştırmanın kaldırılmasını söyler; iki gösterimi de kaldırılabilir (birincil dönem,
+    // kapsam ve yönler sabit kalır).
+    if (path === '$.analysis.compare' && reason === 'focus') for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
     // Geçerli adlı karşılaştırmanın yanındaki bozuk tarih çifti bir bütün olarak kaldırılabilir; adlı dönem yoksa geçerli kardeş sabit kalır.
     if (/^\$\.analysis\.compare(?:From|To)$/.test(path) && reason !== 'required' && (existing?.raw || plan.analysis).compare != null) for (const key of ['compareFrom', 'compareTo']) paths.add(key);
     // Geçmiş dönemle yaklaşan iş: ipucunun önerdiği iki düzeltme açılır — dönem alanları kaldırılabilir ya da `upcoming` yönü çıkarılabilir.
@@ -856,13 +859,26 @@ function analysisRepairMatches(turn, plan) {
   // Yalnızca `upcoming` çıkarılmış yön listesi, onarım karşılaştırmasında özgün yön listesiyle eşdeğerdir (sıra ve diğer yönler sabit).
   const analysis = pin.dropUpcoming && Array.isArray(pin.raw.focus) && pin.raw.focus.includes('upcoming') && Array.isArray(submitted?.focus)
     && JSON.stringify(submitted.focus) === JSON.stringify(pin.raw.focus.filter((item) => item !== 'upcoming')) ? { ...submitted, focus: pin.raw.focus } : submitted;
+  // `upcoming` çıkarıldıysa kalan geçmiş dönem yönleri özgün dönemi okur: dönem alanları değiştirilemez (ipucunun "dönemi kaldır"
+  // seçeneği yalnızca dönemi zaten upcoming için yazılmış plandadır; o planda `upcoming` çıkarılmaz).
+  const droppedUpcoming = analysis !== submitted;
+  const keptWindow = !droppedUpcoming || ['relativeWindow', 'dateFrom', 'dateTo'].every((key) => (submitted[key] ?? null) === (pin.raw[key] ?? null));
   // Çakışma onarımı bir gösterimi kaldırabilir; kalan gösterimin tek bir sınırını bile değiştiremez.
   const dateConflict = analysisSchema().properties.relativeWindow.enum.includes(pin.raw.relativeWindow) && (pin.raw.dateFrom || pin.raw.dateTo);
   const sameWindow = !dateConflict || analysis && ((analysis.relativeWindow === pin.raw.relativeWindow || pin.raw.relativeWindow === 'all_time' && !analysis.relativeWindow) && !analysis.dateFrom && !analysis.dateTo
     || !analysis.relativeWindow && analysis.dateFrom === pin.raw.dateFrom && analysis.dateTo === pin.raw.dateTo);
   const compareConflict = pin.raw.compare && (pin.raw.compareFrom || pin.raw.compareTo);
+  // Çakışan iki gösterimden hiçbiri tek başına geçerli değilse (ör. ikisi de gelecekte) korunacak geçerli bir niyet yoktur: onarım
+  // açık olan karşılaştırma alanlarıyla yeni bir ikinci dönem yazabilir (birincil dönem, kapsam ve yönler yine sabittir).
+  const compareValid = (representation) => {
+    if (!representation) return false;
+    try { analysisWindows({ ...pin.raw, compare: undefined, compareFrom: undefined, compareTo: undefined, ...representation }, turn.context?.today ?? null); return true; } catch { return false; }
+  };
+  // Yarım tarih çiftinde verilen sınır kullanıcının niyetidir ve korunur (aşağıdaki tamamlama kuralı); bu serbestlik yalnızca tam çifte uygulanır.
+  const noValidCompare = Boolean(compareConflict) && Boolean(pin.raw.compareFrom && pin.raw.compareTo) && !compareValid({ compare: pin.raw.compare })
+    && !compareValid(pin.raw.compareFrom && pin.raw.compareTo ? { compareFrom: pin.raw.compareFrom, compareTo: pin.raw.compareTo } : null);
   // Yarım tarih çifti adlı dönemle çakışıyorsa, verilen sınırları koruyarak tamamlanan çift de kabul edilir (eksik uç eklenebilir).
-  const sameCompare = !compareConflict || analysis && (analysis.compare === pin.raw.compare && !analysis.compareFrom && !analysis.compareTo
+  const sameCompare = !compareConflict || noValidCompare && analysis && Boolean(analysis.compare || (analysis.compareFrom && analysis.compareTo)) || analysis && (analysis.compare === pin.raw.compare && !analysis.compareFrom && !analysis.compareTo
     || !analysis.compare && analysis.compareFrom && analysis.compareTo && (pin.raw.compareFrom ? analysis.compareFrom === pin.raw.compareFrom : true)
       && (pin.raw.compareTo ? analysis.compareTo === pin.raw.compareTo : true) && Boolean(pin.raw.compareFrom) !== Boolean(pin.raw.compareTo)
     || !analysis.compare && analysis.compareFrom === pin.raw.compareFrom && analysis.compareTo === pin.raw.compareTo);
@@ -870,7 +886,7 @@ function analysisRepairMatches(turn, plan) {
   const incompleteCompare = Boolean(pin.raw.compareFrom) !== Boolean(pin.raw.compareTo);
   const keptCompare = !incompleteCompare || analysis && (analysis.compareFrom && analysis.compareTo || pin.raw.compare && analysis.compare === pin.raw.compare);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
-    && keptCompare && sameCompare && sameWindow && analysisRepairProjection(analysis, pin.paths) === pin.projection
+    && keptWindow && keptCompare && sameCompare && sameWindow && analysisRepairProjection(analysis, pin.paths) === pin.projection
     && stable(repairOmit(submittedPresentation(plan), pin.presentationPaths)) === stable(repairOmit(pin.presentation, pin.presentationPaths))
     && (pin.visual == null || submittedVisual(plan) === pin.visual) && explicitRepairMatches(turn, pin, plan);
 }
@@ -1710,6 +1726,10 @@ function completedAnalysisContext(turn, verdict) {
     ...((turn.presentationIntent?.relativeWindow && turn.presentationIntent.relativeWindow !== 'all_time') || turn.presentationIntent?.compare?.compare ? { windowDay: turn.context.today } : {}),
     ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
     ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
+    // Dönem yazılmayan geçmiş özetin sunucunun çözdüğü varsayılan günleri de saklanır: ertesi gün aynı sonuçları açan takip (dönem
+    // yazmadan) aynı günleri okur; yeni dönem yazan takip normal çözülür.
+    ...(!turn.presentationIntent?.window && !turn.presentationIntent?.relativeWindow && turn.presentationIntent?.temporal?.defaulted && turn.presentationIntent.temporal.window
+      ? { dateFrom: turn.presentationIntent.temporal.window.dateFrom, dateTo: turn.presentationIntent.temporal.window.dateTo } : {}),
     // Aşama H: karşılaştırma dönemi ve dizi kovası türlü değerleriyle saklanır (takip dönemi değiştirirken bunlar kaybolmaz).
     ...(turn.presentationIntent?.compare || {}),
     ...(turn.presentationIntent?.visual ? { visual: true } : {}), ...(turn.presentationIntent?.chart ? { chart: turn.presentationIntent.chart } : {}),
@@ -2192,7 +2212,7 @@ function presentationIntent(plan, today) {
     // Aşama H: özetin somut dönemleri (türlü değerlerden; bkz. `analysisWindows`), modelin bildirdiği dönem adları ve tarihsel sınırlar.
     temporal: analysis ? temporalIntent(analysis, today) : null,
     // Açıklama sonrasında yeniden yürütülecek kabul edilmiş özet (kimlik taşımaz; adlar kullanıcının kendi iletisindendir).
-    pending: analysis ? pendingAnalysis(plan) : null });
+    pending: analysis ? pendingAnalysis(plan, today) : null });
 }
 
 /**
@@ -2205,8 +2225,12 @@ function temporalIntent(analysis, today) {
   const complete = (range) => (range?.dateFrom && range?.dateTo ? Object.freeze({ dateFrom: range.dateFrom, dateTo: range.dateTo }) : null);
   const window = complete(windows.range);
   const compare = complete(windows.compare);
-  if (!window && !compare && !analysis.historyUnsupported?.length) return null;
-  return Object.freeze({ today, window, compare, defaulted: windows.defaulted === true,
+  // Yalnızca başı verilen dönem ("1 Eylül'den beri") bugüne kadar sürer; tam dönem okumayan yönler (ör. not) bu isteği uygulayamadıklarını
+  // söyleyebilsin diye ayrıca taşınır (dönem bulgularının `window` alanı değişmez).
+  const requested = !window && windows.range?.dateFrom && !windows.range.dateTo && today
+    ? Object.freeze({ dateFrom: windows.range.dateFrom, dateTo: windows.range.dateFrom > today ? windows.range.dateFrom : today }) : null;
+  if (!window && !compare && !requested && !analysis.historyUnsupported?.length) return null;
+  return Object.freeze({ today, window, compare, defaulted: windows.defaulted === true, ...(requested ? { requested } : {}),
     ...(analysis.relativeWindow && analysis.relativeWindow !== 'all_time' ? { windowName: analysis.relativeWindow } : {}),
     ...(analysis.compare && analysis.compare !== 'previous' ? { compareName: analysis.compare } : {}),
     ...(analysis.bucket ? { bucket: analysis.bucket } : {}),
@@ -2222,17 +2246,17 @@ function replayPlan(pending) {
 }
 
 /** Kabul edilen analitik planın kalıcı, kimliksiz biçimi (açıklama turunun özgün niyeti). */
-function pendingAnalysis(plan) {
+function pendingAnalysis(plan, today = null) {
   const analysis = plan.analysis;
   // Aşama G: çok kapsamlı özet bekleyen niyet olarak tek kapsama indirgenemez (kapsam sessizce düşmez); açıklamadan sonra yeniden planlanır.
   if (analysis.also?.length) return null;
   // Önceki/satır göndergesi aynı kayıtlı bağlamla yeniden yürür; kimlikler modele açılmaz.
   const requests = [plan.request, ...(plan.additionalRequests || [])].filter((item, index) => item && (index >= analysis.analysisParts || analysis.explicitParts?.includes(index)));
   return normalizePendingAnalysis({ ...(requests.length ? { requests } : {}), language: plan.language, scope: analysis.scope, ...(analysis.focus.length <= ANALYSIS_LIMITS.maxAcceptedFocus ? { focus: [...analysis.focus] } : {}),
-    ...(analysis.withSelf != null ? { withSelf: analysis.withSelf } : {}), ...(analysis.rows ? { rows: [...analysis.rows] } : {}), ...(analysis.act ? { act: analysis.act } : {}), ...(analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
+    ...(analysis.withSelf != null ? { withSelf: analysis.withSelf } : {}), ...(analysis.rows ? { rows: [...analysis.rows] } : {}), ...(analysis.act ? { act: analysis.act } : {}),
     ...(analysis.names ? { names: [...analysis.names] } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.within ? { within: analysis.within } : {}),
-    ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}),
-    ...(analysis.compare ? { compare: analysis.compare } : {}), ...(analysis.compareFrom && analysis.compareTo ? { compareFrom: analysis.compareFrom, compareTo: analysis.compareTo } : {}),
+    // Adlı dönemler kabul günü sabitlenir: açıklama ertesi gün yanıtlansa da aynı somut dönem okunur.
+    ...pinnedWindowFields(analysis, today),
     ...(analysis.bucket ? { bucket: analysis.bucket } : {}),
     ...(plan.visual != null ? { visual: plan.visual } : {}), ...(plan.chart ? { chart: plan.chart } : {}), ...(plan.charts ? { charts: [...plan.charts] } : {}), ...(plan.table != null ? { table: plan.table } : {}) });
 }

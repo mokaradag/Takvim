@@ -338,6 +338,8 @@ function resolvesDeclared(type, text, entities) {
 }
 
 export function completeRequest(request, calls, { today, allowedTextFields = [] }) {
+  // Modelin özgün bildirimi: çağrının alanları birleştirilmeden önceki dönem sınırları (yalnızca bitişli hareket dönemi reddi için).
+  const declaredFilters = request.filters || {};
   const problems = [];
   const hints = [];
   // Onarım yolu normalleştirilmiş sıraya değil, modelin özgün alan yuvasına aittir.
@@ -511,7 +513,7 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
     .filter(({ path }) => typeof path === 'string' && path.endsWith('.name'));
   const bound = defaulted.length ? Object.freeze({ ...completed, fields: Object.freeze([...completed.fields,
     ...defaulted.map(({ metric, path }) => Object.freeze({ metric, tool, path }))]) }) : completed;
-  const capability = requestCapabilityProblems(bound, { allowedTextFields });
+  const capability = requestCapabilityProblems(bound, { allowedTextFields, declaredFilters });
   return { request: bound, problems: [...problems, ...capability.problems], hints: [...hints, ...capability.hints] };
 }
 
@@ -519,7 +521,7 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
  * Nüfus aracının ifade edemediği ya da kanıtın hiçbir zaman karşılayamayacağı
  * istek veri okunmadan reddedilir; ipuçları yalnızca kayıt defterinden türetilir.
  */
-export function requestCapabilityProblems(request, { allowedTextFields = [] } = {}) {
+export function requestCapabilityProblems(request, { allowedTextFields = [], declaredFilters = request.filters || {} } = {}) {
   const problems = [];
   const hints = [];
   const carrierHint = (name, metric) => {
@@ -584,6 +586,11 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     problems.push('$.filters.activityView:required');
     hints.push('Düzeyli hareket özeti için analysis kapsamı team, level ve activity yönünü kullanın');
   }
+  // Düzey yalnızca ekip kapsamıyla geçerlidir (aracın `$.teamLevel:scope` reddi): çağrıdan devralınan kapsam da yürütmeden önce denetlenir.
+  if (tool.name === 'rota_activity_search' && request.filters.teamLevel && request.filters.activityScope !== 'team') {
+    problems.push('$.filters.teamLevel:scope');
+    hints.push('Hareket özetinde teamLevel yalnızca activityScope team ile verilir');
+  }
   if (tool.name === 'rota_activity_search' && request.filters.activityView && request.filters.activityKind) {
     problems.push('$.filters.activityKind:unsupported');
     hints.push('Toplu hareket görünümünde activityKind verilmez; tür süzgeci için activityView kaldırılır');
@@ -598,7 +605,8 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     hints.push('Toplu hareket görünümü değişiklik metni döndürmez: population.textFields verilmez; metin için activityView kaldırılır');
   }
   // Hareket dönemi başlangıçla tanımlanır: yalnızca bitiş günü araçta bugüne düşer ve reddedilir.
-  if (tool.name === 'rota_activity_search' && request.filters.dateTo && !request.filters.dateFrom) {
+  // Özgün bildirim yalnızca bitiş verdiyse çağrının başlangıcı onun yerine geçmez (kullanıcının bitişi sessizce değişirdi).
+  if (tool.name === 'rota_activity_search' && ((request.filters.dateTo && !request.filters.dateFrom) || (declaredFilters.dateTo && !declaredFilters.dateFrom))) {
     problems.push('$.filters.dateFrom:required');
     hints.push('Hareket dönemi için filters.dateFrom zorunludur (dateTo verilmezse tek gün okunur)');
   }
@@ -629,7 +637,8 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
       const type = propertyType(metric);
       const selecting = type && RESOLVERS[type] ? carriers(metric).filter((name) => Object.hasOwn(getRotaTool(name).parameters.properties, SELECTOR_PARAMS[type])) : [];
       // Aşama H: adı verilmemiş BİRDEN ÇOK görevin açıklaması (notlar) tek görev ayrıntısıyla değil, özetin not yönüyle okunur.
-      if (metric === 'task.description' && tool.name === 'rota_task_search' && !request.entities.some((entity) => entity.type === 'task')) {
+      // Başlığıyla tek görevi adlandıran istek (`filters.text`) adı verilmemiş görevler değildir: bütün açık görevlerin not ipucu verilmez.
+      if (metric === 'task.description' && tool.name === 'rota_task_search' && !request.entities.some((entity) => entity.type === 'task') && !request.filters.text) {
         hints.push('Birden çok görevin notu/açıklaması: request yazma; rota_plan analysis {"scope":…,"focus":["notes"]} yaz (sunucu açık görevlerin notlarını okur)');
       }
       if (selecting.length) hints.push(`${metric}: ${type} özelliği; population.tool ${selecting[0]} ve request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] bildir (ölçüyü SİLME; kimliği sunucu bulur)`);
@@ -647,6 +656,16 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     }
     // Satır ölçüsünün tek koleksiyonu olması, tek değeri olduğu anlamına gelmez.
     const rowHomes = collections.filter((collection) => rowMetricFields(tool.name, collection, metric).length);
+    // Ölçü yalnızca seçilen görünümde bulunmayan satır koleksiyonunda taşınıyorsa (ör. dönem özeti görünümünde `items` satırları)
+    // istek yürütülmeden reddedilir: yanıt ölçüsüz sessizce dönmez.
+    const metricHomes = bound.length ? request.fields.filter((field) => field.metric === metric).map((field) => field.path) : metricPaths(tool.name, metric);
+    if (request.operation === 'value' && !type && rowHomes.length > 0 && metricHomes.length
+      && metricHomes.every((path) => rowHomes.some((collection) => path.startsWith(`data.${collection}.`)))
+      && !metricHomes.some((path) => shaped.some((collection) => path.startsWith(`data.${collection}.`)))) {
+      problems.push(`$.metrics[${index}]:view`);
+      hints.push(`${metric}: yalnızca ${rowHomes.join('|')} satırlarında; seçilen görünümde bu satırlar yoktur (görünümü kaldırıp operation list kullan)`);
+      return;
+    }
     if (request.operation === 'value' && !type && rowHomes.length > 0
       && (bound.length ? request.fields.filter((field) => field.metric === metric).map((field) => field.path) : metricPaths(tool.name, metric))
         .every((path) => shaped.some((collection) => path.startsWith(`data.${collection}.`)))) {
@@ -802,7 +821,8 @@ export function readKey(name, args, today) {
   const extra = Object.fromEntries(Object.entries(args).filter(([key]) => !represented.has(key)));
   return `${name}:${stableArgs({ today, facets: canonicalFacets(FAMILIES[name] || null, args, today), selectors,
     dimensions: canonicalDimensions(name, args), extra, cursor: args.cursor ?? null,
-    limit: effectivePageSize(getRotaTool(name)?.parameters?.properties?.limit, args) })}`;
+    // Hareket dönem özeti (`view`) satır döndürmez: satır sınırı aynı SQL'i ve aynı kovaları değiştirmez, okuma kimliğine girmez.
+    limit: FAMILIES[name] === 'activity' && args.view ? null : effectivePageSize(getRotaTool(name)?.parameters?.properties?.limit, args) })}`;
 }
 
 /** Sıralama isteğinin aracın sırası: sıralama ölçüsü ve yönü aracın sıra kayıtlarından biriyle eşleşmelidir. */
