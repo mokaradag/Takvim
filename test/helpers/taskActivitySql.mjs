@@ -69,11 +69,15 @@ export function taskActivityRecordsets(db, params) {
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(row);
   }
+  // Zaman karşılaştırması sayısal anlıktır (Date ya da ISO metni): grubun anı üretimdeki gibi MAX(OccurredAt), kimliği en büyük AuditId'dir.
+  const instant = (value) => new Date(value).getTime();
+  const earliest = (values) => values.reduce((first, value) => (instant(value) < instant(first) ? value : first));
   const grouped = [...groups.values()].map((events) => {
     events.sort((a, b) => a.AuditId - b.AuditId);
     const last = events.at(-1);
+    const latest = events.map((row) => row.OccurredAt).reduce((max, value) => (instant(value) > instant(max) ? value : max));
     const Completed = events.some((row) => row.Completed), Deleted = events.some((row) => row.Kind === 'deleted'), Created = events.some((row) => row.Kind === 'created');
-    return { events, GroupId: last.AuditId, GroupOccurredAt: last.OccurredAt, Completed, Deleted, Created, Reopened: events.some((row) => row.Reopened), EventCount: events.length,
+    return { events, GroupId: last.AuditId, GroupOccurredAt: latest, Completed, Deleted, Created, Reopened: events.some((row) => row.Reopened), EventCount: events.length,
       kind: Deleted ? 'deleted' : Created ? 'created' : Completed ? 'completed' : 'updated' };
   }).filter((group) => !params.kind || group.kind === params.kind)
     .sort((a, b) => String(b.GroupOccurredAt).localeCompare(String(a.GroupOccurredAt)) || b.GroupId - a.GroupId);
@@ -99,8 +103,9 @@ export function taskActivityRecordsets(db, params) {
         row[metric] += 1; days.set(day, row);
       };
       add(g.GroupOccurredAt, 'Events');
-      if (g.Completed) add(g.events.filter((row) => row.Completed).map((row) => row.OccurredAt).sort()[0], 'CompletionEvents');
-      if (g.Created) add(g.events.filter((row) => row.Kind === 'created').map((row) => row.OccurredAt).sort()[0], 'CreationEvents');
+      // Üretimdeki MIN(OccurredAt): ilk tamamlama/oluşturma anı sayısal olarak seçilir (metin sıralaması gün adını karşılaştırırdı).
+      if (g.Completed) add(earliest(g.events.filter((row) => row.Completed).map((row) => row.OccurredAt)), 'CompletionEvents');
+      if (g.Created) add(earliest(g.events.filter((row) => row.Kind === 'created').map((row) => row.OccurredAt)), 'CreationEvents');
     }
     const population = [...new Set(grouped.map((g) => key(g.events[0].EntityId)))].map((id) => db.tasks.find((task) => key(task.TaskId) === id))
       .filter(Boolean).map((task) => ({ TaskId: task.TaskId, CurrentProjectId: task.ProjectId }));

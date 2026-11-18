@@ -803,6 +803,15 @@ function pinAnalysisRepair(turn, plan, details) {
     // Aşama H — karşılaştırma dönemi: çakışan iki yazımdan biri kaldırılabilir; birincil dönem eksikse yalnızca dönem alanları eklenebilir
     // (kapsam ve yönler sabit kalır; var olan geçerli dönem bu yolla değiştirilemez).
     if (path === '$.analysis.compare' && reason === 'conflict') for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
+    // Tek özne ya da birincilden farklı ikinci dönem isteyen ret, ikinci dönemin iki gösterimini de açar: sorunu çıkaran tarih çifti de
+    // kaldırılabilir (yalnızca `compare` açılırsa çift sabit kalır ve onarım sonuçsuz döner).
+    if (path === '$.analysis.compare' && ['scope', 'same'].includes(reason)) for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
+    // Geçerli adlı karşılaştırmanın yanındaki bozuk tarih çifti bir bütün olarak kaldırılabilir; adlı dönem yoksa geçerli kardeş sabit kalır.
+    if (/^\$\.analysis\.compare(?:From|To)$/.test(path) && reason !== 'required' && (existing?.raw || plan.analysis).compare != null) for (const key of ['compareFrom', 'compareTo']) paths.add(key);
+    // Geçmiş dönemle yaklaşan iş: ipucunun önerdiği iki düzeltme açılır — dönem alanları kaldırılabilir ya da `upcoming` yönü çıkarılabilir.
+    if (path === '$.analysis.dateTo' && reason === 'past') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
+    // Gelecekteki ikinci dönem: ikinci dönemin iki gösterimi de açılır (geçerli birincil dönem ve yönler sabit kalır).
+    if (/^\$\.analysis\.compare(?:From)?$/.test(path) && reason === 'futureWindow') for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
     if (path === '$.analysis.compareFrom' && reason === 'required') {
       for (const key of ['compareFrom', 'compareTo']) if ((existing?.raw || plan.analysis)[key] == null) paths.add(key);
     }
@@ -833,7 +842,9 @@ function pinAnalysisRepair(turn, plan, details) {
   const explicitPaths = !existing ? rejectedPaths : existing.explicitPaths == null || rejectedPaths == null ? null
     : existing.explicitPaths.map((paths, index) => new Set([...paths, ...(rejectedPaths[index] || [])]));
   const explicit = existing ? existing.explicit : submittedExplicit(plan);
-  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, projection: analysisRepairProjection(raw, pinnedPaths), presentation, presentationPaths, explicit, explicitPaths,
+  // Geçmiş dönemle yaklaşan iş reddinde `upcoming` yönünün çıkarılması anlam değişikliği sayılmaz (ipucunun önerdiği düzeltme).
+  const dropUpcoming = Boolean(existing?.dropUpcoming) || details.some((detail) => String(detail) === '$.analysis.dateTo:past');
+  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, projection: analysisRepairProjection(raw, pinnedPaths), presentation, presentationPaths, explicit, explicitPaths, dropUpcoming,
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
       ? null : submittedVisual(plan) });
 }
@@ -841,13 +852,19 @@ function pinAnalysisRepair(turn, plan, details) {
 function analysisRepairMatches(turn, plan) {
   const pin = turn.repairPins.get('analysis');
   if (!pin || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN].includes(plan.intent)) return true;
-  const analysis = normalizedBrief(plan.analysis);
+  const submitted = normalizedBrief(plan.analysis);
+  // Yalnızca `upcoming` çıkarılmış yön listesi, onarım karşılaştırmasında özgün yön listesiyle eşdeğerdir (sıra ve diğer yönler sabit).
+  const analysis = pin.dropUpcoming && Array.isArray(pin.raw.focus) && pin.raw.focus.includes('upcoming') && Array.isArray(submitted?.focus)
+    && JSON.stringify(submitted.focus) === JSON.stringify(pin.raw.focus.filter((item) => item !== 'upcoming')) ? { ...submitted, focus: pin.raw.focus } : submitted;
   // Çakışma onarımı bir gösterimi kaldırabilir; kalan gösterimin tek bir sınırını bile değiştiremez.
   const dateConflict = analysisSchema().properties.relativeWindow.enum.includes(pin.raw.relativeWindow) && (pin.raw.dateFrom || pin.raw.dateTo);
   const sameWindow = !dateConflict || analysis && ((analysis.relativeWindow === pin.raw.relativeWindow || pin.raw.relativeWindow === 'all_time' && !analysis.relativeWindow) && !analysis.dateFrom && !analysis.dateTo
     || !analysis.relativeWindow && analysis.dateFrom === pin.raw.dateFrom && analysis.dateTo === pin.raw.dateTo);
   const compareConflict = pin.raw.compare && (pin.raw.compareFrom || pin.raw.compareTo);
+  // Yarım tarih çifti adlı dönemle çakışıyorsa, verilen sınırları koruyarak tamamlanan çift de kabul edilir (eksik uç eklenebilir).
   const sameCompare = !compareConflict || analysis && (analysis.compare === pin.raw.compare && !analysis.compareFrom && !analysis.compareTo
+    || !analysis.compare && analysis.compareFrom && analysis.compareTo && (pin.raw.compareFrom ? analysis.compareFrom === pin.raw.compareFrom : true)
+      && (pin.raw.compareTo ? analysis.compareTo === pin.raw.compareTo : true) && Boolean(pin.raw.compareFrom) !== Boolean(pin.raw.compareTo)
     || !analysis.compare && analysis.compareFrom === pin.raw.compareFrom && analysis.compareTo === pin.raw.compareTo);
   // Yarım tarih çifti onarılırken karşılaştırma niyeti silinemez; tam çift ya da özgün adlı dönem korunur.
   const incompleteCompare = Boolean(pin.raw.compareFrom) !== Boolean(pin.raw.compareTo);
@@ -1689,6 +1706,8 @@ function completedAnalysisContext(turn, verdict) {
     subjects: scope === 'person' ? persons.slice(0, 2) : scope === 'project' ? projects.slice(0, 2) : [], ...(within ? { within } : {}),
     focus: primary ? [...primary.focus] : intent?.focus ? [...intent.focus] : [],
     ...(turn.presentationIntent?.relativeWindow ? { relativeWindow: turn.presentationIntent.relativeWindow } : {}),
+    // Adlı dönem ya da adlı ikinci dönem bu güne göre çözüldü: gün değiştikten sonraki takip aynı somut dönemi okur.
+    ...((turn.presentationIntent?.relativeWindow && turn.presentationIntent.relativeWindow !== 'all_time') || turn.presentationIntent?.compare?.compare ? { windowDay: turn.context.today } : {}),
     ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
     ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
     // Aşama H: karşılaştırma dönemi ve dizi kovası türlü değerleriyle saklanır (takip dönemi değiştirirken bunlar kaybolmaz).
@@ -1701,8 +1720,10 @@ function completedAnalysisContext(turn, verdict) {
 /** Çok kapsamlı özette bölümün kapsam adı (yalnızca kendi/ekip düzeyleri; başka kapsamda konu adı kullanılır). */
 function layerTopic(filters, locale) {
   const lang = locale === 'en' ? 1 : 0;
-  if (filters?.assignee === 'me') return ['Kendi işleriniz', 'Your work'][lang];
-  if (filters?.assignee !== 'team') return null;
+  // Hareket okuması kapsamını `activityScope` ile taşır (görev okumasındaki `assignee` değil); bölüm aynı kapsam adıyla anılır.
+  const owner = filters?.assignee ?? (filters?.activityScope === 'mine' ? 'me' : filters?.activityScope === 'team' ? 'team' : null);
+  if (owner === 'me') return ['Kendi işleriniz', 'Your work'][lang];
+  if (owner !== 'team') return null;
   return ({ unit: ['Biriminiz', 'Your unit'], department: ['Bölümünüz', 'Your department'], directorate: ['Direktörlüğünüz', 'Your directorate'] }[filters.teamLevel] || ['Ekibiniz', 'Your team'])[lang];
 }
 

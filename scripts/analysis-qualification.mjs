@@ -226,8 +226,22 @@ export function plannerScore(result, expect, today = corpus.today) {
       }
       for (const range of [window, compare].filter(Boolean)) if (!unresolved && !requests.some((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
         && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('istenen tarihsel dönem okunmadı');
+      // Karşılaştırmada iki dönem AYNI ölçü, araç ve nüfusla okunur (ör. bu haftanın tamamlananı ile geçen haftanın oluşturulanı geçmez).
+      const measureKey = (request) => JSON.stringify([request.filters?.activityView ? 'activity' : request.filters?.dateField, request.population?.tool, request.filters?.assignee ?? null,
+        request.filters?.teamLevel ?? null, (request.entities || []).map((entity) => `${entity.type}:${entity.query ?? entity.text ?? entity.id}`).sort()]);
+      const keysAt = (range) => new Set(requests.filter((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
+        && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField))).map(measureKey));
+      if (window && compare && !unresolved && ![...keysAt(window)].some((key) => keysAt(compare).has(key))) failures.push('iki dönem aynı ölçüyle okunmuyor');
     }
     if (expect.temporal && !focus.some((item) => ['completed', 'created', 'activity', 'trend'].includes(item)) && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş dönem okunmadı');
+    // Dönemdeki gelişmeleri bugünkü durumdan ayırmayı isteyen soru (`currentState`): dönemde gözlenen olay okuması ile ayrı, dönemsiz
+    // bugünkü durum okuması birlikte gerekir; geçmiş durum sınırı bildirimi olay okumasının yerine geçmez.
+    if (expect.currentState) {
+      const window = expectedRange(expect.temporalWindow, today);
+      if (!requests.some((request) => window && request.filters?.dateFrom === window[0] && request.filters?.dateTo === window[1]
+        && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('dönemdeki gelişmeler okunmadı');
+      if (!requests.some((request) => request.population?.tool !== 'rota_activity_search' && !request.filters?.dateFrom && !request.filters?.dateTo && !request.filters?.dateField)) failures.push('güncel durum ayrı okunmadı');
+    }
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
     const bounded = requests.filter((request) => request.filters?.dateFrom || request.filters?.dateTo);
@@ -279,7 +293,8 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   const declared = analysis.layers || [analysis, ...(analysis.also || [])];
   const key = (names) => JSON.stringify([...(names || [])].map((name) => containmentText(String(name))).sort());
   // Kapsamı belirtilmeyen beklenti (ör. geçmiş durum sınırı vakası) kapsamla puanlanmaz.
-  const wanted = expect.layers || (expect.scope || expect.scopeAny ? [{ scope: expect.scope, scopeAny: expect.scopeAny, level: expect.level, names: expect.names }] : null);
+  // Beklenen proje daraltması (`within`) katmanın parçasıdır: daraltılmış okuma kabul edilir, daraltmasız okuma reddedilir.
+  const wanted = expect.layers || (expect.scope || expect.scopeAny ? [{ scope: expect.scope, scopeAny: expect.scopeAny, level: expect.level, names: expect.names, ...(expect.within ? { within: expect.within } : {}) }] : null);
   // Adlar özetin katmanında yoksa kabul edilen isteklerin varlık sorgularıdır (ad kümesi eşit olmalıdır; fazlası kabul edilmez).
   const entityNames = [...new Set((result.plan?.requests || []).flatMap((request) => (request.entities || []).map((entity) => entity.query).filter((query) => query != null)).map(String))];
   const matches = (layer, other) => (layer.scopeAny || [layer.scope]).includes(other.scope) && (layer.level || '') === (other.level || '')
@@ -290,6 +305,8 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   for (const required of expect.focusAll || []) if (!focus.includes(required)) failures.push(`yön eksik: ${required}`);
   if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
   if (expect.visual && result.plan?.visual !== true) failures.push('görselleştirme bayrağı yok');
+  // Yanıt dili planın türlü kararıdır: İngilizce soruya Türkçe plan (ya da tersi) geçmez.
+  if (expect.language && result.plan?.language !== expect.language) failures.push(`dil ${result.plan?.language} ≠ ${expect.language}`);
   // Dönem, sunucunun çözdüğü somut günlerle karşılaştırılır (adlı dönem ya da eşdeğer tarih çifti aynı günleri verir).
   const requests = result.plan?.requests || [];
   const atoms = (wanted || []).flatMap((layer) => layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]);
@@ -305,13 +322,21 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
       && request.metrics?.includes('tasks.total') && (measure === 'created' ? !filters.status?.length : filters.status?.length === 1 && filters.status[0] === 'done')
       && (measure === 'trend' ? ['date_week', 'date_month'].includes(request.population.groupBy) : !request.population.groupBy);
   };
-  const reads = (range, wantedMeasures = measures, primary = true) => (atoms.length ? atoms : [null]).every((layer) => (wantedMeasures.length ? wantedMeasures : [null]).every((measure) => requests.some((request) =>
-    (!range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]) && (!expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1) && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
-    && (!primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)))));
+  // Katmanın kendi yönleri varsa (ve üst düzey yön beklentisi yoksa) ölçüleri yalnızca o katmanın okumalarında aranır: yer değiştirmiş
+  // ölçüler (kendi için hareket, ekip için tamamlanan) geçmez.
+  const ownMeasures = (layer, fallback, compared) => (layer?.focus && !expect.focusAll && !expect.focusAny
+    ? layer.focus.filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus) && !(compared && focus === 'trend')) : fallback);
+  const reads = (range, wantedMeasures = measures, primary = true) => (atoms.length ? atoms : [null]).every((layer) => { const own = ownMeasures(layer, wantedMeasures, !primary); return (own.length ? own : [null]).every((measure) => requests.some((request) =>
+    (!range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1])
+    // Dönem başlangıcı beklentisi yalnızca birincil dönemindir; karşılaştırma dönemi kendi başlangıcıyla okunur.
+    && (!primary || !expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1) && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
+    && (!primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)))); });
   const range = expectedRange(expect.window, today);
   if (range && !expect.stateComparison && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
   const prior = expectedCompare(expect.compare, expect.window, today);
   if (prior && !expect.stateComparison && !reads(prior, measures.filter((measure) => measure !== 'trend'), false)) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
+  // Ölçü bildirilmeyen karşılaştırma beklentisinde iki dönem AYNI ölçüyle (aynı nüfus ve kapsamla) okunmalıdır: farklı ölçülerin dönemleri karşılaştırma değildir.
+  if (range && prior && !expect.stateComparison && !measures.length && !['completed', 'created', 'activity'].some((measure) => reads(range, [measure]) && reads(prior, [measure], false))) failures.push('iki dönem aynı ölçüyle okunmuyor');
   if (expect.windowFrom && !reads(range)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
   if (expect.bucket && !reads(range)) failures.push(`dizi kovası ${expect.bucket} okunmuyor`);
   if (expect.stateComparison && !analysis.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
@@ -696,8 +721,9 @@ if (direct) {
       return { ...entry, id: item.id };
     });
   } else if (TIER === 'H') {
-    // Hedefli ve (soru metniyle koşulabilen) olumsuz vakalar: plan modeldendir, altın plan kullanılmaz.
-    const cases = [...temporal.targeted, ...temporal.adversarial.filter((entry) => entry.plan && !entry.expect.finishNot)];
+    // Hedefli ve (soru metniyle koşulabilen) olumsuz vakalar: plan modeldendir, altın plan kullanılmaz. Son açıklama öncesi yetki iptali
+    // (a20, `revokeFinal`) canlı koşuda kurulmaz: yalnızca belirlenimci sınamadır ve canlı puana katılmaz (kurulmayan iptal geçmiş sayılmaz).
+    const cases = [...temporal.targeted, ...temporal.adversarial.filter((entry) => entry.plan && !entry.expect.finishNot && entry.expect.test !== 'revokeFinal')];
     await runQualificationCases(pick(cases), async (t, item) => {
       t.mock.timers.enable({ apis: ['Date'], now: NOW });
       const seed = temporalBenchmarkSeed();

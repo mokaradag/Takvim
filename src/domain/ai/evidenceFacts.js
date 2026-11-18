@@ -86,6 +86,8 @@ const LABELS = Object.freeze({
   completionEvents: ['Tamamlama hareketi', 'Completion events'], creationEvents: ['Oluşturma hareketi', 'Creation events'],
   undatedDone: ['Gerçekleşen bitişi kayıtlı olmayan tamamlanmış görev', 'Completed tasks without a recorded actual finish'],
   firstRecordedDay: ['Hareket kaydının ilk günü', 'First recorded activity day'],
+  // Tarih ve ufuk kovalarının sınırları (iki sütun aynı başlığı taşımaz).
+  dateFrom: ['Başlangıç günü', 'Start date'], dateTo: ['Bitiş günü', 'End date'],
   finishSlipped: ['Bitişi kayan görev', 'Tasks with slipped finish'], startSlipped: ['Başlangıcı kayan görev', 'Tasks with slipped start'],
   addedSinceBaseline: ['Baz plandan sonra eklenen görev', 'Tasks added since baseline'],
   missingTasks: ['Artık bulunmayan baz plan görevi', 'Missing baseline tasks'],

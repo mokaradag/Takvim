@@ -335,6 +335,11 @@ test('dönem tek kavramdır: adlı dönem aynı günlerin okumasına açılır; 
   assert.deepEqual(toolNotes(result.inputs[1]).at(-1).error.details, ['$.analysis.relativeWindow:enum']);
   assert.equal(result.inputs.length, 2, 'eşdeğer tarih çiftine geçen onarım kabul edilir');
   assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  // Onarılan çeyrek gerçekten okumaya taşınır: durum okuması iki sınırı da taşır (sınırsız okuma geçmez).
+  const day = (value) => new Date(value).toISOString().slice(0, 10);
+  const reads = result.log.filter((row) => row.query === 'task-facts' && row.ok === true && !row.params.taskIds);
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every((row) => row.params.dateFrom && row.params.dateTo && day(row.params.dateFrom) === '2026-07-01' && day(row.params.dateTo) === '2026-09-30'), JSON.stringify(reads.map((row) => row.params)));
 });
 
 test('dönem onarımı kapsamı değiştiremez: pencere açılsa da kapsam ve yönler sabittir', async (t) => {

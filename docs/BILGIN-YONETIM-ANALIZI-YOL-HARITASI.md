@@ -600,12 +600,14 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
    adlarıyla yazımı; ayrık küme (y01–y30) bu turda sorulmaz, ayrı bir turda yalnızca bir kez sorulur.
 2. Not soruları (H5) yalnızca sohbet kutusunda "Notlar ve iletiler" anahtarı **o iletide** açıkken sorulur; anahtar kapalıyken
    aynı soru bir kez daha sorulup rıza isteği (veri okunmadan) doğrulanır.
-3. Her yanıtta denetlenir: dönem adı ve tarih aralığı yazılıyor mu; karşılaştırmada iki dönem de adlandırılıyor mu; hareket
+3. Dönem bildiren her yanıtta denetlenir (rıza isteği gibi dönem bildirmeyen yanıtta dönem denetimi uygulanmaz): dönem adı ve tarih aralığı yazılıyor mu; karşılaştırmada iki dönem de adlandırılıyor mu; hareket
    kaydının başlangıcı ve tamlığı doğrulanamadığında bu sınır açıklanıyor mu, kanıtsız dönem "bilinmiyor" diye mi söyleniyor (sıfır değil); tamamlanma geçmişi okunan yanıtta gerçekleşen
    bitişi kayıtlı olmayan görev varsa ilgili çekince var mı; yüzde değişim yalnızca bitmiş, eşit uzunlukta ve örtüşmeyen
    dönemlerde, önceki dönemin sayısı en az 4 olduğunda mı veriliyor.
 4. JSON günlükte `ai.grounded.turn` kaydının `context.parts`, `context.presentation` ve `sqlQueries` değerleri tabloya yazılır;
-   hareket dönem özeti için Görev Hareketleri raporundaki aynı aralığın sayısı elle karşılaştırılır (aynı gizlilik sınırı).
+   hareket dönem özeti için Görev Hareketleri raporundaki aynı aralığın sayısı elle karşılaştırılır (aynı gizlilik sınırı). Rapor aynı
+   nüfusla açılır: aynı işlem yapan kapsamı (kendi hareketlerim / ekip / görünür), aynı kişi ve proje süzgeci; yöneticinin raporu ekip
+   kapsamıyla açılabildiğinden kendi hareket sorusunda kapsam açıkça "kendi" seçilir, düzeyli ekip sorusunda aynı yönetim düzeyiyle karşılaştırılır.
 5. Sonuç §13 ve Kabul Matrisi §9'a tarihli kayıt olarak eklenir; koşulmadıysa H VM kabulü **bekliyor** kalır.
 
 ---

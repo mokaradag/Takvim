@@ -22,9 +22,10 @@ const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'ove
 const LEGACY_FOCUS = Object.freeze(FOCUS.slice(0, 12));
 /** Aşama H: dönemin türlü alanları (karşılaştırma dönemi ve dizi kovası) yalnızca güncel sürümde saklanır. */
 const TEMPORAL_KEYS = Object.freeze(['compare', 'compareFrom', 'compareTo', 'bucket']);
+// `windowDay`: adlı dönemin çözüldüğü Türkiye günü; gün değiştikten sonraki takip aynı somut dönemi okur (model görmez).
 const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow',
-  ...TEMPORAL_KEYS]);
-const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'charts', ...TEMPORAL_KEYS].includes(key)));
+  'windowDay', ...TEMPORAL_KEYS]);
+const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'windowDay', 'charts', ...TEMPORAL_KEYS].includes(key)));
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
 const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests',
@@ -156,7 +157,7 @@ export function normalizeAnalysisContext(value) {
     if (!validTemporal(value)) return null;
     const focus = value.focus == null ? [] : value.focus;
     if (!Array.isArray(focus) || focus.length > ANALYSIS_CONTEXT_LIMITS.maxFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
-    for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && !isIsoDay(value[key])) return null;
+    for (const key of ['dateFrom', 'dateTo', 'windowDay']) if (value[key] != null && !isIsoDay(value[key])) return null;
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
     if (value.visual != null && typeof value.visual !== 'boolean') return null;
     if (value.chart != null && (!CHARTS.includes(value.chart) || value.visual !== true)) return null;
@@ -165,7 +166,7 @@ export function normalizeAnalysisContext(value) {
     // Ayrıntılı istekle listelenen görevlerin bağlamı yalnızca satır göndergesidir (önceki özne olarak kullanılamaz).
     if (value.rowsOnly != null && (value.rowsOnly !== true || !rows.length || rows.some((row) => row && row.type !== 'project'))) return null;
     return Object.freeze({ v: ANALYSIS_CONTEXT_VERSION, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(value.withSelf ? { withSelf: true } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(within ? { within } : {}), focus: Object.freeze([...focus]),
-      ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual ? { visual: true } : {}),
+      ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.windowDay ? { windowDay: value.windowDay } : {}), ...(value.visual ? { visual: true } : {}),
       ...(value.chart ? { chart: value.chart } : {}), ...(value.charts ? { charts: Object.freeze([...value.charts]) } : {}), ...(value.table ? { table: true } : {}), rows,
       ...(rowPopulation ? { rowPopulation: Object.freeze(rowPopulation) } : {}), ...(pending ? { pending } : {}), ...(value.rowsOnly ? { rowsOnly: true } : {}), ...temporalFields(value) });
   } catch {

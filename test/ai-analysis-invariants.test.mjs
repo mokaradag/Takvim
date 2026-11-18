@@ -55,14 +55,30 @@ test('geçmiş görünüm gerektiren sınırlılık vakası sıradan güncel dur
   // Aşama H ile bu vakalar yanıtlanabilir oldu: beklenti geçmiş dönem okuyan (ya da geçmiş durum sınırını bildiren) plandır.
   const cases = fixture.holdout.filter((row) => row.handling === 'limitation' && row.expect.temporal === true);
   assert.ok(cases.some((row) => row.id === 'h08'));
+  const { expectedCompare, expectedRange } = await import('./helpers/temporalScenario.mjs');
+  const today = JSON.parse(readFileSync(new URL('./fixtures/ai-phase4e-corpus.json', import.meta.url), 'utf8')).today;
+  const current = { population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, entities: [], metrics: ['tasks.total'] };
+  const planned = (analysis, requests = [current]) => ({ outcome: 'planned', decisions: [], plan: { analysis, requests } });
   for (const item of cases) {
-    const planned = (analysis) => ({ outcome: 'planned', decisions: [], plan: { analysis,
-      requests: [{ population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, entities: [], metrics: ['tasks.total'] }] } });
-    assert.ok(plannerScore(planned({ scope: 'self', focus: ['overview'] }), item.expect).includes('geçmiş dönem okunmadı'), item.id);
-    assert.equal(plannerScore(planned({ scope: 'self', focus: ['completed'] }), item.expect).includes('geçmiş dönem okunmadı'), false, item.id);
-    assert.equal(plannerScore(planned({ scope: 'self', focus: ['overview'], historyUnsupported: ['overview'] }), item.expect).includes('geçmiş dönem okunmadı'), false, item.id);
-    assert.ok(plannerScore({ outcome: 'abstained', decisions: [{ intent: 'abstain', reason: 'write' }] }, item.expect).length, item.id);
+    const periods = [expectedRange(item.expect.temporalWindow, today), expectedCompare(item.expect.temporalCompare, item.expect.temporalWindow, today)].filter(Boolean);
+    const periodReads = periods.map(([dateFrom, dateTo]) => ({ population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me', status: ['done'], dateField: 'actualFinish', dateFrom, dateTo }, entities: [], metrics: ['tasks.total'] }));
+    assert.ok(plannerScore(planned({ scope: 'self', focus: ['overview'] }), item.expect, today).includes('geçmiş dönem okunmadı'), item.id);
+    // Olumlu denetimler bütün puanlayıcıdan geçer: istenen dönemleri okuyan tamamlanma planı (ayrı güncel durum okumasıyla).
+    assert.deepEqual(plannerScore(planned({ scope: 'self', focus: ['completed'] }, [...periodReads, current]), item.expect, today), [], item.id);
+    // Dönemsiz okuma istenen dönemi karşılamaz.
+    assert.ok(plannerScore(planned({ scope: 'self', focus: ['completed'] }), item.expect, today).includes('istenen tarihsel dönem okunmadı'), item.id);
+    // Bildirilen dönemlerle geçmiş durum sınırı yalnızca dönemdeki gelişmeleri ayrıca istemeyen soruda yeterlidir.
+    const limited = plannerScore(planned({ scope: 'self', focus: ['overview'], historyUnsupported: ['overview'], relativeWindow: item.expect.temporalWindow,
+      ...(item.expect.temporalCompare ? { compare: item.expect.temporalCompare } : {}) }), item.expect, today);
+    if (item.expect.currentState) assert.ok(limited.includes('dönemdeki gelişmeler okunmadı'), item.id);
+    else assert.deepEqual(limited, [], item.id);
+    assert.ok(plannerScore({ outcome: 'abstained', decisions: [{ intent: 'abstain', reason: 'write' }] }, item.expect, today).length, item.id);
   }
+  // h05: dönemdeki gelişme okuması ayrı bir güncel durum okuması olmadan yetmez.
+  const h05 = cases.find((row) => row.id === 'h05');
+  const week = expectedRange('this_week', today);
+  const created = { population: { tool: 'rota_task_analytics' }, filters: { dateField: 'createdAt', dateFrom: week[0], dateTo: week[1] }, entities: [], metrics: ['tasks.total'] };
+  assert.ok(plannerScore(planned({ scope: 'all', focus: ['created'] }, [created]), h05.expect, today).includes('güncel durum ayrı okunmadı'));
 });
 
 test('nitelendirme düzen çağrısındaki altyapı hatasını sonuçta saklar ve sonraki tura geçmez', async (t) => {

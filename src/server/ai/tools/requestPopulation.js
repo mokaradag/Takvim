@@ -6,6 +6,7 @@ import { METRICS } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { effectivePageSize } from './rota/rotaToolSupport.js';
 import { addDays, normalizeTaskFilters, searchText } from './rota/taskFacts.js';
+import { seriesBuckets } from '../../../domain/ai/temporalWindow.js';
 import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool, TASK_RESULT_SCOPE_TOOLS, toolCatalogForModel } from './toolRegistry.js';
 import { containmentText, populationArguments } from './toolScope.js';
@@ -315,7 +316,10 @@ const SELECTED_SHAPES = Object.freeze({
   rota_recurrence_inspect: { type: 'task', single: ['series.next'], plural: ['series', 'series.*.next'], counterparts: { 'series.*.next': 'series.next', 'series.next': 'series.*.next' } }
 });
 
-function shapeCollections(tool, entities) {
+function shapeCollections(tool, entities, filters = null) {
+  // Hareket aramasının satır koleksiyonu etkin görünümden gelir: olağan liste hareket satırları, haftalık/aylık görünüm kova dizisi;
+  // dönem özeti satır döndürmez. Görünümle uyuşmayan koleksiyon kabul edilmez, örtük koleksiyon da görünümden çıkarılır.
+  if (tool === 'rota_activity_search') return !filters?.activityView ? ['items'] : ['week', 'month'].includes(filters.activityView) ? ['series'] : [];
   const shape = SELECTED_SHAPES[tool];
   if (!shape) return rowCollections(tool);
   return entities.some((entity) => entity.type === shape.type) ? shape.single : shape.plural;
@@ -391,7 +395,7 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   const definition = getRotaTool(tool);
   const collections = rowCollections(tool);
   // Bildirilen satır ölçülerini taşıyan tek koleksiyon bildirilmiş sayılır; birden çok kardeş koleksiyon listede hepsidir.
-  const shaped = shapeCollections(tool, entities);
+  const shaped = shapeCollections(tool, entities, filters);
   const counterpart = SELECTED_SHAPES[tool]?.counterparts[population.collection];
   if (population.collection && !shaped.includes(population.collection) && shaped.includes(counterpart)) population.collection = counterpart;
   if (operation !== 'value' && !population.collection) {
@@ -545,7 +549,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   }
   const collections = rowCollections(tool.name);
   const sorts = parameters.sort?.enum || [];
-  const shaped = shapeCollections(tool.name, request.entities);
+  const shaped = shapeCollections(tool.name, request.entities, request.filters);
   if (population.collection && !collections.includes(population.collection)) problems.push('$.population.collection:unknown');
   else if (population.collection && !shaped.includes(population.collection)) problems.push('$.population.collection:shape');
   const lists = request.operation === 'list' && !population.collection ? listCollections(tool.name, request.metrics, shaped) : [];
@@ -583,6 +587,26 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   if (tool.name === 'rota_activity_search' && request.filters.activityView && request.filters.activityKind) {
     problems.push('$.filters.activityKind:unsupported');
     hints.push('Toplu hareket görünümünde activityKind verilmez; tür süzgeci için activityView kaldırılır');
+  }
+  // Aracın toplu görünümde reddettiği seçici ve metin alanları yürütmeden önce reddedilir (onarım ipucuyla).
+  if (tool.name === 'rota_activity_search' && request.filters.activityView && (request.entities || []).some((entity) => entity?.type === 'task')) {
+    problems.push('$.entities:view');
+    hints.push('Toplu hareket görünümünde görev seçicisi verilmez; tek görevin hareketleri için activityView kaldırılır');
+  }
+  if (tool.name === 'rota_activity_search' && request.filters.activityView && population.textFields?.length) {
+    problems.push('$.population.textFields:view');
+    hints.push('Toplu hareket görünümü değişiklik metni döndürmez: population.textFields verilmez; metin için activityView kaldırılır');
+  }
+  // Hareket dönemi başlangıçla tanımlanır: yalnızca bitiş günü araçta bugüne düşer ve reddedilir.
+  if (tool.name === 'rota_activity_search' && request.filters.dateTo && !request.filters.dateFrom) {
+    problems.push('$.filters.dateFrom:required');
+    hints.push('Hareket dönemi için filters.dateFrom zorunludur (dateTo verilmezse tek gün okunur)');
+  }
+  // Haftalık/aylık hareket dizisinin kova sınırı (aracın `$.view:range` reddi) yürütmeden önce denetlenir.
+  if (tool.name === 'rota_activity_search' && ['week', 'month'].includes(request.filters.activityView) && request.filters.dateFrom
+    && !seriesBuckets({ dateFrom: request.filters.dateFrom, dateTo: request.filters.dateTo || request.filters.dateFrom }, request.filters.activityView)) {
+    problems.push('$.filters.activityView:range');
+    hints.push('Hareket dizisi en çok 24 kova ve 366 gündür: aralığı kısaltın ya da aylık görünüm (month) isteyin');
   }
   if (requestTextFields(request).some((field) => !allowedTextFields.includes(field))) {
     problems.push('$.population.textFields:not-authorized');
@@ -804,7 +828,7 @@ export function effectiveCollection(request) {
   const tool = population?.tool;
   if (population?.collection != null || request.operation === 'value' || typeof tool !== 'string' || !getRotaTool(tool)) return population?.collection ?? null;
   if (population.groupBy && tool === 'rota_task_analytics') return 'groups';
-  const shaped = shapeCollections(tool, Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : []);
+  const shaped = shapeCollections(tool, Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : [], request.filters && typeof request.filters === 'object' ? request.filters : null);
   const fitting = Array.isArray(request.metrics) ? listCollections(tool, request.metrics, shaped) : [];
   return fitting.length === 1 ? fitting[0] : !fitting.length && shaped.length === 1 ? shaped[0] : null;
 }

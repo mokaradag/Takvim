@@ -12,7 +12,21 @@ function semanticFailures(expected, rendered, trace) {
   if (expected.maxEvidence != null && (!Number.isSafeInteger(trace?.evidence) || trace.evidence > expected.maxEvidence)) failures.push('beklenen kanıt sınırı aşıldı');
   for (const text of expected.requires || []) if (!String(rendered.text || '').includes(text)) failures.push(`zorunlu görünür metin yok: ${text}`);
   for (const text of expected.forbids || []) if (String(rendered.text || '').includes(text)) failures.push(`yasak görünür metin var: ${text}`);
+  // Bugün dâhil son N günün aralığı (Türkiye günü) yanıtta görünmelidir: daha kısa bir dönemin grafiği dönem denetimini geçmez.
+  if (Number.isSafeInteger(expected.periodDays) && !String(rendered.text || '').includes(periodLabel(expected.periodDays))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays)}`);
   return failures;
+}
+const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+/** Sunucunun aralık yazımıyla aynı biçim (`rangeLabel`): "2 Temmuz – 30 Eylül 2026", yıl sınırında iki yıl. */
+function periodLabel(days, now = new Date()) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const from = new Date(Date.parse(`${today}T00:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);
+  const part = (day) => `${Number(day.slice(8, 10))} ${MONTHS[Number(day.slice(5, 7)) - 1]}`;
+  if (from === today) return `${part(today)} ${today.slice(0, 4)}`;
+  const lastDay = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0)).getUTCDate();
+  if (from.slice(0, 7) === today.slice(0, 7) && from.endsWith('-01') && Number(today.slice(8, 10)) === lastDay) return `${MONTHS[Number(today.slice(5, 7)) - 1]} ${today.slice(0, 4)}`;
+  if (from.slice(0, 7) === today.slice(0, 7)) return `${Number(from.slice(8, 10))}–${part(today)} ${today.slice(0, 4)}`;
+  return from.slice(0, 4) === today.slice(0, 4) ? `${part(from)} – ${part(today)} ${today.slice(0, 4)}` : `${part(from)} ${from.slice(0, 4)} – ${part(today)} ${today.slice(0, 4)}`;
 }
 // Tamamlanmamış ürün yanıtı, senaryonun anlamsal beklentisi olmasa da kabul kanıtı değildir.
 function completionFailures(rendered, trace) {
@@ -46,4 +60,4 @@ function modelFailures(expected, trace, calls) {
   if (calls.some((call) => !call.ok || call.thinking !== 'off' || call.thinkingTokens !== 0 || !call.models?.length || call.models.some((model) => model !== 'claude-haiku-4-5-20251001'))) failures.push('model çağrısı kabul sözleşmesini sağlamadı');
   return failures;
 }
-module.exports = { semanticFailures, completionFailures, modelFailures, replayFailures, scriptedFailures };
+module.exports = { periodLabel, semanticFailures, completionFailures, modelFailures, replayFailures, scriptedFailures };

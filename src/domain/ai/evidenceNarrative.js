@@ -127,7 +127,8 @@ function labelOf(fact, locale) {
   // Aşama H: dönem dizisinin sayı sütunu neyi saydığını söyler ("Kayıt sayısı" değil "Tamamlanan görev").
   if (parts.at(-1) === 'count' && parts.at(-3) === 'groups' && SERIES_HEADS[fact.semantic?.groupBy]) {
     const basis = fact.semantic.groupBy === 'due_horizon' ? ['Açık görev', 'Open tasks'] : fact.semantic.filters?.dateField === 'createdAt' ? ['Oluşturulan görev', 'Created tasks']
-      : fact.semantic.filters?.dateField === 'actualFinish' ? ['Tamamlanan görev', 'Completed tasks'] : null;
+      // Gerçekleşen bitiş tarihi tek başına tamamlanmış nüfus değildir (yeniden açılan görev tarihini korur): ad yalnızca done süzgeciyle.
+      : fact.semantic.filters?.dateField === 'actualFinish' && fact.semantic.filters.statuses?.length === 1 && fact.semantic.filters.statuses[0] === 'done' ? ['Tamamlanan görev', 'Completed tasks'] : null;
     if (basis) return basis[language(locale)];
   }
   if (parts.at(-3) === 'proposedChanges' && ['from', 'to'].includes(parts.at(-1))) {

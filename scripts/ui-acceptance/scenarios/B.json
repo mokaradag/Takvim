@@ -422,7 +422,8 @@
      "outcome": "grounded",
      "requires": [
       "Tamamlanmış"
-     ]
+     ],
+     "periodDays": 90
     }
    ],
    "expectedCharts": [

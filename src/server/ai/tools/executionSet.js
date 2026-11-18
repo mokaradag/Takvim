@@ -223,7 +223,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const [primary, ...also] = plan.analysis;
     onDecoded({ ...plan, analysis: { ...primary, ...(also.length ? { also } : {}) } });
   } else onDecoded(plan);
-  plan = layeredAnalysis(plan);
+  plan = layeredAnalysis(plan, today);
   plan = equivalentAnalysisSpelling(plan, today);
   // Sunum tercihleri (grafik türü, tablo) plan düzeyindedir; zayıf model onları özetin içine de yazabilir. Yapısal taşıma:
   // değer değişmez, özetin anlamı (kapsam, yön, ufuk) değişmez; plan düzeyinde ayrıca verilmişse o geçerlidir.
@@ -537,7 +537,7 @@ function relocatedPlanKeys(plan) {
   return { ...rest, [target === 'new' ? 'request' : target]: into };
 }
 
-function layeredAnalysis(plan) {
+function layeredAnalysis(plan, today = null) {
   if (!Array.isArray(plan.analysis)) return plan;
   const items = plan.analysis;
   if (!items.length || items.length > ANALYSIS_LIMITS.maxLayers || items.some((item) => !item || typeof item !== 'object' || Array.isArray(item))) throw invalidArguments(['$.analysis:type']);
@@ -549,7 +549,13 @@ function layeredAnalysis(plan) {
     return { ...plan, ...(plan.language == null ? { language } : {}), analysis: only };
   }
   const [primary, ...rest] = items;
-  const window = (item) => JSON.stringify([item.dateFrom ?? null, item.dateTo ?? null, item.relativeWindow === 'all_time' ? null : item.relativeWindow ?? null]);
+  // Dönemler eşdeğer yazımları normalleştirildikten sonra karşılaştırılır: adlı dönemle aynı günleri gösteren tarih çifti ad sayılır
+  // (ör. bugün 30 Eylül iken `this_month` + 1–30 Eylül ile yalnızca `this_month`). Farklı günleri kapsayan katmanlar reddedilir.
+  const window = (item) => {
+    const named = today && typeof item.relativeWindow === 'string' ? resolveWindow(item.relativeWindow, today) : null;
+    const same = Boolean(named && item.dateFrom === named.dateFrom && item.dateTo === named.dateTo);
+    return JSON.stringify([same ? null : item.dateFrom ?? null, same ? null : item.dateTo ?? null, item.relativeWindow === 'all_time' ? null : item.relativeWindow ?? null]);
+  };
   if (rest.some((item) => window(item) !== window(primary))) throw invalidArguments(['$.analysis.also:window']);
   // Ek öğede ek kapsamın taşıyamadığı bir alan (daraltma, kendiyle karşılaştırma, satır, takip eylemi, iç içe ek kapsam) ya da
   // birincilde kendi `also` alanı varsa çeviri o koşulu sessizce düşürür: plan reddedilir (model düzeltir). Dönem yukarıda
@@ -609,7 +615,9 @@ function equivalentAnalysisSpelling(plan, today) {
   const isDate = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
   const canonical = normalizedBrief(out);
   // Gecikme yönünün "dönem yok" yinelemesi (yalnızca gelecek dönemde; bkz. yukarıdaki açıklama).
-  if (!follow && today && isDate(out.dateFrom) && out.dateFrom >= today && Array.isArray(out.also) && Array.isArray(out.focus)) {
+  // Birincil dönemin başı: tarih çifti ya da (çift aynı günleri gösterip düşürüldüyse veya hiç yazılmadıysa) adlı dönemin çözümü.
+  const start = isDate(out.dateFrom) ? out.dateFrom : resolved?.dateFrom ?? null;
+  if (!follow && today && start && start >= today && Array.isArray(out.also) && Array.isArray(out.focus)) {
     const sameScope = (layer) => layer && typeof layer === 'object' && !Array.isArray(layer) && layer.scope === out.scope
       && (layer.level ?? null) === (out.level ?? null) && JSON.stringify(layer.names ?? null) === JSON.stringify(out.names ?? null)
       && out.within == null && out.rows == null && !out.withSelf;

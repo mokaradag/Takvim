@@ -462,7 +462,8 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           && contiguousMonths(described.rows.map((row) => row.title));
         // Aşama H: tarih dizisi (haftalık/aylık kovalar) süreklidir ve kronolojiktir: çizgi grafik adayıdır. Kova değerlerinden biri
         // bilinmiyorsa (kayıt başlangıcından önce) aday kurulmaz; tek tük gözlemden eğilim çizilmez.
-        const dated = ['series', 'activitySeries'].includes(cover?.kind) && complete && described.rows.length >= 3;
+        // Hareket dizisinde her kovanın kayıt kapsamı doğrulanmış olmalıdır: kısmi kayıtlı sayılar eğilim gibi çizilmez (tabloda kalır).
+        const dated = (cover?.kind === 'series' || cover?.kind === 'activitySeries' && cover.verified) && complete && described.rows.length >= 3;
         described.columns.forEach((column, index) => {
           if (!column.numeric || !labels) return;
           const rowLimit = monthly || dated ? ANSWER_CHART_LIMITS.maxLineItems : ANSWER_CHART_LIMITS.maxBarItems;
@@ -482,6 +483,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
             && values.every(([fact]) => ['status', 'priority', 'project', 'deadline', 'target_month'].includes(fact.semantic?.groupBy))
             && described.rows.length <= ANSWER_CHART_LIMITS.maxDonutItems && total > 0 && unit === 'count';
           const items = labels.map((label, position) => ({ label, value: values[position][0].value }));
+          // Tarih kovaları sıralamadan bağımsız olarak kronolojik çizilir (kanonik kova anahtarı); tablo istenen sırayı korur.
+          const bucketKeyOf = (row) => { const semantic = row.entries.find(({ fact }) => fact.semantic?.group || fact.semantic?.series)?.fact.semantic; return semantic?.group?.key ?? semantic?.series?.key ?? null; };
+          const chronological = dated && described.rows.every((row) => typeof bucketKeyOf(row) === 'string')
+            ? described.rows.map((row, position) => ({ key: bucketKeyOf(row), position })).sort((a, b) => a.key.localeCompare(b.key)).map((item) => items[item.position]) : null;
           // Zaman dizisi: termin ayına göre tam gruplar sıralı dönemlerdir (çizgi); diğer sütunlar kategorik karşılaştırmadır.
           const months = monthly && unit === 'count' && values.every(([fact]) => fact.semantic?.groupBy === 'target_month')
             && described.rows.length <= ANSWER_CHART_LIMITS.maxLineItems;
@@ -494,10 +499,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           const partTitle = distribution || months ? [...titles.values()].find((item) => item.part === ordinal)?.text : null;
           // Görev gruplarının kayıt sayısı grafikte "Görev sayısı" adını taşır ("Kayıt sayısı" teknik alan adıdır).
           const taskCount = values.every(([fact]) => /(^|\.)groups\.\d+\.count$/.test(fact.field) && ['rota_task_analytics', 'rota_task_search'].includes(group.tool));
-          const title = answerChartLabel(sequence ? seriesChartTitle(cover, locale) : cover?.kind === 'horizons' ? (locale === 'en' ? 'Open tasks by delivery horizon' : 'Teslim ufkuna göre açık görev')
+          // Ufuk başlığı yalnızca açık görev sayısını çizen sütunundur; başka ölçü (ör. gecikmiş) kendi sütun adını taşır.
+          const title = answerChartLabel(sequence ? seriesChartTitle(cover, locale) : cover?.kind === 'horizons' && /\.(?:count|open)$/.test(sample.field) ? (locale === 'en' ? 'Open tasks by delivery horizon' : 'Teslim ufkuna göre açık görev')
             : partTitle || (taskCount ? (locale === 'en' ? 'Task count' : 'Görev sayısı') : column.label), ANSWER_CHART_LIMITS.maxTitleChars);
           addChart({ table: id, column: index, title, unit, evidenceId: group.evidenceId,
-            items: months ? described.rows.map((row, position) => ({ label: monthLabel(row.title, locale), value: values[position][0].value })) : items, types },
+            items: months ? described.rows.map((row, position) => ({ label: monthLabel(row.title, locale), value: values[position][0].value })) : chronological || items, types },
           { column: columns[index].id });
         });
         // Çok sütunlu (yığılmış) ve tarih (zaman çizelgesi) adayları tek sütun adaylarından sonra gelir; kimlikleri kaymaz.
@@ -526,7 +532,8 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       // çok satırlı listede de (doğrulanmış anlatımla aynı biçimde); doğal cümle süzgeçleri söyleyemezse ölçütlü cümle kalır.
       // Aşama H: dönem bulgusunun sayımını söylediği liste boşsa ayrıntı yazılmaz (yokluk girişte söylenmiştir; sayım okuması aynı bölümdedir); tek satırlıysa
       // ölçütlü sayım cümlesinin yerine satırı tanıtan cümle geçer.
-      if (cover?.kind === 'completedList' && shownRows === 0) continue;
+      // Boş liste, giriş paragrafı da sıfır söylediyse yazılmaz; sayım bir tamamlanma bildirip liste boş döndüyse boş sonuç ayrıntıda kalır.
+      if (cover?.kind === 'completedList' && shownRows === 0 && cover.aggregate === 0) continue;
       const singleRow = shownRows === 1 && (cover?.kind === 'notes' || cover?.kind === 'completedList' && cover.total === 1);
       const lead = (singleRow ? singleRowLead(cover.kind, locale) : null)
         || taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });

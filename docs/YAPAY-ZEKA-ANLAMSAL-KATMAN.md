@@ -2094,11 +2094,11 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   `compareFrom/compareTo`; iki dönem AYNI nüfus tanımıyla okunur (yalnızca dönem ayrışır). `previous`: takvim ayı → önceki
   ay, takvim haftası → önceki hafta, kayan "son N gün" ve diğer aralıklar → aynı uzunlukta hemen önceki aralık. Veri okunmadan
   reddedilenler: gelecek dönemde geçmiş yönü (`$.analysis.focus:futureWindow`), dönemsiz karşılaştırma (`compare:window`), aynı
-  dönem (`compare:same`), adı ile tarihleri çelişen karşılaştırma (`compare:conflict`), 366 günü aşan aralık (`dateFrom:range`),
-  eğilimle karşılaştırma (`compare:focus`), geçmiş dönemle `upcoming` (`dateTo:past`). Dönem yazılmayan geçmiş yönü sunucunun
+  dönem (`compare:same`), adlı `compare` ile `compareFrom/compareTo` çiftinin birlikte yazılması — tarihler aynı günleri gösterse de; ikisinden yalnızca biri gönderilir (`compare:conflict`), 366 günü aşan aralık (`dateFrom:range`),
+  kıyaslanabilir geçmiş ölçüsü (completed/created/activity) olmayan karşılaştırma, ör. yalnızca `trend` (`compare:focus`; `completed` + `trend` kabul edilir: eğilim birincil dönemin dizisi, sayımlar iki dönemde okunur), geçmiş dönemle `upcoming` (`dateTo:past`). Dönem yazılmayan geçmiş yönü sunucunun
   AÇIKÇA söylediği varsayılanla okunur (dönem 30 gün, eğilim 90 gün). Yalnızca durum yönleriyle (`overview`, `overdue` …) geçmiş
   karşılaştırma istenirse bugünkü durum okunur ve geçmiş durumun yeniden kurulamadığı adıyla söylenir (`historyUnsupported`).
-  Takip bağlamı `compare` ve `bucket`ı da devralır; yeni dönemde `previous` yeni döneme göre yeniden kurulur. Bulgular
+  Takip bağlamı `compare` ve `bucket`ı da devralır; devralınan adlı dönem ve ikinci dönem ilk çözüldükleri güne sabittir (gün değişse de aynı günler okunur). Takip dönemi değiştirirse yalnızca `previous` yeni döneme göre yeniden kurulur; adlı ya da tarihli ikinci dönem devralınmaz, iki dönemli karşılaştırma için yeniden bildirilmelidir (yoksa yalnızca yeni dönem okunur). Devralınan `upcoming`, başka devralınan yön varken geçmiş dönemde düşer; karşılaştırma ikinci dönem okuması da sınır bildirimi de üretmiyorsa (ör. yalnızca `horizons`) reddedilir (`compare:focus`). Bulgular
   `src/domain/ai/temporalFindings.js` içindedir (dönem özeti, karşılaştırma, eğilim, hareket dizisi, ufuklar, geçmiş durum sınırı,
   not özeti); yüzde değişim yalnızca eşit uzunluklu, bitmiş, örtüşmeyen dönemlerde ve önceki değer ≥ 4 iken söylenir; kısmi ya da
   yok hareket kaydında fark yorumlanmaz. Ayrıntı: [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §9.

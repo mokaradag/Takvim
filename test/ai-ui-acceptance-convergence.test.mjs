@@ -524,10 +524,39 @@ exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}
   for (const file of ['drive.cjs', 'expectations.cjs']) copyFileSync(resolve(`scripts/ui-acceptance/${file}`), join(dir, file));
   const scenario = { profile: 'B', port: 8102, appLog: 'app.log', conversations: [{ name: 'rıza', detail: 'balanced', turns: ['Notları oku'], includeText: [0] }] };
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
-  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_THEME: '', UI_SCRIPTED: '', UI_ONLY: '' });
+  // Üst kabuğun görünüm değişkeni (ör. UI_VIEWPORT=mobile) sınamayı etkilemez.
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_THEME: '', UI_VIEWPORT: '', UI_SCRIPTED: '', UI_ONLY: '' });
   assert.equal(result.status, 1, result.stderr);
   const row = JSON.parse(readFileSync(join(dir, 'out', 'B.json')))[0];
   assert.equal(row.rendered.status, 'driver-error');
   assert.match(row.rendered.error, /Rota verisi kapalı/);
   assert.ok(!readdirSync(dir).includes('gonderim'));
+});
+
+test('betikli uç göreli günü yalnızca tarih alanlarında çözer; "T" adlı proje adı değişmez', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'rota-kopru-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const benchmark = { targeted: [{ id: 'k1', profile: 'B', text: 'T projesinde dün ve bugün neler tamamlandı?',
+    plan: { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['T'], focus: ['completed'], dateFrom: 'T-1', dateTo: 'T' } } }] };
+  writeFileSync(join(dir, 'benchmark.json'), JSON.stringify(benchmark));
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: '', UI_PROFILE: 'B', UI_BENCHMARK: join(dir, 'benchmark.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  const port = await new Promise((done, fail) => {
+    const timer = setTimeout(() => fail(new Error('betikli uç açılmadı')), 5000); let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) { clearTimeout(timer); done(Number(match[1])); } });
+  });
+  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: benchmark.targeted[0].text }] }) });
+  const plan = JSON.parse((await response.json()).choices[0].message.tool_calls[0].function.arguments);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  assert.deepEqual(plan.analysis.names, ['T']);
+  assert.equal(plan.analysis.dateTo, today);
+});
+
+test('görsel kabulün dönem denetimi sunucunun aralık yazımını bekler ve daha kısa dönemi geçirmez', async () => {
+  const { periodLabel, semanticFailures } = await import('../scripts/ui-acceptance/expectations.cjs');
+  const now = new Date(Date.UTC(2026, 8, 30, 9));
+  assert.equal(periodLabel(90, now), '3 Temmuz – 30 Eylül 2026');
+  const trace = { outcome: 'grounded' };
+  assert.deepEqual(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(90)} döneminde` }, trace), []);
+  assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(30)} döneminde` }, trace).length);
 });

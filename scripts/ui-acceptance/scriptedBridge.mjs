@@ -15,10 +15,14 @@ const PORT = Number(process.env.BRIDGE_PORT ?? 18741);
 const CALLS = process.env.BRIDGE_CALLS || null;
 const benchmark = JSON.parse(readFileSync(process.env.UI_BENCHMARK || new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
 // Göreli termin belirteçleri ("T+N") çalıştırma gününe (Türkiye günü) göre çözülür; sentetik veri de aynı güne göre kurulur.
-const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const istanbulDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const today = istanbulDay();
 const shift = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
 // Aşama H kıyas kümesi "T", "T-N" ve "T+N" biçimlerini kullanır; hepsi aynı güne göre çözülür.
-const resolved = (plan) => JSON.parse(JSON.stringify(plan).replace(/"T(?:\+(-?\d+)|(-\d+))?"/g, (_, plus, minus) => `"${shift(Number(plus ?? minus ?? 0))}"`));
+// Yalnızca tarih alanları çözülür: "T" adlı bir proje ya da metin değeri tarihe çevrilmez.
+const DATE_KEYS = new Set(['dateFrom', 'dateTo', 'compareFrom', 'compareTo']);
+const relativeDay = (value) => { const match = /^T(?:\+(-?\d+)|(-\d+))?$/.exec(value); return match ? shift(Number(match[1] ?? match[2] ?? 0)) : value; };
+const resolved = (plan) => JSON.parse(JSON.stringify(plan), (key, value) => (DATE_KEYS.has(key) && typeof value === 'string' ? relativeDay(value) : value));
 // Aynı soru metni farklı profillerde farklı altın planla geçebilir (ör. g08/g09): UI_PROFILE verilirse yalnızca o profilin vakaları
 // eşlenir. Aynı metne iki farklı plan kalırsa biri sessizce seçilmez: metin çakışma olarak işaretlenir ve yanıt açıklama kararıdır.
 const PROFILE = process.env.UI_PROFILE || null;
@@ -67,6 +71,13 @@ http.createServer((request, response) => {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Array.isArray(input.messages)
       || input.messages.some((message) => !message || typeof message !== 'object')) { response.writeHead(400).end(); return; }
     // Düzen iletisi bozuk JSON ya da çizilemeyen görünüm taşıyabilir: hata ucu sonlandırmaz, istemci hatası (400) olarak döner.
+    // Göreli altın planlar başlangıç gününe çözüldü: Türkiye gün sınırını aşan yeniden oynatma bayat dönem okurdu. Yanıt verilmez;
+    // koşu yeniden başlatılmalıdır (uygulama ve sentetik veri de yeni güne göre kurulur).
+    if (istanbulDay() !== today) {
+      process.stderr.write(`betikli uç ${today} gününe göre çözüldü; Türkiye günü değişti, koşuyu yeniden başlatın\n`);
+      response.writeHead(409).end();
+      return;
+    }
     let replied;
     try { replied = reply(input); } catch { response.writeHead(400).end(); return; }
     const { purpose, message, unscripted } = replied;

@@ -255,6 +255,9 @@ const taskSearch = {
     const pageProjects = projects;
     // Aşama H: sayfadaki görünür görevlerin açıklamaları (kesilmiş; yalnızca istenirse). Metin veridir, talimat değildir.
     const notes = withNotes && pageFacts.length ? await call.sql((executor) => readTaskNotes(executor, scope, pageFacts.map((fact) => fact.id))) : new Map();
+    // Not varlığı (görev okuması) ile not metni (ayrı okuma) arasında açıklama boşaltılmışsa "açıklaması olan" sayfa artık aynı
+    // anlık görüntü değildir: sayım tam kabul edilmez (yeni okuma bütçesi açılmaz; metni dönmeyen satır okunmuş not sayılmaz).
+    const staleNotes = filters.hasDescription && withNotes && pageFacts.some((fact) => !notes.get(fact.id)?.text?.trim());
     const exactTotal = sorted.length;
     const stableNextCursor = nextCursor;
     const descriptor = searchedScope(scope, filters.projectId);
@@ -309,8 +312,9 @@ const taskSearch = {
         filters
       },
       scope: descriptor,
-      complete: offset + page.length >= sorted.length && ![...notes.values()].some((note) => note.clipped),
-      truncated: (!stableNextCursor && offset + page.length < sorted.length) || [...notes.values()].some((note) => note.clipped),
+      // Koleksiyon tamlığı sayfalamadan gelir: kesilen not metni satırda `descriptionClipped` ile bildirilir, görev listesini eksik yapmaz.
+      complete: offset + page.length >= sorted.length && !staleNotes,
+      truncated: !stableNextCursor && offset + page.length < sorted.length,
       returnedCount: pageFacts.length,
       totalCount: exactTotal,
       nextCursor: stableNextCursor,
@@ -521,6 +525,8 @@ function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false
   }
 }
 
+const { hasDescription: _hasDescription, ...ANALYTICS_FILTER_PROPERTIES } = FILTER_PROPERTIES;
+
 const taskAnalytics = {
   name: 'rota_task_analytics',
   version: 1,
@@ -532,7 +538,8 @@ const taskAnalytics = {
     type: 'object',
     additionalProperties: false,
     properties: {
-      ...FILTER_PROPERTIES,
+      // Not varlığı süzgeci yalnızca rızalı görev aramasındadır; toplamlar aracı onu desteklemez ve şemada da sunmaz.
+      ...ANALYTICS_FILTER_PROPERTIES,
       groupBy: {
         type: 'string', enum: [...GROUP_BY],
         description: 'Gruplama boyutu: status, priority, project, assignee (bir görev birden çok sorumluda sayılabilir), deadline (termin kovası), target_month (termin ayı), department/unit (sorumlunun bölümü/birimi; bir görev birden çok birimde sayılabilir), date_week/date_month (dateField\'e göre haftalık/aylık dizi; dateFrom+dateTo zorunlu), due_horizon (7/14/30 günlük teslim bantları).'

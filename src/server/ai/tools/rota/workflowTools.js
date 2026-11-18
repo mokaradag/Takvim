@@ -92,7 +92,8 @@ const activitySearch = {
       kind: { type: 'string', enum: Object.keys(ACTIVITY_KIND_LABELS), description: 'Hareket türü.' },
       teamLevel: { type: 'string', enum: Object.keys(TEAM_LEVELS), description: 'Yalnızca scope team ile: ekibin kurumsal düzeyi (unit, department, directorate).' },
       view: { type: 'string', enum: [...ACTIVITY_VIEWS], description: 'Dönem özeti (satır döndürmez): period = kaydedilen hareketlerin sayıları (oluşturulan, tamamlanan, silinen, yeniden açılan görev) ve kayıt kapsamı; week/month = ayrıca haftalık/aylık hareket dizisi.' },
-      limit: LIMIT_PROPERTY(20, 10),
+      // Sınır yalnızca hareket satırlarınındır: dönem özeti görünümü (view) satır döndürmez, dizi aralığın bütün kovalarıyla döner.
+      limit: Object.assign(LIMIT_PROPERTY(20, 10), { description: 'Döndürülecek en fazla hareket satırı (1–20, varsayılan 10); view ile uygulanmaz.' }),
       cursor: CURSOR_PROPERTY
     }
   },

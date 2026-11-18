@@ -669,7 +669,7 @@ var). Bugün sabit: 2026-09-30.
 dönem, kovalar, adlar), kıyas kümesi bütünlüğü ve ayrık küme yalıtımı, plan şeması/yönerge sınırları, her adlı dönem × yön × kapsam
 açılımı, geçersiz dönem retleri, 62 hedefli altın plan uçtan uca, 12 çapraz aşama vakası kendi verisiyle, araç düzeyi (Türkiye günü,
 sürekli dizi, undatedDone, hareket kapsamı none/partial/complete, gizli proje, ekip düzeyi yetkisi, rıza kapısı), bulgu birimleri
-(yüzde payda kuralları, bilinmeyen ≠ sıfır, eğilim kuralları, ek daraltmalı okuma), 19 olumsuz vaka + adlandırılmış olumsuz sınamalar,
+(yüzde payda kuralları, bilinmeyen ≠ sıfır, eğilim kuralları, ek daraltmalı okuma), 20 olumsuz vaka + adlandırılmış olumsuz sınamalar,
 takip devri, doğal düzyazı, 30 ayrık vakanın puanlayıcıyla karşılanabilirliği ve puanlayıcının yanlış planı yakalaması, boş dizi kanıtı,
 önermesiz düzen.
 
@@ -696,9 +696,9 @@ başarısızlık sayılır; sunucunun tek olası düzeni (`NO_CHOICE`) model hat
 | Aşama | Vaka | Geçen | Çağrı | Not |
 | --- | --- | --- | --- | --- |
 | B — duman | 12 | 6 → 8 (düzeltme sonrası) | 21 + 21 | dönem adı (geçen hafta → son 7 gün) ve not isteği sınıfları |
-| C — geniş hedefli + olumsuz | 79 | 46 | 150 | |
+| C — geniş hedefli + olumsuz | 79 | 46 | 150 | 62 hedefli + soru metniyle koşulabilen 17 olumsuz (a08, a09, a11 veri okunmadan ret vakalarıdır, canlı koşulmaz) |
 | D — yakınsama (yalnızca başarısızlar) | 33 | 17 | 50 | |
-| E — son doğrulama, hedefli + olumsuz | 79 | **55 (%70)** | 112 | yetenek grubu ayrıntısı aşağıda |
+| E — son doğrulama, hedefli + olumsuz | 79 | **55 (%70)** | 112 | yetenek grubu ayrıntısı aşağıda; a20 (son yetki iptali) o koşuda kurulum yapılmadan sayılmıştı, artık yalnızca belirlenimcidir ve sonraki canlı koşular 78 vaka puanlar (55/79 yeniden ölçülmedi) |
 | E — son doğrulama, ayrık küme (dokunulmamış) | 30 | **14 (%47)**, 12 ilk bildirimde | 35 | ilk denemede 20. soruda hız sınırı → koşu durdu (altyapı), yeniden koşuldu |
 | Ek tanı koşusu (sonradan geri alınan normalleştirmeyle) | 3 | 3 | 6 | geçerli kodun ölçümü değildir; bkz. 9.5 |
 

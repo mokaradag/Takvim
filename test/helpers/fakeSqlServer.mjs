@@ -2385,6 +2385,8 @@ function runQuery(db, statement, params, { database }) {
       RecurrenceOccurrenceDate: nullableDate(params.recurrenceOccurrenceDate),
       SortOrder: params.sortOrder ?? null,
       CreatedBySicil: params.actorSicil ?? null,
+      // SQL Server varsayılanı SYSUTCDATETIME(): eklenen görevin oluşturulma anı sınama saatinden gelir (oluşturulma dönemi okumaları).
+      CreatedAt: new Date().toISOString(),
       RowVersion: nextVersion()
     });
     return result([[]]);

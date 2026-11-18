@@ -1307,7 +1307,7 @@
    "id": "h05",
    "text": "Bu hafta hangi somut gelişmeler oldu ve hangileri sadece mevcut durum bilgisidir?",
    "profile": "B",
-   "expect": {"intent": "rota", "temporal": true, "temporalWindow": "this_week"},
+   "expect": {"intent": "rota", "temporal": true, "temporalWindow": "this_week", "currentState": true},
    "handling": "limitation",
    "textEntities": []
   },

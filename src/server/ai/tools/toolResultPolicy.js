@@ -40,12 +40,27 @@ function collections(value, path) {
  * @param {object|null} explicitPolicy - Varsayılanı değiştiren koleksiyon politikası.
  * @returns {string|null} Sınırı sağlayan JSON; daraltma yetersizse null.
  */
+/** Boyut sınırında not metninin kısaltılabileceği en kısa uzunluk (kod noktası). */
+const NOTE_FLOOR = 16;
+
 export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = null) {
   const current = structuredClone(envelope);
   const policy = explicitPolicy || POLICIES[current.tool];
   for (let attempt = 0; attempt < 128; attempt += 1) {
     const text = JSON.stringify({ ...current, factScope });
     if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+    // Rızalı not metni satırlardan ÖNCE kısalır (kod noktası sınırında, yarıya): görev satırları ve sıralama kanıtı korunur, kesilen not
+    // `descriptionClipped` taşır ve yanıt metnin tamamının okunmadığını söyler.
+    const notes = (policy?.rows || []).flatMap((path) => collections(current.data, path.split('.'))).flat()
+      .filter((row) => row && typeof row.description === 'string' && Array.from(row.description).length > NOTE_FLOOR);
+    if (notes.length) {
+      for (const row of notes) {
+        const characters = Array.from(row.description);
+        row.description = characters.slice(0, Math.max(NOTE_FLOOR, Math.floor(characters.length / 2))).join('');
+        row.descriptionClipped = true;
+      }
+      continue;
+    }
     const candidates = (policy?.trim || []).flatMap((path) => collections(current.data, path.split('.')))
       .filter((list) => list.length > 0).sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length);
     const largest = candidates[0];
