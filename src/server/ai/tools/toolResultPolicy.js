@@ -46,12 +46,32 @@ const NOTE_FLOOR = 16;
 export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = null) {
   const current = structuredClone(envelope);
   const policy = explicitPolicy || POLICIES[current.tool];
+  const rows = () => (policy?.rows || []).flatMap((path) => collections(current.data, path.split('.'))).flat();
+  const originals = new WeakMap();
+  let rowsTrimmed = false;
+  const serialize = () => JSON.stringify({ ...current, factScope });
+  const fits = (text) => Buffer.byteLength(text, 'utf8') <= maxBytes;
+  const restoreNotes = (text) => {
+    if (!rowsTrimmed) return text;
+    // Daraltmadan sonra kalan satırlarda özgün alıntıyı ve kaynağın kesilme işaretini geri yüklemeyi dene.
+    for (const row of rows()) {
+      const original = originals.get(row);
+      if (!original) continue;
+      const clipped = row.description;
+      Object.assign(row, original);
+      if (!Object.hasOwn(original, 'descriptionClipped')) delete row.descriptionClipped;
+      const restored = serialize();
+      if (fits(restored)) text = restored;
+      else Object.assign(row, { description: clipped, descriptionClipped: true });
+    }
+    return text;
+  };
   for (let attempt = 0; attempt < 128; attempt += 1) {
-    const text = JSON.stringify({ ...current, factScope });
-    if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+    const text = serialize();
+    if (fits(text)) return restoreNotes(text);
     // Rızalı not metni satırlardan ÖNCE kısalır (kod noktası sınırında, yarıya): görev satırları ve sıralama kanıtı korunur, kesilen not
     // `descriptionClipped` taşır ve yanıt metnin tamamının okunmadığını söyler.
-    const notes = (policy?.rows || []).flatMap((path) => collections(current.data, path.split('.'))).flat()
+    const notes = rows()
       .filter((row) => row && typeof row.description === 'string' && Array.from(row.description).length > NOTE_FLOOR);
     // Her kısaltma ayrı denenir: yalnızca bayrak dâhil UTF-8 boyutunu gerçekten küçültüyorsa uygulanır ve ardından sınır yeniden
     // denetlenir (yeterli olan ilk kısaltmadan sonra diğer notlar bütün kalır). Baştaki boşluk alıntının yerini tutmaz.
@@ -60,10 +80,12 @@ export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = nu
       const characters = Array.from(row.description.replace(/^\s+/u, ''));
       const next = { ...row, description: characters.slice(0, Math.max(NOTE_FLOOR, Math.floor(characters.length / 2))).join(''), descriptionClipped: true };
       if (Buffer.byteLength(JSON.stringify(next), 'utf8') >= Buffer.byteLength(JSON.stringify(row), 'utf8')) continue;
+      if (!originals.has(row)) originals.set(row, { description: row.description,
+        ...(Object.hasOwn(row, 'descriptionClipped') ? { descriptionClipped: row.descriptionClipped } : {}) });
       Object.assign(row, next);
       shortened = true;
-      const fitted = JSON.stringify({ ...current, factScope });
-      if (Buffer.byteLength(fitted, 'utf8') <= maxBytes) return fitted;
+      const fitted = serialize();
+      if (fits(fitted)) return restoreNotes(fitted);
     }
     if (shortened) continue;
     const candidates = (policy?.trim || []).flatMap((path) => collections(current.data, path.split('.')))
@@ -71,6 +93,7 @@ export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = nu
     const largest = candidates[0];
     if (!largest) return null;
     largest.splice(Math.floor(largest.length / 2));
+    rowsTrimmed = true;
     // İş dağılım adları ile düğüm kökeni aynı öneki korur.
     if (current.tool === 'rota_task_detail' && largest === current.data?.task?.wbsPath
       && Array.isArray(current.data.task.wbsNodes)) current.data.task.wbsNodes.splice(largest.length);

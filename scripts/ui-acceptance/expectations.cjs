@@ -15,6 +15,7 @@ function semanticFailures(expected, rendered, trace, now = new Date()) {
   for (const text of expected.forbids || []) if (String(rendered.text || '').includes(text)) failures.push(`yasak görünür metin var: ${text}`);
   // Seçenekli zorunlu metin (`matches`: düzenli ifade kaynakları): ör. kapsamın hareket sayısı YA DA açık kayıt sınırı.
   for (const source of expected.matches || []) if (!new RegExp(source, 'u').test(String(rendered.text || ''))) failures.push(`zorunlu görünür ifade yok: ${source}`);
+  for (const source of expected.rejects || []) if (new RegExp(source, 'iu').test(String(rendered.text || ''))) failures.push('yasak görünür ifade var: ' + source);
   // Bugün dâhil son N günün aralığı (Türkiye günü) yanıtta görünmelidir: daha kısa bir dönemin grafiği dönem denetimini geçmez.
   // Dönem etiketi bütün olarak aranır: "13 Temmuz – 30 Eylül" metni "3 Temmuz – 30 Eylül" beklentisini sonek eşleşmesiyle geçmez.
   if (Number.isSafeInteger(expected.periodDays) && !new RegExp(`(^|[^0-9])${periodLabel(expected.periodDays, now).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(String(rendered.text || ''))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays, now)}`);

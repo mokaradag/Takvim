@@ -305,6 +305,12 @@ export function parseAnalysis(raw) {
       ...(layer.names ? { names: Object.freeze([...layer.names]) } : {}) }))) } : {}) });
 }
 
+/** Güncel durumun bugünden başlayan adlı pencereleri yeni Türkiye gününe göre çözülür. */
+export function pinsFollowUpWindow({ relativeWindow, focus, compare } = {}) {
+  const named = relativeWindow && relativeWindow !== 'all_time';
+  return Boolean(compare || named && (!/^(today$|next_)/.test(relativeWindow) || focus?.some((item) => TEMPORAL_FOCUS.includes(item))));
+}
+
 /** Önceki yönlerden yeni öznede anlamı olanlar (ör. proje satırına "projelere göre", kişi satırına alt birim kırılımı uygulanmaz). */
 function inheritableFocus(focus, scope) {
   return (focus || []).filter((item) => layerApplicable(item, scope));
@@ -330,7 +336,7 @@ export function resolveAnalysisBrief(analysis, { previous = null, today = null }
   // adı korur. Takip yeni dönem yazdıysa o dönem yeni güne göre çözülür.
   const ownWindow = Boolean(analysis.relativeWindow || analysis.dateFrom || analysis.dateTo);
   const priorNamed = previous?.relativeWindow && previous.relativeWindow !== 'all_time' ? previous.relativeWindow : null;
-  const anchor = previous?.windowDay && today && previous.windowDay !== today ? previous.windowDay : null;
+  const anchor = previous?.windowDay && today && previous.windowDay !== today && pinsFollowUpWindow(previous) ? previous.windowDay : null;
   const pinned = !ownWindow && priorNamed && anchor ? resolveWindow(priorNamed, anchor) : null;
   const relativeWindow = analysis.relativeWindow || (!analysis.dateFrom && !analysis.dateTo && !pinned ? previous?.relativeWindow : null);
   const inherited = priorNamed && today ? resolveWindow(priorNamed, anchor || today) : previous;

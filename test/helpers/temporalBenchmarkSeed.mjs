@@ -1,3 +1,4 @@
+import { uiRunDay } from '../../scripts/ui-acceptance/uiSeed.mjs';
 /**
  * Bilgin dönemsel, tarihsel ve not farkındalıklı zekâ kıyas kümesinin (Aşama H) SENTETİK verisi. Gerçek kişi, proje ya da kurum
  * kaydı içermez.
@@ -24,10 +25,7 @@ export const DELETED_TASK = '24000000-0000-4000-8000-000000000001';
 export const HIDDEN_PROJECT = '11000000-0000-4000-8000-000000000099';
 
 // `UI_RUN_DAY`: görsel kabul koşusunun tek günü (run.sh); birim sınamalarında verilmez ve (sahte) saat kullanılır.
-function todayIso() {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(process.env.UI_RUN_DAY || '')) return process.env.UI_RUN_DAY;
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-}
+
 
 const NOTES = Object.freeze([
   'Tedarikçi onayı bekleniyor; lisans gelmeden kurulum başlayamıyor.',
@@ -42,9 +40,8 @@ const NOTES = Object.freeze([
 /** B'nin kendi açık görevindeki not (kendi kapsamlı not sorusunun kanıtı). */
 export const OWN_NOTE = 'Bağımlılık: kimlik doğrulama servisinin sürüm yükseltmesi tamamlanmadan entegrasyon testi başlayamaz.';
 
-export function temporalBenchmarkSeed() {
-  const seed = executiveBenchmarkSeed();
-  const today = todayIso();
+export function temporalBenchmarkSeed(today = uiRunDay()) {
+  const seed = executiveBenchmarkSeed(today);
   const day = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
   // Türkiye günü içinde öğlen: gün sınırına yakın anlar ayrıca özel kayıtlarla sınanır.
   const at = (offset, hour = 9) => new Date(Date.parse(`${day(offset)}T00:00:00Z`) + (hour - 3) * 3600000).toISOString();

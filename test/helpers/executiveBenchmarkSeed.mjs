@@ -1,3 +1,4 @@
+import { uiRunDay } from '../../scripts/ui-acceptance/uiSeed.mjs';
 /**
  * Bilgin yönetici ve proje zekâsı kıyas kümesinin (Aşama G) SENTETİK verisi. Gerçek kişi, proje ya da kurum adı içermez.
  *
@@ -21,9 +22,7 @@ export const EXEC_PROFILES = Object.freeze({ ...BENCH_PROFILES });
 const CAL = '41000000-0000-4000-8000-000000000001';
 const tid = (n) => `23000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-function todayIso() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-}
+
 
 /** Dizindeki örgütsel birimler (kişi → [birim, bölüm]); direktörlük hepsi için aynıdır. */
 const ORGANIZATION = Object.freeze({
@@ -56,9 +55,8 @@ const SPEC = Object.freeze([
 
 const STATUS = Object.freeze({ t: 'planned', p: 'in-progress', d: 'done' });
 
-export function executiveBenchmarkSeed() {
-  const seed = analysisBenchmarkSeed();
-  const today = todayIso();
+export function executiveBenchmarkSeed(today = uiRunDay()) {
+  const seed = analysisBenchmarkSeed(today);
   const d = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
   for (const person of seed.people) {
     const org = ORGANIZATION[person.Sicil];

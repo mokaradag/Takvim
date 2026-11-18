@@ -92,6 +92,18 @@ const requestFocus = (request) => {
 };
 const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
 
+/** Dönem dışındaki bütün etkin süzgeçler ve varlık seçicileri aynı nüfusu tanımlar. */
+function periodPopulationKey(request) {
+  const filters = Object.entries(request.filters || {}).filter(([key, value]) => !['dateFrom', 'dateTo'].includes(key) && value != null && !(Array.isArray(value) && !value.length))
+    .sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value]);
+  const entities = (request.entities || []).map((entity) => JSON.stringify([entity.type, entity.id ?? entity.query ?? entity.text])).sort();
+  return JSON.stringify([request.population?.tool, filters, entities]);
+}
+
+function periodReadKey(request) {
+  return JSON.stringify([periodPopulationKey(request), request.operation, request.population?.groupBy, request.population?.collection, [...(request.metrics || [])].sort()]);
+}
+
 function liveTurn(rounds, completeRound) {
   return (options) => runGroundedTurn(Object.freeze({
     sicil: 900001, profile: 'chat.tools', model: 'planner-under-test', reportedModel: () => null, maxOutputTokens: 4096,
@@ -226,12 +238,9 @@ export function plannerScore(result, expect, today = corpus.today) {
       }
       for (const range of [window, compare].filter(Boolean)) if (!unresolved && !requests.some((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
         && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('istenen tarihsel dönem okunmadı');
-      // Karşılaştırmada iki dönem AYNI ölçü, araç ve nüfusla okunur (ör. bu haftanın tamamlananı ile geçen haftanın oluşturulanı geçmez).
-      // Hareket okumasının işlem yapan nüfusu (`activityScope`: mine/visible/team) da nüfusun parçasıdır: iki dönem aynı kapsamla okunur.
-      const measureKey = (request) => JSON.stringify([request.filters?.activityView ? 'activity' : request.filters?.dateField, request.population?.tool, request.filters?.assignee ?? null,
-        request.filters?.activityScope ?? null, request.filters?.teamLevel ?? null, (request.entities || []).map((entity) => `${entity.type}:${entity.query ?? entity.text ?? entity.id}`).sort()]);
+      // Karşılaştırmada iki dönem aynı ölçüyü aynı nüfus ve sonuç biçimiyle okur.
       const keysAt = (range) => new Set(requests.filter((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
-        && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField))).map(measureKey));
+        && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField))).map(periodReadKey));
       if (window && compare && !unresolved && ![...keysAt(window)].some((key) => keysAt(compare).has(key))) failures.push('iki dönem aynı ölçüyle okunmuyor');
     }
     if (expect.temporal && !focus.some((item) => ['completed', 'created', 'activity', 'trend'].includes(item)) && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş dönem okunmadı');
@@ -332,27 +341,38 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   // ölçüler (kendi için hareket, ekip için tamamlanan) geçmez.
   const ownMeasures = (layer, fallback, compared) => (layer?.focus && !expect.focusAll && !expect.focusAny
     ? layer.focus.filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus) && !(compared && focus === 'trend')) : fallback);
-  // Karşılaştırma döneminde yalnızca eğilim isteyen katmanın ölçüsü kalmaz: o katman için önceki dönem okuması aranmaz (birincil eğilim
-  // denetimi ve diğer katmanların iki dönemi korunur).
-  const reads = (range, wantedMeasures = measures, primary = true) => (atoms.length ? atoms : [null]).every((layer) => { const own = ownMeasures(layer, wantedMeasures, !primary);
-    if (!primary && layer?.focus && !own.length && layer.focus.includes('trend')) return true;
-    return (own.length ? own : [null]).every((measure) => requests.some((request) =>
-    (!range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1])
-    // Dönem başlangıcı beklentisi yalnızca birincil dönemindir; karşılaştırma dönemi kendi başlangıcıyla okunur.
-    && (!primary || !expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1) && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
-    && (!primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)))); });
+  const layers = atoms.length ? atoms : [null];
+  const inRange = (request, range) => !range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1];
+  const candidates = (layer, measure, range, primary = true) => requests.filter((request) => inRange(request, range)
+    && (!primary || !expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1)
+    && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
+    && (!primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)));
+  const reads = (range) => layers.every((layer) => {
+    const own = ownMeasures(layer, measures, false);
+    return (own.length ? own : [null]).every((measure) => candidates(layer, measure, range).length);
+  });
   const range = expectedRange(expect.window, today);
   if (range && !expect.stateComparison && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
   const prior = expectedCompare(expect.compare, expect.window, today);
-  if (prior && !expect.stateComparison && !reads(prior, measures.filter((measure) => measure !== 'trend'), false)) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
-  // Ölçü bildirilmeyen karşılaştırma beklentisinde iki dönem AYNI ölçüyle (aynı nüfus ve kapsamla) okunmalıdır: farklı ölçülerin dönemleri karşılaştırma değildir.
-  if (range && prior && !expect.stateComparison && !measures.length && !['completed', 'created', 'activity'].some((measure) => reads(range, [measure]) && reads(prior, [measure], false))) failures.push('iki dönem aynı ölçüyle okunmuyor');
+  if (prior && !expect.stateComparison && !requests.some((request) => inRange(request, prior))) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
+  if (prior && !expect.stateComparison && !layers.every((layer) => {
+    const own = ownMeasures(layer, measures.filter((measure) => measure !== 'trend'), true);
+    const paired = (measure) => {
+      const priorKeys = new Set(candidates(layer, measure, prior, false).map(periodReadKey));
+      return candidates(layer, measure, range).some((request) => priorKeys.has(periodReadKey(request)));
+    };
+    // Yalnızca eğilim isteyen katman, başka bir katmanın karşılaştırma dönemini devralmaz.
+    if (!own.length && (layer?.focus || measures).includes('trend')) return true;
+    return own.length ? own.every(paired) : ['completed', 'created', 'activity'].some(paired);
+  })) failures.push('iki dönem aynı ölçüyle okunmuyor');
   if (expect.windowFrom && !reads(range)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
   if (expect.bucket && !reads(range)) failures.push(`dizi kovası ${expect.bucket} okunmuyor`);
-  // Birincil eğilim dizisi tarihi kayıtlı olmayan tamamlanmışları söyleyemez: aynı dönem ve nüfusun gruplanmamış tamlık okuması
-  // (`tasks.undatedDone`) gerekir. Karşılaştırma dönemi için eğilim dizisi istenmez.
-  if (range && measures.includes('trend') && !(atoms.length ? atoms : [null]).every((layer) => requests.some((request) => carries(request, 'completed')
-    && request.metrics?.includes('tasks.undatedDone') && request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1] && (!layer || temporalRequestMatches(request, layer))))) failures.push('eğilimin tamlık okuması yok');
+  // Her eğilimin tamlık okuması kendi katmanı, nüfusu ve dönemiyle eşleşir.
+  for (const layer of layers.filter((item) => ownMeasures(item, measures, false).includes('trend'))) {
+    const totals = candidates(layer, 'completed', range).filter((request) => request.metrics?.includes('tasks.undatedDone'));
+    if (!candidates(layer, 'trend', range).some((series) => totals.some((total) => inRange(total, [series.filters?.dateFrom, series.filters?.dateTo])
+      && periodPopulationKey(series) === periodPopulationKey(total)))) failures.push('eğilimin tamlık okuması yok');
+  }
   if (expect.stateComparison && !analysis.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
   if (expect.stateComparison && analysis.historyUnsupported?.length) {
     let matches = false;

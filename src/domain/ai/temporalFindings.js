@@ -217,6 +217,7 @@ export function temporalFindings(groups, context = null) {
     const periodReads = entry.reads.filter((read) => ['completed', 'created', 'activity'].includes(read.kind));
     const ranges = [...new Map(periodReads.map((read) => [rangeKey(read.range), read.range])).values()].sort((a, b) => a.dateFrom.localeCompare(b.dateFrom) || a.dateTo.localeCompare(b.dateTo));
     const seriesRead = entry.reads.find((read) => read.kind === 'series');
+    const seriesSum = seriesRead?.collectionComplete ? seriesRead.rows.reduce((sum, row) => sum + row.value, 0) : null;
     // Karşılaştırma: aynı kapsamın aynı tür okuması iki ayrı dönemde. Dönemler kronolojik sıradadır (önce → sonra). Kapsamda ikiden
     // çok dönem okunduysa (ör. karşılaştırmanın yanında ayrı bir dönem sayımı) çift, özetin bildirdiği iki dönemdir; ek dönem ayrıca özetlenir.
     const declared = context?.window && context?.compare ? [rangeKey(context.compare), rangeKey(context.window)] : null;
@@ -238,7 +239,7 @@ export function temporalFindings(groups, context = null) {
     // giren okumalar burada yinelenmez; aynı dönemin eşi olmayan ölçüsü (ör. yalnızca bir dönemde okunan hareket) ve çekincesi korunur.
     const paired = new Set(pairs.flatMap((pair) => [pair.earlier, pair.later]));
     for (const range of ranges) {
-      const list = periodReads.filter((read) => !paired.has(read) && rangeKey(read.range) === rangeKey(range) && !(read.kind === 'completed' && seriesRead && rangeKey(seriesRead.range) === rangeKey(range)
+      const list = periodReads.filter((read) => !paired.has(read) && rangeKey(read.range) === rangeKey(range) && !(read.kind === 'completed' && seriesSum != null && read.total === seriesSum && rangeKey(seriesRead.range) === rangeKey(range)
         && !periodReads.some((other) => other !== read && rangeKey(other.range) === rangeKey(range))));
       if (!list.length) continue;
       findings.push({ kind: 'periodSummary', interpretation: 'distribution', scope: entry.scope, filters: {}, today, range, reads: list, position: windowPosition(range, today),
@@ -246,11 +247,12 @@ export function temporalFindings(groups, context = null) {
     }
     if (seriesRead) {
       const total = entry.reads.find((read) => read.kind === 'completed' && rangeKey(read.range) === rangeKey(seriesRead.range)) || null;
+      const narratedTotal = total && (paired.has(total) || findings.some((item) => item.kind === 'periodSummary' && item.reads.includes(total))) ? total.total : null;
+      // Yalnızca aynı nüfus ve dönemin anlatılan tamamlanma sayısı dizi toplamının yerini tutar.
       findings.push({ kind: 'completionTrend', interpretation: 'distribution', scope: entry.scope, filters: {}, today, range: seriesRead.range, series: seriesRead, total,
         position: windowPosition(seriesRead.range, today), evidenceIds: [...new Set([seriesRead.evidenceId, ...(total ? [total.evidenceId] : [])])],
         completeness: seriesRead.collectionComplete ? ((seriesRead.undated ?? total?.undated) || seriesRead.undatedUnknown || total?.undatedUnknown ? 'partial' : 'complete') : 'incomplete', names: periodNames([seriesRead.range], context),
-        // Özet paragrafı aynı dönemi zaten anlattıysa dizi cümlesi toplamı yinelemez.
-        summarized: findings.some((item) => item.kind === 'periodSummary' && item.scope === entry.scope && rangeKey(item.range) === rangeKey(seriesRead.range)) });
+        narratedTotal });
     }
     const activitySeries = entry.reads.find((read) => read.kind === 'activitySeries');
     if (activitySeries) {
@@ -472,8 +474,8 @@ function monthDays(key) {
 /** Tarihsiz tamamlanmış görev sayısı okuma sınırı nedeniyle doğrulanamadı: sıfır değil, bilinmiyor. */
 function undatedUnknownSentence(locale) {
   return { ...factSentence(en(locale)
-    ? ['The number of completed tasks without a recorded actual finish date exceeded the read limit and could not be verified, so the counts include only dated completions and may be incomplete.']
-    : ['Gerçekleşen bitiş tarihi kayıtlı olmayan tamamlanmış görevlerin sayısı okuma sınırını aştığından doğrulanamadı; sayılar yalnızca tarihi kayıtlı tamamlananları içerir ve eksik olabilir.']),
+    ? ['The number of completed tasks without a recorded actual finish date could not be verified within the read limit, so the counts include only dated completions and may be incomplete.']
+    : ['Gerçekleşen bitiş tarihi kayıtlı olmayan tamamlanmış görevlerin sayısı okuma sınırı içinde doğrulanamadı; sayılar yalnızca tarihi kayıtlı tamamlananları içerir ve eksik olabilir.']),
   caveat: true, states: [] };
 }
 
@@ -601,23 +603,32 @@ function trendSentences(finding, locale) {
   const place = taskPlace(finding.scope, locale);
   const sum = series.rows.reduce((acc, row) => acc + (row.value || 0), 0);
   const seriesStates = states(series.evidenceId, ['tasks.total', 'tasks.groupCount']);
+  const undated = series.undated ?? total?.undated ?? 0;
+  const undatedSource = series.undated != null ? series : total;
+  const undatedUnknown = series.undatedUnknown || (series.undated == null && total?.undatedUnknown === true);
+  const undatedCaveat = undatedUnknown ? undatedUnknownSentence(locale)
+    : undated > 0 ? undatedSentence(undated, locale, [undatedSource.evidenceId]) : null;
   if (!series.collectionComplete) {
     out.push({ ...factSentence(lang ? ['The completion series could not be read in full, so no trend is stated.'] : ['Tamamlanma dizisi eksiksiz okunamadığından eğilim söylenmedi.']), caveat: true, states: [] });
+    if (undatedCaveat) out.push(undatedCaveat);
     return out;
   }
-  if (!finding.summarized) {
+  if (finding.narratedTotal != null && finding.narratedTotal !== sum) {
+    out.push({ ...factSentence(lang
+      ? ['The separate series read contains ', n(sum, locale), ' dated completions. It differs from the period total, so no trend is inferred.']
+      : ['Ayrı dizi okumasında ', n(sum, locale), ' tamamlanmış görevin bitiş tarihi kayıtlı. Bu sayı dönem toplamından farklı olduğundan eğilim çıkarılmadı.']),
+    caveat: true, states: seriesStates });
+    if (undatedCaveat) out.push(undatedCaveat);
+    return out;
+  }
+  if (finding.narratedTotal !== sum) {
     out.push({ ...factSentence(sum === 0
       ? (lang ? [adverb, ', ', ...place, ', no task has a recorded completion date.'] : [adverb, ' ', ...place, ' gerçekleşen bitişi kayıtlı tamamlanan görev yok.'])
       : (lang ? [adverb, ', ', ...place, ', ', n(sum, locale), sum === 1 ? ' task was completed' : ' tasks were completed', ' (by recorded actual finish date).']
         : [adverb, ' ', ...place, ' ', n(sum, locale), ' görev tamamlandı (gerçekleşen bitiş tarihine göre).'])),
     // Toplam okumasının değeri yalnızca söylenen dizi toplamıyla aynıysa söylenmiş sayılır (farklı kanıt kimliği ayrıntıda kalır).
-    states: [...seriesStates, ...(total && total.total === sum ? states(total.evidenceId, ['tasks.total']) : [])] });
+    requiredInShort: true, states: [...seriesStates, ...(total && total.total === sum ? states(total.evidenceId, ['tasks.total']) : [])] });
   }
-  const undated = series.undated ?? total?.undated ?? 0;
-  // Tarihi kayıtlı olmayan görev sayısı onu sağlayan okumaya bağlanır.
-  const undatedSource = series.undated != null ? series : total;
-  // Sayısı bilinmeyen tarihsiz görevler tarihi kayıtlı olanlardan fazla olabilir: eğilim yorumlanmaz.
-  const undatedUnknown = series.undatedUnknown || (series.undated == null && total?.undatedUnknown === true);
   const full = series.rows.filter((row) => !row.partial && endedBucket(row, series.bucket, finding.today));
   if (sum > 0) {
     const max = Math.max(...full.map((row) => row.value));
@@ -671,8 +682,7 @@ function trendSentences(finding, locale) {
       ? ['The range contains only ', n(full.length, locale), ` full ${unit}${full.length === 1 ? '' : 's'}, which is not enough to state a trend; a longer period is needed.`]
       : ['Bu aralık yalnızca ', n(full.length, locale), ` tam ${unit} içerdiğinden eğilim söylenemez; bunun için daha uzun bir dönem gerekir.`]), caveat: true, states: [] });
   }
-  if (undatedUnknown) out.push(undatedUnknownSentence(locale));
-  else if (undated > 0) out.push(undatedSentence(undated, locale, [undatedSource?.evidenceId || series.evidenceId]));
+  if (undatedCaveat) out.push(undatedCaveat);
   else if (total && out.length) out.at(-1).states = [...(out.at(-1).states || []), ...states(total.evidenceId, [...(total.total === sum ? ['tasks.total'] : []), ...(total.undated === 0 ? ['tasks.undatedDone'] : [])])];
   if (series.rows.some((row) => row.partial) && full.length >= 2 && sum > 0) {
     out.push({ ...factSentence(lang ? [`The first or last ${unit} of the range is not a full ${unit}; it is counted in the total but left out of the peak and trend reading.`]

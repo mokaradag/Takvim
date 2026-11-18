@@ -32,7 +32,7 @@ import { concreteCollections, rankedRowIndexes, REQUEST_LIMITS, taskResultScope 
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { layerAspectLabel, PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderLayerOmissions, renderOverlappingSeries, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, analysisWindows, normalizedBrief, pinnedWindowFields, resolveAnalysisBrief, parseAnalysis } from '../tools/analysisPlan.js';
+import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, analysisWindows, normalizedBrief, pinnedWindowFields, pinsFollowUpWindow, resolveAnalysisBrief, parseAnalysis } from '../tools/analysisPlan.js';
 import { resolveWindow } from '../../../domain/ai/temporalWindow.js';
 import { caveatPropositions } from '../../../domain/ai/groundedPropositions.js';
 import { expandedAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
@@ -1718,12 +1718,14 @@ function completedAnalysisContext(turn, verdict) {
       return id == null ? null : { type: scope, id: String(id) };
     }).filter(Boolean).filter((item, index, all) => all.findIndex((other) => other.type === item.type && other.id === item.id) === index);
   }
+  const relativeWindow = turn.presentationIntent?.relativeWindow;
+  const windowDay = pinsFollowUpWindow({ relativeWindow, focus: primary?.focus || intent.focus, compare: turn.presentationIntent?.compare?.compare });
   return normalizeAnalysisContext({ v: ANALYSIS_CONTEXT_VERSION, scope, ...(level ? { level } : {}), ...(intent.withSelf ? { withSelf: true } : {}),
     subjects: scope === 'person' ? persons.slice(0, 2) : scope === 'project' ? projects.slice(0, 2) : [], ...(within ? { within } : {}),
     focus: primary ? [...primary.focus] : intent?.focus ? [...intent.focus] : [],
     ...(turn.presentationIntent?.relativeWindow ? { relativeWindow: turn.presentationIntent.relativeWindow } : {}),
     // Adlı dönem ya da adlı ikinci dönem bu güne göre çözüldü: gün değiştikten sonraki takip aynı somut dönemi okur.
-    ...((turn.presentationIntent?.relativeWindow && turn.presentationIntent.relativeWindow !== 'all_time') || turn.presentationIntent?.compare?.compare ? { windowDay: turn.context.today } : {}),
+    ...(windowDay ? { windowDay: turn.context.today } : {}),
     ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
     ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
     // Dönem yazılmayan geçmiş özetin sunucunun çözdüğü varsayılan günleri de saklanır: ertesi gün aynı sonuçları açan takip (dönem

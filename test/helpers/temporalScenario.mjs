@@ -43,6 +43,12 @@ export const H_FINDING_TEXT = Object.freeze({
 
 const fold = (text) => String(text).replace(/\\([\\`*_{}[\]()#+.!|<>~:/-])/g, '$1');
 
+// Termin ve durum denetimlerinde nüfusu daraltan ek süzgeçler kanıt ve SQL için aynı şekilde yorumlanır.
+const narrowsTasks = (filters) => Boolean(filters.deadline || filters.priorityCsv || filters.priorities?.length || filters.milestone != null
+  || filters.text || filters.wbsId || filters.seriesId || filters.recurringOnly || filters.createdByMe || filters.hasDescription
+  || filters.assigneeMode === 'unassigned' || filters.assignee === 'unassigned' || filters.previousResult);
+const openStatuses = (statuses) => statuses?.length === 2 && ['todo', 'in_progress'].every((status) => statuses.includes(status));
+
 /** SQL günlüğünde dönem ve olay ölçüsü birlikte eşleşir; termin okuması tamamlanma kanıtı değildir. */
 function temporalLogMatches(row, range, measure = null) {
   if (row.ok !== true || !['task-facts', 'activity'].includes(row.query)) return false;
@@ -65,8 +71,7 @@ function temporalLogMatches(row, range, measure = null) {
   if (measure === 'upcoming') {
     const open = (p.statusCsv || '').split(',').filter(Boolean);
     // Pencereyi daraltan ek süzgeç (ör. yalnızca bugün teslim, öncelik, kilometre taşı, metin) teslim penceresinin tamamını okumaz.
-    const narrowed = p.deadline || p.priorityCsv || p.milestone != null || p.text || p.wbsId || p.seriesId || p.recurringOnly || p.createdByMe || p.hasDescription || p.assigneeMode === 'unassigned';
-    return row.query === 'task-facts' && !p.taskIds && !narrowed && (p.dateField == null || p.dateField === 'targetFinish') && open.length === 2 && ['todo', 'in_progress'].every((status) => open.includes(status));
+    return row.query === 'task-facts' && !p.taskIds && !narrowsTasks(p) && (!p.targetFrom || day(p.targetFrom) === from) && (!p.targetTo || day(p.targetTo) === to) && (p.dateField == null || p.dateField === 'targetFinish') && openStatuses(open);
   }
   if (p.priorityCsv || p.milestone != null || p.text || p.wbsId || p.seriesId || p.recurringOnly || p.assigneeMode === 'unassigned'
     || p.createdByMe || p.hasDescription || p.openOnly || p.deadline || p.targetFrom || p.targetTo) return false;
@@ -145,7 +150,8 @@ export function temporalPopulationViolations(result, analysis, seed) {
             && filters.dateField === 'actualFinish' && filters.statuses?.join() === 'done' && filters.dateFrom === period[0] && filters.dateTo === period[1];
         });
         const bucket = layer.bucket || analysis.bucket;
-        if (!evidence.some((item) => bucket ? item.data.groupBy === `date_${bucket}` : ['date_week', 'date_month'].includes(item.data.groupBy)) || !evidence.some((item) => !item.data.groupBy)) problems.push(`eğilim dizisi ya da toplamı okunmadı: ${layer.scope}`);
+        if (!evidence.some((item) => bucket ? item.data.groupBy === `date_${bucket}` : ['date_week', 'date_month'].includes(item.data.groupBy)) || !evidence.some((item) => !item.data.groupBy
+          && (item.data.history?.undatedDone === null || Number.isSafeInteger(item.data.history?.undatedDone) && item.data.history.undatedDone >= 0))) problems.push(`eğilim dizisi ya da toplamı okunmadı: ${layer.scope}`);
       }
     }
     // Dönemli yaklaşan teslim istendiyse açık görevlerin hedef bitiş okuması zorunludur (bugünden başlar).
@@ -160,7 +166,7 @@ export function temporalPopulationViolations(result, analysis, seed) {
         const filters = item.data?.filters || {};
         return matches({ query: 'task-facts', params: { ...filters, assigneeMode: filters.assignee } }, layer);
       });
-      const open = (filters) => filters.statuses?.length === 2 && ['todo', 'in_progress'].every((status) => filters.statuses.includes(status));
+      const open = (filters) => openStatuses(filters.statuses);
       const noteIds = new Set((result.log || []).filter((row) => row.query === 'task-notes' && row.ok === true).flatMap((row) => String(row.params.taskIds || '').toLowerCase().split(',')));
       // Not okuması açık görev notlarının tamamıdır: tarih süzgeci taşıyan not araması (kanıtta ya da okumada) nüfusu daraltır ve geçmez.
       // Okunan not boş olmayan metindir (yalnızca boşluk dönen açıklama okunmuş not sayılmaz).
@@ -169,10 +175,10 @@ export function temporalPopulationViolations(result, analysis, seed) {
         && reads.some((read) => matches(read, layer) && read.params.hasDescription && undated(read.params))
         && (item.complete === true && item.totalCount === 0 && item.data.tasks?.length === 0 || item.data.tasks?.length > 0
           && item.data.tasks.every((task) => typeof task.description === 'string' && task.description.trim() && noteIds.has(String(task.taskId).toLowerCase()))))
-        : evidence.some((item) => item.ok === true && item.complete === true && item.tool === 'rota_task_analytics' && item.data.groupBy === 'due_horizon' && open(item.data.filters)
+        : evidence.some((item) => item.ok === true && item.complete === true && item.tool === 'rota_task_analytics' && item.data.groupBy === 'due_horizon' && open(item.data.filters) && !narrowsTasks(item.data.filters)
           && item.data.filters.dateField === 'targetFinish' && item.data.filters.dateFrom === TEMPORAL_TODAY && item.data.filters.dateTo === shift(29)
           && ['days_0_6', 'days_7_13', 'days_14_29'].every((key) => item.data.groups?.some((group) => group.key === key && Number.isSafeInteger(group.count) && group.count >= 0))
-          && reads.some((read) => matches(read, layer) && read.params.dateField === 'targetFinish' && read.params.dateFrom === TEMPORAL_TODAY && read.params.dateTo === shift(29)));
+          && reads.some((read) => matches(read, layer) && temporalLogMatches(read, [TEMPORAL_TODAY, shift(29)], 'upcoming')));
       if (!seen) problems.push(`${kind === 'notes' ? 'not' : 'teslim ufku'} kanıtı okunmadı: ${layer.scope}`);
     }
   }
@@ -209,7 +215,15 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
   }
   for (const pattern of expect.says || []) if (!new RegExp(pattern, 'u').test(content)) problems.push(`beklenen ifade yok: ${pattern}`);
   // "Hangileri devam ediyor" sorusu bugünkü durum okumasını ister (durum dağılımı kanıtı): yalnızca tamamlanma özeti geçmez.
-  if (expect.statusRead && !(result.evidence || []).some((item) => item.ok === true && item.tool === 'rota_task_analytics' && item.data?.groupBy === 'status')) problems.push('durum okuması yok');
+  if (expect.statusRead && !(result.evidence || []).some((item) => {
+    const filters = item.data?.filters;
+    const wanted = expect.window?.map((value) => resolveDay(value));
+    const current = filters && (!filters.dateField && !filters.dateFrom && !filters.dateTo
+      || filters.dateField === 'targetFinish' && wanted && filters.dateFrom === wanted[0] && filters.dateTo === wanted[1]);
+    return item.ok === true && item.tool === 'rota_task_analytics' && item.data?.groupBy === 'status' && current
+      && !filters.statuses?.length && !narrowsTasks(filters)
+      && !filters.personSicil && !filters.projectId && (!filters.assignee || filters.assignee === 'any');
+  })) problems.push('durum okuması yok');
 
   const charts = renderedCharts(result.answer?.content || '');
   for (const type of expect.charts || []) if (!charts.some((chart) => chart.type === type)) problems.push(`grafik yok: ${type}`);
@@ -229,7 +243,9 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
         && item.data?.filters?.dateField === dateField && item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1])?.data?.totals?.total;
       const counts = periods.map(total);
       // Karşılaştırma grafiği başlığından tanınır (çubuk sayısından değil): fazladan çubuklu grafik denetimden kaçamaz, tam iki çubuk gerekir.
-      for (const chart of charts.filter((item) => item.type === 'bar' && title.test(String(item.title || '')))) {
+      const matching = charts.filter((item) => item.type === 'bar' && title.test(String(item.title || '')));
+      if (expect.charts?.includes('bar') && !matching.length) problems.push(`karşılaştırma grafiği yok: ${measure}`);
+      for (const chart of matching) {
         if (chart.items?.length !== 2) { problems.push('karşılaştırma grafiği iki dönem çubuğu taşımıyor'); continue; }
         if (!counts.every(Number.isFinite) || chart.items.map((item) => item.value).join() !== counts.join()) problems.push('karşılaştırma çubukları dönem sayılarıyla eşleşmiyor');
         if (chart.items.some((item, index) => !String(item.label || '').toLocaleLowerCase('tr').startsWith(labels[index]))) problems.push('karşılaştırma çubuğunun etiketi dönemiyle eşleşmiyor');

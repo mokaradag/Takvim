@@ -538,7 +538,7 @@ async function scriptedBridge(t, benchmark, env = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'rota-kopru-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, 'benchmark.json'), JSON.stringify(benchmark));
-  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: '', UI_PROFILE: 'B', UI_BENCHMARK: join(dir, 'benchmark.json'), ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: '', BRIDGE_ENFORCE_DAY: '', UI_PROFILE: 'B', UI_BENCHMARK: join(dir, 'benchmark.json'), ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => child.kill());
   return new Promise((done, fail) => {
     const timer = setTimeout(() => fail(new Error('betikli uç açılmadı')), 5000); let output = '';
@@ -568,7 +568,7 @@ test('betikli uç gün devrinde boş 409 döndürür (eski güne göre çözülm
   const runner = readFileSync(join(root, 'scripts/ui-acceptance/run.sh'), 'utf8');
   assert.match(runner, /UI_RUN_DAY=\$\(TZ=Europe\/Istanbul date \+%F\)/);
   assert.match(runner, /BRIDGE_TODAY=\$UI_RUN_DAY BRIDGE_ENFORCE_DAY=1 /);
-  for (const seed of ['scripts/ui-acceptance/uiSeed.mjs', 'test/helpers/temporalBenchmarkSeed.mjs']) assert.match(readFileSync(join(root, seed), 'utf8'), /process\.env\.UI_RUN_DAY/, seed);
+  assert.match(readFileSync(join(root, 'scripts/ui-acceptance/uiSeed.mjs'), 'utf8'), /process\.env\.UI_RUN_DAY/);
 });
 
 test('görsel kabulün dönem denetimi sunucunun aralık yazımını bekler ve daha kısa dönemi geçirmez', async () => {
@@ -580,4 +580,39 @@ test('görsel kabulün dönem denetimi sunucunun aralık yazımını bekler ve d
   assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(30)} döneminde` }, trace).length);
   // Aynı soneki taşıyan daha kısa dönem (80 gün) de geçmez.
   assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler 1${periodLabel(90)} döneminde` }, trace).length);
+});
+
+test('arayüz kabulü iki dönemin ölçüsünü, yanıt dilini ve geçmiş durum sınırını birlikte denetler', async () => {
+  const { semanticFailures } = await import('../scripts/ui-acceptance/expectations.cjs');
+  const scenarios = JSON.parse(readFileSync(join(root, 'scripts/ui-acceptance/scenarios/B.json'))).conversations;
+  const score = (name, text) => semanticFailures(scenarios.find((item) => item.name === name).expectedTurns[0], { text }, { outcome: 'grounded' });
+  const turkish = 'Geçen ay (Ağustos 2026) görebildiğiniz işlerde 5 görev tamamlanmıştı; bu ay (Eylül 2026) şu ana kadar 8 görev tamamlandı.';
+  assert.deepEqual(score('H2-donem-kiyasi', turkish), []);
+  assert.deepEqual(score('H2-donem-kiyasi', 'Tamamlanan iş sayıları karşılaştırılamıyor: Ağustos 2026 için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde 8 görev var.'), []);
+  assert.ok(score('H2-donem-kiyasi', 'Geçen ay için karşılaştırma yapılmadı; bu ay 8 görev tamamlandı.').length);
+  assert.deepEqual(score('H7-ingilizce', 'Last month (August 2026), across the tasks you can see, completed tasks totalled 5; this month (September 2026) so far, 8.'), []);
+  assert.ok(score('H7-ingilizce', 'Last month 5 görev tamamlandı; this month 8 görev tamamlandı.').length);
+  const limited = 'Geçen haftanın durumu yeniden kurulamıyor ve karşılaştırma yapılmadı; aşağıdaki sayılar bugünü gösterir. Şu anda 3 gecikmiş görev var.';
+  assert.deepEqual(score('H2-gecmis-durum-siniri', limited), []);
+  assert.ok(score('H2-gecmis-durum-siniri', limited + ' Ancak gecikmeleriniz azaldı.').length);
+  assert.ok(score('H2-gecmis-durum-siniri', 'Geçen haftanın durumu yeniden kurulamıyor.').length);
+});
+
+test('kabul tohumları tek Türkiye gününü paylaşır ve geçersiz takvim gününü reddeder', async (t) => {
+  const { temporalBenchmarkSeed } = await import('./helpers/temporalBenchmarkSeed.mjs');
+  const { uiRunDay } = await import('../scripts/ui-acceptance/uiSeed.mjs');
+  const previous = process.env.UI_RUN_DAY;
+  t.after(() => { if (previous == null) delete process.env.UI_RUN_DAY; else process.env.UI_RUN_DAY = previous; });
+  for (const value of ['2026-13-01', '2026-02-29']) {
+    process.env.UI_RUN_DAY = value;
+    assert.throws(uiRunDay, /UI_RUN_DAY/);
+  }
+  process.env.UI_RUN_DAY = '2026-11-18';
+  assert.deepEqual(temporalBenchmarkSeed(), temporalBenchmarkSeed('2026-11-18'));
+  const base = temporalBenchmarkSeed('2026-11-18');
+  const next = temporalBenchmarkSeed('2026-11-19');
+  for (let index = 0; index < base.tasks.length; index += 1) {
+    if (base.tasks[index].TargetFinish) assert.equal(Date.parse(next.tasks[index].TargetFinish) - Date.parse(base.tasks[index].TargetFinish), 86400000);
+    else assert.equal(next.tasks[index].TargetFinish, base.tasks[index].TargetFinish);
+  }
 });

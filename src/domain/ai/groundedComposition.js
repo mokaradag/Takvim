@@ -349,6 +349,9 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     }).sort((left, right) => right.change - left.change).slice(0, 2);
   const subjectWanted = (synthesis?.findings || []).filter((finding) => finding.kind === 'subjectComparison').reduce((sum, finding) => sum + Object.keys(finding.metrics).length, 0);
   const comparisonSlots = Math.min(2, subjectWanted + periodCharts.length);
+  const hasChartRoom = (types) => charts.size < COMPOSITION_LIMITS.maxCharts - comparisonSlots
+    || charts.size < COMPOSITION_LIMITS.maxCharts + requestedCharts.length - comparisonSlots
+      && requestedCharts.some((type) => types.includes(type) && ![...charts.values()].some((item) => item.types.includes(type)));
   // Ayrılan karşılaştırma yuvalarından biri dönem karşılaştırmasınındır (ikisi de varsa): özne çubukları sayfayı doldurup dönem
   // karşılaştırması grafiğini sessizce düşüremez.
   const periodReserve = periodCharts.length && subjectWanted ? 1 : 0;
@@ -455,11 +458,8 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         if (!cover) for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population, collection })) derived.push({ ordinal, proposition, table: id });
         // Grafik adayı: satır başına tek, sonlu ve negatif olmayan sayı taşıyan sütun.
         const addChart = (candidate, viewExtra = {}) => {
-          if (!chartAllowed(ordinal)) return;
-          // İstenen tür, tek sütunlu çubuk adaylarının doldurduğu sınırın arkasında kalamaz: o türden aday yoksa bir yer ayrılır.
-          const reserved = requestedCharts.some((type) => candidate.types.includes(type) && ![...charts.values()].some((item) => item.types.includes(type)))
-            && charts.size < COMPOSITION_LIMITS.maxCharts + requestedCharts.length - comparisonSlots;
-          if (charts.size >= COMPOSITION_LIMITS.maxCharts - comparisonSlots && !reserved) return;
+          // İstenen yeni grafik türüne yer açılır; karşılaştırma için ayrılan yuvalar korunur.
+          if (!chartAllowed(ordinal) || !hasChartRoom(candidate.types)) return;
           const chartId = `G${charts.size + 1}`;
           if (!candidate.types.every((type) => answerChartFence(chartSpec(candidate, type, locale)))) return;
           charts.set(chartId, Object.freeze({ id: chartId, part: ordinal, ...candidate }));
@@ -530,8 +530,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         }
       }
       // Başlık ölçüleri (KPI kartları): satır koleksiyonu olmayan kaydın doğrulanmış sayıları.
-      if (chartAllowed(ordinal) && !comparing && !multi.size && (charts.size < COMPOSITION_LIMITS.maxCharts || requestedCharts.includes('kpi') && charts.size < COMPOSITION_LIMITS.maxCharts + requestedCharts.length
-        && ![...charts.values()].some((item) => item.types.includes('kpi')))) {
+      if (chartAllowed(ordinal) && !comparing && !multi.size && hasChartRoom(['kpi'])) {
         const kpi = kpiCandidate(group, locale);
         if (kpi && answerChartFence(chartSpec(kpi, 'kpi', locale))) {
           const chartId = `G${charts.size + 1}`;

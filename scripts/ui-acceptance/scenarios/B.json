@@ -384,9 +384,8 @@
    "expectedTurns": [
     {
      "outcome": "grounded",
-     "requires": [
-      "Geçen ay",
-      "bu ay"
+     "matches": [
+      "(?:Geçen ay[^\\n;]*[\\d.]+ görev tamamlanmıştı; bu ay[^\\n;]*[\\d.]+ görev tamamlandı|İki dönemde de \\([^)]+ ve [^)]+\\)[^\\n.]*(?:görev tamamlandı|tamamlanan görev yok)|Tamamlanan iş sayıları karşılaştırılamıyor: (?:iki dönemin de görev sayısı bilinmiyor|[^\\n]*için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde [\\d.]+ görev var))"
      ]
     }
    ]
@@ -529,9 +528,8 @@
    "expectedTurns": [
     {
      "outcome": "grounded",
-     "requires": [
-      "Last month",
-      "this month"
+     "matches": [
+      "(?:Last month[^\\n;]*completed tasks totalled [\\d,]+; this month[^\\n;]*, [\\d,]+|In both periods \\([^)]+ and [^)]+\\)[^\\n.]*(?:completed tasks totalled [\\d,]+|no task was completed)|Counts of completed tasks cannot be compared: (?:both periods are unknown|the count for [^\\n]* is unknown, not zero; the other period has [\\d,]+ tasks))"
      ]
     }
    ]
@@ -547,7 +545,14 @@
     {
      "outcome": "grounded",
      "requires": [
-      "yeniden kurulamıyor"
+      "yeniden kurulamıyor",
+      "sayılar bugünü gösterir"
+     ],
+     "matches": [
+      "(?:\\d+\\s+(?:gecikmiş (?:görev|iş)|(?:görev|iş)\\s+gecikmiş)|gecikmiş (?:görev|iş)(?:iniz)?\\s+(?:yok|bulunmuyor))"
+     ],
+     "rejects": [
+      "(?:gecikme\\p{L}*|gecikmiş (?:görev|iş)\\p{L}*)[^.;\\n]{0,60}\\b(?:azaldı|arttı|iyileşti|kötüleşti)(?!\\p{L})"
      ]
     }
    ]

@@ -1,3 +1,5 @@
+import { isIsoDay } from '../../src/domain/ai/isoDay.js';
+
 /**
  * Sentetik UI kabul verisi (gerçek kişi/proje yok). Tarihler çalıştırma gününe göredir (Türkiye günü).
  * Profiller: A sıradan çalışan, B ekip lideri, C yönetimi olmayan sistem yöneticisi, D ekip lideri + yönetici,
@@ -14,11 +16,13 @@ export const PROJ = Object.freeze({ ALTYAPI: pid(1), MOBIL: pid(2), AMBAR: pid(3
 const CAL = '41000000-0000-4000-8000-000000000001';
 
 // `UI_RUN_DAY`: koşunun tek günü (run.sh); tohum ve betikli uç aynı günü kullanır. Verilmezse bugünün Türkiye günü.
-function todayIso() {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(process.env.UI_RUN_DAY || '')) return process.env.UI_RUN_DAY;
+export function uiRunDay() {
+  if (process.env.UI_RUN_DAY) {
+    if (!isIsoDay(process.env.UI_RUN_DAY)) throw new Error('UI_RUN_DAY geçerli bir takvim günü olmalıdır.');
+    return process.env.UI_RUN_DAY;
+  }
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
-const d = (offset) => new Date(Date.parse(`${todayIso()}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
 
 const TITLES = ['Gereksinim incelemesi', 'Sunucu kurulumu', 'Ağ yapılandırması', 'Test planı', 'Kullanıcı kabul testi', 'Veri taşıma betiği', 'Güvenlik taraması',
   'Dokümantasyon güncellemesi', 'Performans ölçümü', 'Yedekleme doğrulaması', 'Arayüz tasarımı', 'API entegrasyonu', 'Raporlama modülü', 'Eğitim materyali',
@@ -69,7 +73,8 @@ const SPEC = [
 
 const STATUS = { t: 'planned', p: 'in-progress', d: 'done' };
 
-export function uiSeed() {
+export function uiSeed(today = uiRunDay()) {
+  const d = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
   const tasks = [];
   const taskAssignees = [];
   SPEC.forEach(([projectId, sicils, status, priority, offset, title], index) => {
