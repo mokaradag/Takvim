@@ -103,8 +103,9 @@ export function canonicalFacets(family, values, today) {
     case 'activity': {
       const window = populationArguments('rota_activity_search', { ...values, ...periodWindow(values.period, today),
         period: values.period || values.dateFrom ? 'custom' : undefined }, today);
-      const fallback = window.dateFrom === today && window.dateTo === today;
-      return compact({ dateFrom: fallback ? null : window.dateFrom, dateTo: fallback ? null : window.dateTo,
+      const fallbackFrom = !values.period && !values.dateFrom && window.dateFrom === today;
+      const fallbackTo = !values.period && !values.dateTo && window.dateTo === today;
+      return compact({ dateFrom: fallbackFrom ? null : window.dateFrom, dateTo: fallbackTo ? null : window.dateTo,
         activityScope: window.scope && window.scope !== 'visible' ? window.scope : null, activityKind: values.kind || null,
         // Aşama H: dönem özeti görünümü ve ekip düzeyi nüfusun parçasıdır (satır okumasıyla özet birbirinin yerine geçmez).
         activityView: values.view || null, teamLevel: window.scope === 'team' ? values.teamLevel || null : values.teamLevel ?? null });
@@ -610,11 +611,14 @@ export function requestCapabilityProblems(request, { allowedTextFields = [], dec
     problems.push('$.filters.dateFrom:required');
     hints.push('Hareket dönemi için filters.dateFrom zorunludur (dateTo verilmezse tek gün okunur)');
   }
-  // Haftalık/aylık hareket dizisinin kova sınırı (aracın `$.view:range` reddi) yürütmeden önce denetlenir.
-  if (tool.name === 'rota_activity_search' && ['week', 'month'].includes(request.filters.activityView) && request.filters.dateFrom
-    && !seriesBuckets({ dateFrom: request.filters.dateFrom, dateTo: request.filters.dateTo || request.filters.dateFrom }, request.filters.activityView)) {
-    problems.push('$.filters.activityView:range');
-    hints.push('Hareket dizisi en çok 24 kova ve 366 gündür: aralığı kısaltın ya da aylık görünüm (month) isteyin');
+  // Toplu hareket görünümünün 366 gün sınırı ve haftalık/aylık dizinin 24 kova sınırı yürütmeden önce denetlenir.
+  if (tool.name === 'rota_activity_search' && ['period', 'week', 'month'].includes(request.filters.activityView) && request.filters.dateFrom) {
+    const to = request.filters.dateTo || request.filters.dateFrom;
+    const overYear = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${request.filters.dateFrom}T00:00:00Z`) > 365 * 86400000;
+    if (overYear || (['week', 'month'].includes(request.filters.activityView) && !seriesBuckets({ dateFrom: request.filters.dateFrom, dateTo: to }, request.filters.activityView))) {
+      problems.push('$.filters.activityView:range');
+      hints.push('Hareket özeti en çok 366 gün, hareket dizisi ayrıca en çok 24 kovadır: aralığı kısaltın ya da aylık görünüm (month) isteyin');
+    }
   }
   if (requestTextFields(request).some((field) => !allowedTextFields.includes(field))) {
     problems.push('$.population.textFields:not-authorized');
@@ -627,6 +631,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [], dec
   }
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const fieldTools = (metric) => [...new Set((request.fields || []).filter((field) => field.metric === metric).map((field) => field.tool))];
+  const AGGREGATE_ACTIVITY_METRICS = new Set(['activity.createdTasks', 'activity.deletedTasks', 'activity.updatedTasks', 'activity.reopenedTasks']);
   request.metrics.forEach((metric, index) => {
     const bound = fieldTools(metric);
     const property = entityProperty(request, metric);
@@ -644,6 +649,19 @@ export function requestCapabilityProblems(request, { allowedTextFields = [], dec
       if (selecting.length) hints.push(`${metric}: ${type} özelliği; population.tool ${selecting[0]} ve request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] bildir (ölçüyü SİLME; kimliği sunucu bulur)`);
       return;
     }
+    // Toplu hareket sayaçları yalnızca toplu görünümde (`period`/`week`/`month`) döner; olağan satır okuması bu alanları üretmez.
+    if (tool.name === 'rota_activity_search' && !request.filters.activityView && AGGREGATE_ACTIVITY_METRICS.has(metric)) {
+      problems.push(`$.metrics[${index}]:view`);
+      hints.push(`${metric}: yalnızca toplu hareket görünümünde döner; filters.activityView "period" bildir`);
+      return;
+    }
+    // Dizi listesi (`series`) skaler özet yoluna (`data.summary.*`) bağlanamaz; kova başına dizi alanı seçilmelidir.
+    if (tool.name === 'rota_activity_search' && request.operation !== 'value' && population.collection === 'series'
+      && (request.fields || []).some((field) => field.metric === metric && field.tool === tool.name && !field.path.startsWith('data.series.'))) {
+      problems.push(`$.metrics[${index}]:view`);
+      hints.push(`${metric}: series listesinde data.series.* alanına bağlanır (dönem toplamı için operation value ve activityView "period")`);
+      return;
+    }
     // Toplam, sayım ve satır alanı nüfus koşullarının tamamını ifade edebilen araçtan gelmelidir;
     // değer isteğinde bildirilen varlığın kendi özelliği koşullardan bağımsızdır.
     // Değer isteğinde bir varlığın kendi özelliği (ör. task.status) yalnızca o varlık bildirilirse satırdan okunabilir.
@@ -656,10 +674,11 @@ export function requestCapabilityProblems(request, { allowedTextFields = [], dec
     }
     // Satır ölçüsünün tek koleksiyonu olması, tek değeri olduğu anlamına gelmez.
     const rowHomes = collections.filter((collection) => rowMetricFields(tool.name, collection, metric).length);
-    // Ölçü yalnızca seçilen görünümde bulunmayan satır koleksiyonunda taşınıyorsa (ör. dönem özeti görünümünde `items` satırları)
-    // istek yürütülmeden reddedilir: yanıt ölçüsüz sessizce dönmez.
+    // Ölçü yalnızca seçilen görünümde bulunmayan satır koleksiyonunda taşınıyorsa (ör. dönem özeti görünümünde `items` satırları,
+    // türlü `task.title` dahil) istek yürütülmeden reddedilir: yanıt ölçüsüz sessizce dönmez.
+    const boundHere = bound.includes(tool.name);
     const metricHomes = bound.length ? request.fields.filter((field) => field.metric === metric).map((field) => field.path) : metricPaths(tool.name, metric);
-    if (request.operation === 'value' && !type && rowHomes.length > 0 && metricHomes.length
+    if (request.operation === 'value' && (!property || boundHere) && rowHomes.length > 0 && metricHomes.length
       && metricHomes.every((path) => rowHomes.some((collection) => path.startsWith(`data.${collection}.`)))
       && !metricHomes.some((path) => shaped.some((collection) => path.startsWith(`data.${collection}.`)))) {
       problems.push(`$.metrics[${index}]:view`);

@@ -309,7 +309,8 @@ function recordSentences(record, locale, { rowsCovered = false } = {}) {
   // Grup satırının etiketi grubun adıdır (öznede söylenir); ayrıca "Etiket metni:" olarak yinelenmez.
   const nameEntry = take((rel) => ['title', 'name'].includes(rel) || (record.kind === 'group' && rel === 'label'))[0];
   const codeEntry = take((rel) => rel === 'code')[0];
-  const subjectText = record.row ? escapedFactText(record.subject) : nameEntry ? narrativeValue(nameEntry.fact, locale) : escapedFactText(record.subject);
+  const rawSubject = record.row && record.entries[0]?.fact ? canonicalGroupLabel(record.entries[0].fact, record.subject, locale) : record.subject;
+  const subjectText = record.row ? escapedFactText(rawSubject) : nameEntry ? narrativeValue(nameEntry.fact, locale) : escapedFactText(record.subject);
   const subject = `${strong(subjectText)}${codeEntry ? ` (${narrativeValue(codeEntry.fact, locale)})` : ''}`;
   const qualifiers = qualifierText(record.entries, locale);
   // Proje adı zaten özne olarak yazıldığında ölçütte yinelenmez.

@@ -665,7 +665,7 @@ var). Bugün sabit: 2026-09-30.
 
 ### 9.3 Belirlenimci kabul
 
-`test/ai-temporal-intelligence.test.mjs` (Türkçe adlar) — **157/157**: dönem birimleri (hafta, ay, yıl sınırı, artık yıl, önceki
+`test/ai-temporal-intelligence.test.mjs` (Türkçe adlar) — ilk tam koşu (2026-11-16, `481825f`): **157/157** (güncel koşu toplamları için bkz. §9.7): dönem birimleri (hafta, ay, yıl sınırı, artık yıl, önceki
 dönem, kovalar, adlar), kıyas kümesi bütünlüğü ve ayrık küme yalıtımı, plan şeması/yönerge sınırları, her adlı dönem × yön × kapsam
 açılımı, geçersiz dönem retleri, 62 hedefli altın plan uçtan uca, 12 çapraz aşama vakası kendi verisiyle, araç düzeyi (Türkiye günü,
 sürekli dizi, undatedDone, hareket kapsamı none/partial/complete, gizli proje, ekip düzeyi yetkisi, rıza kapısı), bulgu birimleri

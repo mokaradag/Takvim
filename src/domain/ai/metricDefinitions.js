@@ -16,7 +16,7 @@ export const METRIC_DEFINITIONS = Object.freeze({
   // Aşama H: geçmişe dönük dönem okumasının dayanağı. Görevin bugünkü durumu geçmişteki durumu değildir; dönem sayımı yalnızca
   // kayıtlı tarihe dayanır.
   historyBasis: Object.freeze({
-    actualFinish: 'Dönem sayımı, bugün tamamlanmış durumda olan görevlerin kayıtlı gerçekleşen bitiş tarihine dayanır; gerçekleşen bitişi kayıtlı olmayan tamamlanmış görev hiçbir döneme yerleştirilemez. Tamamlandıktan sonra yeniden açılan görev tamamlanmış sayılmaz.',
+    actualFinish: 'Dönem sayımı, bugün tamamlanmış durumda olan görevlerin kayıtlı gerçekleşen bitiş tarihine dayanır; gerçekleşen bitişi kayıtlı olmayan tamamlanmış görev hiçbir döneme yerleştirilemez. Tamamlandıktan sonra yeniden açılıp hâlâ açık durumda olan görev tamamlanmış sayılmaz.',
     createdAt: 'Dönem sayımı, o dönemde oluşturulmuş ve bugün kayıtlı olan görevlere dayanır; sonradan silinen görev sayılmaz.',
     // Yalnızca tamamlanmış durum süzülmediğinde: tarih süzgeci ile durum süzgeci ayrı anlatılır.
     actualFinishAnyStatus: 'Dönem süzgeci görevin kayıtlı gerçekleşen bitiş tarihine uygulanır; durum süzgeci görevin bugünkü durumudur. Gerçekleşen bitişi kayıtlı olup bugün tamamlanmamış görev de seçilen duruma göre sayılabilir.'

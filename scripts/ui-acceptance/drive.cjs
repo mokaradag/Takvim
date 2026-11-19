@@ -148,7 +148,9 @@ function scriptedQuestions() {
   let currentDetail = null;
   for (const [conversationIndex, conversation] of scenario.conversations.entries()) {
     // Yanlış veriyle sınanmaz: atlanır ve bu koşunun eksik kapsamı olarak kaydedilir (rapor başarı saymaz).
+    // Çok veri kümeli koşuda (`UI_SEED_GROUPS=1`) her veri kümesi kendi uygulama örneğinde ayrı yürütüldüğünden bu gruptaki olmayanlar sıradaki örnekte koşulur.
     if (seedMismatch(conversation)) {
+      if (process.env.UI_SEED_GROUPS === '1') continue;
       process.stdout.write(`atlandı: ${scenario.profile}/${conversation.name} (UI_SEED=${conversation.seed} gerekir)\n`);
       results.push({ runId, skipped: `UI_SEED=${conversation.seed} gerekir`, failures: [`kapsam eksik: UI_SEED=${conversation.seed} gerekir`], profile: scenario.profile,
         conversation: conversation.name, detail: conversation.detail, turn: 0, question: conversation.turns[0] || '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] });
@@ -192,7 +194,7 @@ function scriptedQuestions() {
       // kabulü uygulanır; değişken tek başına model denetimini kapatmaz.
       const scripted = process.env.UI_SCRIPTED === '1' && calls.length > 0 && calls.every((call) => call.scripted === true);
       // Betikli kipte yalnızca canlı model gereksinimleri atlanır; yeniden yürütme ve düzen çağrısı kanıtı her iki kipte denetlenir.
-      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace, sentAt), ...(scripted ? scriptedFailures(expected, trace, calls) : modelFailures(expected, trace, calls))];
+      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace, sentAt, expectedChart), ...(scripted ? scriptedFailures(expected, trace, calls) : modelFailures(expected, trace, calls))];
       // "any": türü belirtilmemiş grafik isteği; görünür herhangi bir grafik yeterlidir.
       if (expectedChart && !rendered.charts?.some((chart) => (expectedChart === 'any' || chart.type === expectedChart) && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');

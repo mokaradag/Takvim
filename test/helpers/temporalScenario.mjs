@@ -5,7 +5,7 @@
  * yanıt geçmez.
  */
 import { readFileSync } from 'node:fs';
-import { namedWindow, previousWindow, rangeLabel, resolveWindow, windowName } from '../../src/domain/ai/temporalWindow.js';
+import { namedWindow, previousWindow, rangeLabel, resolveWindow, windowName, windowPosition } from '../../src/domain/ai/temporalWindow.js';
 import { answerQuality } from './answerQuality.mjs';
 import { renderedCharts } from './phase4eScenario.mjs';
 
@@ -21,7 +21,7 @@ export const resolveDays = (value) => JSON.parse(JSON.stringify(value ?? null).r
 /** Aşama H bulgularının sunucu cümlelerinin ayırt edici kalıpları (yalnızca varlık; sayılar kanıttandır). */
 export const H_FINDING_TEXT = Object.freeze({
   tr: {
-    periodSummary: /görev tamamlandı \(gerçekleşen bitiş tarihine göre\)|yeni görev oluşturul(du|madı)|hareket kayde(dildi|tti|ttiniz)|tamamlanan görev yok|hareket kayd(edilmedi|etmedi|etmediniz)|hareket kaydı bulunmuyor/,
+    periodSummary: /görev tamamlandı \(gerçekleşen bitiş tarihine göre\)|yeni görev oluşturul(du|madı)|oluşturulmuş ve bugün kayıtlı yeni görev yok|hareket kayde(dildi|tti|ttiniz)|tamamlanan görev yok|hareket kayd(edilmedi|etmedi|etmediniz)|hareket kaydı bulunmuyor/,
     periodComparison: /İki dönem karşılaştırıldığında|karşılaştırma şimdilik geçici|İki dönem örtüştüğü|karşılaştırılamıyor|İki dönemde de/,
     completionTrend: /En yoğun (hafta|ay)|tamamlanma hızı|eğilim söylenemez|eğilim çıkarılmadı|eğilim söylemek için kısa|gerçekleşen bitişi kayıtlı tamamlanan görev yok/,
     activityTrend: /Kaydedilen hareketler en çok|için hareket kaydı yok; bu kovalar bilinmiyor/,
@@ -31,7 +31,7 @@ export const H_FINDING_TEXT = Object.freeze({
     noteDigest: /açık görevin notu(?:nun tamamı)?|tanesinin notu okundu|açıklaması olan açık görev yok|not parçası okundu/
   },
   en: {
-    periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events? (?:was|were) recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
+    periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|no task created in this period is currently on record|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events? (?:was|were) recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
     periodComparison: /Comparing the two periods|comparison is provisional|two periods overlap|cannot be compared|In both periods/,
     completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn/,
     activityTrend: /Recorded activity peaked|no activity record; those are unknown/,
@@ -62,8 +62,10 @@ function temporalLogMatches(row, range, measure = null) {
   if (row.query === 'activity' && range && (new Date(p.startUtc).getTime() !== midnight(range[0]) || new Date(p.endUtc).getTime() !== midnight(range[1]) + 86400000)) return false;
   if (!measure) return true;
   if (measure === 'activity') return row.query === 'activity' && p.teamLevel !== undefined;
-  // Tamamlanan kilometre taşı: gerçekleşen bitişe göre, yalnızca tamamlanmış kilometre taşı görevleri (sıradan görev listesi geçmez).
+  // Tamamlanan kilometre taşı: gerçekleşen bitişe göre, yalnızca tamamlanmış kilometre taşı görevleri (daraltılmış liste geçmez).
   if (measure === 'milestone') {
+    if (p.priorityCsv || p.priorities?.length || p.text || p.wbsId || p.seriesId || p.recurringOnly || p.assigneeMode === 'unassigned'
+      || p.createdByMe || p.hasDescription || p.openOnly || p.deadline || p.targetFrom || p.targetTo) return false;
     const done = (p.statusCsv || '').split(',').filter(Boolean);
     return row.query === 'task-facts' && !p.taskIds && (p.milestone === true || p.milestone === 1) && p.dateField === 'actualFinish' && done.length === 1 && done[0] === 'done';
   }
@@ -129,9 +131,10 @@ export function temporalPopulationViolations(result, analysis, seed) {
   for (const read of reads) if (!layers.some((layer) => matches(read, layer))) problems.push('beklenmeyen nüfus okundu');
   for (const layer of layers) if (!reads.some((read) => matches(read, layer))) problems.push(`kapsam okunmadı: ${layer.scope}/${layer.level || ''}`);
   // Her katmanın her olay ölçüsü her istenen dönemde okunur; çapraz iki okuma dört birleşimi karşılayamaz.
-  // Yalnızca başı verilen geçmiş dönem bugüne kadar okunur (sunucunun `analysisWindows` kuralı).
+  // Yalnızca başı verilen geçmiş dönem bugüne kadar okunur (sunucunun `analysisWindows` kuralı); göreli başlangıç önce çözülür.
+  const resolvedFrom = analysis.dateFrom ? resolveDay(analysis.dateFrom) : null;
   const window = analysis.relativeWindow && analysis.relativeWindow !== 'all_time' ? expectedRange(analysis.relativeWindow)
-    : analysis.dateFrom ? expectedRange([analysis.dateFrom, analysis.dateTo || (analysis.dateFrom > TEMPORAL_TODAY ? analysis.dateFrom : TEMPORAL_TODAY)]) : null;
+    : resolvedFrom ? expectedRange([resolvedFrom, analysis.dateTo || (resolvedFrom > TEMPORAL_TODAY ? resolvedFrom : TEMPORAL_TODAY)]) : null;
   const defaultRange = [shift(layers.some((layer) => layer.focus?.includes('trend')) ? -89 : -29), TEMPORAL_TODAY];
   const effectiveWindow = window || defaultRange;
   const prior = analysis.compare ? expectedCompare(analysis.compare, analysis.relativeWindow || effectiveWindow, TEMPORAL_TODAY, !window)
@@ -168,11 +171,12 @@ export function temporalPopulationViolations(result, analysis, seed) {
       });
       const open = (filters) => openStatuses(filters.statuses);
       const noteIds = new Set((result.log || []).filter((row) => row.query === 'task-notes' && row.ok === true).flatMap((row) => String(row.params.taskIds || '').toLowerCase().split(',')));
-      // Not okuması açık görev notlarının tamamıdır: tarih süzgeci taşıyan not araması (kanıtta ya da okumada) nüfusu daraltır ve geçmez.
+      // Not okuması açık görev notlarının tamamıdır: tarih ya da termin süzgeci taşıyan not araması (kanıtta ya da okumada) nüfusu daraltır ve geçmez.
       // Okunan not boş olmayan metindir (yalnızca boşluk dönen açıklama okunmuş not sayılmaz).
-      const undated = (filters) => !filters?.dateFrom && !filters?.dateTo;
-      const seen = kind === 'notes' ? evidence.some((item) => item.ok === true && item.tool === 'rota_task_search' && item.data.filters.hasDescription && open(item.data.filters) && undated(item.data.filters)
-        && reads.some((read) => matches(read, layer) && read.params.hasDescription && undated(read.params))
+      const unrestrictedNotes = (filters) => !filters?.dateFrom && !filters?.dateTo && !filters?.deadline && !filters?.targetFrom && !filters?.targetTo
+        && !filters?.priorityCsv && !filters?.priorities?.length && filters?.milestone == null && !filters?.text && !filters?.wbsId && !filters?.createdByMe;
+      const seen = kind === 'notes' ? evidence.some((item) => item.ok === true && item.tool === 'rota_task_search' && item.data.filters.hasDescription && open(item.data.filters) && unrestrictedNotes(item.data.filters)
+        && reads.some((read) => matches(read, layer) && read.params.hasDescription && unrestrictedNotes(read.params))
         && (item.complete === true && item.totalCount === 0 && item.data.tasks?.length === 0 || item.data.tasks?.length > 0
           && item.data.tasks.every((task) => typeof task.description === 'string' && task.description.trim() && noteIds.has(String(task.taskId).toLowerCase()))))
         : evidence.some((item) => item.ok === true && item.complete === true && item.tool === 'rota_task_analytics' && item.data.groupBy === 'due_horizon' && open(item.data.filters) && !narrowsTasks(item.data.filters)
@@ -214,6 +218,17 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
     if (!H_FINDING_TEXT[locale === 'en' ? 'en' : 'tr'][kind]?.test(content)) problems.push(`bulgu yok: ${kind}`);
   }
   for (const pattern of expect.says || []) if (!new RegExp(pattern, 'u').test(content)) problems.push(`beklenen ifade yok: ${pattern}`);
+  // İstenen tablo: Markdown tablosu gerçek satırlarla çizilmiş ya da sunucu tablo üretilemediğini açıkça bildirmiş olmalıdır.
+  if (expect.table && !/(?:^|\n)\|[^\n]+\|\n\|(?:\s*:?-+:?\s*\|)+\n\|[^\n]+\|/u.test(content)
+    && !/tablo olarak gösterilebilecek satır koleksiyonu yok|no row collection.*table/iu.test(content)) problems.push('beklenen tablo yok');
+  // Kişi başına tamamlanma kırılımı (ör. t36): yalnızca ekip toplamı yetmez; sorumluya göre gruplanmış tamamlanma okuması gerekir.
+  if (expect.groupBy && !(result.evidence || []).some((item) => {
+    const filters = item.data?.filters || {};
+    const wanted = expect.window?.map((value) => resolveDay(value));
+    return item.ok === true && item.tool === 'rota_task_analytics' && item.data?.groupBy === expect.groupBy
+      && (!wanted || (filters.dateFrom === wanted[0] && filters.dateTo === wanted[1]))
+      && (!expect.measures?.includes('completed') || (filters.dateField === 'actualFinish' && filters.statuses?.length === 1 && filters.statuses[0] === 'done'));
+  })) problems.push(`beklenen kırılım okunmadı: ${expect.groupBy}`);
   // "Hangileri devam ediyor" sorusu bugünkü durum okumasını ister (durum dağılımı kanıtı): yalnızca tamamlanma özeti geçmez.
   if (expect.statusRead && !(result.evidence || []).some((item) => {
     const filters = item.data?.filters;
@@ -228,27 +243,55 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
   const charts = renderedCharts(result.answer?.content || '');
   for (const type of expect.charts || []) if (!charts.some((chart) => chart.type === type)) problems.push(`grafik yok: ${type}`);
   if (expect.noChart && charts.some((chart) => chart.type === expect.noChart)) problems.push(`grafik çizilmemeliydi: ${expect.noChart}`);
-  if (expect.chartNote && !/(?:grafik|zaman çizelgesi|gösterge kartları) için .+ gerekir|(?:chart|KPI card set|timeline) (?:needs|requires)\b/iu.test(content)) problems.push('grafik türü notu yok');
-  // Dönem karşılaştırması çubukları: her çubuk kendi döneminin kanıttaki sayısıdır (önce → sonra); yer değiştirmiş sayılar geçmez.
-  // Her grafik kendi ölçüsüyle (başlık) eşleştirilir ve her çubuğun etiketi ile değeri AYNI döneme aittir (etiketler yer değiştirmiş
-  // ya da oluşturulma grafiği tamamlanma sayılarıyla sınanmış grafik geçmez).
+  if (expect.chartNote && !/(?:grafik|zaman çizelgesi|gösterge kartları) için .+ gerekir|(?:chart|KPI card set|timeline) (?:needs|requires)\b|kayıt kapsamı doğrulanamadığı için çizgi grafik çizilemedi|recording coverage for the activity series could not be verified/iu.test(content)) problems.push('grafik türü notu yok');
+  // Dönem karşılaştırması çubukları: her çubuk kendi döneminin ve KENDİ nüfusunun kanıttaki sayısıdır (önce → sonra); yer değiştirmiş
+  // ya da başka kapsamdan kopyalanmış sayılar geçmez. Her çubuğun etiketi açık dönemde kısmi işaretini de taşır.
   if (expect.window && expect.compare) {
-    const periods = [expect.compare, expect.window].map((range) => range.map((value) => resolveDay(value))).sort((a, b) => a[0].localeCompare(b[0]));
-    const english = result.locale === 'en';
+    const periods = [expect.compare, expect.window].map((range) => range.map((value) => resolveDay(value)))
+      .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+    const english = locale === 'en';
     const names = periods.map((range) => windowName(namedWindow({ dateFrom: range[0], dateTo: range[1] }, TEMPORAL_TODAY), english ? 'en' : 'tr'));
-    const labels = periods.map((range, index) => (names.every(Boolean) ? names[index] : rangeLabel({ dateFrom: range[0], dateTo: range[1] }, english ? 'en' : 'tr')).toLocaleLowerCase('tr'));
+    const labels = periods.map((range, index) => {
+      const base = names.every(Boolean) ? names[index] : rangeLabel({ dateFrom: range[0], dateTo: range[1] }, english ? 'en' : 'tr');
+      const open = windowPosition({ dateFrom: range[0], dateTo: range[1] }, TEMPORAL_TODAY)?.open;
+      return `${base}${open ? ` (${english ? 'partial' : 'kısmi'})` : ''}`.toLocaleLowerCase('tr');
+    });
     const specs = { completed: ['actualFinish', /^(Tamamlanan görev|Completed tasks)/], created: ['createdAt', /^(Oluşturulan görev|Created tasks)/] };
     for (const [measure, [dateField, title]] of Object.entries(specs).filter(([measure]) => (expect.measures || []).includes(measure))) {
-      const total = (range) => (result.evidence || []).find((item) => item.ok === true && item.tool === 'rota_task_analytics' && !item.data?.groupBy
-        && item.data?.filters?.dateField === dateField && item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1])?.data?.totals?.total;
-      const counts = periods.map(total);
-      // Karşılaştırma grafiği başlığından tanınır (çubuk sayısından değil): fazladan çubuklu grafik denetimden kaçamaz, tam iki çubuk gerekir.
+      // Aynı dönem çifti birden çok kapsam/proje için okunduysa her nüfusun kendi [önce, sonra] toplam çifti çıkarılır.
+      const readsFor = (result.evidence || []).filter((item) => item.ok === true && item.tool === 'rota_task_analytics' && !item.data?.groupBy
+        && item.data?.filters?.dateField === dateField);
+      const popKey = (item) => {
+        const f = item.data?.filters || {};
+        return JSON.stringify([f.assignee || null, f.teamLevel || null, f.personSicil || null, f.projectId || null]);
+      };
+      const byPop = new Map();
+      for (const item of readsFor) {
+        const key = popKey(item);
+        if (!byPop.has(key)) byPop.set(key, []);
+        byPop.get(key).push(item);
+      }
+      const populationPairs = [...byPop.values()].map((items) => {
+        const pair = periods.map((range) => items.find((item) => item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1]));
+        if (pair.some((item) => !item || !Number.isFinite(item.data?.totals?.total))) return null;
+        const sample = pair[0].data.filters;
+        const suffix = [sample.project, sample.person].filter((name) => typeof name === 'string' && name.trim()).join(' — ');
+        return { suffix, counts: pair.map((item) => item.data.totals.total) };
+      }).filter(Boolean);
       const matching = charts.filter((item) => item.type === 'bar' && title.test(String(item.title || '')));
       if (expect.charts?.includes('bar') && !matching.length) problems.push(`karşılaştırma grafiği yok: ${measure}`);
+      const usedPops = new Set();
       for (const chart of matching) {
         if (chart.items?.length !== 2) { problems.push('karşılaştırma grafiği iki dönem çubuğu taşımıyor'); continue; }
-        if (!counts.every(Number.isFinite) || chart.items.map((item) => item.value).join() !== counts.join()) problems.push('karşılaştırma çubukları dönem sayılarıyla eşleşmiyor');
-        if (chart.items.some((item, index) => !String(item.label || '').toLocaleLowerCase('tr').startsWith(labels[index]))) problems.push('karşılaştırma çubuğunun etiketi dönemiyle eşleşmiyor');
+        const chartSuffix = String(chart.title || '').includes(' — ') ? String(chart.title).split(' — ').slice(1).join(' — ').trim() : '';
+        const candidatePops = chartSuffix
+          ? populationPairs.filter((pop) => pop.suffix === chartSuffix)
+          : populationPairs.filter((_, index) => !usedPops.has(index));
+        const values = chart.items.map((item) => item.value).join();
+        const matchedIndex = populationPairs.findIndex((pop, index) => candidatePops.includes(pop) && !usedPops.has(index) && pop.counts.join() === values);
+        if (matchedIndex < 0) problems.push('karşılaştırma çubukları dönem sayılarıyla eşleşmiyor');
+        else usedPops.add(matchedIndex);
+        if (chart.items.some((item, index) => String(item.label || '').toLocaleLowerCase('tr') !== labels[index])) problems.push('karşılaştırma çubuğunun etiketi dönemiyle eşleşmiyor');
       }
     }
   }

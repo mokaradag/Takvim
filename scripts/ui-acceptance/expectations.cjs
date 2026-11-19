@@ -1,6 +1,6 @@
 // Senaryonun açık beklentileri görülmüş metin ve bu turun sunucu sonucu üzerinde denetlenir; dil yorumu yapılmaz.
 // `now`: turun gönderildiği an; dönem etiketi ekran görüntüsü sonrasındaki saatle değil, sunucunun dönemi çözdüğü günle beklenir.
-function semanticFailures(expected, rendered, trace, now = new Date()) {
+function semanticFailures(expected, rendered, trace, now = new Date(), expectedChart = null) {
   // Bu paket Rota senaryolarıdır; farklı bir sonuç açıkça belirtilmedikçe kanıtlı yanıt gerekir.
   expected = { outcome: 'grounded', ...expected };
   const failures = [];
@@ -19,18 +19,44 @@ function semanticFailures(expected, rendered, trace, now = new Date()) {
   // Bugün dâhil son N günün aralığı (Türkiye günü) yanıtta görünmelidir: daha kısa bir dönemin grafiği dönem denetimini geçmez.
   // Dönem etiketi bütün olarak aranır: "13 Temmuz – 30 Eylül" metni "3 Temmuz – 30 Eylül" beklentisini sonek eşleşmesiyle geçmez.
   if (Number.isSafeInteger(expected.periodDays) && !new RegExp(`(^|[^0-9])${periodLabel(expected.periodDays, now).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(String(rendered.text || ''))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays, now)}`);
-  // Grafik beklentileri AYNI görünür grafikte aranır: başlıktaki ölçü (`chartTitle`), bütün etiketler (`chartItems`) ve en az nokta sayısı
-  // (`chartMinItems`, ör. 90 günlük haftalık dizinin kovaları). Düzyazıda doğru olup başka bir grafik çizen yanıt geçmez.
-  const chartExpected = expected.chartTitle || Array.isArray(expected.chartItems) || Number.isSafeInteger(expected.chartMinItems);
+  // İstenen takvim dönemi (ör. bu hafta ya da bu ay/geçen ay) alternatif yanıtlarda da doğrulanır.
+  if (expected.periodKind) {
+    const text = String(rendered.text || '');
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+    const [y, m] = [Number(today.slice(0, 4)), Number(today.slice(5, 7))];
+    const prevY = m === 1 ? y - 1 : y;
+    const prevM = m === 1 ? 12 : m - 1;
+    if (expected.periodKind === 'this_week') {
+      const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
+      const mon = new Date(Date.parse(`${today}T00:00:00Z`) - dow * 86400000).toISOString().slice(0, 10);
+      const sun = new Date(Date.parse(`${mon}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10);
+      const monPart = `${Number(mon.slice(8, 10))} ${MONTHS[Number(mon.slice(5, 7)) - 1]}`;
+      const sunPart = `${Number(sun.slice(8, 10))} ${MONTHS[Number(sun.slice(5, 7)) - 1]}`;
+      if (!/bu hafta/i.test(text) && !(text.includes(monPart) && text.includes(sunPart))) failures.push('istenen hafta dönemi görünmüyor: this_week');
+    } else if (expected.periodKind === 'this_month_vs_last_month') {
+      const en = expected.language === 'en';
+      const curName = (en ? EN_MONTHS : MONTHS)[m - 1];
+      const prevName = (en ? EN_MONTHS : MONTHS)[prevM - 1];
+      const namedPair = en ? /\blast month\b/i.test(text) && /\bthis month\b/i.test(text) : /geçen ay/i.test(text) && /bu ay/i.test(text);
+      const literalPair = text.includes(`${prevName} ${prevY}`) && text.includes(`${curName} ${y}`);
+      if (!namedPair && !literalPair) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
+    }
+  }
+  // Grafik türü ve içerik beklentileri AYNI görünür grafikte aranır: başlıktaki ölçü (`chartTitle`), bütün etiketler (`chartItems`),
+  // en az nokta sayısı (`chartMinItems`) ve istenen grafik türü (`expectedChart` / `chartType`).
+  const chartType = expectedChart || expected.chartType || null;
+  const chartExpected = chartType || expected.chartTitle || Array.isArray(expected.chartItems) || Number.isSafeInteger(expected.chartMinItems);
   if (chartExpected && !(rendered.charts || []).some((chart) => chart.visible
+    && (!chartType || chartType === 'any' || chart.type === chartType)
     && (!expected.chartTitle || String(chart.title || '').includes(expected.chartTitle))
     && (!Array.isArray(expected.chartItems) || expected.chartItems.every((label) => (chart.items || []).some((item) => String(item).includes(label))))
     && (!Number.isSafeInteger(expected.chartMinItems) || (chart.items || []).length >= expected.chartMinItems))) {
-    failures.push(`istenen grafik içeriği görünmüyor: ${[expected.chartTitle, ...(expected.chartItems || []), expected.chartMinItems].filter((item) => item != null).join(' | ')}`);
+    failures.push(`istenen grafik içeriği görünmüyor: ${[chartType, expected.chartTitle, ...(expected.chartItems || []), expected.chartMinItems].filter((item) => item != null).join(' | ')}`);
   }
   return failures;
 }
 const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+const EN_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 /** Sunucunun aralık yazımıyla aynı biçim (`rangeLabel`): "2 Temmuz – 30 Eylül 2026", yıl sınırında iki yıl. */
 function periodLabel(days, now = new Date()) {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
@@ -60,9 +86,10 @@ function compositionFailures(trace, calls) {
   return trace?.presentation?.mode === 'composed' && !trace.presentation.server && !calls.some((call) => call.ok && call.purpose === 'compose')
     ? ['model düzeni çağrı kanıtı yok'] : [];
 }
-// Betikli kip: yalnızca canlı model kimliği ve düşünme gereksinimleri atlanır; yeniden yürütme ve düzen çağrısı kanıtı denetlenir.
+// Betikli kip: yalnızca canlı model kimliği ve düşünme gereksinimleri atlanır; yeniden yürütme, düzen ve gün devri denetlenir.
 function scriptedFailures(expected, trace, calls) {
-  return [...replayFailures(expected, trace, calls), ...compositionFailures(trace, calls)];
+  const rollover = calls.some((call) => call.error === 'day_rollover' || call.status === 409) ? ['betikli uç gün devri nedeniyle 409 döndürdü'] : [];
+  return [...rollover, ...replayFailures(expected, trace, calls), ...compositionFailures(trace, calls)];
 }
 // Model yolunda gerçek plan çağrısı zorunludur; aday seçiminin sunucu yeniden yürütmesi açıkça belirtilir.
 function modelFailures(expected, trace, calls) {

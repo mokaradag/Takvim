@@ -708,7 +708,7 @@ test('dönemsel nitelendirme: iki dönem aynı hareket kapsamıyla, bugünkü du
   const h05 = { intent: 'rota', temporal: true, temporalWindow: 'this_week', currentState: true };
   const completed = { population: { tool: 'rota_task_analytics' }, filters: { status: ['done'], dateField: 'actualFinish', ...thisWeek } };
   assert.ok(score([completed, { population: { tool: 'rota_calendar_inspect' }, filters: {} }], h05).includes('güncel durum ayrı okunmadı'));
-  assert.ok(!score([completed, { population: { tool: 'rota_task_analytics' }, filters: {} }], h05).includes('güncel durum ayrı okunmadı'));
+  assert.ok(!score([completed, { population: { tool: 'rota_task_analytics' }, metrics: ['tasks.open', 'tasks.overdue'], filters: {} }], h05).includes('güncel durum ayrı okunmadı'));
   const layered = { intent: 'rota', layers: [{ scope: 'all' }, { scope: 'team' }] };
   const team = { population: { tool: 'rota_task_analytics' }, filters: { activityScope: 'team' } };
   assert.ok(score([team], layered).some((failure) => /all/.test(failure)), JSON.stringify(score([team], layered)));

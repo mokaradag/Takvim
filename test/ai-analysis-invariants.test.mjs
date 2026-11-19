@@ -57,7 +57,7 @@ test('geçmiş görünüm gerektiren sınırlılık vakası sıradan güncel dur
   assert.ok(cases.some((row) => row.id === 'h08'));
   const { expectedCompare, expectedRange } = await import('./helpers/temporalScenario.mjs');
   const today = JSON.parse(readFileSync(new URL('./fixtures/ai-phase4e-corpus.json', import.meta.url), 'utf8')).today;
-  const current = { population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, entities: [], metrics: ['tasks.total'] };
+  const current = { population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, entities: [], metrics: ['tasks.total', 'tasks.open', 'tasks.overdue'] };
   const planned = (analysis, requests = [current]) => ({ outcome: 'planned', decisions: [], plan: { analysis, requests } });
   for (const item of cases) {
     const periods = [expectedRange(item.expect.temporalWindow, today), expectedCompare(item.expect.temporalCompare, item.expect.temporalWindow, today)].filter(Boolean);

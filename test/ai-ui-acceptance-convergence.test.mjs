@@ -564,8 +564,9 @@ test('betikli uç gün devrinde boş 409 döndürür (eski güne göre çözülm
   const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
   assert.equal(response.status, 409);
   assert.equal(await response.text(), '');
-  // Koşu tohumu ve betikli ucu tek günle başlatır: uç gün değişimini denetler, tohumlar aynı günü okur.
+  // Koşu tohumu ve betikli ucu tek günle başlatır: uç gün değişimini denetler, tohumlar dışa aktarılan aynı günü okur.
   const runner = readFileSync(join(root, 'scripts/ui-acceptance/run.sh'), 'utf8');
+  assert.match(runner, /\bexport UI_RUN_DAY\b/);
   assert.match(runner, /UI_RUN_DAY=\$\(TZ=Europe\/Istanbul date \+%F\)/);
   assert.match(runner, /BRIDGE_TODAY=\$UI_RUN_DAY BRIDGE_ENFORCE_DAY=1 /);
   assert.match(readFileSync(join(root, 'scripts/ui-acceptance/uiSeed.mjs'), 'utf8'), /process\.env\.UI_RUN_DAY/);
@@ -576,25 +577,34 @@ test('görsel kabulün dönem denetimi sunucunun aralık yazımını bekler ve d
   const now = new Date(Date.UTC(2026, 8, 30, 9));
   assert.equal(periodLabel(90, now), '3 Temmuz – 30 Eylül 2026');
   const trace = { outcome: 'grounded' };
-  assert.deepEqual(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(90)} döneminde` }, trace), []);
-  assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(30)} döneminde` }, trace).length);
+  assert.deepEqual(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(90, now)} döneminde` }, trace, now), []);
+  assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(30, now)} döneminde` }, trace, now).length);
   // Aynı soneki taşıyan daha kısa dönem (80 gün) de geçmez.
-  assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler 1${periodLabel(90)} döneminde` }, trace).length);
+  assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler 1${periodLabel(90, now)} döneminde` }, trace, now).length);
+  // Grafik türü ve içeriği AYNI görünür grafikte doğrulanır: ayrı bir çubuk grafik 12 noktalı çizgi grafik beklentisini karşılayamaz.
+  const splitCharts = [{ type: 'line', visible: true, title: 'Kısa çizgi', items: ['a', 'b', 'c', 'd'] },
+    { type: 'bar', visible: true, title: 'Tamamlanan görev', items: Array.from({ length: 12 }, (_, i) => `H${i + 1}`) }];
+  assert.ok(semanticFailures({ chartMinItems: 12 }, { text: 'ok', charts: splitCharts }, trace, now, 'line').length);
+  assert.deepEqual(semanticFailures({ chartMinItems: 12 }, { text: 'ok', charts: [{ ...splitCharts[1], type: 'line' }] }, trace, now, 'line'), []);
 });
 
 test('arayüz kabulü iki dönemin ölçüsünü, yanıt dilini ve geçmiş durum sınırını birlikte denetler', async () => {
   const { semanticFailures } = await import('../scripts/ui-acceptance/expectations.cjs');
+  const now = new Date(Date.UTC(2026, 8, 30, 9));
   const scenarios = JSON.parse(readFileSync(join(root, 'scripts/ui-acceptance/scenarios/B.json'))).conversations;
-  const score = (name, text) => semanticFailures(scenarios.find((item) => item.name === name).expectedTurns[0], { text }, { outcome: 'grounded' });
+  const score = (name, text) => semanticFailures(scenarios.find((item) => item.name === name).expectedTurns[0], { text }, { outcome: 'grounded' }, now);
   const turkish = 'Geçen ay (Ağustos 2026) görebildiğiniz işlerde 5 görev tamamlanmıştı; bu ay (Eylül 2026) şu ana kadar 8 görev tamamlandı.';
   assert.deepEqual(score('H2-donem-kiyasi', turkish), []);
-  assert.deepEqual(score('H2-donem-kiyasi', 'Tamamlanan iş sayıları karşılaştırılamıyor: Ağustos 2026 için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde 8 görev var.'), []);
+  assert.deepEqual(score('H2-donem-kiyasi', 'Tamamlanan iş sayıları karşılaştırılamıyor: Ağustos 2026 için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde (Eylül 2026) 8 görev var.'), []);
+  assert.ok(score('H2-donem-kiyasi', 'İki dönemde de (Dün ve bugün) 4 görev tamamlandı.').length);
   assert.ok(score('H2-donem-kiyasi', 'Geçen ay için karşılaştırma yapılmadı; bu ay 8 görev tamamlandı.').length);
   assert.deepEqual(score('H7-ingilizce', 'Last month (August 2026), across the tasks you can see, completed tasks totalled 5; this month (September 2026) so far, 8.'), []);
   assert.ok(score('H7-ingilizce', 'Last month 5 görev tamamlandı; this month 8 görev tamamlandı.').length);
   const limited = 'Geçen haftanın durumu yeniden kurulamıyor ve karşılaştırma yapılmadı; aşağıdaki sayılar bugünü gösterir. Şu anda 3 gecikmiş görev var.';
   assert.deepEqual(score('H2-gecmis-durum-siniri', limited), []);
+  assert.deepEqual(score('H2-gecmis-durum-siniri', limited + ' Gecikmeleriniz azaldı denemez.'), []);
   assert.ok(score('H2-gecmis-durum-siniri', limited + ' Ancak gecikmeleriniz azaldı.').length);
+  assert.ok(score('H2-gecmis-durum-siniri', limited + ' Geçen haftaya göre daha az gecikmiş işiniz var.').length);
   assert.ok(score('H2-gecmis-durum-siniri', 'Geçen haftanın durumu yeniden kurulamıyor.').length);
 });
 

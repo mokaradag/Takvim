@@ -9,6 +9,7 @@
  */
 import { appendFileSync, readFileSync } from 'node:fs';
 import http from 'node:http';
+import { isIsoDay } from '../../src/domain/ai/isoDay.js';
 import { compositionView, coveringBlocks, isCompositionCall } from '../../test/helpers/compositionScenario.mjs';
 
 const PORT = Number(process.env.BRIDGE_PORT ?? 18741);
@@ -16,8 +17,13 @@ const CALLS = process.env.BRIDGE_CALLS || null;
 const benchmark = JSON.parse(readFileSync(process.env.UI_BENCHMARK || new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
 // Göreli termin belirteçleri ("T+N") çalıştırma gününe (Türkiye günü) göre çözülür; sentetik veri de aynı güne göre kurulur.
 const istanbulDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-// `BRIDGE_TODAY`: yalnızca sınamada sabit gün (köprü ile sınama kahini aynı saati kullanır); verilmezse bugünün Türkiye günü.
-const FIXED_DAY = /^\d{4}-\d{2}-\d{2}$/.test(process.env.BRIDGE_TODAY || '') ? process.env.BRIDGE_TODAY : null;
+// `BRIDGE_TODAY`: yalnızca sınamada sabit gün (köprü ile sınama kahini aynı saati kullanır); geçersiz takvim günü açılışta reddedilir.
+const rawBridgeToday = process.env.BRIDGE_TODAY;
+if (rawBridgeToday != null && rawBridgeToday !== '' && !isIsoDay(rawBridgeToday)) {
+  process.stderr.write(`geçersiz BRIDGE_TODAY takvim günü: ${rawBridgeToday}\n`);
+  process.exit(1);
+}
+const FIXED_DAY = rawBridgeToday && isIsoDay(rawBridgeToday) ? rawBridgeToday : null;
 const today = FIXED_DAY || istanbulDay();
 const shift = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
 // Aşama H kıyas kümesi "T", "T-N" ve "T+N" biçimlerini kullanır; hepsi aynı güne göre çözülür.
@@ -78,6 +84,7 @@ http.createServer((request, response) => {
     // Gün değişimi denetimi sabit günde yalnızca açıkça istenirse (`BRIDGE_ENFORCE_DAY=1`, devir sınaması) uygulanır.
     if ((!FIXED_DAY || process.env.BRIDGE_ENFORCE_DAY === '1') && istanbulDay() !== today) {
       process.stderr.write(`betikli uç ${today} gününe göre çözüldü; Türkiye günü değişti, koşuyu yeniden başlatın\n`);
+      try { if (CALLS) appendFileSync(CALLS, `${JSON.stringify({ at: new Date().toISOString(), purpose: 'rollover', ok: false, scripted: true, status: 409, error: 'day_rollover' })}\n`); } catch { /* günlük yazılamasa da 409 döner */ }
       response.writeHead(409).end();
       return;
     }

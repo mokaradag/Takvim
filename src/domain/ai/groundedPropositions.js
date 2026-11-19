@@ -442,6 +442,8 @@ export function tablePropositions({ group, described, distribution, locale, popu
     const filters = facts[0].semantic?.filters;
     const whose = ownerParts(filters, locale);
     add('total', TASK_TOOLS.has(group.tool) ? taskCountSentence(filters, total, locale, { total: true }) : null, 'info', { count: total });
+    // Kısmi tarih kovaları tam dönemle aynı uzunlukta değildir: toplam korunur, en büyük kova / çoğunluk iddiası kurulmaz.
+    if (['date_week', 'date_month'].includes(groupBy) && facts.some((fact) => fact.semantic?.group?.partial || fact.semantic?.series?.partial)) return out;
     const max = Math.max(...facts.map((fact) => fact.value));
     const ownerTitle = soleRow(described, facts, max);
     const owner = ownerTitle == null ? null : canonicalGroupLabel(facts.find((fact) => fact.value === max), ownerTitle, locale);
@@ -649,6 +651,7 @@ function openPartition(described, group, locale, add) {
   if (!facts || !facts.every((fact) => Number.isSafeInteger(fact.value) && fact.value >= 0)) return [];
   const groupBy = facts[0].semantic?.groupBy;
   if (!EXCLUSIVE_GROUP_BY.includes(groupBy) || !facts.every((fact) => fact.semantic?.groupBy === groupBy)) return [];
+  if (['date_week', 'date_month'].includes(groupBy) && facts.some((fact) => fact.semantic?.group?.partial || fact.semantic?.series?.partial)) return [];
   const total = facts.reduce((sum, fact) => sum + fact.value, 0);
   const max = Math.max(...facts.map((fact) => fact.value));
   const title = soleRow(described, facts, max);

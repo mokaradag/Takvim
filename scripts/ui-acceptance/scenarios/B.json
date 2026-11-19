@@ -384,8 +384,9 @@
    "expectedTurns": [
     {
      "outcome": "grounded",
+     "periodKind": "this_month_vs_last_month",
      "matches": [
-      "(?:Geçen ay[^\\n;]*[\\d.]+ görev tamamlanmıştı; bu ay[^\\n;]*[\\d.]+ görev tamamlandı|İki dönemde de \\([^)]+ ve [^)]+\\)[^\\n.]*(?:görev tamamlandı|tamamlanan görev yok)|Tamamlanan iş sayıları karşılaştırılamıyor: (?:iki dönemin de görev sayısı bilinmiyor|[^\\n]*için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde [\\d.]+ görev var))"
+      "(?:Geçen ay[^\\n;]*[\\d.]+ görev tamamlanmıştı; bu ay[^\\n;]*[\\d.]+ görev tamamlandı|İki dönemde de \\([^)]+ ve [^)]+\\)[^\\n.]*(?:görev tamamlandı|tamamlanan görev yok)|Tamamlanan iş sayıları(?: \\([^)]+\\))? karşılaştırılamıyor: (?:iki dönemin de görev sayısı bilinmiyor|[^\\n]*için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde (?:\\([^)]+\\) )?[\\d.]+ görev var))"
      ]
     }
    ]
@@ -446,9 +447,13 @@
     {
      "outcome": "grounded",
      "requires": [
-      "bilinmiyor",
-      "görev tamamlandı",
-      "hareket"
+      "görev tamamlandı"
+     ],
+     "matches": [
+      "(?:hareket[^\\n.]{0,120}(?:bilinmiyor|kayıt bulunmuyor|doğrulanamadı)|bazı kovalar için hareket kaydı yok|hareket kaydı[^\\n.]{0,120}(?:bilinmiyor|doğrulanamadı|yansımıyor))"
+     ],
+     "rejects": [
+      "\\b0\\s+hareket\\b"
      ]
     }
    ]
@@ -508,6 +513,7 @@
    "expectedTurns": [
     {
      "outcome": "grounded",
+     "periodKind": "this_week",
      "requires": [
       "toplanmaz"
      ],
@@ -528,8 +534,10 @@
    "expectedTurns": [
     {
      "outcome": "grounded",
+     "periodKind": "this_month_vs_last_month",
+     "language": "en",
      "matches": [
-      "(?:Last month[^\\n;]*completed tasks totalled [\\d,]+; this month[^\\n;]*, [\\d,]+|In both periods \\([^)]+ and [^)]+\\)[^\\n.]*(?:completed tasks totalled [\\d,]+|no task was completed)|Counts of completed tasks cannot be compared: (?:both periods are unknown|the count for [^\\n]* is unknown, not zero; the other period has [\\d,]+ tasks))"
+      "(?:Last month[^\\n;]*completed tasks totalled [\\d,]+; this month[^\\n;]*, [\\d,]+|In both periods \\([^)]+ and [^)]+\\)[^\\n.]*(?:completed tasks totalled [\\d,]+|no task was completed)|Counts of completed tasks(?: \\([^)]+\\))? cannot be compared: (?:both periods are unknown|the count for [^\\n]* is unknown, not zero; the other period has [\\d,]+ tasks))"
      ]
     }
    ]
@@ -552,7 +560,7 @@
       "(?:\\d+\\s+(?:gecikmiş (?:görev|iş)|(?:görev|iş)\\s+gecikmiş)|gecikmiş (?:görev|iş)(?:iniz)?\\s+(?:yok|bulunmuyor))"
      ],
      "rejects": [
-      "(?:gecikme\\p{L}*|gecikmiş (?:görev|iş)\\p{L}*)[^.;\\n]{0,60}\\b(?:azaldı|arttı|iyileşti|kötüleşti)(?!\\p{L})"
+      "(?:(?:gecikme\\p{L}*|gecikmiş (?:görev|iş)\\p{L}*)[^.;\\n]{0,60}\\b(?:azaldı|arttı|iyileşti|kötüleşti)(?!\\p{L})(?!\\s+(?:denemez|söylenemez|diyemeyiz|belirlenemez))|\\bdaha (?:az|fazla)\\s+gecikmiş\\s+(?:görev|iş))"
      ]
     }
    ]

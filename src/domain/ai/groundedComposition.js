@@ -391,6 +391,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     viewTitles.push({ id, part: ordinal, text: clip(text, COMPOSITION_LIMITS.maxValueChars) });
   };
 
+  let unverifiedActivitySeries = false;
   for (const part of parts) {
     const presentation = table && part.presentation ? { ...part.presentation, layout: 'table' } : part.presentation;
     if (!presentation || !Array.isArray(presentation.facts)) continue;
@@ -413,13 +414,16 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       const cover = covered && (covered.part == null || covered.part === ordinal) ? covered : null;
       // Dönemde tamamlananların listesi: sayımı giriş paragrafı söylemiştir; liste kendi giriş cümlesini alır (ölçütlü sayım yinelenmez).
       const shownRows = new Set(presentation.facts.filter((item) => item.evidenceId === group.evidenceId).map((item) => /^data\.tasks\.(\d+)\./.exec(item.fact?.field || '')?.[1]).filter(Boolean)).size;
+      const hasNoteText = cover?.kind === 'notes' && presentation.facts.some((item) => item.evidenceId === group.evidenceId
+        && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '') && typeof item.fact?.value === 'string' && item.fact.value.trim().length > 0);
       // Tek satırlı liste ayrıntı cümlesiyle çizilir (satır o cümlededir): giriş önermesi onu örtmez.
       // Liste giriş cümlesi yalnızca listenin doğrulanmış toplamı girişin söylediği sayıyla aynıysa kullanılır; farklıysa (iki okuma
       // arasında yeni tamamlanan görev) listenin kendi sayımı ayrıntıda kalır.
       const listAgrees = cover?.kind !== 'completedList' || (cover.total != null && cover.total === cover.aggregate);
       const countId = cover?.kind === 'completedList' && shownRows > 1 && listAgrees
         ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...completedListLead(shownRows, cover.total, locale) })
-        : cover?.kind === 'notes' && shownRows > 1 ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...noteListLead(locale) })
+        : cover?.kind === 'notes' && shownRows > 1 && hasNoteText
+          ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...noteListLead(locale, { shown: shownRows, total: cover.total }) })
         : !cover && envelopeOnlyGroup(group, presentation.layout)
           ? propose(ordinal, countProposition(group, totalFact, locale, totalFact ? countFallback() : null)) : null;
       if (totalFact) entitle(ordinal, group, [totalFact]);
@@ -470,10 +474,16 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           && contiguousMonths(described.rows.map((row) => row.title));
         // Aşama H: tarih dizisi (haftalık/aylık kovalar) süreklidir ve kronolojiktir: çizgi grafik adayıdır. Kova değerlerinden biri
         // bilinmiyorsa (kayıt başlangıcından önce) aday kurulmaz; tek tük gözlemden eğilim çizilmez.
-        // Hareket dizisinde her kovanın kayıt kapsamı doğrulanmış olmalıdır: kısmi kayıtlı sayılar eğilim gibi çizilmez (tabloda kalır).
+        // Hareket dizisinde her kovanın kayıt kapsamı doğrulanmış olmalıdır: kısmi kayıtlı sayılar ne çizgi ne çubuk grafik olur (tabloda kalır).
+        const partialActivitySeries = group.tool === 'rota_activity_search' && collection.endsWith('series')
+          && (cover?.kind === 'activitySeries' ? !cover.verified
+            : presentation.facts.some((item) => item.evidenceId === group.evidenceId
+              && ((item.fact?.field === 'data.coverage.status' && item.fact.value !== 'complete')
+                || item.fact?.semantic?.series?.partial === true || item.fact?.semantic?.series?.recorded === false)));
+        if (partialActivitySeries && described.rows.length >= 3) unverifiedActivitySeries = true;
         const dated = (cover?.kind === 'series' || cover?.kind === 'activitySeries' && cover.verified) && complete && described.rows.length >= 3;
         described.columns.forEach((column, index) => {
-          if (!column.numeric || !labels) return;
+          if (partialActivitySeries || !column.numeric || !labels) return;
           const rowLimit = monthly || dated ? ANSWER_CHART_LIMITS.maxLineItems : ANSWER_CHART_LIMITS.maxBarItems;
           if (described.rows.length < ANSWER_CHART_LIMITS.minItems || described.rows.length > rowLimit) return;
           const values = described.rows.map((row) => row.cells[index]);
@@ -749,6 +759,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     ...(framing ? { framing } : listing ? { framing: listing } : {}), ...(analyst && outline && contentParts.size >= 1 ? { closing: nextStepSentence(outline.focus || [], locale) } : {}),
     // Çok bölümlü analitik rapor: tablolar kendi bölümünde cümlesiz kalmaz. Yalnızca tablo istenen yanıt tabloyla başlar.
     ...(analyst && contentParts.size > 1 ? { report: true } : {}),
+    ...(unverifiedActivitySeries ? { unverifiedActivitySeries: true } : {}),
     // Genel değerlendirme (ilk yön genel durum, tek kapsam): yanıt genel durumun kendisiyle açılır.
     ...(analyst && outline?.focus?.[0] === 'overview' && !(outline.layers?.length > 1) ? { statusLead: true, overviewPart: parts.find((part) => part.index === 0)?.index + 1 } : {}) }) });
 }
@@ -1467,9 +1478,8 @@ export function renderComposition(composition, validated) {
     return (detail.source.group.main?.entries || []).filter(({ fact }) => Object.hasOwn(totals, fact.semantic?.metric) && totals[fact.semantic.metric] === fact.value)
       .map(({ fact }) => fact.semantic.metric);
   };
-  const introduced = new Set([...(render.synthesis?.intro?.evidenceIds || []), ...(render.synthesis?.intro?.insights?.evidenceIds || [])]);
   const detailText = (detail) => {
-    if (detail.silent && introduced.has(detail.evidenceId)) return '';
+    if (detail.silent && (stated.get(detail.evidenceId)?.size || 0) > 0) return '';
     const omit = new Set([...(stated.get(detail.evidenceId) || []), ...derived(detail)]);
     const entries = detail.source?.group?.main?.entries || [];
     const valueOf = (metric) => entries.find(({ fact }) => fact.semantic?.metric === metric)?.fact.value;

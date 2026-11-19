@@ -253,9 +253,19 @@ export function plannerScore(result, expect, today = corpus.today) {
       const window = expectedRange(expect.temporalWindow, today);
       if (!requests.some((request) => window && request.filters?.dateFrom === window[0] && request.filters?.dateTo === window[1]
         && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('dönemdeki gelişmeler okunmadı');
-      // Bugünkü durum okuması görev durumunu okuyan araçtandır (takvim, çalışma isteği ya da hareket okuması bugünkü görev durumu değildir).
+      // Bugünkü durum okuması görev durumunu okuyan araçtan ve gerçek bir durum ölçüsünden gelir (yalnızca başlık ya da done sayımı yetmez).
+      const hasCurrentStateMeasure = (request) => {
+        const metrics = request.metrics || [];
+        const filters = request.filters || {};
+        const doneOnly = Array.isArray(filters.status) && filters.status.length === 1 && filters.status[0] === 'done';
+        if (doneOnly) return false;
+        if (request.population?.tool === 'rota_workload_summary') return true;
+        const openFilter = Array.isArray(filters.status) && filters.status.some((status) => ['todo', 'in_progress'].includes(status));
+        return request.population?.groupBy === 'status' || Boolean(filters.deadline) || openFilter
+          || metrics.some((metric) => ['task.status', 'tasks.open', 'tasks.todo', 'tasks.inProgress', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'].includes(metric));
+      };
       if (!requests.some((request) => ['rota_task_analytics', 'rota_task_search', 'rota_workload_summary'].includes(request.population?.tool)
-        && !request.filters?.dateFrom && !request.filters?.dateTo && !request.filters?.dateField)) failures.push('güncel durum ayrı okunmadı');
+        && !request.filters?.dateFrom && !request.filters?.dateTo && !request.filters?.dateField && hasCurrentStateMeasure(request))) failures.push('güncel durum ayrı okunmadı');
     }
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
@@ -343,12 +353,16 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
     ? layer.focus.filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus) && !(compared && focus === 'trend')) : fallback);
   const layers = atoms.length ? atoms : [null];
   const inRange = (request, range) => !range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1];
-  const candidates = (layer, measure, range, primary = true) => requests.filter((request) => inRange(request, range)
+  const candidates = (layer, measure, range, primary = true, bucketed = true) => requests.filter((request) => inRange(request, range)
     && (!primary || !expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1)
     && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
-    && (!primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)));
+    && (!bucketed || !primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)));
+  const stateOnlyLayer = (layer) => Boolean(layer?.focus?.length && !layer.focus.some((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)));
   const reads = (range) => layers.every((layer) => {
     const own = ownMeasures(layer, measures, false);
+    if (!own.length && stateOnlyLayer(layer)) {
+      return requests.some((request) => !request.filters?.dateFrom && !request.filters?.dateTo && temporalRequestMatches(request, layer));
+    }
     return (own.length ? own : [null]).every((measure) => candidates(layer, measure, range).length);
   });
   const range = expectedRange(expect.window, today);
@@ -358,11 +372,12 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   if (prior && !expect.stateComparison && !layers.every((layer) => {
     const own = ownMeasures(layer, measures.filter((measure) => measure !== 'trend'), true);
     const paired = (measure) => {
-      const priorKeys = new Set(candidates(layer, measure, prior, false).map(periodReadKey));
-      return candidates(layer, measure, range).some((request) => priorKeys.has(periodReadKey(request)));
+      const priorKeys = new Set(candidates(layer, measure, prior, false, false).map(periodReadKey));
+      return candidates(layer, measure, range, true, false).some((request) => priorKeys.has(periodReadKey(request)));
     };
-    // Yalnızca eğilim isteyen katman, başka bir katmanın karşılaştırma dönemini devralmaz.
+    // Yalnızca eğilim ya da yalnızca durum yönü isteyen katman ikinci dönem tarihsel okuması gerektirmez (durum katmanı geçmiş sınırı taşır).
     if (!own.length && (layer?.focus || measures).includes('trend')) return true;
+    if (!own.length && stateOnlyLayer(layer)) return Boolean(analysis.historyUnsupported?.length);
     return own.length ? own.every(paired) : ['completed', 'created', 'activity'].some(paired);
   })) failures.push('iki dönem aynı ölçüyle okunmuyor');
   if (expect.windowFrom && !reads(range)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
@@ -760,7 +775,7 @@ if (direct) {
     const cases = [...temporal.targeted, ...temporal.adversarial.filter((entry) => entry.plan && !entry.expect.finishNot && entry.expect.test !== 'revokeFinal')];
     await runQualificationCases(pick(cases), async (t, item) => {
       t.mock.timers.enable({ apis: ['Date'], now: NOW });
-      const seed = temporalBenchmarkSeed();
+      const seed = temporalBenchmarkSeed(temporal.today);
       t.mock.timers.reset();
       const { test: _named, ...expect } = item.expect;
       const turn = { text: item.text, detail: item.detail || null, includeText: item.includeText === true, requireComposed: item.handling === 'full' && !expect.finish,

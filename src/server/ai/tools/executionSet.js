@@ -1,5 +1,5 @@
 import 'server-only';
-import { previousWindow, resolveWindow } from '../../../domain/ai/temporalWindow.js';
+import { previousWindow, resolveWindow, TEMPORAL_WINDOWS } from '../../../domain/ai/temporalWindow.js';
 import { randomBytes } from 'node:crypto';
 import { ABSTAIN_REASONS, CLARIFY_REASONS, PLANNER_INTENTS, PLANNER_LIMITS } from '../../../domain/ai/plannerOutcome.js';
 import { parseToolArguments } from './toolArguments.js';
@@ -8,7 +8,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema, populationShape, SERVER_EXPANDED_METRICS } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
-import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
+import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief, TEMPORAL_FOCUS } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
@@ -209,7 +209,7 @@ function chartPreferences(plan) {
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
  * `{ plan: { intent, language, request, additionalRequests? }, calls }`.
  */
-export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null, detail = null, optionalFits = () => true } = {}) {
+export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null, detail = null, optionalFits = () => true, replayed = false } = {}) {
   const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
   if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
   const [call] = plans;
@@ -367,7 +367,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       }
       return { parts, kept, merged: [...merged].sort((a, b) => a - b) };
     };
-    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve, optionalFits: (parts) => {
+    const expand = (reserve) => expandAnalysis(replayed ? { ...analysis, replayPinned: true } : analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve, optionalFits: (parts) => {
       // Bütçe, son plandakiyle aynı sınır ve düzen uyuşmazlıklarını sayar; zorunlu istekler yerinden edilmez.
       const merged = merge(parts);
       return optionalFits([...merged.parts, ...merged.kept]);
@@ -407,7 +407,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       return [merged === 0 ? '$.request' : `$.additionalRequests[${merged - 1}]`, own(item)];
     })));
     return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(requested ? { charts: requested } : {}),
-      ...(table ? { table: true } : {}), analysis: Object.freeze({ ...analysis, ...omitted, ...owned }), request,
+      ...(table ? { table: true } : {}), analysis: Object.freeze({ ...analysis, ...(replayed ? { replayPinned: true } : {}), ...omitted, ...owned }), request,
       ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [], ...(kept.length ? { explicitPaths } : {}) };
   }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
@@ -549,6 +549,20 @@ function layeredAnalysis(plan, today = null) {
     return { ...plan, ...(plan.language == null ? { language } : {}), analysis: only };
   }
   const [primary, ...rest] = items;
+  const PAST = new Set(['yesterday', 'last_week', 'last_month', 'last_7_days', 'last_14_days', 'last_30_days']);
+  const VALID_WINDOWS = new Set([...TEMPORAL_WINDOWS, 'all_time']);
+  // Ek katmanların dönem alanları katlanmadan ÖNCE doğrulanır: geçersiz tür, bilinmeyen ad, tarihle çakışan `all_time` ya da
+  // odakla uyumsuz adlı dönem (ör. tamamlanan işler için `next_7_days`) tarih eşitliğiyle sessizce düşürülemez.
+  items.forEach((item, index) => {
+    if (item.relativeWindow == null) return;
+    if (typeof item.relativeWindow !== 'string') throw invalidArguments([index === 0 ? '$.analysis.relativeWindow:type' : '$.analysis.also:window']);
+    if (!VALID_WINDOWS.has(item.relativeWindow)) throw invalidArguments([index === 0 ? '$.analysis.relativeWindow:enum' : '$.analysis.also:window']);
+    const dated = item.dateFrom != null || item.dateTo != null;
+    if (item.relativeWindow === 'all_time' && dated) throw invalidArguments(['$.analysis.relativeWindow:conflict']);
+    const focus = Array.isArray(item.focus) ? item.focus : Array.isArray(primary.focus) ? primary.focus : [];
+    if (/^next_/.test(item.relativeWindow) && focus.some((entry) => TEMPORAL_FOCUS.includes(entry))) throw invalidArguments(['$.analysis.focus:futureWindow']);
+    if (PAST.has(item.relativeWindow) && focus.includes('upcoming')) throw invalidArguments(['$.analysis.dateTo:past']);
+  });
   // Dönemler eşdeğer yazımları normalleştirildikten sonra karşılaştırılır: adlı dönemle aynı günleri gösteren tarih çifti ad sayılır
   // (ör. bugün 30 Eylül iken `this_month` + 1–30 Eylül ile yalnızca `this_month`). Farklı günleri kapsayan katmanlar reddedilir.
   // Geçerli dönemler ÇÖZÜLMÜŞ gün çiftleriyle karşılaştırılır: adlı dönem ile aynı günleri gösteren tarih çifti (farklı katmanlarda da)
@@ -623,7 +637,7 @@ function equivalentAnalysisSpelling(plan, today) {
   // "Bir önceki eşdeğer dönem" ile aynı günleri gösteren karşılaştırma çifti de çelişki değildir (birincil dönemin kuralıyla çözülür).
   const isIsoDay = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
   const primaryRange = resolved || (isIsoDay(out.dateFrom) && isIsoDay(out.dateTo) && out.dateFrom <= out.dateTo ? { dateFrom: out.dateFrom, dateTo: out.dateTo } : null);
-  const preceding = out.compare === 'previous' && primaryRange ? previousWindow(primaryRange, { rolling: /^last_\d+_days$/.test(out.relativeWindow || '') }) : null;
+  const preceding = out.compare === 'previous' && primaryRange ? previousWindow(primaryRange, { rolling: /^(?:last|next)_\d+_days$/.test(out.relativeWindow || '') }) : null;
   if (preceding && out.compareFrom === preceding.dateFrom && out.compareTo === preceding.dateTo) {
     delete out.compareFrom;
     delete out.compareTo;

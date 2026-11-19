@@ -129,7 +129,7 @@ function taskLists(groups) {
     // taşları" olarak anlatılmaz (devam eden gecikmiş kilometre taşı dışarıda kalırdı).
     // Metin, iş dağılımı düğümü, öncelik ya da oluşturan koşuluyla daraltılmış liste de kapsamın açık kilometre taşı nüfusu değildir.
     const milestone = filters.milestone === true && statuses.length === OPEN_STATUSES.size && [...OPEN_STATUSES].every((status) => statuses.includes(status))
-      && !filters.deadline && !filters.dateFrom && !filters.dateTo && ['text', 'wbsId', 'priorities', 'createdByMe'].every((key) => neutral(filters[key], key));
+      && !filters.deadline && !filters.dateFrom && !filters.dateTo && ['text', 'wbsId', 'priorities', 'createdByMe', 'hasDescription'].every((key) => neutral(filters[key], key));
     const kind = milestone ? 'milestone' : filters.deadline === 'overdue' ? 'overdue'
       : statuses.length && statuses.every((status) => OPEN_STATUSES.has(status)) && upcoming ? 'upcoming' : null;
     if (!kind) continue;

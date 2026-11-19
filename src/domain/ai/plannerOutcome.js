@@ -149,8 +149,13 @@ const CHART_TYPE_NAMES = Object.freeze({ bar: ['çubuk grafik', 'bar chart'], do
  * İstenen grafik TÜRÜ doğrulanmış kanıttan çizilemediğinde türün gerektirdiği veriyi söyleyen kısa not; başka uygun bir
  * grafik çizildiyse bunu da söyler (yanlış grafik sessizce istenenin yerine geçmez).
  */
-export function renderChartTypeUnavailable({ type, substituted = null, locale = 'tr' } = {}) {
+export function renderChartTypeUnavailable({ type, substituted = null, locale = 'tr', reason = null } = {}) {
   const en = locale === 'en';
+  if (type === 'line' && reason === 'coverage') {
+    return en
+      ? '_A line chart could not be drawn because recording coverage for the activity series could not be verified; the observed counts are shown in the table._'
+      : '_Hareket dizisinin kayıt kapsamı doğrulanamadığı için çizgi grafik çizilemedi; gözlenen sayılar tabloda gösterildi._';
+  }
   const need = CHART_TYPE_NEEDS[type];
   const name = CHART_TYPE_NAMES[type];
   if (!need || !name) return renderChartUnavailable({ locale });

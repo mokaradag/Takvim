@@ -268,7 +268,7 @@ const taskSearch = {
     // Not varlığı (görev okuması) ile not metni (ayrı okuma) arasında açıklama boşaltılmışsa "açıklaması olan" sayfa artık aynı
     // anlık görüntü değildir: sayım tam kabul edilmez (yeni okuma bütçesi açılmaz; metni dönmeyen satır okunmuş not sayılmaz).
     const staleNotes = filters.hasDescription && withNotes && pageFacts.some((fact) => !notes.get(fact.id)?.text?.trim());
-    const exactTotal = sorted.length;
+    const exactTotal = staleNotes ? null : sorted.length;
     const stableNextCursor = nextCursor;
     const descriptor = searchedScope(scope, filters.projectId);
     // Metinle ad çözümü: yalnızca TEK KESİN başlık eşleşmesi görevi çözer. Tek

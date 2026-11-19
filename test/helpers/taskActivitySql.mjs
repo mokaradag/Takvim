@@ -24,7 +24,7 @@ export function taskActivityRecordsets(db, params) {
   let rows = db.auditLog.filter((row) => row.EntityType === 'TASK' && ['CREATE', 'UPDATE', 'DELETE'].includes(row.ActionCode))
     .filter((row) => new Date(row.OccurredAt) >= params.startUtc && new Date(row.OccurredAt) < params.endUtc)
     .filter((row) => (!params.projectId || key(row.ProjectId) === key(params.projectId)) && (!params.taskIdText || key(row.EntityId) === key(params.taskIdText)))
-    .filter((row) => params.scope === 'visible' || (params.scope === 'mine' ? row.ActorSicil === params.sicil : (params.isAdmin && !level && !(aggregate && row.ActorSicil === params.sicil)) || inTeam(row.ActorSicil)))
+    .filter((row) => params.scope === 'visible' || (params.scope === 'mine' ? row.ActorSicil === params.sicil : (!aggregate && params.isAdmin && !level) || inTeam(row.ActorSicil)))
     .flatMap((row) => {
       const task = db.tasks.find((task) => key(task.TaskId) === key(row.EntityId));
       const project = db.projects.find((project) => key(project.ProjectId) === key(row.ProjectId));
