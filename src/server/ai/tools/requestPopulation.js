@@ -676,9 +676,9 @@ export function requestCapabilityProblems(request, { allowedTextFields = [], dec
     const rowHomes = collections.filter((collection) => rowMetricFields(tool.name, collection, metric).length);
     // Ölçü yalnızca seçilen görünümde bulunmayan satır koleksiyonunda taşınıyorsa (ör. dönem özeti görünümünde `items` satırları,
     // türlü `task.title` dahil) istek yürütülmeden reddedilir: yanıt ölçüsüz sessizce dönmez.
-    const boundHere = bound.includes(tool.name);
+    // Seçiciyle tek nesneye dönüşen araçlarda (ör. görevli `rota_recurrence_inspect` için `data.series.*`) özellik alanı nesnede vardır.
     const metricHomes = bound.length ? request.fields.filter((field) => field.metric === metric).map((field) => field.path) : metricPaths(tool.name, metric);
-    if (request.operation === 'value' && (!property || boundHere) && rowHomes.length > 0 && metricHomes.length
+    if (request.operation === 'value' && (!type || tool.name === 'rota_activity_search') && rowHomes.length > 0 && metricHomes.length
       && metricHomes.every((path) => rowHomes.some((collection) => path.startsWith(`data.${collection}.`)))
       && !metricHomes.some((path) => shaped.some((collection) => path.startsWith(`data.${collection}.`)))) {
       problems.push(`$.metrics[${index}]:view`);
