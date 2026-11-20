@@ -392,6 +392,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   };
 
   let unverifiedActivitySeries = false;
+  let unverifiedActivityObserved = false;
   for (const part of parts) {
     const presentation = table && part.presentation ? { ...part.presentation, layout: 'table' } : part.presentation;
     if (!presentation || !Array.isArray(presentation.facts)) continue;
@@ -480,7 +481,12 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
             : presentation.facts.some((item) => item.evidenceId === group.evidenceId
               && ((item.fact?.field === 'data.coverage.status' && item.fact.value !== 'complete')
                 || item.fact?.semantic?.series?.partial === true || item.fact?.semantic?.series?.recorded === false)));
-        if (partialActivitySeries && described.rows.length >= 3) unverifiedActivitySeries = true;
+        if (partialActivitySeries && described.rows.length >= 3 && chartAllowed(ordinal)) {
+          unverifiedActivitySeries = true;
+          if (presentation.facts.some((item) => item.evidenceId === group.evidenceId && /^data\.series\.\d+\.events$/.test(item.fact?.field || '') && Number.isFinite(item.fact?.value))) {
+            unverifiedActivityObserved = true;
+          }
+        }
         const dated = (cover?.kind === 'series' || cover?.kind === 'activitySeries' && cover.verified) && complete && described.rows.length >= 3;
         described.columns.forEach((column, index) => {
           if (partialActivitySeries || !column.numeric || !labels) return;
@@ -759,7 +765,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     ...(framing ? { framing } : listing ? { framing: listing } : {}), ...(analyst && outline && contentParts.size >= 1 ? { closing: nextStepSentence(outline.focus || [], locale) } : {}),
     // Çok bölümlü analitik rapor: tablolar kendi bölümünde cümlesiz kalmaz. Yalnızca tablo istenen yanıt tabloyla başlar.
     ...(analyst && contentParts.size > 1 ? { report: true } : {}),
-    ...(unverifiedActivitySeries ? { unverifiedActivitySeries: true } : {}),
+    ...(unverifiedActivitySeries ? { unverifiedActivitySeries: true, unverifiedActivityObserved } : {}),
     // Genel değerlendirme (ilk yön genel durum, tek kapsam): yanıt genel durumun kendisiyle açılır.
     ...(analyst && outline?.focus?.[0] === 'overview' && !(outline.layers?.length > 1) ? { statusLead: true, overviewPart: parts.find((part) => part.index === 0)?.index + 1 } : {}) }) });
 }

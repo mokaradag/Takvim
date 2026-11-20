@@ -19,27 +19,25 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
   // Bugün dâhil son N günün aralığı (Türkiye günü) yanıtta görünmelidir: daha kısa bir dönemin grafiği dönem denetimini geçmez.
   // Dönem etiketi bütün olarak aranır: "13 Temmuz – 30 Eylül" metni "3 Temmuz – 30 Eylül" beklentisini sonek eşleşmesiyle geçmez.
   if (Number.isSafeInteger(expected.periodDays) && !new RegExp(`(^|[^0-9])${periodLabel(expected.periodDays, now).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(String(rendered.text || ''))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays, now)}`);
-  // İstenen takvim dönemi (ör. bu hafta ya da bu ay/geçen ay) alternatif yanıtlarda da doğrulanır.
+  // İstenen takvim dönemi (ör. bu hafta ya da bu ay/geçen ay) çözülen takvim aralığıyla doğrulanır; göreli etiket tek başına yetmez.
   if (expected.periodKind) {
     const text = String(rendered.text || '');
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
     const [y, m] = [Number(today.slice(0, 4)), Number(today.slice(5, 7))];
     const prevY = m === 1 ? y - 1 : y;
     const prevM = m === 1 ? 12 : m - 1;
+    const en = expected.language === 'en';
     if (expected.periodKind === 'this_week') {
       const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
       const mon = new Date(Date.parse(`${today}T00:00:00Z`) - dow * 86400000).toISOString().slice(0, 10);
       const sun = new Date(Date.parse(`${mon}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10);
-      const monPart = `${Number(mon.slice(8, 10))} ${MONTHS[Number(mon.slice(5, 7)) - 1]}`;
-      const sunPart = `${Number(sun.slice(8, 10))} ${MONTHS[Number(sun.slice(5, 7)) - 1]}`;
-      if (!/bu hafta/i.test(text) && !(text.includes(monPart) && text.includes(sunPart))) failures.push('istenen hafta dönemi görünmüyor: this_week');
+      const weekLabel = formatRangeLabel(mon, sun, en);
+      if (!new RegExp(`(^|[^0-9])${weekLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text)) failures.push('istenen hafta dönemi görünmüyor: this_week');
     } else if (expected.periodKind === 'this_month_vs_last_month') {
-      const en = expected.language === 'en';
       const curName = (en ? EN_MONTHS : MONTHS)[m - 1];
       const prevName = (en ? EN_MONTHS : MONTHS)[prevM - 1];
-      const namedPair = en ? /\blast month\b/i.test(text) && /\bthis month\b/i.test(text) : /geçen ay/i.test(text) && /bu ay/i.test(text);
       const literalPair = text.includes(`${prevName} ${prevY}`) && text.includes(`${curName} ${y}`);
-      if (!namedPair && !literalPair) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
+      if (!literalPair) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
     }
   }
   // Grafik türü ve içerik beklentileri AYNI görünür grafikte aranır: başlıktaki ölçü (`chartTitle`), bütün etiketler (`chartItems`),
@@ -57,16 +55,20 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
 }
 const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 const EN_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-/** Sunucunun aralık yazımıyla aynı biçim (`rangeLabel`): "2 Temmuz – 30 Eylül 2026", yıl sınırında iki yıl. */
+/** Sunucunun aralık yazımıyla aynı biçim (`rangeLabel`): aynı ayda "16–22 Kasım 2026", ay sınırında "2 Temmuz – 30 Eylül 2026", yıl sınırında iki yıl. */
+function formatRangeLabel(from, to, en = false) {
+  const months = en ? EN_MONTHS : MONTHS;
+  const part = (day) => `${Number(day.slice(8, 10))} ${months[Number(day.slice(5, 7)) - 1]}`;
+  if (from === to) return `${part(to)} ${to.slice(0, 4)}`;
+  const lastDay = new Date(Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)), 0)).getUTCDate();
+  if (from.slice(0, 7) === to.slice(0, 7) && from.endsWith('-01') && Number(to.slice(8, 10)) === lastDay) return `${months[Number(to.slice(5, 7)) - 1]} ${to.slice(0, 4)}`;
+  if (from.slice(0, 7) === to.slice(0, 7)) return `${Number(from.slice(8, 10))}–${part(to)} ${to.slice(0, 4)}`;
+  return from.slice(0, 4) === to.slice(0, 4) ? `${part(from)} – ${part(to)} ${to.slice(0, 4)}` : `${part(from)} ${from.slice(0, 4)} – ${part(to)} ${to.slice(0, 4)}`;
+}
 function periodLabel(days, now = new Date()) {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
   const from = new Date(Date.parse(`${today}T00:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);
-  const part = (day) => `${Number(day.slice(8, 10))} ${MONTHS[Number(day.slice(5, 7)) - 1]}`;
-  if (from === today) return `${part(today)} ${today.slice(0, 4)}`;
-  const lastDay = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0)).getUTCDate();
-  if (from.slice(0, 7) === today.slice(0, 7) && from.endsWith('-01') && Number(today.slice(8, 10)) === lastDay) return `${MONTHS[Number(today.slice(5, 7)) - 1]} ${today.slice(0, 4)}`;
-  if (from.slice(0, 7) === today.slice(0, 7)) return `${Number(from.slice(8, 10))}–${part(today)} ${today.slice(0, 4)}`;
-  return from.slice(0, 4) === today.slice(0, 4) ? `${part(from)} – ${part(today)} ${today.slice(0, 4)}` : `${part(from)} ${from.slice(0, 4)} – ${part(today)} ${today.slice(0, 4)}`;
+  return formatRangeLabel(from, today, false);
 }
 // Tamamlanmamış ürün yanıtı, senaryonun anlamsal beklentisi olmasa da kabul kanıtı değildir.
 function completionFailures(rendered, trace) {

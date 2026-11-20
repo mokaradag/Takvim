@@ -31,13 +31,13 @@ export const H_FINDING_TEXT = Object.freeze({
     noteDigest: /açık görevin notu(?:nun tamamı)?|tanesinin notu okundu|açıklaması olan açık görev yok|not parçası okundu/
   },
   en: {
-    periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|no task created in this period is currently on record|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events? (?:was|were) recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
+    periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|no task created in this period is (?:currently on record|still present today)|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events?(?: across \*\*\d+\*\* tasks?)? (?:was|were) recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
     periodComparison: /Comparing the two periods|comparison is provisional|two periods overlap|cannot be compared|In both periods/,
-    completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn/,
+    completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn|no task has a recorded completion date/,
     activityTrend: /Recorded activity peaked|no activity record; those are unknown/,
     horizonSpread: /within 7 days, \*\*\d+\*\* within 14 days|In the next 30 days, no open task is due/,
     historyLimit: /cannot be reconstructed/,
-    noteDigest: /descriptions? of (?:the|all)|returned were read|has a description to read|Returned excerpts from/
+    noteDigest: /The descriptions? of (?:the|all) \*\*\d+\*\* open tasks? that have one .* were read|Returned excerpts from \*\*\d+\*\* open task descriptions? .* were read|open tasks? with a description .*, the \*\*\d+\*\* returned were read|has a description to read/i
   }
 });
 
@@ -220,7 +220,7 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
   for (const pattern of expect.says || []) if (!new RegExp(pattern, 'u').test(content)) problems.push(`beklenen ifade yok: ${pattern}`);
   // İstenen tablo: Markdown tablosu gerçek satırlarla çizilmiş ya da sunucu tablo üretilemediğini açıkça bildirmiş olmalıdır.
   if (expect.table && !/(?:^|\n)\|[^\n]+\|\n\|(?:\s*:?-+:?\s*\|)+\n\|[^\n]+\|/u.test(content)
-    && !/tablo olarak gösterilebilecek satır koleksiyonu yok|no row collection.*table/iu.test(content)) problems.push('beklenen tablo yok');
+    && !/tablo olarak gösterilebilecek satır koleksiyonu yok|no row collection.*table|İstenen tablo güvenle hazırlanamadı|requested table could not be rendered safely/iu.test(content)) problems.push('beklenen tablo yok');
   // Kişi başına tamamlanma kırılımı (ör. t36): yalnızca ekip toplamı yetmez; sorumluya göre gruplanmış tamamlanma okuması gerekir.
   if (expect.groupBy && !(result.evidence || []).some((item) => {
     const filters = item.data?.filters || {};
@@ -260,7 +260,10 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
     for (const [measure, [dateField, title]] of Object.entries(specs).filter(([measure]) => (expect.measures || []).includes(measure))) {
       // Aynı dönem çifti birden çok kapsam/proje için okunduysa her nüfusun kendi [önce, sonra] toplam çifti çıkarılır.
       const readsFor = (result.evidence || []).filter((item) => item.ok === true && item.tool === 'rota_task_analytics' && !item.data?.groupBy
-        && item.data?.filters?.dateField === dateField);
+        && item.data?.filters?.dateField === dateField
+        && (measure === 'completed'
+          ? item.data?.filters?.statuses?.length === 1 && item.data.filters.statuses[0] === 'done'
+          : !item.data?.filters?.statuses?.length));
       const popKey = (item) => {
         const f = item.data?.filters || {};
         return JSON.stringify([f.assignee || null, f.teamLevel || null, f.personSicil || null, f.projectId || null]);
@@ -275,7 +278,14 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
         const pair = periods.map((range) => items.find((item) => item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1]));
         if (pair.some((item) => !item || !Number.isFinite(item.data?.totals?.total))) return null;
         const sample = pair[0].data.filters;
-        const suffix = [sample.project, sample.person].filter((name) => typeof name === 'string' && name.trim()).join(' — ');
+        const teamPart = sample.teamLevel === 'UNIT' ? (english ? 'Your unit' : 'Biriminiz')
+          : sample.teamLevel === 'DEPARTMENT' ? (english ? 'Your department' : 'Bölümünüz')
+            : sample.teamLevel === 'DIRECTORATE' ? (english ? 'Your directorate' : 'Direktörlüğünüz')
+              : (english ? 'Your team' : 'Ekibiniz');
+        const ownerLabel = !sample.person && sample.personSicil == null
+          ? (sample.assignee === 'me' ? (english ? 'Your work' : 'Kendi işleriniz') : sample.assignee === 'team' ? teamPart : '')
+          : '';
+        const suffix = [sample.project, sample.person, ownerLabel].filter((name) => typeof name === 'string' && name.trim()).join(' — ');
         return { suffix, counts: pair.map((item) => item.data.totals.total) };
       }).filter(Boolean);
       const matching = charts.filter((item) => item.type === 'bar' && title.test(String(item.title || '')));
@@ -284,7 +294,7 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
       for (const chart of matching) {
         if (chart.items?.length !== 2) { problems.push('karşılaştırma grafiği iki dönem çubuğu taşımıyor'); continue; }
         const chartSuffix = String(chart.title || '').includes(' — ') ? String(chart.title).split(' — ').slice(1).join(' — ').trim() : '';
-        const candidatePops = chartSuffix
+        const candidatePops = chartSuffix || populationPairs.some((pop) => pop.suffix)
           ? populationPairs.filter((pop) => pop.suffix === chartSuffix)
           : populationPairs.filter((_, index) => !usedPops.has(index));
         const values = chart.items.map((item) => item.value).join();

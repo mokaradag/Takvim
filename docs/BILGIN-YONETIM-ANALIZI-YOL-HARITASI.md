@@ -601,7 +601,7 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
    adlarıyla yazımı; ayrık küme (y01–y30) bu turda sorulmaz, ayrı bir turda yalnızca bir kez sorulur.
 2. Not soruları (H5) yalnızca sohbet kutusunda "Notlar ve iletiler" anahtarı **o iletide** açıkken sorulur; anahtar kapalıyken
    aynı soru bir kez daha sorulup rıza isteği (veri okunmadan) doğrulanır.
-3. Dönem beklenen her yanıtta dönem adı ve tarih aralığı zorunludur. Aralıkları yeniden oynatma gününe göre çözün ve karşılaştırmada
+3. Dönem beklenen her yanıtta çözülen tam tarih aralığı (özel aralıklar ve karşılaştırmanın her iki dönemi dâhil), takvim dönemi adı olan dönemlerde ise ayrıca dönem adı zorunludur. Aralıkları yeniden oynatma gününe göre çözün ve karşılaştırmada
    her iki aralığı da birebir doğrulayın. Eksik aralık kabulü başarısız kılar. Beklenen sonuç veri okumadan rıza istemekse dönem
    denetimi uygulanmaz. Hareket kaydının başlangıcı veya tamlığı doğrulanamadığında sınır açıklanır ve kanıtsız dönem bilinmiyor
    olarak gösterilir. Bitiş tarihi kayıtlı olmayan tamamlanmış görevler varsa çekince belirtilir. Yüzde değişim yalnızca bitmiş,

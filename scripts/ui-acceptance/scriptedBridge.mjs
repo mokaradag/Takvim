@@ -14,7 +14,12 @@ import { compositionView, coveringBlocks, isCompositionCall } from '../../test/h
 
 const PORT = Number(process.env.BRIDGE_PORT ?? 18741);
 const CALLS = process.env.BRIDGE_CALLS || null;
-const benchmark = JSON.parse(readFileSync(process.env.UI_BENCHMARK || new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
+const benchmarks = (process.env.UI_BENCHMARK
+  ? process.env.UI_BENCHMARK.split(',').filter(Boolean)
+  : [
+    new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url),
+    new URL('../../test/fixtures/bilgin-temporal-benchmark.json', import.meta.url)
+  ]).map((source) => JSON.parse(readFileSync(source, 'utf8')));
 // Göreli termin belirteçleri ("T+N") çalıştırma gününe (Türkiye günü) göre çözülür; sentetik veri de aynı güne göre kurulur.
 const istanbulDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 // `BRIDGE_TODAY`: yalnızca sınamada sabit gün (köprü ile sınama kahini aynı saati kullanır); geçersiz takvim günü açılışta reddedilir.
@@ -36,7 +41,13 @@ const resolved = (plan) => JSON.parse(JSON.stringify(plan), (key, value) => (DAT
 const PROFILE = process.env.UI_PROFILE || null;
 const plans = new Map();
 const collisions = new Set();
-for (const item of [...(benchmark.scenarios || []), ...(benchmark.original || []), ...(benchmark.targeted || []), ...(benchmark.adversarial || [])]) {
+const items = benchmarks.flatMap((benchmark) => [
+  ...(benchmark.scenarios || []),
+  ...(benchmark.original || []),
+  ...(benchmark.targeted || []),
+  ...(benchmark.adversarial || [])
+]);
+for (const item of items) {
   if (PROFILE && item.profile && item.profile !== PROFILE) continue;
   for (const turn of item.turns || [{ text: item.text, plan: item.plan }]) {
     if (!turn.plan) continue;

@@ -272,8 +272,12 @@ function rankPlan(request, source, collection) {
   const limit = Math.min(request.rank.limit || 1, ranked.length);
   if (!limit) return null;
   const boundary = ranked[limit - 1].value;
-  const order = ranked.filter((item, position) => position < limit || item.value === boundary).map((item) => item.index);
-  return { rows, ranked, boundary, order, direction, rankValue };
+  // Not örneği (`hasDescription` + `task.updatedAt` azalan): araç eşit güncelleme anlarını `(başlık, kimlik)` ile belirlenimci kırar;
+  // örnek boyu sabittir ve sayfa sınırındaki eşit zaman damgası örneği geçersiz kılmaz.
+  const boundedSample = source.tool === 'rota_task_search' && request?.filters?.hasDescription === true
+    && request?.rank?.metric === 'task.updatedAt' && request?.rank?.order === 'desc';
+  const order = ranked.filter((item, position) => position < limit || (!boundedSample && item.value === boundary)).map((item) => item.index);
+  return { rows, ranked, boundary, order, direction, rankValue, boundedSample };
 }
 
 /** Sıralama isteğinin bu kanıtta beklenen satır indisleri; seçim yine `verifyRequestedFacts` ile doğrulanır. */
@@ -290,7 +294,7 @@ export function rankedRowIndexes(request, tool, envelope, canonical, concrete = 
 function rankedIndexes(request, source, collection, selected) {
   const plan = rankPlan(request, source, collection);
   if (!plan) return null;
-  const { rows, ranked, boundary, order, direction, rankValue } = plan;
+  const { rows, ranked, boundary, order, direction, rankValue, boundedSample } = plan;
   const expected = new Set(order);
   if (expected.size !== selected.size || [...expected].some((index) => !selected.has(index))) return null;
   if (collectionComplete(source, collection.canonical)) return order;
@@ -302,7 +306,7 @@ function rankedIndexes(request, source, collection, selected) {
   return proof?.collection === collection.canonical && proof.metric === request.rank.metric
     && proof.order === request.rank.order && proof.returnedCount === rows.length
     && (proof.nextValue === null || (ranked.length >= (request.rank.limit || 1) && nextValue != null && typeof nextValue === typeof boundary
-      && (nextValue < boundary ? -1 : nextValue > boundary ? 1 : 0) * direction > 0)) ? order : null;
+      && (nextValue < boundary ? -1 : nextValue > boundary ? 1 : 0) * direction >= (boundedSample ? 0 : 1))) ? order : null;
 }
 
 export function entityKey(type, id) {

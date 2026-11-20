@@ -103,9 +103,7 @@ export function canonicalFacets(family, values, today) {
     case 'activity': {
       const window = populationArguments('rota_activity_search', { ...values, ...periodWindow(values.period, today),
         period: values.period || values.dateFrom ? 'custom' : undefined }, today);
-      const fallbackFrom = !values.period && !values.dateFrom && window.dateFrom === today;
-      const fallbackTo = !values.period && !values.dateTo && window.dateTo === today;
-      return compact({ dateFrom: fallbackFrom ? null : window.dateFrom, dateTo: fallbackTo ? null : window.dateTo,
+      return compact({ dateFrom: window.dateFrom, dateTo: window.dateTo,
         activityScope: window.scope && window.scope !== 'visible' ? window.scope : null, activityKind: values.kind || null,
         // Aşama H: dönem özeti görünümü ve ekip düzeyi nüfusun parçasıdır (satır okumasıyla özet birbirinin yerine geçmez).
         activityView: values.view || null, teamLevel: window.scope === 'team' ? values.teamLevel || null : values.teamLevel ?? null });
@@ -412,6 +410,10 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   const family = FAMILIES[tool] || null;
   if (own.length) {
     const declared = canonicalFacets(family, declaredValues(family, filters), today);
+    if (family === 'activity' && !declaredFilters.period && !declaredFilters.dateFrom) {
+      delete declared.dateFrom;
+      delete declared.dateTo;
+    }
     const executed = own.map((call) => canonicalFacets(family, call.args, today));
     for (const key of new Set(executed.flatMap((facets) => Object.keys(facets)).concat(Object.keys(declared)))) {
       const values = executed.map((facets) => facets[key]);

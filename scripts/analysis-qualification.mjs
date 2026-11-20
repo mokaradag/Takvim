@@ -265,7 +265,7 @@ export function plannerScore(result, expect, today = corpus.today) {
           || metrics.some((metric) => ['task.status', 'tasks.open', 'tasks.todo', 'tasks.inProgress', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'].includes(metric));
       };
       if (!requests.some((request) => ['rota_task_analytics', 'rota_task_search', 'rota_workload_summary'].includes(request.population?.tool)
-        && !request.filters?.dateFrom && !request.filters?.dateTo && !request.filters?.dateField && hasCurrentStateMeasure(request))) failures.push('güncel durum ayrı okunmadı');
+        && !request.filters?.dateFrom && !request.filters?.dateTo && !request.filters?.dateField && !request.filters?.period && hasCurrentStateMeasure(request))) failures.push('güncel durum ayrı okunmadı');
     }
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
@@ -358,15 +358,36 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
     && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
     && (!bucketed || !primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)));
   const stateOnlyLayer = (layer) => Boolean(layer?.focus?.length && !layer.focus.some((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)));
+  const carriesStateFocus = (request, layer, stateFocus) => {
+    const f = request.filters || {};
+    const m = request.metrics || [];
+    const g = request.population?.groupBy;
+    const tool = request.population?.tool;
+    if (stateFocus === 'horizons') return tool === 'rota_task_analytics' && g === 'due_horizon';
+    if (stateFocus === 'notes') return tool === 'rota_task_search' && f.hasDescription === true;
+    if (f.dateFrom || f.dateTo || f.dateField || f.period) return false;
+    if (stateFocus === 'overdue') return f.deadline === 'overdue' || m.includes('tasks.overdue');
+    if (stateFocus === 'upcoming') return f.deadline === 'due_next_7_days' || m.includes('tasks.dueNext7Days');
+    if (stateFocus === 'critical') return Array.isArray(f.priority) && f.priority.includes('critical');
+    if (stateFocus === 'milestones') return f.milestone === true || m.includes('tasks.openMilestones');
+    if (stateFocus === 'workload') return tool === 'rota_workload_summary' || g === 'assignee' || (layer?.scope === 'self' && g === 'project');
+    if (stateFocus === 'projects') return tool === 'rota_portfolio_summary' || g === 'project';
+    if (stateFocus === 'org') return ['department', 'unit', 'assignee'].includes(g) || tool === 'rota_workload_summary';
+    if (stateFocus === 'priority') return g === 'priority';
+    if (stateFocus === 'deadlines') return g === 'deadline';
+    if (stateFocus === 'schedule') return g === 'target_month';
+    return g === 'status' || ['tasks.open', 'tasks.todo', 'tasks.inProgress', 'tasks.overdue', 'tasks.completionRatePercent'].some((metric) => m.includes(metric));
+  };
   const reads = (range) => layers.every((layer) => {
     const own = ownMeasures(layer, measures, false);
     if (!own.length && stateOnlyLayer(layer)) {
-      return requests.some((request) => !request.filters?.dateFrom && !request.filters?.dateTo && temporalRequestMatches(request, layer));
+      return layer.focus.every((stateFocus) => requests.some((request) => temporalRequestMatches(request, layer) && carriesStateFocus(request, layer, stateFocus)));
     }
     return (own.length ? own : [null]).every((measure) => candidates(layer, measure, range).length);
   });
   const range = expectedRange(expect.window, today);
   if (range && !expect.stateComparison && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
+  if (!range && atoms.some(stateOnlyLayer) && !reads(null)) failures.push('durum katmanı yönü okunmuyor');
   const prior = expectedCompare(expect.compare, expect.window, today);
   if (prior && !expect.stateComparison && !requests.some((request) => inRange(request, prior))) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
   if (prior && !expect.stateComparison && !layers.every((layer) => {

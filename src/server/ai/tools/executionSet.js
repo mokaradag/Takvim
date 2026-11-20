@@ -8,7 +8,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema, populationShape, SERVER_EXPANDED_METRICS } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
-import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief, TEMPORAL_FOCUS } from './analysisPlan.js';
+import { analysisSchema, ANALYSIS_LIMITS, canonicalFocus, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief, TEMPORAL_FOCUS } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
@@ -553,13 +553,14 @@ function layeredAnalysis(plan, today = null) {
   const VALID_WINDOWS = new Set([...TEMPORAL_WINDOWS, 'all_time']);
   // Ek katmanların dönem alanları katlanmadan ÖNCE doğrulanır: geçersiz tür, bilinmeyen ad, tarihle çakışan `all_time` ya da
   // odakla uyumsuz adlı dönem (ör. tamamlanan işler için `next_7_days`) tarih eşitliğiyle sessizce düşürülemez.
+  const effectiveFocusOf = (item) => (Array.isArray(item.focus) ? item.focus : Array.isArray(primary.focus) ? primary.focus : []).map(canonicalFocus);
   items.forEach((item, index) => {
     if (item.relativeWindow == null) return;
     if (typeof item.relativeWindow !== 'string') throw invalidArguments([index === 0 ? '$.analysis.relativeWindow:type' : '$.analysis.also:window']);
     if (!VALID_WINDOWS.has(item.relativeWindow)) throw invalidArguments([index === 0 ? '$.analysis.relativeWindow:enum' : '$.analysis.also:window']);
     const dated = item.dateFrom != null || item.dateTo != null;
     if (item.relativeWindow === 'all_time' && dated) throw invalidArguments(['$.analysis.relativeWindow:conflict']);
-    const focus = Array.isArray(item.focus) ? item.focus : Array.isArray(primary.focus) ? primary.focus : [];
+    const focus = effectiveFocusOf(item);
     if (/^next_/.test(item.relativeWindow) && focus.some((entry) => TEMPORAL_FOCUS.includes(entry))) throw invalidArguments(['$.analysis.focus:futureWindow']);
     if (PAST.has(item.relativeWindow) && focus.includes('upcoming')) throw invalidArguments(['$.analysis.dateTo:past']);
   });
@@ -576,10 +577,12 @@ function layeredAnalysis(plan, today = null) {
     return JSON.stringify(named ? [named.dateFrom, named.dateTo, null] : [item.dateFrom ?? null, item.dateTo ?? null, null]);
   };
   if (rest.some((item) => window(item) !== window(primary))) throw invalidArguments(['$.analysis.also:window']);
-  // Açıkça yazılmış "tüm zamanlar" dönem verilmemesiyle aynı değildir: birincil dönemsizse ek katmanın `all_time` bildirimi korunur
-  // (tarihsel yönde reddedilir; sessizce varsayılan 30 güne dönüşmez).
+  // Açıkça yazılmış "tüm zamanlar" yalnızca tarihsel yön taşıyan bir katmanda bildirildiyse dönem verilmemesiyle aynı değildir
+  // (tarihsel yönde reddedilir; sessizce varsayılan 30 güne dönüşmez). Yalnızca durum yönlü katmanın `all_time` alanı ise
+  // dönemsizlikle eşdeğerdir ve başka katmanın dönemsiz tarihsel yönünü bozmaz.
   const primaryWindowed = primary.relativeWindow != null || primary.dateFrom != null || primary.dateTo != null;
-  const explicitAllTime = !primaryWindowed && rest.some((item) => item.relativeWindow === 'all_time');
+  const temporalAllTime = items.some((item) => item.relativeWindow === 'all_time' && effectiveFocusOf(item).some((entry) => TEMPORAL_FOCUS.includes(entry)));
+  const explicitAllTime = !primaryWindowed && temporalAllTime;
   // Ek öğede ek kapsamın taşıyamadığı bir alan (daraltma, kendiyle karşılaştırma, satır, takip eylemi, iç içe ek kapsam) ya da
   // birincilde kendi `also` alanı varsa çeviri o koşulu sessizce düşürür: plan reddedilir (model düzeltir). Dönem yukarıda
   // birincille aynı olduğu doğrulandı; sunum alanları birincilinkiyle aynıysa anlam taşımaz.
@@ -596,6 +599,7 @@ function layeredAnalysis(plan, today = null) {
   const languages = [...new Set(items.filter((item) => Object.hasOwn(item, 'language')).map((item) => item.language))];
   if (languages.length > 1 || (languages.length && plan.language != null && plan.language !== languages[0])) throw invalidArguments(['$.analysis.also:scope']);
   const { language: _language, ...head } = primary;
+  if (head.relativeWindow === 'all_time' && !temporalAllTime && !['previous', 'row'].includes(head.scope)) delete head.relativeWindow;
   return { ...plan, ...(languages.length && plan.language == null ? { language: languages[0] } : {}), analysis: { ...head, ...(explicitAllTime ? { relativeWindow: 'all_time' } : {}), also: rest.map(layer) } };
 }
 
@@ -634,9 +638,14 @@ function equivalentAnalysisSpelling(plan, today) {
     delete out.compareFrom;
     delete out.compareTo;
   }
-  // "Bir önceki eşdeğer dönem" ile aynı günleri gösteren karşılaştırma çifti de çelişki değildir (birincil dönemin kuralıyla çözülür).
+  // "Bir önceki eşdeğer dönem" ile aynı günleri gösteren karşılaştırma çifti de çelişki değildir (birincil dönemin kuralıyla çözülür;
+  // yalnızca başı verilen geçmiş dönemde örtük bitiş günü bugündür).
   const isIsoDay = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
-  const primaryRange = resolved || (isIsoDay(out.dateFrom) && isIsoDay(out.dateTo) && out.dateFrom <= out.dateTo ? { dateFrom: out.dateFrom, dateTo: out.dateTo } : null);
+  const hasTemporalFocus = [out, ...(Array.isArray(out.also) ? out.also : [])]
+    .some((layer) => Array.isArray(layer?.focus) && layer.focus.map(canonicalFocus).some((focus) => TEMPORAL_FOCUS.includes(focus)));
+  const implicitTo = !out.dateTo && isIsoDay(out.dateFrom) && today && hasTemporalFocus
+    ? (out.dateFrom > today ? out.dateFrom : today) : out.dateTo;
+  const primaryRange = resolved || (isIsoDay(out.dateFrom) && isIsoDay(implicitTo) && out.dateFrom <= implicitTo ? { dateFrom: out.dateFrom, dateTo: implicitTo } : null);
   const preceding = out.compare === 'previous' && primaryRange ? previousWindow(primaryRange, { rolling: /^(?:last|next)_\d+_days$/.test(out.relativeWindow || '') }) : null;
   if (preceding && out.compareFrom === preceding.dateFrom && out.compareTo === preceding.dateTo) {
     delete out.compareFrom;

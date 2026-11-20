@@ -137,14 +137,16 @@ export function analysisSchema() {
  * okumasını değiştirmez). Alanların kendisi kapsamı belirlediğinde (ad listesiyle `projects`, satır listesiyle `previous`)
  * kapsam o alanın tek anlamına çevrilir. Başka her değer olduğu gibi doğrulanır.
  */
+export const canonicalFocus = (item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item
+  : ANALYSIS_FOCUS.find((known) => known === `${item}s` || `${known}s` === item) || item);
+
 export function normalizedBrief(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   // Değeri `null` olan alan yazılmamış alandır (zayıf model şablonu `"relativeWindow": null` gibi doldurur).
   const out = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null));
   const single = (item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item);
   if (Array.isArray(out.focus)) {
-    out.focus = out.focus.map((item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item
-      : ANALYSIS_FOCUS.find((known) => known === `${item}s` || `${known}s` === item) || item));
+    out.focus = out.focus.map(canonicalFocus);
     out.focus = out.focus.filter((item, index) => out.focus.indexOf(item) === index);
   }
   if (out.act != null && !ANALYSIS_ACTS.includes(out.act)) delete out.act;
@@ -247,8 +249,7 @@ function layerApplicable(focus, scope) {
 function normalizedLayer(raw, unwindowed = false) {
   const out = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null));
   if (Array.isArray(out.focus)) {
-    out.focus = out.focus.map((item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item
-      : ANALYSIS_FOCUS.find((known) => known === `${item}s` || `${known}s` === item) || item));
+    out.focus = out.focus.map(canonicalFocus);
     out.focus = out.focus.filter((item, index) => out.focus.indexOf(item) === index);
   }
   if (unwindowed && out.relativeWindow === 'all_time' && (out.focus == null || Array.isArray(out.focus) && !out.focus.some((focus) => TEMPORAL_FOCUS.includes(focus)))) delete out.relativeWindow;
@@ -362,51 +363,45 @@ export function resolveAnalysisBrief(analysis, { previous = null, today = null }
   const windowChanged = Boolean(analysis.relativeWindow || analysis.dateFrom || analysis.dateTo);
   const ownCompare = Boolean(analysis.compare || analysis.compareFrom || analysis.compareTo);
   let priorCompare = previous?.compare ? { compare: previous.compare } : previous?.compareFrom && previous?.compareTo ? { compareFrom: previous.compareFrom, compareTo: previous.compareTo } : null;
-  // Dönem değişmeden devralınan karşılaştırma da önceki analizin gününe göre sabittir (adlı ikinci dönem ve "bir önceki eşdeğer dönem").
-  if (priorCompare?.compare && anchor && !windowChanged) {
-    const range = priorCompare.compare !== 'previous' ? resolveWindow(priorCompare.compare, anchor)
-      : pinned ? previousWindow(pinned, { rolling: ROLLING.test(priorNamed) }) : null;
-    // "Bir önceki eşdeğer dönem" kuralı, sabitlenen tarih çiftinden aynı günlere çözülüyorsa kural olarak korunur: sonraki takip dönemi
-    // değiştirdiğinde karşılaştırma yeni döneme göre yeniden kurulabilir. Yalnızca kayan pencerenin takvim dönemiyle çakıştığı durumda
-    // (ör. 30 günlük ayla çakışan son 30 gün) somut tarihlere çevrilir.
-    const ruleKept = priorCompare.compare === 'previous' && pinned && range
-      && JSON.stringify(previousWindow(pinned, { rolling: false })) === JSON.stringify(range);
-    if (range && !ruleKept) priorCompare = { compareFrom: range.dateFrom, compareTo: range.dateTo };
+  // Dönem değişmeden devralınan adlı karşılaştırma da önceki analizin gününe göre sabittir; "bir önceki eşdeğer dönem" kuralı ise
+  // sabitlenen birincil dönem ve kayan pencere bayrağı (`windowRolling`) üzerinden kural olarak korunur.
+  if (priorCompare?.compare && priorCompare.compare !== 'previous' && anchor && !windowChanged) {
+    const range = resolveWindow(priorCompare.compare, anchor);
+    if (range) priorCompare = { compareFrom: range.dateFrom, compareTo: range.dateTo };
   }
-  // Karşılaştırmanın reddedileceği yön kümesine (ör. yalnızca bugünden başlayan teslim ufukları) karşılaştırma devralınmaz; modelin açıkça
-  // yazdığı desteklenmeyen karşılaştırma reddedilmeye devam eder.
+  const resolvedSubjects = analysis.scope === 'row' ? (analysis.rows?.length || 0)
+    : analysis.scope === 'previous' && ['person', 'project'].includes(previous?.scope) ? (previous.subjects?.length || 0) : (analysis.names?.length || 0);
+  // Karşılaştırmanın reddedileceği yön kümesine (ör. yalnızca bugünden başlayan teslim ufukları) ya da çok özneli takibe karşılaştırma
+  // devralınmaz; modelin açıkça yazdığı desteklenmeyen karşılaştırma reddedilmeye devam eder.
   const comparableFocus = focus.some((item) => COMPARABLE_FOCUS.includes(item))
     || (!focus.some((item) => TEMPORAL_FOCUS.includes(item)) && focus.some((item) => item !== 'horizons'));
-  const compare = !ownCompare && !analysis.withSelf && !withSelf.withSelf && priorCompare && comparableFocus && analysis.relativeWindow !== 'all_time' && (!windowChanged || priorCompare.compare === 'previous') ? priorCompare : {};
+  const compare = !ownCompare && !analysis.withSelf && !withSelf.withSelf && resolvedSubjects <= 1 && priorCompare && comparableFocus && analysis.relativeWindow !== 'all_time' && (!windowChanged || priorCompare.compare === 'previous') ? priorCompare : {};
   const bucket = !analysis.bucket && previous?.bucket && (focus.includes('trend') || focus.includes('activity') || focus.includes('completed')) ? { bucket: previous.bucket } : {};
-  // Sabitlenen adlı dönemin tarih çifti dönemin kuralını taşımaz: takibin yazdığı "bir önceki eşdeğer dönem" sabitlenen dönemin KENDİ
-  // kuralıyla (kayan pencere ya da takvim dönemi) burada çözülür; yoksa takvim ayıyla çakışan kayan pencere takvim ayı sayılırdı.
-  const ownPrevious = pinned && analysis.compare === 'previous' && !analysis.compareFrom && !analysis.compareTo
-    ? previousWindow(pinned, { rolling: ROLLING.test(priorNamed) }) : null;
-  const { compare: _ownCompare, ...ownAnalysis } = ownPrevious ? analysis : { compare: null };
-  const merged = { ...window, ...windowRolling, ...withSelf, ...compare, ...bucket, ...(ownPrevious ? { ...ownAnalysis, compareFrom: ownPrevious.dateFrom, compareTo: ownPrevious.dateTo } : analysis), focus: Object.freeze(focus) };
-  if (merged.withSelf && (merged.compare || merged.compareFrom)) throw invalidArguments(['$.analysis.compare:scope']);
+  const merged = { ...window, ...windowRolling, ...withSelf, ...compare, ...bucket, ...analysis, focus: Object.freeze(focus) };
+  if ((merged.withSelf || resolvedSubjects > 1) && (merged.compare || merged.compareFrom)) throw invalidArguments(['$.analysis.compare:scope']);
   if (merged.dateFrom && merged.dateTo && merged.dateFrom > merged.dateTo) throw invalidArguments(['$.analysis.dateFrom:reversed']);
   return Object.freeze(merged);
 }
 
 /**
- * Saklanan (açıklama sonrasında yeniden yürütülecek) GEÇMİŞ dönem özetinin dönem alanları: adlı dönem ve adlı ya da "bir önceki"
- * ikinci dönem, kabul edildikleri güne göre somut tarih çiftlerine sabitlenir. Kullanıcı ertesi gün yanıtlasa da "dün" o günün dünüdür; dönem
- * sessizce kaymaz. Varsayılan dönem (bildirilmemiş) ve "tüm zamanlar" sabitlenmez. Çözülemeyen özet olduğu gibi kalır.
+ * Saklanan (açıklama sonrasında yeniden yürütülecek) GEÇMİŞ dönem özetinin dönem alanları: adlı dönem, yalnızca başı verilen dönem ve
+ * adlı ya da "bir önceki" ikinci dönem, kabul edildikleri güne göre somut tarih çiftlerine sabitlenir. Kullanıcı ertesi gün yanıtlasa da
+ * "dün" ya da "1 Kasım'dan beri" o günün sınırıyla kalır; dönem sessizce kaymaz. Varsayılan dönem (bildirilmemiş) ve "tüm zamanlar"
+ * sabitlenmez. Çözülemeyen özet olduğu gibi kalır.
  */
 export function pinnedWindowFields(analysis, today) {
   const named = analysis.relativeWindow && analysis.relativeWindow !== 'all_time' ? analysis.relativeWindow : null;
+  const startOnly = Boolean(analysis.dateFrom && !analysis.dateTo);
   const own = { ...(analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}), ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}),
     ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}), ...(analysis.compare ? { compare: analysis.compare } : {}),
     ...(analysis.compareFrom && analysis.compareTo ? { compareFrom: analysis.compareFrom, compareTo: analysis.compareTo } : {}) };
   // Yalnızca geçmiş dönem yönleri sabitlenir: bugünkü durum ve ileriye dönük ufuk ("bugün", "önümüzdeki 7 gün") seçim gününe göre
   // yeniden çözülür (Aşama 4E sözleşmesi; yanıt güncel durumu anlatır).
   const historical = [analysis, ...(analysis.also || [])].some((layer) => (layer.focus || []).some((focus) => TEMPORAL_FOCUS.includes(focus)));
-  if (!today || !historical || (!named && !analysis.compare)) return own;
+  if (!today || !historical || (!named && !startOnly && !analysis.compare)) return own;
   let windows;
   try { windows = analysisWindows(analysis, today); } catch { return own; }
-  const range = named && windows.range?.dateFrom && windows.range?.dateTo && !windows.defaulted ? windows.range : null;
+  const range = (named || startOnly) && windows.range?.dateFrom && windows.range?.dateTo && !windows.defaulted ? windows.range : null;
   const compare = analysis.compare && windows.compare ? windows.compare : null;
   const { relativeWindow: _named, compare: _compare, ...rest } = own;
   return { ...rest, ...(range ? { dateFrom: range.dateFrom, dateTo: range.dateTo } : named ? { relativeWindow: named } : analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
@@ -791,6 +786,10 @@ function focusRequest(focus, analysis, base, today = null) {
   const compare = base.entities.filter((entity) => entity.type === (analysis.scope === 'person' ? 'person' : 'project')).length > 1 && ['person', 'project'].includes(analysis.scope);
   const window = analysis.dateFrom || analysis.dateTo ? { ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) } : null;
   const ahead = window && focus === 'upcoming' ? upcomingFrom(window, today, { replayPinned: analysis.replayPinned }) : window;
+  if (focus === 'upcoming' && analysis.replayPinned && ahead && !ahead.dateTo && base.filters.dateTo != null) {
+    const { dateTo: _staleTo, ...filters } = base.filters;
+    base = { ...base, filters };
+  }
   if (compare) return comparisonFor(focus, analysis, base, focus === 'upcoming' ? ahead : window, today);
   switch (focus) {
     case 'overview':
@@ -919,7 +918,8 @@ export function expandAnalysis(analysis, { previous = null, today = null, detail
   if (['previous', 'row'].includes(analysis.scope)) {
     const resolved = previousBase(analysis, previous);
     // Önceki ekip kapsamının düzeyi de öznenin parçasıdır: örgütsel kırılımın düzeyi (ör. bölüm → birim) ondan seçilir.
-    const level = analysis.scope === 'previous' && resolved.scope === 'team' && previous.level ? { level: previous.level } : {};
+    const teamLevel = resolved.base.filters?.teamLevel || (analysis.scope === 'previous' ? previous.level : null);
+    const level = resolved.scope === 'team' && teamLevel ? { level: teamLevel } : {};
     analysis = { ...analysis, scope: resolved.scope, ...level };
     return expandWith(analysis, narrowed(resolved.base), today, detail, chart, charts, reserve, false, optionalFits);
   }
@@ -996,8 +996,8 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
   const add = (items, owner) => {
     for (const item of items) { seen.add(JSON.stringify(item)); parts.push(item); owners.set(item, owner); }
   };
-  // Sunucunun kapsam gereği eklediği okumalar ve bütün katmanların zorunlu tarihsel/ufuk/not okumaları bildirilebilir dağılım
-  // yönlerinden ÖNCE yer alır: önceki katmanın isteğe bağlı dağılımı bütçeyi doldurup sonraki katmanın zorunlu okumasını reddettirmez.
+  // Bütün katmanların açıkça bildirilen zorunlu tarihsel/ufuk/not okumaları türetilen ve isteğe bağlı dağılım yönlerinden ÖNCE yer
+  // alır: önceki katmanın türetilen/isteğe bağlı okuması bütçeyi doldurup sonraki katmanın zorunlu okumasını reddettirmez.
   const mandatoryFocus = (layer, focus) => TEMPORAL_FOCUS.includes(focus)
     || (HISTORY_GROUP_FOCUS.includes(focus) && layer.focus.some((item) => ['completed', 'created', 'trend'].includes(item)))
     || ['horizons', 'notes'].includes(focus);
@@ -1019,14 +1019,14 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
       const items = (Array.isArray(produced) ? produced : [produced]).filter((item) => !seen.has(JSON.stringify(item)));
       if (!items.length) continue;
       if (parts.length + items.length > budget) {
-        if (TEMPORAL_FOCUS.includes(focus) || HISTORY_GROUP_FOCUS.includes(focus) && layer.focus.some((item) => ['completed', 'created', 'trend'].includes(item))) throw invalidArguments(budgetDetails(analysis));
+        if (!derived && (TEMPORAL_FOCUS.includes(focus) || HISTORY_GROUP_FOCUS.includes(focus) && layer.focus.some((item) => ['completed', 'created', 'trend'].includes(item)))) throw invalidArguments(budgetDetails(analysis));
         omitted.push(Object.freeze({ layer: index, focus })); continue;
       }
       add(items, { layer: index, focus });
     }
   });
-  pass('derived');
   pass('required');
+  pass('derived');
   pass('optional');
   // Her istenen kapsamın en az bir okuması olmalıdır: bütçe nedeniyle hiç okunmayan kapsam sessizce yanıtsız kalmaz, plan reddedilir
   // ve kullanıcıdan öncelik istenir (ör. yalnızca teslim ufku isteyen kapsamın tek okuması dışarıda kaldıysa).
@@ -1038,10 +1038,12 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     if (!layers.some((layer) => layer.focus.some((focus) => COMPARABLE_FOCUS.includes(focus)))
       && layers.some((layer) => layer.focus.some((focus) => TEMPORAL_FOCUS.includes(focus)))) throw invalidArguments(['$.analysis.compare:focus']);
     layers.forEach((layer, index) => {
+      const layerComparable = layer.focus.filter((item) => COMPARABLE_FOCUS.includes(item));
       for (const focus of layer.focus.filter((item) => COMPARABLE_FOCUS.includes(item) || HISTORY_GROUP_FOCUS.includes(item))) {
         const compared = { ...layerAnalysisOf(layer), defaultRange: analysis.compareRange };
-        const produced = HISTORY_GROUP_FOCUS.includes(focus) ? historyGroups(focus, compared, basedOf(layer), layer.focus) : temporalRequest(focus, compared, basedOf(layer), { range: analysis.compareRange });
+        const produced = HISTORY_GROUP_FOCUS.includes(focus) ? historyGroups(focus, compared, basedOf(layer), layerComparable) : temporalRequest(focus, compared, basedOf(layer), { range: analysis.compareRange });
         const items = [].concat(produced || []).filter((item) => !seen.has(JSON.stringify(item)));
+        if (!items.length) continue;
         // Karşılaştırmanın ikinci dönem okuması zorunludur: yer yoksa önce bildirilebilir dağılım okumaları (ör. öncelik dağılımı)
         // sondan çıkarılır ve mevcut atlanan yön bildirimiyle söylenir; yine sığmazsa plan reddedilir.
         while (parts.length + items.length > budget) {
@@ -1087,13 +1089,14 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     }[type];
     if (ready !== false || (stateFree(primary) && type !== 'line')) continue;
     const based = basedOf(primary);
+    const donutBase = primaryAnalysis.compareRange ? { ...based, filters: Object.fromEntries(Object.entries(based.filters).filter(([key]) => !['dateFrom', 'dateTo'].includes(key))) } : based;
     // Çizginin dizisi sorulan ölçününkidir (bkz. `chartFocus`): oluşturulma ya da yalnızca teslim ufku için başka ölçünün dizisi kurulmaz.
     const lineFocus = primary.focus.includes('completed') || primary.focus.includes('trend') ? 'trend'
       : primary.focus.some((focus) => TEMPORAL_FOCUS.includes(focus)) || primary.focus.every((focus) => focus === 'horizons') ? null : 'schedule';
     const focus = { donut: 'status', stacked: 'projects', line: lineFocus, timeline: !future && declared.includes('overdue') ? 'overdue' : declared.includes('critical') ? 'critical' : 'upcoming' }[type];
     let produced = null;
     try {
-      produced = type === 'donut' ? groups(based, 'status', { open: false }) : type === 'stacked' ? groups(based, 'project', { split: true, future })
+      produced = type === 'donut' ? groups(donutBase, 'status', { open: false }) : type === 'stacked' ? groups(based, 'project', { split: true, future })
         : type === 'line' && activityOnly(primary.focus) ? activitySeries(based, primaryAnalysis, trendBucket(primaryAnalysis, primaryAnalysis.defaultRange || { dateFrom: primaryAnalysis.dateFrom, dateTo: primaryAnalysis.dateTo }))
           : focus ? focusRequest(focus, primaryAnalysis, based, today) : null;
     } catch (error) { produced = optionalRead(error); }
@@ -1268,7 +1271,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     if (!comparable.length && declared.some((focus) => TEMPORAL_FOCUS.includes(focus))) throw invalidArguments(['$.analysis.compare:focus']);
     for (const focus of declared.filter((item) => COMPARABLE_FOCUS.includes(item) || HISTORY_GROUP_FOCUS.includes(item))) {
       const compared = { ...analysis, defaultRange: analysis.compareRange };
-      const produced = HISTORY_GROUP_FOCUS.includes(focus) ? historyGroups(focus, compared, base, declared) : temporalRequest(focus, compared, base, { range: analysis.compareRange });
+      const produced = HISTORY_GROUP_FOCUS.includes(focus) ? historyGroups(focus, compared, base, comparable) : temporalRequest(focus, compared, base, { range: analysis.compareRange });
       const items = [].concat(produced || []).filter((item) => !seen.has(JSON.stringify(item)));
       const next = [...parts, ...items];
       if (next.length > ANALYSIS_LIMITS.maxParts) throw invalidArguments(budgetDetails(analysis));
@@ -1375,7 +1378,8 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
           const common = base.entities.filter((entity) => entity.type !== analysis.scope);
           const bases = analysis.withSelf ? [base, { filters: { ...base.filters, assignee: 'me' }, entities: common }]
             : subjects.length > 1 ? subjects.map((entity) => ({ ...base, entities: [entity, ...common] })) : [base];
-          produced = bases.map((side) => groups(side, 'status', { open: false }));
+          const undatedSide = (side) => (analysis.compareRange ? { ...side, filters: Object.fromEntries(Object.entries(side.filters).filter(([key]) => !['dateFrom', 'dateTo'].includes(key))) } : side);
+          produced = bases.map((side) => groups(undatedSide(side), 'status', { open: false }));
         } else if (chart === 'timeline') {
           const subjects = base.entities.filter((entity) => entity.type === analysis.scope);
           const common = base.entities.filter((entity) => entity.type !== analysis.scope);

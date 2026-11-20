@@ -848,9 +848,11 @@ function pinAnalysisRepair(turn, plan, details) {
   const explicit = existing ? existing.explicit : submittedExplicit(plan);
   // Geçmiş dönemle yaklaşan iş reddinde `upcoming` yönünün çıkarılması anlam değişikliği sayılmaz (ipucunun önerdiği düzeltme).
   const dropUpcoming = Boolean(existing?.dropUpcoming) || details.some((detail) => String(detail) === '$.analysis.dateTo:past');
-  // Aynı iki dönemin karşılaştırması (`compare:same`) karşılaştırmayı sessizce kaldırarak onarılamaz; yalnızca kapsam ya da yön
-  // karşılaştırmayı desteklemiyorsa (`compare:scope` / `compare:focus`) ikinci dönem tamamen kaldırılabilir.
-  const keepCompare = Boolean(existing?.keepCompare) || details.some((detail) => String(detail) === '$.analysis.compare:same');
+  // Aynı iki dönemin ya da gelecekteki ikinci dönemin karşılaştırması (`compare:same`, `compare:futureWindow`, `compareFrom:futureWindow`)
+  // karşılaştırmayı sessizce kaldırarak onarılamaz; yalnızca kapsam ya da yön karşılaştırmayı desteklemiyorsa (`compare:scope` / `compare:focus`)
+  // ikinci dönem tamamen kaldırılabilir.
+  const keepCompare = Boolean(existing?.keepCompare)
+    || details.some((detail) => ['$.analysis.compare:same', '$.analysis.compare:futureWindow', '$.analysis.compareFrom:futureWindow'].includes(String(detail)));
   const dropCompare = Boolean(existing?.dropCompare) || details.some((detail) => ['$.analysis.compare:scope', '$.analysis.compare:focus'].includes(String(detail)));
   turn.repairPins.set('analysis', { raw, paths: pinnedPaths, projection: analysisRepairProjection(raw, pinnedPaths), presentation, presentationPaths, explicit, explicitPaths, dropUpcoming, keepCompare, dropCompare,
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
@@ -1008,7 +1010,7 @@ const PROSE_PLAN_HINT = 'plan:required: düz metin yanıt kullanıcıya gösteri
  * clarify yazdı. Doğrulama modelin türlü kararıyla tetiklenir (kullanıcı metni yorumlanmaz), mevcut bildirim düzeltme hakkından tek
  * tur kullanır, yetki ya da okuma bütçesi açmaz; aynı karar yinelenirse olduğu gibi kabul edilir.
  */
-const CLARIFY_CONFIRM_HINT = 'clarify:unconfirmed: açıklama kararı veri okunmadan bir kez doğrulanır. clarify yalnızca şu iki durumda doğrudur: (1) soru adı ya da kodu verilmemiş TEK bir kayda yalnızca zamirle ya da göndergesiz ifadeyle işaret ediyor; (2) soru birbirinden farklı kayıt türlerine götüren anlamlar taşıyor ve hiçbir ad, ölçü ya da kapsam hangisinin kastedildiğini belirlemiyor. Şunlar belirsiz DEĞİLDİR, intent rota ile analysis (ya da request) yazılır: adı geçen proje, kişi ya da görev (adı sunucu arar, bulunamazsa kendisi söyler); kullanıcının kendi işleri, ekibi, birimi, bölümü, direktörlüğü ve projeleri; verisi birden çok araca bölünen ya da yorum, sınır veya kanıt isteyen yönetim soruları. Yapılamayan, Rota dışı (geçmiş dönemle kıyas dâhil) ya da güvensiz istekte intent abstain yaz. Soru gerçekten (1) ya da (2) ise aynı clarify kararını yinele';
+const CLARIFY_CONFIRM_HINT = 'clarify:unconfirmed: açıklama kararı veri okunmadan bir kez doğrulanır. clarify yalnızca şu iki durumda doğrudur: (1) soru adı ya da kodu verilmemiş TEK bir kayda yalnızca zamirle ya da göndergesiz ifadeyle işaret ediyor; (2) soru birbirinden farklı kayıt türlerine götüren anlamlar taşıyor ve hiçbir ad, ölçü ya da kapsam hangisinin kastedildiğini belirlemiyor. Şunlar belirsiz DEĞİLDİR, intent rota ile analysis (ya da request) yazılır: adı geçen proje, kişi ya da görev (adı sunucu arar, bulunamazsa kendisi söyler); kullanıcının kendi işleri, ekibi, birimi, bölümü, direktörlüğü ve projeleri; verisi birden çok araca bölünen ya da yorum, sınır veya kanıt isteyen yönetim soruları. Yapılamayan, Rota dışı ya da güvensiz istekte intent abstain yaz. Soru gerçekten (1) ya da (2) ise aynı clarify kararını yinele';
 const UNRELATED_CALL_HINT = 'request:unrelated: çağrı isteğin okuması değil; ileti ayrı okuma gerektiren başka bir soru da soruyorsa onu additionalRequests içinde ek bölüm olarak bildir (calls verme), değilse çağrıyı kaldır';
 
 /**
@@ -1730,7 +1732,8 @@ function completedAnalysisContext(turn, verdict) {
     const owned = new Set(grounded.flatMap((answer) => (answer.entries || []).map((entry) => entry.id)));
     const evidence = new Map(entries.filter((entry) => owned.has(entry.id)).map((entry) => [entry.id, entry]));
     rows = (turn.renderedEvidence || []).map((id) => evidence.get(id)).filter(Boolean).map((entry) => {
-      const id = scope === 'person' ? entry.args.personSicil ?? (entry.args.assignee === 'me' ? turn.context.sicil : null) : entry.args.projectId;
+      const selfActivity = entry.tool === 'rota_activity_search' && entry.args.scope === 'mine';
+      const id = scope === 'person' ? entry.args.personSicil ?? (entry.args.assignee === 'me' || selfActivity ? turn.context.sicil : null) : entry.args.projectId;
       return id == null ? null : { type: scope, id: String(id) };
     }).filter(Boolean).filter((item, index, all) => all.findIndex((other) => other.type === item.type && other.id === item.id) === index);
   }
@@ -1988,7 +1991,8 @@ export function chartTypeNote(turn, composition, rendered) {
     turn.trace.presentation = { ...(turn.trace.presentation || {}), chartTypeUnavailable: type };
     notes.push(type === 'stacked' && overlapping ? renderOverlappingSeries({ substituted: workloadChart, locale: turn.locale })
       : chartTypeSupported({ ...composition.render, chartType: type }) ? renderChartUnavailable({ type, substituted: rendered.chart, locale: turn.locale })
-        : renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale, reason: type === 'line' && composition.render.unverifiedActivitySeries ? 'coverage' : null }));
+        : renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale, reason: type === 'line' && composition.render.unverifiedActivitySeries ? 'coverage' : null,
+          observedCounts: composition.render.unverifiedActivityObserved !== false }));
   }
   return [...new Set(notes)];
 }
@@ -2252,10 +2256,10 @@ function temporalIntent(analysis, today) {
   const complete = (range) => (range?.dateFrom && range?.dateTo ? Object.freeze({ dateFrom: range.dateFrom, dateTo: range.dateTo }) : null);
   const window = complete(windows.range);
   const compare = complete(windows.compare);
-  // Yalnızca başı ("1 Eylül'den beri") ya da yalnızca bitişi ("30 Eylül'e kadar") verilen dönem: tam dönem okumayan yönler (ör. not)
-  // bu sınırın uygulanamadığını söyleyebilsin diye ayrıca taşınır (dönem bulgularının `window` alanı değişmez; başlangıç uydurulmaz).
+  // Yalnızca başı ("1 Eylül'den beri") ya da yalnızca bitişi ("30 Eylül'e kadar") verilen dönem: tam dönem okumayan yönler (ör. not, ufuk)
+  // bu sınırın uygulanamadığını söyleyebilsin diye ayrıca taşınır (dönem bulgularının `window` alanı değişmez; başlangıç ya da gelecek bitiş uydurulmaz).
   const requested = !window && windows.range?.dateFrom && !windows.range.dateTo && today
-    ? Object.freeze({ dateFrom: windows.range.dateFrom, dateTo: windows.range.dateFrom > today ? windows.range.dateFrom : today })
+    ? Object.freeze(windows.range.dateFrom > today ? { dateFrom: windows.range.dateFrom } : { dateFrom: windows.range.dateFrom, dateTo: today })
     : !window && !windows.range?.dateFrom && windows.range?.dateTo
       ? Object.freeze({ dateTo: windows.range.dateTo }) : null;
   if (!window && !compare && !requested && !analysis.historyUnsupported?.length) return null;
@@ -2292,7 +2296,7 @@ function pendingAnalysis(plan, today = null) {
 
 /** Bu bölümün isteği bir ekip kapsamı mı (yetkisizlik ancak o zaman kapsam yokluğudur, kaydın yokluğu değil)? */
 function scopeDenied(turn) {
-  return turn.request?.filters?.assignee === 'team';
+  return turn.request?.filters?.assignee === 'team' || turn.request?.filters?.activityScope === 'team';
 }
 
 /** Doğrulanamayan turun sabit güvenli yanıtı. */

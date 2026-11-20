@@ -106,7 +106,7 @@ for P in $PROFILES; do
       sleep 1
     done
     [ "$ready" = 1 ]
-    UI_SEED=$SEED UI_SEED_GROUPS=$SEED_GROUPS node "$HERE/drive.cjs" "$HERE/scenarios/$P.json" "$UI_ACCEPTANCE_DIR/out" | tee -a "$UI_ACCEPTANCE_DIR/run.log"
+    UI_SEED=$SEED UI_SEED_GROUPS=$SEED_GROUPS UI_APP_LOG="$LOG" node "$HERE/drive.cjs" "$HERE/scenarios/$P.json" "$UI_ACCEPTANCE_DIR/out" | tee -a "$UI_ACCEPTANCE_DIR/run.log"
     kill "$APP"; wait "$APP" 2>/dev/null || true; APP=''
   done
 done

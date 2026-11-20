@@ -13,8 +13,9 @@ const { semanticFailures, completionFailures, modelFailures, scriptedFailures } 
 const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
 // İsteğe bağlı: yalnızca adı verilen konuşmalar (yarıda kalan koşunun kalanı için).
+scenario.conversations = scenario.conversations.map((item, index) => ({ ...item, index }));
 if (process.env.UI_ONLY) scenario.conversations = scenario.conversations.filter((item) => process.env.UI_ONLY.split(',').includes(item.name));
-scenario.appLog = path.resolve(process.env.UI_ACCEPTANCE_DIR || '.', scenario.appLog);
+scenario.appLog = process.env.UI_APP_LOG ? path.resolve(process.env.UI_APP_LOG) : path.resolve(process.env.UI_ACCEPTANCE_DIR || '.', scenario.appLog);
 const CALLS = path.join(process.env.UI_ACCEPTANCE_DIR || path.join(__dirname, 'logs'), 'calls.jsonl');
 const lines = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : []);
 const turnTraces = () => lines(scenario.appLog).filter((line) => line.includes('"operation":"ai.grounded.turn"'))
@@ -100,18 +101,25 @@ function scriptedQuestions() {
   // satırsız kalır ve koşu başarısızdır. Uç betikli değilse (liste alınamazsa) kapsam daraltılmaz: model kabulü uygulanır.
   const resultFile = path.join(outDir, `${scenario.profile}.json`);
   const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
+  const groupedSeeds = process.env.UI_SEED_GROUPS === '1';
+  // Çok veri kümeli koşuda (`UI_SEED_GROUPS=1`) `run.sh` tohumsuz konuşmaları `executive` grubuna ayırır; sürücü de aynı varsayılanı
+  // kullanarak tohumsuz konuşmaların sonraki veri kümesinde (ör. `temporal`) yeniden koşulmasını ve önceki grubun sonuçlarını ezmesini önler.
+  const effectiveSeed = (conversation) => conversation.seed || (groupedSeeds ? 'executive' : null);
+  const seedMismatch = (conversation) => Boolean(effectiveSeed(conversation)) && effectiveSeed(conversation) !== (process.env.UI_SEED || null);
   const uncovered = [];
   if (process.env.UI_SCRIPTED === '1') {
     const known = await scriptedQuestions();
     if (known) {
-      const covered = scenario.conversations.filter((item) => item.turns.every((text, index) => item.expectedTurns?.[index]?.serverReplay === true || known.has(String(text).trim())));
-      process.stdout.write(`betikli kapsam: ${scenario.profile} ${covered.length}/${scenario.conversations.length} konuşma (kalanı betikli planı olmadığı için koşulmadı; model kabulü gerekir)\n`);
+      const pool = groupedSeeds ? scenario.conversations.filter((item) => !seedMismatch(item)) : scenario.conversations;
+      const covered = pool.filter((item) => item.turns.every((text, index) => item.expectedTurns?.[index]?.serverReplay === true || known.has(String(text).trim())));
+      process.stdout.write(`betikli kapsam: ${scenario.profile} ${covered.length}/${pool.length} konuşma (kalanı betikli planı olmadığı için koşulmadı; model kabulü gerekir)\n`);
       // Seçilen profilin hiçbir konuşması betikli değilse profil sınanmamıştır: eksik kapsam satırı yazılır, rapor koşuyu başarı saymaz
       // (başka profilin geçen satırları bu profilin sınanmadığını örtemez).
-      const missing = scenario.conversations.filter((item) => !covered.includes(item));
-      const previous = process.env.UI_ONLY && fs.existsSync(resultFile) ? JSON.parse(fs.readFileSync(resultFile, 'utf8')) : [];
-      const missingNames = new Set(missing.map((item) => item.name));
-      const preserved = previous.filter((row) => !missingNames.has(row.conversation));
+      const missing = pool.filter((item) => !covered.includes(item));
+      const previous = (process.env.UI_ONLY || groupedSeeds) && fs.existsSync(resultFile)
+        ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => process.env.UI_ONLY || row.runId === runId) : [];
+      const replacedNames = new Set((groupedSeeds ? pool : missing).map((item) => item.name));
+      const preserved = previous.filter((row) => !replacedNames.has(row.conversation));
       const skipped = missing.map((item) => ({ runId, skipped: 'betikli plan yok', failures: ['kapsam eksik: betikli plan yok'], profile: scenario.profile,
         conversation: item.name, detail: item.detail, turn: 0, question: item.turns[0] || '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] }));
       uncovered.push(...skipped);
@@ -126,13 +134,16 @@ function scriptedQuestions() {
   const page = await context.newPage();
   // Senaryonun gerektirdiği sentetik veri (ör. Aşama G: UI_SEED=executive) bu koşuda yoksa konuşma sınanmaz. Atlanan konuşma yeniden
   // koşulmuş sayılmaz (önceki satırları silinmez) ve sonuçta eksik kapsam olarak kaydedilir: rapor tam kabul iddia etmez.
-  const seedMismatch = (conversation) => Boolean(conversation.seed) && conversation.seed !== (process.env.UI_SEED || null);
   const rerun = new Set(scenario.conversations.filter((item) => !seedMismatch(item)).map((item) => item.name));
   // Bu koşunun atlanmış satırı yalnızca konuşma bu yeniden koşuda yeniden seçildiyse yenilenir (yeniden atlanırsa yeniden yazılır);
   // seçilmeyen konuşmaların atlanmış satırları korunur: sınanmamış konuşma rapordan sessizce düşmez.
   const selected = new Set(scenario.conversations.map((item) => item.name));
-  const results = process.env.UI_ONLY && fs.existsSync(resultFile)
-    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation) && !(row.skipped && row.runId === runId && selected.has(row.conversation))) : [...uncovered];
+  const priorRows = (process.env.UI_ONLY || groupedSeeds) && fs.existsSync(resultFile)
+    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => process.env.UI_ONLY || row.runId === runId) : [];
+  const results = [
+    ...priorRows.filter((row) => !rerun.has(row.conversation) && !(row.skipped && row.runId === runId && selected.has(row.conversation))),
+    ...uncovered
+  ];
   try {
   await page.goto(`http://127.0.0.1:${scenario.port}/`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /Gerçek Sistemi aç/ }).click();
@@ -150,7 +161,7 @@ function scriptedQuestions() {
     // Yanlış veriyle sınanmaz: atlanır ve bu koşunun eksik kapsamı olarak kaydedilir (rapor başarı saymaz).
     // Çok veri kümeli koşuda (`UI_SEED_GROUPS=1`) her veri kümesi kendi uygulama örneğinde ayrı yürütüldüğünden bu gruptaki olmayanlar sıradaki örnekte koşulur.
     if (seedMismatch(conversation)) {
-      if (process.env.UI_SEED_GROUPS === '1') continue;
+      if (groupedSeeds) continue;
       process.stdout.write(`atlandı: ${scenario.profile}/${conversation.name} (UI_SEED=${conversation.seed} gerekir)\n`);
       results.push({ runId, skipped: `UI_SEED=${conversation.seed} gerekir`, failures: [`kapsam eksik: UI_SEED=${conversation.seed} gerekir`], profile: scenario.profile,
         conversation: conversation.name, detail: conversation.detail, turn: 0, question: conversation.turns[0] || '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] });
@@ -185,7 +196,7 @@ function scriptedQuestions() {
       const calls = lines(CALLS).slice(callsBefore).map((line) => JSON.parse(line));
       const trace = turnTraces().slice(tracesBefore).at(-1) || null;
       const variant = [process.env.UI_VIEWPORT, process.env.UI_THEME].filter(Boolean).join('-');
-      const shot = path.join(outDir, `${scenario.profile}-${conversationIndex + 1}-${turnIndex + 1}${variant ? `-${variant}` : ''}.png`);
+      const shot = path.join(outDir, `${scenario.profile}-${(conversation.index ?? conversationIndex) + 1}-${turnIndex + 1}${variant ? `-${variant}` : ''}.png`);
       await page.locator('.rota-assistant-thread').screenshot({ path: shot }).catch(() => {});
       const expectedChart = conversation.expectedCharts?.[turnIndex] || null;
       const expected = conversation.expectedTurns?.[turnIndex];
