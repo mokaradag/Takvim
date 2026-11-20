@@ -43,14 +43,9 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
         const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
         const escaped = `${name} ${year}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const matches = [...(clause || text).matchAll(new RegExp(`(?:(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})|(\\d{1,2}))?\\s*${escaped}`, 'gu'))];
-        if (!matches.length) return false;
-        const hasPartial = (clause ? matches.slice(0, 1) : matches).some((match) => {
-          const [, start, end, single] = match;
-          if (single) return Boolean(clause) || matches.length === 1;
-          if (start && end) return !(Number(start) === 1 && Number(end) === lastDay);
-          return false;
-        });
-        return !hasPartial;
+        const labels = clause ? matches.slice(0, 1) : matches;
+        const full = ([, start, end, single]) => !single && (!start || Number(start) === 1 && Number(end) === lastDay);
+        return labels.some(full) && labels.every((match) => !match[1] || full(match));
       };
       // "Geçen ay" / "bu ay" (veya "Last month" / "this month") birlikte geçiyorsa her ay kendi ifadesine bağlı olmalıdır (yer değiştirmiş aylar reddedilir).
       const prevClause = en ? new RegExp(`Last month[^\\n;]*${prevName} ${prevY}`, 'iu') : new RegExp(`Geçen ay[^\\n;]*${prevName} ${prevY}`, 'iu');

@@ -2301,6 +2301,7 @@ function temporalIntent(analysis, today) {
       ? Object.freeze({ dateTo: windows.range.dateTo }) : null;
   if (!window && !compare && !requested && !analysis.historyUnsupported?.length) return null;
   return Object.freeze({ today, window, compare, defaulted: windows.defaulted === true, ...(requested ? { requested } : {}),
+    ...(Number.isInteger(analysis.analysisParts) ? { analysisParts: analysis.analysisParts } : {}),
     ...(analysis.relativeWindow && analysis.relativeWindow !== 'all_time' ? { windowName: analysis.relativeWindow } : {}),
     ...(analysis.compare && analysis.compare !== 'previous' ? { compareName: analysis.compare } : {}),
     ...(analysis.bucket ? { bucket: analysis.bucket } : {}),

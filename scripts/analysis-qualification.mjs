@@ -233,15 +233,22 @@ export function plannerScore(result, expect, today = corpus.today) {
       const window = expectedRange(expect.temporalWindow, today);
       const compare = expectedCompare(expect.temporalCompare, expect.temporalWindow, today);
       let unresolved = false;
-      if (result.plan?.analysis?.historyUnsupported?.length) {
+      if (!expect.temporalPairRequired && result.plan?.analysis?.historyUnsupported?.length) {
         try { const windows = analysisWindows(result.plan.analysis, today); unresolved = [window, compare].filter(Boolean).every((wanted) => [windows.range, windows.compare].some((candidate) => candidate?.dateFrom === wanted[0] && candidate?.dateTo === wanted[1])); } catch { unresolved = false; }
       }
-      for (const range of [window, compare].filter(Boolean)) if (!unresolved && !requests.some((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
-        && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('istenen tarihsel dönem okunmadı');
+      const readsAt = (range) => requests.filter(({ filters, metrics, population }) => {
+        if (filters?.dateFrom !== range[0] || filters?.dateTo !== range[1]) return false;
+        if (!expect.temporalPairRequired) return Boolean(filters.activityView || ['actualFinish', 'createdAt'].includes(filters.dateField));
+        if (population?.tool === 'rota_activity_search') return filters.activityView === 'period' && metrics?.includes('activity.events');
+        return population?.tool === 'rota_task_analytics' && metrics?.includes('tasks.total')
+          && (filters.dateField === 'createdAt' || filters.dateField === 'actualFinish' && filters.status?.length === 1 && filters.status[0] === 'done');
+      });
+      for (const range of [window, compare].filter(Boolean)) if (!unresolved && !readsAt(range).length) failures.push('istenen tarihsel dönem okunmadı');
       // Karşılaştırmada iki dönem aynı ölçüyü aynı nüfus ve sonuç biçimiyle okur.
-      const keysAt = (range) => new Set(requests.filter((request) => request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1]
-        && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField))).map(periodReadKey));
-      if (window && compare && !unresolved && ![...keysAt(window)].some((key) => keysAt(compare).has(key))) failures.push('iki dönem aynı ölçüyle okunmuyor');
+      if (window && compare && !unresolved) {
+        const priorKeys = new Set(readsAt(compare).map(periodReadKey));
+        if (!readsAt(window).some((request) => priorKeys.has(periodReadKey(request)))) failures.push('iki dönem aynı ölçüyle okunmuyor');
+      }
     }
     if (expect.temporal && !focus.some((item) => ['completed', 'created', 'activity', 'trend'].includes(item)) && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş dönem okunmadı');
     // "Durum iyileşti mi" sorusu geçmiş DURUMU sorar: dönemlerin tamamlanma sayıları bunu kanıtlamaz; görev durumu yönünün geçmiş sınırı
@@ -617,7 +624,7 @@ export function executiveExpectation(item) {
     : finalAnalysis(turns);
   const scope = analysis?.scope;
   const denied = (layer) => (item.expect?.deniedLayers || []).some((entry) => entry.scope === layer.scope && (entry.level || null) === (layer.level || null));
-  const seed = executiveBenchmarkSeed();
+  const seed = executiveBenchmarkSeed(BENCHMARK_TODAY);
   const layers = expectationLayers(analysis, seed)?.map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) || null;
   const finish = item.expect?.finish || { denied: 'unavailable', clarify: 'clarification', limitation: 'unsupported' }[item.handling] || 'stop';
   const names = analysis?.names || [];
@@ -784,7 +791,7 @@ if (direct) {
   } else if (TIER === 'G') {
     await runQualificationCases(pick(executive.scenarios), async (t, item) => {
       t.mock.timers.enable({ apis: ['Date'], now: NOW });
-      const seed = executiveBenchmarkSeed();
+      const seed = executiveBenchmarkSeed(BENCHMARK_TODAY);
       t.mock.timers.reset();
       // Çok turlu vakada önceki turlar yalnızca doğrulanmış yanıtla biter; puan son turun beklentisidir.
       // Ara turlar da kendi altın planlarının kapsamıyla puanlanır: son turdaki doğru ret, ara turda yanlış kapsamı örtmez.

@@ -10,7 +10,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema, populationShape, SERVER_EXPANDED_METRICS } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
-import { analysisSchema, ANALYSIS_LIMITS, canonicalFocus, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief, TEMPORAL_FOCUS } from './analysisPlan.js';
+import { analysisSchema, analysisWindows, ANALYSIS_LIMITS, canonicalFocus, expandAnalysis, normalizedBrief, parseAnalysis, resolveAnalysisBrief, TEMPORAL_FOCUS } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
@@ -661,7 +661,17 @@ function equivalentAnalysisSpelling(plan, today, previousAnalysis) {
   const implicitTo = !out.dateTo && isIsoDay(out.dateFrom) && today && hasTemporalFocus
     ? (out.dateFrom > today ? out.dateFrom : today) : out.dateTo;
   const primaryRange = resolved || (isIsoDay(out.dateFrom) && isIsoDay(implicitTo) && out.dateFrom <= implicitTo ? { dateFrom: out.dateFrom, dateTo: implicitTo } : null);
-  const preceding = out.compare === 'previous' && primaryRange ? previousWindow(primaryRange, { rolling: /^(?:last|next)_\d+_days$/.test(out.relativeWindow || '') }) : null;
+  let preceding = out.compare === 'previous' && primaryRange ? previousWindow(primaryRange, { rolling: /^(?:last|next)_\d+_days$/.test(out.relativeWindow || '') }) : null;
+  if (out.compare === 'previous' && isIsoDay(out.compareFrom) && isIsoDay(out.compareTo) && inheritedFocus) {
+    // Devralınan dönem ve kayan pencere kökeni, yürütmeyle aynı çözümleyiciden gelir.
+    const { compareFrom: _from, compareTo: _to, chart: _chart, charts: _charts, table: _table, ...candidate } = brief;
+    try {
+      preceding = analysisWindows(resolveAnalysisBrief(parseAnalysis(candidate), { previous: previousAnalysis, today }), today).compare;
+    } catch (error) {
+      if (error?.code !== TOOL_ERROR_CODES.INVALID_ARGUMENTS) throw error;
+      preceding = null;
+    }
+  }
   if (preceding && out.compareFrom === preceding.dateFrom && out.compareTo === preceding.dateTo) {
     delete out.compareFrom;
     delete out.compareTo;

@@ -528,7 +528,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           // Görev gruplarının kayıt sayısı grafikte "Görev sayısı" adını taşır ("Kayıt sayısı" teknik alan adıdır).
           const taskCount = values.every(([fact]) => /(^|\.)groups\.\d+\.count$/.test(fact.field) && ['rota_task_analytics', 'rota_task_search'].includes(group.tool));
           // Ufuk başlığı yalnızca açık görev sayısını çizen sütunundur; başka ölçü (ör. gecikmiş) kendi sütun adını taşır.
-          const title = answerChartLabel(sequence ? seriesChartTitle(cover, locale) : cover?.kind === 'horizons' && /\.(?:count|open)$/.test(sample.field) ? (locale === 'en' ? 'Open tasks by delivery horizon' : 'Teslim ufkuna göre açık görev')
+          const title = answerChartLabel(sequence ? seriesChartTitle(cover, locale, sample.semantic?.filters) : cover?.kind === 'horizons' && /\.(?:count|open)$/.test(sample.field) ? (locale === 'en' ? 'Open tasks by delivery horizon' : 'Teslim ufkuna göre açık görev')
             : partTitle || (taskCount ? (locale === 'en' ? 'Task count' : 'Görev sayısı') : column.label), ANSWER_CHART_LIMITS.maxTitleChars);
           addChart({ table: id, column: index, title, unit, evidenceId: group.evidenceId,
             items: months ? described.rows.map((row, position) => ({ label: monthLabel(row.title, locale), value: values[position][0].value })) : chronological || items, types },
@@ -568,9 +568,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       const noteRead = presentation.facts.some((item) => item.evidenceId === group.evidenceId && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '')
         && typeof item.fact.value === 'string' && item.fact.value.trim());
       const singleRow = shownRows === 1 && (cover?.kind === 'notes' && noteRead || cover?.kind === 'completedList' && cover.total === 1 && listAgrees);
-      const lead = (singleRow ? singleRowLead(cover.kind, locale) : null)
-        || taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
-      const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead });
+      const lead = singleRow ? singleRowLead(cover.kind, locale)
+        : taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
+      const criteriaStated = Boolean(lead && !singleRow);
+      const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead, criteriaStated });
       if (detailText) {
         if (details.size >= COMPOSITION_LIMITS.maxDetails) { overflow = true; continue; }
         const id = `D${details.size + 1}`;
@@ -580,7 +581,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         // Aşama H: boş not okumasının yokluğunu giriş cümlesi söyler; giriş bu kanıtı anıyorsa ayrıntı yeniden yazılmaz.
         details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText, covers: countId, notices: Object.freeze(notices),
           ...(cover?.kind === 'notes' && shownRows === 0 ? { silent: true } : {}),
-          source: Object.freeze({ group, empty: presentation.empty || [], layout: presentation.layout, lead }) }));
+          source: Object.freeze({ group, empty: presentation.empty || [], layout: presentation.layout, lead, criteriaStated }) }));
         for (const table of ownedTables) tables.set(table.id, Object.freeze({ ...table, detail: id }));
         if (!countId) viewDetails.push({ id, part: ordinal, text: clip(renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, cite: false }), COMPOSITION_LIMITS.maxValueChars) });
       }
@@ -1493,7 +1494,7 @@ export function renderComposition(composition, validated) {
     for (const claim of claimed.get(detail.evidenceId) || []) {
       if (Object.entries(claim.values).every(([metric, value]) => valueOf(metric) === value)) omit.add(claim.metric);
     }
-    return omit.size && detail.source ? renderGroupDetails(detail.source.group, { locale, empty: detail.source.empty, layout: detail.source.layout, lead: detail.source.lead, omitMetrics: omit })
+    return omit.size && detail.source ? renderGroupDetails(detail.source.group, { locale, empty: detail.source.empty, layout: detail.source.layout, lead: detail.source.lead, criteriaStated: detail.source.criteriaStated, omitMetrics: omit })
       : detail.text;
   };
   const pending = [];
@@ -1658,7 +1659,7 @@ export function renderComposition(composition, validated) {
         emit(tableLead(table, block.style), table.part);
       }
       let rowsText = renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated: statedText,
-        criteriaStated: Boolean(detail?.source?.lead) || namedPopulations.has(table.evidenceId) });
+        criteriaStated: Boolean(detail?.source?.criteriaStated) || namedPopulations.has(table.evidenceId) });
       // Aynı ölçüt satırı yanıtta ikinci kez yazılmaz (aynı nüfusun ikinci tablosu).
       const caption = /^_[^\n]+_\n\n/.exec(rowsText)?.[0];
       const captionKey = `${signature(table.group) || table.evidenceId}|${caption}`;

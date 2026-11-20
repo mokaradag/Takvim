@@ -653,6 +653,7 @@ test('çoklu tohum koşusu sonuçları ezmez, UI_APP_LOG günlüğünü okur ve 
   const playwright = join(dir, 'node_modules', 'playwright', 'index.js');
   writeFileSync(playwright, readFileSync(playwright, 'utf8')
     .replace("path.join(process.env.UI_ACCEPTANCE_DIR,'app-B.log')", "(process.env.UI_APP_LOG||path.join(process.env.UI_ACCEPTANCE_DIR,'app-B.log'))")
+    .replace("evidence:1", "evidence:process.env.UI_SEED==='base'?1:2")
     .replace("return {status:'complete'",
       "fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,toolCalls:['rota_plan'],models:['claude-haiku-4-5-20251001'],thinking:'off',thinkingTokens:0})+'\\n');\n return {status:'complete'"));
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify({
@@ -663,15 +664,20 @@ test('çoklu tohum koşusu sonuçları ezmez, UI_APP_LOG günlüğünü okur ve 
     ]
   }));
   const firstPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
-    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SEED: 'base', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-base.log')
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SCRIPTED: '', UI_SEED: 'base', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-base.log')
   });
   assert.equal(firstPass.status, 0, firstPass.stderr);
+  const rows = () => JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  const firstRow = rows().find(({ conversation }) => conversation === 'g-tohumsuz');
+  assert.equal(firstRow?.server?.evidence, 1);
   const secondPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
-    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SEED: 'temporal', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-temporal.log')
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SCRIPTED: '', UI_SEED: 'temporal', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-temporal.log')
   });
   assert.equal(secondPass.status, 0, secondPass.stderr);
-  const combined = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  const combined = rows();
   assert.deepEqual(combined.map((row) => [row.conversation, row.failures.length]), [['g-tohumsuz', 0], ['h-tohumlu', 0]]);
+  assert.deepEqual(combined[0], firstRow);
+  assert.equal(combined[1].server?.evidence, 2);
 
   // Betikli köprü UI_BENCHMARK verilmediğinde hem G (executive) hem H (temporal) sorularının gerçek altın planlarını döndürür.
   const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], {
@@ -713,6 +719,8 @@ test('dönem ve geçmiş durum beklentileri kısmi ay aralığını, yer değiş
   assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1–10 Ekim 2026 ve 1–10 Kasım 2026 tamamlandı.' }, okTrace, nov20).length > 0);
   assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Ekim 2026 özeti: 1–10 Ekim 2026 / 1–10 Kasım 2026.' }, okTrace, nov20).length > 0);
   assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Ekim 2026) 4 görev tamamlanmıştı; bu ay (1–30 Kasım 2026) 6 görev tamamlandı.' }, okTrace, nov20), []);
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1 Ekim 2026; 2 Ekim 2026; 1 Kasım 2026; 2 Kasım 2026' }, okTrace, nov20).length > 0);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1–31 Ekim 2026 ile 1–30 Kasım 2026 karşılaştırıldı. Bir işin tarihi 5 Kasım 2026.' }, okTrace, nov20), []);
   // Yer değiştirmiş aylar ("Geçen ay (Eylül 2026) ... bu ay (Ağustos 2026)") reddedilir.
   assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Eylül 2026) 5 görev tamamlanmıştı; bu ay (Ağustos 2026) 8 görev tamamlandı.' }, okTrace, sep30).length > 0);
   // Geçen hafta (21–27 Eylül 2026) beklentisi kayan 7 günü (24–30 Eylül 2026) reddeder.

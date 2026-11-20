@@ -902,13 +902,13 @@ export function narrativeRowCollections(group, layout = 'auto') {
  * Kanıt grubunun kayıt cümleleri (kanıt atfıyla); yazılacak olgu yoksa boş metin. Düzen anlatımdakiyle
  * aynıdır: açıkça istenen tabloda tek satırlı koleksiyon tablodadır, cümlelerde yinelenmez.
  */
-export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 'auto', cite = true, omitMetrics = null, lead = null } = {}) {
+export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 'auto', cite = true, omitMetrics = null, lead = null, criteriaStated = Boolean(lead) } = {}) {
   // Aynı kanıttan söylenmiş önermelerin ölçüleri (ör. analist cümlesindeki açık ve gecikmiş sayı) ayrıntıda yinelenmez.
   const shown = omitMetrics?.size ? { ...group, main: { ...group.main, entries: group.main.entries.filter(({ fact }) => !omitMetrics.has(fact.semantic?.metric)) } } : group;
   const sentences = groupSentences(shown, { locale, layout, empty, lead });
   if (!sentences.length) return '';
   // Doğal sayım cümlesi nüfusun bütün süzgeçlerini söyler (yalnızca bunu yapabildiğinde kurulur): satırın ölçütü yinelenmez.
-  const { text, criteria } = lead ? { text: withoutCriteria(sentences.join(' '), locale, lead, group), criteria: null } : sharedCriteria(sentences.join(' '), locale);
+  const { text, criteria } = criteriaStated ? { text: withoutCriteria(sentences.join(' '), locale, lead, group), criteria: null } : sharedCriteria(sentences.join(' '), locale);
   // Ortak ölçüt satırı da süzgeçleri doğal söylenebiliyorsa doğal biçimdedir.
   const natural = criteria ? naturalCaption([{ entries: group.main.entries }, ...[...group.collections.values()].flatMap((rows) => [...rows.values()])], locale) : null;
   return `${text}${cite ? ` ${citation([group.evidenceId])}` : ''}${criteria ? `\n\n_${natural || criteria}_` : ''}`;

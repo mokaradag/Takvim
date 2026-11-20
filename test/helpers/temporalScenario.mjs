@@ -5,7 +5,9 @@
  * yanıt geçmez.
  */
 import { readFileSync } from 'node:fs';
-import { englishBucketLabel, namedWindow, previousWindow, rangeLabel, resolveWindow, windowName, windowPosition } from '../../src/domain/ai/temporalWindow.js';
+import { englishBucketLabel, namedWindow, previousWindow, rangeLabel, resolveWindow, windowAdverb, windowName, windowPosition } from '../../src/domain/ai/temporalWindow.js';
+import { answerChartLabel, ANSWER_CHART_LIMITS } from '../../src/domain/ai/answerChart.js';
+import { seriesChartTitle } from '../../src/domain/ai/temporalFindings.js';
 import { answerQuality } from './answerQuality.mjs';
 import { renderedCharts } from './phase4eScenario.mjs';
 
@@ -240,6 +242,14 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
     if (!H_FINDING_TEXT[locale === 'en' ? 'en' : 'tr'][kind]?.test(content)) problems.push(`bulgu yok: ${kind}`);
   }
   for (const pattern of expect.says || []) if (!new RegExp(pattern, 'u').test(content)) problems.push(`beklenen ifade yok: ${pattern}`);
+  if (expect.historyLimitPeriod) {
+    const [dateFrom, dateTo] = expect.historyLimitPeriod.map((value) => resolveDay(value));
+    const label = windowAdverb({ dateFrom, dateTo }, TEMPORAL_TODAY, locale);
+    const phrase = H_FINDING_TEXT[locale === 'en' ? 'en' : 'tr'].historyLimit;
+    if (!content.split(/[.!?\n]/u).some((sentence) => sentence.includes(label) && phrase.test(sentence))) {
+      problems.push('geçmiş durum sınırı istenen dönemi belirtmiyor');
+    }
+  }
   if (expect.completionCount) {
     const range = expect.window.map((value) => resolveDay(value));
     const visible = content.replace(/\*\*/g, '');
@@ -353,6 +363,9 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
         const filters = item.data?.filters;
         if (!item.ok || item.tool !== 'rota_task_analytics' || !['date_week', 'date_month'].includes(groupBy)
           || filters?.dateField !== 'actualFinish' || ranges && (filters.dateFrom !== ranges[0] || filters.dateTo !== ranges[1])) return false;
+        if (!chart.evidence?.includes(item.evidenceId)) return false;
+        const title = seriesChartTitle({ kind: 'series', bucket: groupBy === 'date_week' ? 'week' : 'month' }, localeKey, filters);
+        if (chart.title !== answerChartLabel(title, ANSWER_CHART_LIMITS.maxTitleChars)) return false;
         const groups = [...(item.data.groups || [])].filter((group) => group.dateFrom <= (item.today || TEMPORAL_TODAY))
           .sort((a, b) => a.key.localeCompare(b.key));
         return chart.items?.length === groups.length && groups.every((group, index) => {

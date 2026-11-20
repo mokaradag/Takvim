@@ -74,6 +74,7 @@ test('geçmiş görünüm gerektiren sınırlılık vakası sıradan güncel dur
     const limited = plannerScore(planned({ scope: 'self', focus: ['overview'], historyUnsupported: ['overview'], relativeWindow: item.expect.temporalWindow,
       ...(item.expect.temporalCompare ? { compare: item.expect.temporalCompare } : {}) }), item.expect, today);
     if (item.expect.currentState) assert.ok(limited.includes('dönemdeki gelişmeler okunmadı'), item.id);
+    else if (item.expect.temporalPairRequired) assert.ok(limited.includes('iki dönem aynı ölçüyle okunmuyor'), item.id);
     else assert.deepEqual(limited, [], item.id);
     assert.ok(plannerScore({ outcome: 'abstained', decisions: [{ intent: 'abstain', reason: 'write' }] }, item.expect, today).length, item.id);
   }

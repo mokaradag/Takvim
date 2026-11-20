@@ -267,8 +267,10 @@ export function temporalFindings(groups, context = null) {
       evidenceIds: [notes.evidenceId], completeness: notes.total != null && notes.shown >= notes.total && !notes.clipped ? 'complete' : 'sample' });
     const horizons = entry.reads.find((read) => read.kind === 'horizons');
     if (horizons?.collectionComplete) {
-      const req = !context?.defaulted && !periodReads.length && !seriesRead && !activitySeries ? (context?.window || context?.requested || null) : null;
-      const horizonMismatch = Boolean(req && ((req.dateFrom && req.dateFrom !== today) || (req.dateTo && horizons.filters?.dateTo && req.dateTo !== horizons.filters.dateTo)));
+      // Özetin dönemi, kendi tarihleriyle bildirilen ayrı bir okumanın terminlerine uygulanmaz.
+      const separate = Number.isInteger(context?.analysisParts) && horizons.part > context.analysisParts;
+      const req = !separate && !context?.defaulted ? (context?.window || context?.requested || null) : null;
+      const horizonMismatch = Boolean(req && ((req.dateFrom && req.dateFrom !== horizons.filters?.dateFrom) || (req.dateTo && horizons.filters?.dateTo && req.dateTo !== horizons.filters.dateTo)));
       findings.push({ kind: 'horizonSpread', interpretation: 'distribution', scope: entry.scope, filters: horizons.filters, today, bands: horizons.rows.map((row) => row.value),
         ...(horizonMismatch ? { requestedRange: req } : {}),
         evidenceIds: [horizons.evidenceId], completeness: 'complete' });
@@ -1057,11 +1059,16 @@ export function noteListLead(locale = 'tr', { shown = null, total = null } = {})
 }
 
 /** Dizi grafiğinin başlığı (sunucu metni). */
-export function seriesChartTitle(coverage, locale = 'tr') {
+export function seriesChartTitle(coverage, locale = 'tr', filters = null) {
   const lang = en(locale) ? 1 : 0;
   const week = coverage.bucket === 'week';
-  if (coverage.kind === 'activitySeries') return week ? ['Haftalara göre kaydedilen hareket', 'Recorded activity by week'][lang] : ['Aylara göre kaydedilen hareket', 'Recorded activity by month'][lang];
-  return week ? ['Haftalara göre tamamlanan görev', 'Completed tasks by week'][lang] : ['Aylara göre tamamlanan görev', 'Completed tasks by month'][lang];
+  const activity = coverage.kind === 'activitySeries';
+  const title = activity
+    ? (week ? ['Haftalara göre kaydedilen hareket', 'Recorded activity by week'][lang] : ['Aylara göre kaydedilen hareket', 'Recorded activity by month'][lang])
+    : (week ? ['Haftalara göre tamamlanan görev', 'Completed tasks by week'][lang] : ['Aylara göre tamamlanan görev', 'Completed tasks by month'][lang]);
+  const scope = activity ? activityScope(filters) : taskScope(filters);
+  const scoped = scope && (scope.owner !== 'all' || scope.personSicil != null || scope.person || scope.project);
+  return scoped ? [title, scopeLabel(scope, locale)].join(' — ') : title;
 }
 
 /** Tek satırlı dönem listesinin (tamamlanan görev ya da not) satırını tanıtan cümle; sayı taşımaz (sayım giriştedir). */

@@ -3000,7 +3000,7 @@ test('karşılaştırmalı iki kapsam ayrı kalır; yalnızca ufuk sorusuna term
   const lastWeek = resolveWindow('last_week', TODAY);
   const before = previousWindow(lastWeek);
   assert.equal(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['completed'], relativeWindow: 'last_week', compare: 'previous', compareFrom: before.dateFrom, compareTo: before.dateTo } }), null);
-  assert.notEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['completed'], relativeWindow: 'last_week', compare: 'previous', compareFrom: before.dateFrom, compareTo: shiftDay(before.dateTo, -1) } }), null);
+  assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['completed'], relativeWindow: 'last_week', compare: 'previous', compareFrom: before.dateFrom, compareTo: shiftDay(before.dateTo, -1) } }), ['$.analysis.compare:conflict']);
 });
 
 test('gelecekteki ikinci dönem karşılaştırma alanının hatasıdır ve onarımla değiştirilebilir; yarım tarih çifti tamamlanabilir', async (t) => {
@@ -3792,4 +3792,99 @@ test('katman bütçesi rızalı not okumasını sessizce atlamaz', () => {
   const analysis = parseAnalysis({ scope: 'self', focus: ['completed', 'created', 'activity'], relativeWindow: 'last_month',
     also: [{ scope: 'team', focus: ['completed', 'created', 'activity', 'notes'] }] });
   assert.throws(() => expandAnalysis(analysis, { today: TODAY }), (error) => error.details.includes('$.analysis.focus:requestBudget'));
+});
+
+test('yeni başlangıç varsayılan geçmiş bitişini taşımaz, dönemsiz geçmiş takip aralığı korur', () => {
+  const today = '2026-11-19';
+  const previous = { scope: 'self', focus: ['completed'], dateFrom: '2026-10-20', dateTo: '2026-11-18', windowDefaulted: true };
+  for (const dateFrom of ['2026-11-10', today]) {
+    const requests = expandAnalysis(parseAnalysis({ scope: 'previous', focus: ['status'], dateFrom }), { previous, today });
+    const read = requests.find((request) => request.population.groupBy === 'status');
+    assert.deepEqual([read?.filters.dateFrom, read?.filters.dateTo], [dateFrom, undefined]);
+  }
+  const history = expandAnalysis(parseAnalysis({ scope: 'previous' }), { previous, today }).find((request) => request.filters.dateField === 'actualFinish');
+  assert.deepEqual([history?.filters.dateFrom, history?.filters.dateTo], [previous.dateFrom, previous.dateTo]);
+});
+
+test('takipte devralınan önceki dönem yalnızca eşdeğer karşılaştırma tarihlerini katlar', () => {
+  const today = '2026-11-23';
+  const previousCases = [
+    [{ scope: 'self', focus: ['completed'], relativeWindow: 'last_week', windowDay: '2026-11-19' }, '2026-11-02', '2026-11-08'],
+    [{ scope: 'self', focus: ['completed'], dateFrom: '2026-09-01', dateTo: '2026-09-30', windowRolling: true }, '2026-08-02', '2026-08-31']
+  ];
+  for (const [previousAnalysis, compareFrom, compareTo] of previousCases) {
+    const analysis = { scope: 'previous', compare: 'previous', compareFrom, compareTo };
+    const run = (brief) => unpackTypedPlan({ toolCalls: [{ name: 'rota_plan', arguments: JSON.stringify({ intent: 'rota', language: 'tr', analysis: brief }) }] }, { today, previousAnalysis });
+    assert.ok(run(analysis).plan.additionalRequests.some(({ filters }) => filters.dateFrom === compareFrom && filters.dateTo === compareTo));
+    assert.throws(() => run({ ...analysis, compareTo: shiftDay(compareTo, -1) }), (error) => error.details?.includes('$.analysis.compare:conflict'));
+  }
+});
+
+test('çizgi grafiğine eklenen okuma isteğe bağlıdır, bildirilen eğilim okuması zorunludur', () => {
+  for (const also of [undefined, [{ scope: 'team', focus: ['completed'] }]]) {
+    const base = { scope: 'self', focus: ['completed'], relativeWindow: 'last_month', ...(also ? { also } : {}) };
+    for (const focus of [['completed'], ['trend']]) {
+      const reads = expandAnalysis(parseAnalysis({ ...base, focus }), { today: TODAY, chart: 'line' });
+      const index = reads.findIndex(({ filters, population }) => filters.assignee === 'me' && ['date_week', 'date_month'].includes(population.groupBy));
+      assert.notEqual(index, -1);
+      assert.equal(Boolean(reads.optionalParts?.includes(index)), focus[0] === 'completed');
+    }
+  }
+});
+
+test('teslim dönemi uyuşmazlığı aynı kapsamın tamamlanma okumasından bağımsızdır', () => {
+  const prior = resolveWindow('last_month', TODAY);
+  const current = resolveWindow('next_30_days', TODAY);
+  const horizons = { part: 2, evidenceId: 'R2', facts: ['days_0_6', 'days_7_13', 'days_14_29'].map((key, index) => fact('rota_task_analytics', {
+    ...current, statuses: ['todo', 'in_progress'], dateField: 'targetFinish'
+  }, 'data.groups.' + index + '.count', 2, { groupBy: 'due_horizon', group: { key, label: key }, row: { collectionSize: 3 } })) };
+  const combined = [completedRead('R1', prior, 4), horizons];
+  assert.match(said(combined, { today: TODAY, window: prior }), /istenen dönem .*Ağustos 2026.* hesaplanamaz/);
+  assert.doesNotMatch(said(combined, { today: TODAY, window: current }), /hesaplanamaz/);
+  assert.doesNotMatch(said(combined, { today: TODAY, window: prior, defaulted: true }), /hesaplanamaz/);
+  assert.doesNotMatch(said(combined, { today: TODAY, window: prior, analysisParts: 1 }), /hesaplanamaz/);
+});
+
+test('geçmiş durum çekincesi karşılaştırılan dönemi kendi cümlesinde belirtir', async (t) => {
+  const { ask } = conversation(t, 'B');
+  const scenario = fixture.targeted.find(({ id }) => id === 't61');
+  const full = await ask(scenario);
+  assert.deepEqual(temporalViolations(full, scenario.expect), []);
+  const content = full.answer.content.replace('21–27 Eylül 2026', '14–20 Eylül 2026') + '\n\nBir kayıt 21–27 Eylül 2026 aralığına aittir.';
+  assert.ok(temporalViolations({ ...full, answer: { ...full.answer, content } }, scenario.expect).includes('geçmiş durum sınırı istenen dönemi belirtmiyor'));
+});
+
+test('tek tamamlanan görev tanıtımı listenin kendi dönem ölçütünü korur', async (t) => {
+  const { callRotaTools } = await import('./helpers/aiToolFixtures.mjs');
+  const { verifyRequested } = await import('./helpers/requestScenario.mjs');
+  const { buildComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const { stack, sicil } = toolStack(t, 'B');
+  const done = stack.db.tasks.filter((task) => task.Status === 'done');
+  done.forEach((task, index) => { task.ActualFinish = shift(index === 0 ? -3 : -16); });
+  const filters = { status: ['done'], dateField: 'actualFinish', ...resolveWindow('last_week', TODAY) };
+  const { ledger, results } = await callRotaTools(stack, sicil, [['rota_task_analytics', filters], ['rota_task_search', { ...filters, limit: 1 }]]);
+  assert.equal(results[1].totalCount, 1);
+  const total = verifyRequested(ledger, ['R1:data.totals.total'], { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters });
+  const list = verifyRequested(ledger, ['R2:totalCount', 'R2:data.tasks.*.title'], { operation: 'list', metrics: ['tasks.total', 'task.title'],
+    population: { tool: 'rota_task_search', collection: 'tasks' }, filters });
+  assert.equal(total.ok && list.ok, true);
+  const composition = buildComposition({ parts: [total, list].map((verdict, index) => ({ index, presentation: verdict.presentation })), analyst: true, today: TODAY });
+  const detail = [...composition.render.details.values()].find(({ evidenceId }) => evidenceId === 'R2');
+  assert.match(detail?.text ?? '', /Tamamlanan görev şudur\..*Gerçekleşen bitiş: 21 Eylül 2026 – 27 Eylül 2026/u);
+});
+
+test('çizgi grafiği başlığındaki ekip kapsamı kişisel kanıtın değerleriyle geçemez', async () => {
+  const { answerChartFence } = await import('../src/domain/ai/answerChart.js');
+  const starts = ['2026-09-07', '2026-09-14', '2026-09-21'];
+  const labels = ['7–13 Eyl', '14–20 Eyl', '21–27 Eyl'];
+  const series = (evidenceId, assignee, values) => ({ evidenceId, ok: true, tool: 'rota_task_analytics', today: TODAY, data: { groupBy: 'date_week',
+    filters: { dateField: 'actualFinish', assignee }, groups: starts.map((key, index) => ({ key, dateFrom: key, dateTo: shiftDay(key, 6), label: labels[index], count: values[index] })) } });
+  const own = series('R1', 'me', [1, 2, 3]);
+  const team = series('R2', 'team', [4, 5, 6]);
+  const chartFor = (entry, owner) => ({ version: 1, type: 'line', locale: 'tr', unit: 'count', evidence: [entry.evidenceId],
+    title: 'Haftalara göre tamamlanan görev — ' + owner, items: entry.data.groups.map(({ label, count }) => ({ label, value: count })) });
+  const check = (teamChart) => temporalViolations({ evidence: [own, team], answer: { finishReason: 'stop',
+    content: ['Kaynak 【R1】【R2】', answerChartFence(chartFor(own, 'Kendi işleriniz')), answerChartFence(teamChart)].join('\n\n') } }, { measures: ['trend'], charts: ['line'] });
+  assert.deepEqual(check(chartFor(team, 'Ekibiniz')), []);
+  assert.ok(check(chartFor(own, 'Ekibiniz')).includes('çizgi grafik noktaları kova kanıtıyla eşleşmiyor'));
 });

@@ -345,13 +345,12 @@ export function resolveAnalysisBrief(analysis, { previous = null, today = null }
   const relativeWindow = analysis.relativeWindow || (!analysis.dateFrom && !analysis.dateTo && !pinned ? previous?.relativeWindow : null);
   const inheritedDefault = !ownWindow && !relativeWindow && !pinned && previous?.windowDefaulted && previous.dateFrom && previous.dateTo
     ? { dateFrom: previous.dateFrom, dateTo: previous.dateTo } : null;
-  const inherited = priorNamed && today ? resolveWindow(priorNamed, anchor || today) : inheritedDefault ? null : previous;
+  const inherited = priorNamed && today ? resolveWindow(priorNamed, anchor || today) : previous?.windowDefaulted ? null : previous;
   const inheritedHistoricalEnd = !ownWindow && !relativeWindow && !pinned && !inheritedDefault && previous?.historicalDateTo && focus.some((item) => TEMPORAL_FOCUS.includes(item))
     ? previous.historicalDateTo : null;
-  const dropDefaultStart = previous?.windowDefaulted && !analysis.dateFrom && !focus.some((item) => TEMPORAL_FOCUS.includes(item));
   const window = relativeWindow ? { relativeWindow } : pinned ? { dateFrom: pinned.dateFrom, dateTo: pinned.dateTo }
     : inheritedDefault ? (focus.some((item) => TEMPORAL_FOCUS.includes(item)) ? { defaultRange: inheritedDefault } : {})
-      : { ...(inherited?.dateFrom && !dropDefaultStart ? { dateFrom: inherited.dateFrom } : {}), ...(inherited?.dateTo && !(analysis.dateFrom && focus.some((item) => TEMPORAL_FOCUS.includes(item))) ? { dateTo: inherited.dateTo } : {}),
+      : { ...(inherited?.dateFrom ? { dateFrom: inherited.dateFrom } : {}), ...(inherited?.dateTo && !(analysis.dateFrom && focus.some((item) => TEMPORAL_FOCUS.includes(item))) ? { dateTo: inherited.dateTo } : {}),
         ...(inheritedHistoricalEnd && !focus.includes('upcoming') ? { dateTo: inheritedHistoricalEnd } : {}),
         ...(inheritedHistoricalEnd && focus.includes('upcoming') ? { historicalDateTo: inheritedHistoricalEnd } : {}) };
   const windowRolling = !ownWindow && (Boolean(pinned && ROLLING.test(priorNamed)) || Boolean(!relativeWindow && !pinned && (previous?.windowRolling || inheritedDefault)))
@@ -1132,7 +1131,7 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (!items.length) continue;
     if (parts.length + items.length > budget || !optionalFits([...parts, ...items])) { omitted.push(Object.freeze({ layer: 0, focus })); continue; }
-    add(items, { layer: 0, focus, required: false });
+    add(items, { layer: 0, focus, required: false, optional: type === 'line' });
   }
   // Bölüm ya da direktörlük düzeyindeki ekip kapsamının doğal kırılımı alt örgüt birimleridir (tek kapsamlı özetteki kuralın aynısı):
   // `org` yazılmadıysa kalan bütçeyle o kapsamın kendi nüfusu ve yetkisiyle eklenir. İsteğe bağlıdır: yer yoksa eklenmez ve
@@ -1316,12 +1315,12 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     if (!comparable.length && !states.length) throw invalidArguments(['$.analysis.compare:focus']);
     if (states.length) unsupportedHistory = Object.freeze([...states]);
   }
-  // Adı verilen grafik türünün okuması (sunucunun zorunlu eklediği okuma: en çok `maxParts`'a kadar; sığmazsa grafik
+  const optionalParts = [];
+  // Adı verilen grafik türünün okuması (sunucunun tamamlayıcı okuması: en çok `maxParts`'a kadar; sığmazsa grafik
   // notu türün neden çizilemediğini söyler). Aşama F: iki tür istendiyse her türün okuması sırayla ve aynı bütçeyle eklenir.
   for (const type of [chart, ...(charts || []).filter((item) => item !== chart)].filter(Boolean)) addChartReads(type);
   // Aşama H — isteğe bağlı dönem okumaları (yalnızca yer varsa; bildirilen yön düşmez): dönemde tamamlananların en yeni satırları ve
   // hareketlerle eğilim birlikte istendiyse kaydedilen hareketlerin dizisi. Karşılaştırmada satır listesi okunmaz (iki dönemin sayıları sorulur).
-  const optionalParts = [];
   const addOptional = (build) => {
     let produced = null;
     try { produced = build(); } catch (error) { produced = optionalRead(error); }
@@ -1428,8 +1427,11 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
       } catch (error) { produced = optionalRead(error); }
       const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
       if (items.length && parts.length + items.length <= optionalBudget && optionalFits([...parts, ...items])) {
-        for (const item of items) seen.add(JSON.stringify(item));
-        parts.push(...items);
+        for (const item of items) {
+          seen.add(JSON.stringify(item));
+          if (chart === 'line') optionalParts.push(parts.length);
+          parts.push(item);
+        }
       }
     }
   }
