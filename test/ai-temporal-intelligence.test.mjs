@@ -235,7 +235,7 @@ for (const item of fixture.targeted) {
   test(`H kıyas ${item.id} (${item.capability}, ${item.handling}): ${item.text}`, async (t) => {
     const { ask, stack } = conversation(t, item.profile);
     const result = await ask({ text: item.text, plan: resolveDays(item.plan) }, { ...(item.detail ? { detail: item.detail } : {}), includeText: item.includeText === true });
-    assert.deepEqual([...temporalViolations(result, item.expect, { locale: item.plan.language, includeText: item.includeText === true }), ...temporalPopulationViolations(result, item.plan?.analysis, stack.db)], [], result.answer.content);
+    assert.deepEqual([...temporalViolations(result, item.expect, { locale: item.plan.language, includeText: item.includeText === true }), ...temporalPopulationViolations(result, item.plan?.analysis, stack.db, item.expect)], [], result.answer.content);
     // Bileşik puan, kapasite ya da kişi performans yargısı üretilmez; içeriksiz telemetri dışında not metni sızmaz.
     assert.doesNotMatch(String(result.answer.content), /risk puanı \*\*|performansı (?:düşük|zayıf)/u);
   });
@@ -1136,13 +1136,21 @@ test('söylenecek önerme kalmayan dönem yanıtında model düzeni çağrılmaz
   assert.deepEqual([line.context.presentation.reason, line.context.escalated], ['NO_CHOICE', false], JSON.stringify(line.context.presentation));
 });
 
-test('boş dönem dizisi (sıfırla doldurulmuş tek hafta) kanıtlanmış boş sonuçtur: yanıt "bulunamadı"ya düşmez ve yokluğu söyler', async (t) => {
+test('dönem toplamı ve dizisindeki sıfır, yeniden açılan görevleri tamamlandı durumunda saymaz', async (t) => {
   // Canlı nitelendirmede görüldü: kendi işlerinde bu hafta tamamlanan görev yokken dizi tek sıfır kovası taşır; son doğrulama bunu
   // boş sonuç saymadığından kanıt düşüyor ve yanıt "Kayıt bulunamadı" oluyordu.
-  const { ask } = conversation(t, 'B');
-  const result = await ask({ text: 'Bu haftanın tamamlanma eğilimi nedir?', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['trend'], relativeWindow: 'this_week', bucket: 'week' } } });
-  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
-  assert.match(String(result.answer.content), /kendi işlerinizde gerçekleşen bitişi kayıtlı tamamlanan görev yok/);
+  const seed = seeded(t);
+  const reopened = seed.tasks.find((task) => task.Status === 'in-progress'
+    && seed.taskAssignees.some((row) => row.TaskId === task.TaskId && row.Sicil === P.B));
+  assert.ok(reopened, 'sorumlusu kullanıcı olan yeniden açılmış görev gerekir');
+  reopened.ActualFinish = TODAY;
+  const { ask } = conversation(t, 'B', { seed });
+  for (const focus of ['completed', 'trend']) {
+    const result = await ask({ text: 'Bu hafta tamamladığım işler neler?', plan: { intent: 'rota', language: 'tr',
+      analysis: { scope: 'self', focus: [focus], relativeWindow: 'this_week' } } });
+    assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+    assert.match(String(result.answer.content), /kendi işlerinizde şu anda tamamlandı durumundaki görevlerin hiçbirinde gerçekleşen bitiş kaydı yok/);
+  }
   // Teslim ufku bantları da sabit kovalardır: açık işi olmayan kapsamda yanıt yine kanıtlıdır ve boş ufku bildirir.
   const horizons = await conversation(t, 'G', { seed: seeded(t) }).ask({ text: 'Önümüzdeki teslim ufuklarım nasıl?', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['horizons'] } } });
   assert.equal(horizons.answer.finishReason, 'stop', horizons.answer.content);
@@ -1833,6 +1841,79 @@ test('kova onarım ipucu uygulanan yirmi dört sınırıyla aynıdır', async ()
   assert.equal(seriesBuckets({ dateFrom: '2026-01-05', dateTo: '2026-06-28' }, 'week'), null);
 });
 
+test('bildirilen hareket kovası tek ve çok kapsamlı planlarda zorunlu dizi okuması üretir', () => {
+  const brief = { scope: 'team', focus: ['activity'], relativeWindow: 'last_month', bucket: 'week' };
+  const expand = (analysis, options = {}) => expandAnalysis(parseAnalysis(analysis), { today: TODAY, ...options });
+  for (const also of [undefined, [{ scope: 'self', focus: ['completed'] }]]) {
+    const reads = expand(also ? { ...brief, also } : brief);
+    const index = reads.findIndex((read) => read.population.collection === 'series');
+    assert.notEqual(index, -1);
+    assert.deepEqual(reads[index].filters, { activityScope: 'team', ...resolveWindow('last_month', TODAY), activityView: 'week' });
+    assert.ok(!reads.optionalParts?.includes(index));
+    if (also) assert.deepEqual(reads.sections[index], { layer: 0, focus: 'activity' });
+    assert.ok(reads.some((read) => read.filters.activityView === 'period'));
+  }
+  assert.ok(!expand({ ...brief, bucket: undefined }).some((read) => read.population.collection === 'series'));
+  assert.throws(() => expand({ ...brief, relativeWindow: undefined, dateFrom: '2026-01-05', dateTo: TODAY }),
+    (error) => error.details.includes('$.analysis.bucket:range'));
+  const compared = expand({ ...brief, compare: 'previous' });
+  assert.equal(compared.filter((read) => read.filters.activityView === 'period').length, 2);
+  assert.equal(compared.filter((read) => read.filters.activityView === 'week').length, 1);
+});
+
+test('grafik istenmeyen haftalık hareket sorusu ekip dizisini yanıta taşır', async (t) => {
+  const { ask } = conversation(t, 'B');
+  const analysis = { scope: 'team', focus: ['activity'], relativeWindow: 'last_14_days', bucket: 'week',
+    also: [{ scope: 'self', focus: ['completed'] }] };
+  const result = await ask({ text: 'Son 14 günde ekibimin haftalık hareketleri ile tamamladığım işler neler?', plan: { intent: 'rota', language: 'tr', analysis } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const series = result.evidence.find((item) => item.tool === 'rota_activity_search' && Array.isArray(item.data?.series));
+  assert.ok(series, result.answer.content);
+  assert.equal(series?.data?.filters?.activityScope, 'team');
+  assert.ok(series.data.series.length > 1);
+  assert.ok(result.answer.content.includes(`【${series.evidenceId}】`), result.answer.content);
+});
+
+test('dönemli durum dağılımı tek sayımla karşılanmaz, genel özet karşılanabilir', async () => {
+  const { temporalPlannerScore } = await import('../scripts/analysis-qualification.mjs');
+  const window = resolveWindow('this_month', TODAY);
+  const score = (focus, metrics, groupBy) => temporalPlannerScore({ outcome: 'planned', decisions: [], plan: {
+    analysis: { scope: 'self', focus: [focus] }, requests: [
+      { population: { tool: 'rota_task_analytics', groupBy }, entities: [], filters: { assignee: 'me', ...(focus === 'status' ? window : {}) }, metrics }
+    ]
+  } }, { intent: 'rota', scope: 'self', focusAll: [focus], ...(focus === 'status' ? { window: [window.dateFrom, window.dateTo] } : {}) }, TODAY);
+  assert.ok(score('status', ['tasks.overdue']).includes('dönem 2026-09-01..2026-09-30 okunmuyor'));
+  assert.deepEqual(score('status', ['tasks.todo', 'tasks.inProgress', 'tasks.done']), []);
+  assert.deepEqual(score('status', ['tasks.total'], 'status'), []);
+  assert.deepEqual(score('overview', ['tasks.overdue']), []);
+});
+
+test('başlamayan tek termin kovası kendi görev kapsamıyla birlikte anlatılır', async () => {
+  const { renderVerifiedNarrative } = await import('../src/domain/ai/evidenceNarrative.js');
+  const group = { key: '2026-10', label: 'Ekim 2026', notStarted: true };
+  const facts = ['me', 'team'].map((assignee, index) => ({ evidenceId: `R${index + 1}`, fact: {
+    ...fact('rota_task_analytics', { assignee, dateField: 'targetFinish' }, 'data.groups.0.count', 0,
+      { metric: 'tasks.total', groupBy: 'target_month', group, row: { index: 0, collectionSize: 1 } }),
+    subject: group.label
+  } }));
+  assert.match(renderVerifiedNarrative(facts, { locale: 'tr' }), /Başlamadı[^\n]*ölçüt: Sorumlu: Ben[;)]/i);
+  assert.match(renderVerifiedNarrative(facts, { locale: 'tr' }), /Başlamadı[^\n]*ölçüt:[^\n]*ekibiniz/i);
+  assert.match(renderVerifiedNarrative(facts, { locale: 'en' }), /Not started[^\n]*criteria: Assignee: Me[;)]/i);
+});
+
+test('geçmiş yön ve gelecek dönem çakışınca onarım bildirilen dönemi korur', async (t) => {
+  const initial = { scope: 'self', focus: ['completed'], relativeWindow: 'next_7_days' };
+  const result = async (repair) => {
+    t.mock.timers.reset();
+    const queue = [initial, { ...initial, ...repair }].map((analysis) => call({ intent: 'rota', language: 'tr', analysis }));
+    return conversation(t, 'B', { planner: () => queue.shift() }).ask({ text: 'Önümüzdeki yedi gün işlerim neler?' });
+  };
+  assert.notEqual((await result({ relativeWindow: 'last_week' })).answer.finishReason, 'stop');
+  const kept = await result({ focus: ['upcoming'] });
+  assert.equal(kept.answer.finishReason, 'stop', kept.answer.content);
+  assert.ok(kept.log.some(({ query, params }) => query === 'task-facts' && params.dateTo === shift(6)));
+});
+
 test('boşluk notları sayım sayfa ve sabit SQL sözleşmesinde aynı biçimde dışlanır', async (t) => {
   const { AI_TOOL_TASK_FACTS_SQL, AI_TOOL_TASK_NOTES_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
   const whites = [9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279];
@@ -1855,10 +1936,27 @@ test('boşluk notları sayım sayfa ve sabit SQL sözleşmesinde aynı biçimde 
 test('dönemli kıyas vakalarının olay ölçüsü ve tarih beklentileri açıktır', () => {
   for (const item of fixture.targeted) {
     const analysis = item.plan?.analysis;
+    if ((analysis?.relativeWindow || analysis?.dateFrom) && [analysis, ...(analysis.also || [])]
+      .some((layer) => (layer.focus || analysis.focus).includes('milestones'))) {
+      assert.ok(item.expect.measures?.includes('milestone'), item.id);
+    }
     if (!analysis?.focus.some((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus))) continue;
     assert.ok(item.expect.measures?.length, item.id);
     if (analysis.relativeWindow || analysis.dateFrom) assert.ok(item.expect.window, item.id);
     if (analysis.compare || analysis.compareFrom) assert.ok(item.expect.compare, item.id);
+  }
+});
+
+test('dönemli kilometre taşı kabulü ölçüyü ve aynı kapsamın gerçekleşen bitiş okumasını ister', () => {
+  const plan = { scope: 'self', focus: ['milestones'], dateFrom: '2026-09-01', dateTo: '2026-09-15' };
+  const read = { ok: true, query: 'task-facts', params: { assigneeMode: 'me', dateFrom: plan.dateFrom, dateTo: plan.dateTo,
+    dateField: 'actualFinish', milestone: true, statusCsv: 'done' } };
+  const run = (params, expect) => temporalPopulationViolations({ answer: { finishReason: 'stop' }, log: [{ ...read, params }] }, plan, {}, expect);
+  assert.ok(run(read.params, {}).includes('dönemli kilometre taşı ölçüsü açıkça bildirilmedi'));
+  const expect = { measures: ['milestone'] };
+  assert.deepEqual(run(read.params, expect), []);
+  for (const change of [{ dateField: 'targetFinish' }, { milestone: undefined }, { assigneeMode: 'team' }]) {
+    assert.ok(run({ ...read.params, ...change }, expect).some((message) => message.includes('/milestone/')));
   }
 });
 
@@ -2375,7 +2473,11 @@ test('kırpılmış tek tamamlanma satırı dönemde yalnızca bir görev varmı
     const text = renderComposition(composition, defaultComposition(composition)).text;
     assert.doesNotMatch(text, /Tamamlanan görev şudur|This is the completed task/);
     const expected = results[1].totalCount;
-    assert.match(text.replaceAll('**', ''), new RegExp(`\\b${expected}\\s+${locale === 'tr' ? 'görev' : 'tasks?'}\\b`));
+    const shown = results[1].data.tasks.length;
+    const listIntro = locale === 'tr'
+      ? new RegExp(`Toplam ${expected} tamamlanmış görevden dönen ${shown} tanesi aşağıda listeleniyor\\.`)
+      : new RegExp(`Of ${expected} completed tasks, the ${shown} returned task is shown below\\.`);
+    assert.ok(text.replaceAll('**', '').split('\n').some((line) => line.includes('【R2】') && listIntro.test(line)), text);
   }
 });
 
@@ -2961,18 +3063,21 @@ test('sıralı on notluk örnek sonuç bütçesine sığar: uzun çok baytlı no
   const result = await ask({ text: 'Görev notlarını özetle.', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['notes'] } } }, { includeText: true });
   assert.equal(result.answer.finishReason, 'stop', result.answer.content);
   const notes = result.evidence.find((item) => item.tool === 'rota_task_search' && item.data?.filters?.hasDescription);
-  // Satırlar düşürülmez: istenen sıralı örnek (en az on görev) tam satırlarıyla kalır; notlar kısaltılmış olarak işaretlenir.
+  // Araç sıralamayı kanıtlamak için fazladan satır okuyabilir, ancak yanıtın örneği on görevdir.
   assert.ok(notes.data.tasks.length >= 10, String(notes.data.tasks.length));
+  assert.match(String(result.answer.content), /(?:dönen |\*\*)(?:\*\*)?10(?:\*\*)? (?:tanesinin|not|açık görev)/u, result.answer.content);
   assert.ok(notes.data.tasks.every((task) => task.descriptionClipped === true && task.description.isWellFormed()));
   assert.match(String(result.answer.content), /metnin ya da nüfusun tamamının okunduğu söylenemez|söylenemez/);
   assert.ok(notes.rankingBoundary || notes.complete, 'sıralama kanıtı korunur');
   // Satır sırası güncellenme anına göre azalandır ve yetkili açık görevlerin en yeni on kaydını birebir korur.
-  const returnedIds = notes.data.tasks.map((task) => String(task.taskId).toLowerCase());
+  const returnedIds = notes.data.tasks.slice(0, 10).map((task) => String(task.taskId).toLowerCase());
   const expectedIds = open.filter((task) => String(task.ProjectId).toLowerCase() !== String(TEMPORAL_PROJECTS.GIZLI).toLowerCase())
     .sort((a, b) => Date.parse(b.UpdatedAt) - Date.parse(a.UpdatedAt))
-    .slice(0, returnedIds.length)
+    .slice(0, 10)
     .map((task) => String(task.TaskId).toLowerCase());
   assert.deepEqual(returnedIds, expectedIds);
+  for (const task of notes.data.tasks.slice(0, 10)) assert.ok(result.answer.content.includes(task.title), task.title);
+  for (const task of notes.data.tasks.slice(10)) assert.ok(!result.answer.content.includes(task.title), task.title);
 });
 
 test('karşılaştırmalı iki kapsam ayrı kalır; yalnızca ufuk sorusuna termin okuması eklenmez; eşdeğer katman dönemi reddedilmez', () => {
@@ -3328,7 +3433,7 @@ test('nitelendirme h05 gerçek durum ölçüsü ister, dönemli durum okumasın�
     { population: { tool: 'rota_task_search' }, entities: [], metrics: ['task.title'], filters: { assignee: 'team', deadline: 'overdue' } }
   ] } };
   assert.ok(temporalPlannerScore(missingWorkload, multiStateExpect, TODAY).includes('durum katmanı yönü okunmuyor'));
-  // t58 düzyazı-tekli karşılaştırmayı reddeder.
+  // t58, satır koleksiyonu sınırını belirtmeli; aynı bildirim gerçek tablo bekleyen vakaya yetmez.
   const t58 = fixture.targeted.find((item) => item.id === 't58');
   const proseOnly = { answer: { finishReason: 'stop', content: 'İki dönem karşılaştırıldığında tamamlanan görev arttı. 【R1】' },
     log: [
@@ -3337,7 +3442,10 @@ test('nitelendirme h05 gerçek durum ölçüsü ister, dönemli durum okumasın�
       { ok: true, query: 'task-facts', params: { dateField: 'actualFinish', statusCsv: 'done', dateFrom: '2026-08-01', dateTo: '2026-08-31' } },
       { ok: true, query: 'task-facts', params: { dateField: 'createdAt', dateFrom: '2026-08-01', dateTo: '2026-08-31' } }
     ] };
-  assert.ok(temporalViolations(proseOnly, t58.expect).includes('beklenen tablo yok'));
+  assert.ok(temporalViolations(proseOnly, t58.expect).includes('tabloya uygun satır koleksiyonu olmadığı bildirilmedi'));
+  const noticeOnly = { ...proseOnly, answer: { ...proseOnly.answer, content: `${proseOnly.answer.content}\nBu doğrulanmış sonuçta tablo olarak gösterilebilecek satır koleksiyonu yok.` } };
+  assert.deepEqual(temporalViolations(noticeOnly, t58.expect), []);
+  assert.ok(temporalViolations(noticeOnly, { ...t58.expect, tableNotice: undefined, table: true }).includes('beklenen tablo yok'));
   // t38 bölüm kırılımı olmadan yalnızca direktörlük toplamıyla geçemez (negatif kontrol).
   const t38 = fixture.targeted.find((item) => item.id === 't38');
   const totalOnlyT38 = {
@@ -3604,7 +3712,7 @@ test('kök neden yakınsaması: karma geçmiş bitiş, çok katmanlı onarım, k
   assert.match(partialUndatedText, /bitiş tarihi kayıtlı/);
   assert.doesNotMatch(partialUndatedText, /%100|arttı/);
   const zeroUndatedText = said([completedRead('R1', sep, 0, 2), completedRead('R2', aug, 0, 2)]);
-  assert.match(zeroUndatedText, /bitiş tarihi kayıtlı tamamlanan görev yok/);
+  assert.match(zeroUndatedText, /şu anda tamamlandı durumundaki görevlerin hiçbirinde gerçekleşen bitiş kaydı yok/);
   // Toplu okuma 2 tarihsiz görürken dizi 0 tarihsiz görse de toplu okumanın uyarısı korunur.
   const seriesZeroUndated = { part: 1, evidenceId: 'R2', facts: ['2026-09-07', '2026-09-14', '2026-09-21'].map((k, i) => fact('rota_task_analytics', { assignee: 'any', statuses: ['done'], dateField: 'actualFinish', ...sep }, `data.groups.${i}.count`, [2, 2, 1][i], { metric: 'tasks.total', groupBy: 'date_week', history: { basis: 'actualFinish', undatedDone: 0 }, group: { key: k, label: k }, row: { collectionSize: 3 } })) };
   assert.match(said([completedRead('R1', sep, 5, 2), seriesZeroUndated]), /Tamamlanmış 2 görevin gerçekleşen bitiş tarihi kayıtlı olmadığından/);

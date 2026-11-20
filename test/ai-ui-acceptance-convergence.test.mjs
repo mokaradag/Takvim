@@ -525,7 +525,8 @@ exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}
   const scenario = { profile: 'B', port: 8102, appLog: 'app.log', conversations: [{ name: 'rıza', detail: 'balanced', turns: ['Notları oku'], includeText: [0] }] };
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
   // Üst kabuğun görünüm değişkeni (ör. UI_VIEWPORT=mobile) sınamayı etkilemez.
-  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_THEME: '', UI_VIEWPORT: '', UI_SCRIPTED: '', UI_ONLY: '', UI_SEED_GROUPS: '', UI_SEED: '' });
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_APP_LOG: join(dir, 'app.log'),
+    UI_THEME: '', UI_VIEWPORT: '', UI_SCRIPTED: '', UI_ONLY: '', UI_SEED_GROUPS: '', UI_SEED: '' });
   assert.equal(result.status, 1, result.stderr);
   const row = JSON.parse(readFileSync(join(dir, 'out', 'B.json')))[0];
   assert.equal(row.rendered.status, 'driver-error');
@@ -648,7 +649,7 @@ test('kabul tohumları tek Türkiye gününü paylaşır ve geçersiz takvim gü
   }
 });
 
-test('çoklu tohum koşusu sonuçları ezmez, UI_APP_LOG günlüğünü okur ve betikli köprü G/H kıyas kümelerini birlikte sunar', async (t) => {
+test('çoklu tohum koşusu boşluklu seçimi işler, ayrı günlüklerin sonuçlarını korur ve G/H planlarını sunar', async (t) => {
   const dir = fakeDriverDir(t);
   const playwright = join(dir, 'node_modules', 'playwright', 'index.js');
   writeFileSync(playwright, readFileSync(playwright, 'utf8')
@@ -664,14 +665,16 @@ test('çoklu tohum koşusu sonuçları ezmez, UI_APP_LOG günlüğünü okur ve 
     ]
   }));
   const firstPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
-    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SCRIPTED: '', UI_SEED: 'base', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-base.log')
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SCRIPTED: '', UI_SEED: 'base', UI_SEED_GROUPS: '1',
+    UI_ONLY: 'g-tohumsuz, h-tohumlu ', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-base.log')
   });
   assert.equal(firstPass.status, 0, firstPass.stderr);
   const rows = () => JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
   const firstRow = rows().find(({ conversation }) => conversation === 'g-tohumsuz');
   assert.equal(firstRow?.server?.evidence, 1);
   const secondPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
-    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SCRIPTED: '', UI_SEED: 'temporal', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-temporal.log')
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SCRIPTED: '', UI_SEED: 'temporal', UI_SEED_GROUPS: '1',
+    UI_ONLY: 'g-tohumsuz, h-tohumlu ', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-temporal.log')
   });
   assert.equal(secondPass.status, 0, secondPass.stderr);
   const combined = rows();
@@ -723,6 +726,12 @@ test('dönem ve geçmiş durum beklentileri kısmi ay aralığını, yer değiş
   assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1–31 Ekim 2026 ile 1–30 Kasım 2026 karşılaştırıldı. Bir işin tarihi 5 Kasım 2026.' }, okTrace, nov20), []);
   // Yer değiştirmiş aylar ("Geçen ay (Eylül 2026) ... bu ay (Ağustos 2026)") reddedilir.
   assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Eylül 2026) 5 görev tamamlanmıştı; bu ay (Ağustos 2026) 8 görev tamamlandı.' }, okTrace, sep30).length > 0);
+  for (const [language, text] of [
+    ['tr', 'Geçen ay Eylül 2026, bu ay Ağustos 2026 (Ağustos 2026 – Eylül 2026).'],
+    ['en', 'Last month September 2026, this month August 2026 (August 2026 – September 2026).']
+  ]) assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month', language }, { text }, okTrace, sep30).length > 0, language);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month', language: 'en' },
+    { text: 'Last month (August 2026), this month 1–30 September 2026.' }, okTrace, sep30), []);
   // Geçen hafta (21–27 Eylül 2026) beklentisi kayan 7 günü (24–30 Eylül 2026) reddeder.
   assert.ok(semanticFailures({ periodKind: 'last_week' }, { text: 'Geçen hafta (24–30 Eylül 2026) 4 görev tamamlandı.' }, okTrace, sep30).length > 0);
   assert.deepEqual(semanticFailures({ periodKind: 'last_week' }, { text: 'Geçen hafta (21–27 Eylül 2026) 4 görev tamamlandı.' }, okTrace, sep30), []);

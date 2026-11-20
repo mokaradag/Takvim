@@ -14,7 +14,10 @@ const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
 // İsteğe bağlı: yalnızca adı verilen konuşmalar (yarıda kalan koşunun kalanı için).
 scenario.conversations = scenario.conversations.map((item, index) => ({ ...item, index }));
-if (process.env.UI_ONLY) scenario.conversations = scenario.conversations.filter((item) => process.env.UI_ONLY.split(',').includes(item.name));
+if (process.env.UI_ONLY) {
+  const names = new Set(process.env.UI_ONLY.split(',').map((name) => name.trim()));
+  scenario.conversations = scenario.conversations.filter((item) => names.has(item.name));
+}
 scenario.appLog = process.env.UI_APP_LOG ? path.resolve(process.env.UI_APP_LOG) : path.resolve(process.env.UI_ACCEPTANCE_DIR || '.', scenario.appLog);
 const CALLS = path.join(process.env.UI_ACCEPTANCE_DIR || path.join(__dirname, 'logs'), 'calls.jsonl');
 const lines = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : []);

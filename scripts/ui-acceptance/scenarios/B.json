@@ -372,7 +372,7 @@
       "Geçen hafta"
      ],
      "matches": [
-      "(?:[\\d.]+ görev tamamlandı \\(gerçekleşen bitiş tarihine göre\\)|gerçekleşen bitişi kayıtlı tamamlanan görev yok)"
+      "(?:[\\d.]+ görev tamamlandı \\(gerçekleşen bitiş tarihine göre\\)|şu anda tamamlandı durumundaki görevlerin hiçbirinde gerçekleşen bitiş kaydı yok)"
      ]
     }
    ]

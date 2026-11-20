@@ -27,6 +27,9 @@ export const TEMPORAL_LIMITS = Object.freeze({ minPercentBase: 4, minTrendBucket
 
 const s = strongFact;
 const en = (locale) => locale === 'en';
+// Gerçekleşen bitiş okuması yalnızca bugünkü durumu tamamlandı olan görevleri kapsar.
+const noDatedCompletion = (locale) => en(locale) ? 'no task currently marked done has a recorded completion date'
+  : 'şu anda tamamlandı durumundaki görevlerin hiçbirinde gerçekleşen bitiş kaydı yok';
 const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null);
 const n = (value, locale) => s(formatCount(value, locale));
 const upper = (text, locale) => `${text.charAt(0).toLocaleUpperCase(en(locale) ? 'en-US' : 'tr-TR')}${text.slice(1)}`;
@@ -432,9 +435,9 @@ function comparisonSentences(finding, locale) {
       } else if (a === b) {
         out.push({ ...factSentence(lang
           ? ['In both periods (', rangeLabel(earlier, locale), ' and ', rangeLabel(later, locale), '), ', ...place,
-            ...(a === 0 ? ['no task has a recorded completion date'] : ['dated completed tasks totalled ', n(a, locale)]), '.']
+            ...(a === 0 ? [noDatedCompletion(locale)] : ['dated completed tasks totalled ', n(a, locale)]), '.']
           : ['İki dönemde de (', rangeLabel(earlier, locale), ' ve ', rangeLabel(later, locale), ') ', ...place,
-            ...(a === 0 ? ['bitiş tarihi kayıtlı tamamlanan görev yok'] : ['bitiş tarihi kayıtlı ', n(a, locale), ' görev tamamlandı']), '.']),
+            ...(a === 0 ? [noDatedCompletion(locale)] : ['bitiş tarihi kayıtlı ', n(a, locale), ' görev tamamlandı']), '.']),
         states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ['tasks.total', 'tasks.undatedDone'])) });
       } else {
         out.push({ ...factSentence(lang
@@ -592,7 +595,7 @@ function summarySentences(finding, locale) {
   const activity = finding.reads.find((read) => read.kind === 'activity');
   if (completed && completed.total != null) {
     out.push({ ...factSentence(completed.total === 0
-      ? (lang ? [...lead(), 'no task has a recorded completion date.'] : [...lead(), 'gerçekleşen bitişi kayıtlı tamamlanan görev yok.'])
+      ? [...lead(), noDatedCompletion(locale), '.']
       : (lang ? [...lead(), n(completed.total, locale), completed.total === 1 ? ' task was completed' : ' tasks were completed', ' (by recorded actual finish date).']
         : [...lead(), n(completed.total, locale), ' görev tamamlandı (gerçekleşen bitiş tarihine göre).'])), states: states(completed.evidenceId, ['tasks.total']) });
   } else if (completed) {
@@ -702,7 +705,7 @@ function trendSentences(finding, locale) {
   }
   if (finding.narratedTotal !== sum) {
     out.push({ ...factSentence(sum === 0
-      ? (lang ? [adverb, ', ', ...place, ', no task has a recorded completion date.'] : [adverb, ' ', ...place, ' gerçekleşen bitişi kayıtlı tamamlanan görev yok.'])
+      ? [adverb, lang ? ', ' : ' ', ...place, lang ? ', ' : ' ', noDatedCompletion(locale), '.']
       : (lang ? [adverb, ', ', ...place, ', ', n(sum, locale), sum === 1 ? ' task was completed' : ' tasks were completed', ' (by recorded actual finish date).']
         : [adverb, ' ', ...place, ' ', n(sum, locale), ' görev tamamlandı (gerçekleşen bitiş tarihine göre).'])),
     // Toplam okumasının değeri yalnızca söylenen dizi toplamıyla aynıysa söylenmiş sayılır (farklı kanıt kimliği ayrıntıda kalır).
@@ -1042,7 +1045,7 @@ export function completedListLead(shown, total, locale = 'tr') {
   const lang = en(locale) ? 1 : 0;
   if (total != null && shown >= total) return factSentence(lang ? ['The completed tasks are listed below.'] : ['Tamamlanan görevler aşağıda listeleniyor.']);
   if (total != null) {
-    return factSentence(lang ? ['Of ', n(total, locale), ' completed tasks, the ', n(shown, locale), ' returned are listed below.']
+    return factSentence(lang ? ['Of ', n(total, locale), ' completed tasks, the ', n(shown, locale), shown === 1 ? ' returned task is shown below.' : ' returned are listed below.']
       : ['Toplam ', n(total, locale), ' tamamlanmış görevden dönen ', n(shown, locale), ' tanesi aşağıda listeleniyor.']);
   }
   return factSentence(lang ? ['The ', n(shown, locale), ' returned completed tasks are listed below.'] : ['Dönen tamamlanmış görevlerden ', n(shown, locale), ' tanesi aşağıda listeleniyor.']);

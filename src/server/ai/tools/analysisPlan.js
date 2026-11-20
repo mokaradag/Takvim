@@ -572,9 +572,12 @@ function temporalRequest(focus, analysis, base, { range = null, bucket = null } 
     case 'created':
       return request({ operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.done'], population: { tool: 'rota_task_analytics' }, ...entities,
         filters: historyFilters(base, 'createdAt', window) });
-    case 'activity':
-      return request({ operation: 'value', metrics: [...ACTIVITY_METRICS], population: { tool: 'rota_activity_search' },
+    case 'activity': {
+      const total = request({ operation: 'value', metrics: [...ACTIVITY_METRICS], population: { tool: 'rota_activity_search' },
         ...(selectable(base).length ? { entities: selectable(base) } : {}), filters: activityFilters(base, window, 'period') });
+      // Bildirilen hareket kovası birincil dönemde zorunlu okumadır; karşılaştırma dönemi aynı nüfusun toplamıyla okunur.
+      return !range && analysis.bucket && activityOnly(analysis.focus) ? [total, activitySeries(base, analysis, trendBucket(analysis, window))] : total;
+    }
     case 'trend': {
       const size = bucket || trendBucket(analysis, window);
       // Dizi ile aynı nüfusun dönem toplamı ve tamlık ölçüsü (tarihi kayıtlı olmayan tamamlanmış görev) birlikte okunur.
@@ -614,7 +617,7 @@ function completedList(base, analysis) {
     filters: { status: [...DONE], dateField: 'actualFinish', ...window } });
 }
 
-/** Hareket dizisi (yalnızca `activity` ve `trend` birlikte istendiğinde): kaydedilen hareketlerin haftalık/aylık sayıları. */
+/** Kaydedilen hareketlerin haftalık veya aylık dizisi. */
 function activitySeries(base, analysis, bucket) {
   const window = historyRangeOf(analysis);
   return request({ operation: 'list', metrics: ['activity.events', 'activity.completionEvents'], layout: 'table', population: { tool: 'rota_activity_search', collection: 'series' },

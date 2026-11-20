@@ -396,6 +396,8 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
     if (stateFocus === 'priority') return g === 'priority';
     if (stateFocus === 'deadlines') return g === 'deadline';
     if (stateFocus === 'schedule') return g === 'target_month';
+    if (stateFocus === 'status') return tool === 'rota_task_analytics' && (g === 'status'
+      || !g && ['tasks.todo', 'tasks.inProgress', 'tasks.done'].every((metric) => m.includes(metric)));
     return g === 'status' || ['tasks.open', 'tasks.todo', 'tasks.inProgress', 'tasks.overdue', 'tasks.completionRatePercent'].some((metric) => m.includes(metric));
   };
   const reads = (range) => layers.every((layer) => {
@@ -820,7 +822,7 @@ if (direct) {
       t.mock.timers.reset();
       const { test: _named, ...expect } = item.expect;
       const turn = { text: item.text, detail: item.detail || null, includeText: item.includeText === true, requireComposed: item.handling === 'full' && !expect.finish,
-        violations: (result) => [...temporalViolations(result, expect, { locale: item.plan?.language || 'tr', includeText: item.includeText === true }), ...temporalPopulationViolations(result, item.plan?.analysis, seed)] };
+        violations: (result) => [...temporalViolations(result, expect, { locale: item.plan?.language || 'tr', includeText: item.includeText === true }), ...temporalPopulationViolations(result, item.plan?.analysis, seed, expect)] };
       const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: TEMPORAL_PROFILES[item.profile] });
       // Sunucunun tek olası düzeni (seçim yok) modelin düzen hatası değildir; diğer sunucu düzenleri (geçersiz düzen, sağlayıcı) başarısızlıktır.
       const failures = result.failures.filter((failure) => !/^düzen [a-z]+(?:\/sunucu)?\/NO_CHOICE\//.test(failure));

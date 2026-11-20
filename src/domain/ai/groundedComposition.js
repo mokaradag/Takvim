@@ -568,9 +568,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       const noteRead = presentation.facts.some((item) => item.evidenceId === group.evidenceId && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '')
         && typeof item.fact.value === 'string' && item.fact.value.trim());
       const singleRow = shownRows === 1 && (cover?.kind === 'notes' && noteRead || cover?.kind === 'completedList' && cover.total === 1 && listAgrees);
+      const clippedSingle = cover?.kind === 'completedList' && shownRows === 1 && cover.total > shownRows;
       const lead = singleRow ? singleRowLead(cover.kind, locale)
-        : taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
-      const criteriaStated = Boolean(lead && !singleRow);
+        : clippedSingle ? completedListLead(shownRows, cover.total, locale).markdown
+          : taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
+      const criteriaStated = Boolean(lead && !singleRow && !clippedSingle);
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead, criteriaStated });
       if (detailText) {
         if (details.size >= COMPOSITION_LIMITS.maxDetails) { overflow = true; continue; }

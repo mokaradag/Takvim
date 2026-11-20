@@ -23,9 +23,9 @@ export const resolveDays = (value) => JSON.parse(JSON.stringify(value ?? null).r
 /** Aşama H bulgularının sunucu cümlelerinin ayırt edici kalıpları (yalnızca varlık; sayılar kanıttandır). */
 export const H_FINDING_TEXT = Object.freeze({
   tr: {
-    periodSummary: /görev tamamlandı \(gerçekleşen bitiş tarihine göre\)|yeni görev oluşturul(du|madı)|oluşturulmuş ve bugün kayıtlı yeni görev yok|hareket kayde(dildi|tti|ttiniz)|tamamlanan görev yok|hareket kayd(edilmedi|etmedi|etmediniz)|hareket kaydı bulunmuyor/,
+    periodSummary: /görev tamamlandı \(gerçekleşen bitiş tarihine göre\)|yeni görev oluşturul(du|madı)|oluşturulmuş ve bugün kayıtlı yeni görev yok|hareket kayde(dildi|tti|ttiniz)|gerçekleşen bitiş kaydı yok|hareket kayd(edilmedi|etmedi|etmediniz)|hareket kaydı bulunmuyor/,
     periodComparison: /İki dönem karşılaştırıldığında|karşılaştırma şimdilik geçici|İki dönem örtüştüğü|karşılaştırılamıyor|İki dönemde de|bu fark yorumlanmadı|toplam değişim yorumlanmadı/,
-    completionTrend: /En yoğun (hafta|ay)|tamamlanma hızı|eğilim söylenemez|eğilim çıkarılmadı|eğilim söylemek için kısa|gerçekleşen bitişi kayıtlı tamamlanan görev yok/,
+    completionTrend: /En yoğun (hafta|ay)|tamamlanma hızı|eğilim söylenemez|eğilim çıkarılmadı|eğilim söylemek için kısa|gerçekleşen bitiş kaydı yok/,
     activityTrend: /Kaydedilen hareketler en çok|için hareket kaydı yok; bu kovalar bilinmiyor/,
     horizonSpread: /7 gün içinde \*\*\d+\*\*, 14 gün içinde \*\*\d+\*\*, 30 gün içinde \*\*\d+\*\*|önümüzdeki 30 gün içinde .*termini olan açık görev yok/i,
     historyLimit: /yeniden kurulamıyor/,
@@ -33,9 +33,9 @@ export const H_FINDING_TEXT = Object.freeze({
     noteDigest: /açık görevin notu(?:nun tamamı)?|tanesinin notu okundu|açıklaması olan açık görev yok|not parçası okundu/
   },
   en: {
-    periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|no task created in this period is (?:currently on record|still present today)|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events?(?: (?:across|on) (?:\*\*)?\d+(?:\*\*)? tasks?)? (?:was|were) recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
+    periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|no task created in this period is (?:currently on record|still present today)|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events?(?: (?:across|on) (?:\*\*)?\d+(?:\*\*)? tasks?)? (?:was|were) recorded|no task currently marked done has a recorded completion date|no new task was created|no activity record)/i,
     periodComparison: /Comparing the two periods|comparison is provisional|two periods overlap|cannot be compared|In both periods|difference is not interpreted|no overall change is interpreted/,
-    completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn|no task has a recorded completion date/,
+    completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn|no task currently marked done has a recorded completion date/,
     activityTrend: /Recorded activity peaked|no activity record; those are unknown/,
     horizonSpread: /within 7 days, \*\*\d+\*\* within 14 days|In the next 30 days, no open task is due/,
     historyLimit: /cannot be reconstructed/,
@@ -104,7 +104,7 @@ export function temporalRequestMatches(request, layer) {
 }
 
 /** Altın plan yalnızca kapsam beklentisidir; modelin her başarılı nüfus okuması ayrıca denetlenir. */
-export function temporalPopulationViolations(result, analysis, seed) {
+export function temporalPopulationViolations(result, analysis, seed, expect = {}) {
   // Açıkça yazılan "tüm zamanlar" tarihsel yönde desteklenmez: sınırlı bir dönemle verilen başarılı yanıt geçmez (dönemsizlikten ayrıdır).
   if (analysis?.relativeWindow === 'all_time' && [analysis, ...(analysis.also || [])].some((layer) => (layer.focus || analysis.focus || []).some((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)))
     && result.answer?.finishReason === 'stop') return ['tüm zamanlar tarihsel isteği sınırlı dönemle yanıtlandı'];
@@ -144,6 +144,10 @@ export function temporalPopulationViolations(result, analysis, seed) {
     : analysis.compareFrom && analysis.compareTo ? expectedRange([analysis.compareFrom, analysis.compareTo]) : null;
   for (const layer of layers) {
     const measures = [...new Set((layer.focus || analysis.focus || []).filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)))];
+    const windowedMilestones = Boolean(window && layer.focus?.includes('milestones'));
+    if (windowedMilestones && !expect.measures?.includes('milestone')) problems.push('dönemli kilometre taşı ölçüsü açıkça bildirilmedi');
+    if (windowedMilestones && expect.measures?.includes('milestone')
+      && !reads.some((read) => matches(read, layer) && temporalLogMatches(read, window, 'milestone'))) problems.push(`kapsamın dönem ölçüsü okunmadı: ${layer.scope}/milestone/${window.join('..')}`);
     const range = measures.length ? effectiveWindow : null;
     for (const measure of measures) for (const period of [range, ...(measure === 'trend' ? [] : [prior])].filter(Boolean)) {
       if (!reads.some((read) => matches(read, layer) && temporalLogMatches(read, period, measure))) problems.push(`kapsamın dönem ölçüsü okunmadı: ${layer.scope}/${measure}/${period.join('..')}`);
@@ -255,13 +259,15 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
     const visible = content.replace(/\*\*/g, '');
     const count = (result.evidence || []).find((item) => item.ok === true && item.tool === 'rota_task_analytics' && !item.data?.groupBy
       && item.data?.filters?.dateField === 'actualFinish' && item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1])?.data?.totals?.total;
-    const matches = count === 0 ? /tamamlanan görev yok|no task has a recorded completion date/iu.test(visible)
+    const matches = count === 0 ? /gerçekleşen bitiş kaydı yok|no task currently marked done has a recorded completion date/iu.test(visible)
       : Number.isSafeInteger(count) && new RegExp('(?:^|[^0-9])' + count + ' (?:görev tamamlandı|tasks? (?:was|were) completed)', 'iu').test(visible);
     if (!matches) problems.push('tamamlanma sayısı aynı dönemin kanıtıyla eşleşmiyor');
   }
-  // İstenen tablo: Markdown tablosu gerçek satırlarla çizilmiş ya da sunucu tablo üretilemediğini açıkça bildirmiş olmalıdır.
-  if (expect.table && !/(?:^|\n)\|[^\n]+\|\n\|(?:\s*:?-+:?\s*\|)+\n\|[^\n]+\|/u.test(content)
-    && !/tablo olarak gösterilebilecek satır koleksiyonu yok|no row collection.*table|İstenen tablo güvenle hazırlanamadı|requested table could not be rendered safely/iu.test(content)) problems.push('beklenen tablo yok');
+  // Satırlı tablo ve sunum sınırı ayrı kabul sonuçlarıdır.
+  if (expect.table && !/(?:^|\n)\|[^\n]+\|\n\|(?:\s*:?-+:?\s*\|)+\n\|[^\n]+\|/u.test(content)) problems.push('beklenen tablo yok');
+  if (expect.tableNotice === 'noRows' && !/tablo olarak gösterilebilecek satır koleksiyonu yok|no row collection to display as a table/iu.test(content)) {
+    problems.push('tabloya uygun satır koleksiyonu olmadığı bildirilmedi');
+  }
   // Toplam, tarihsel proje veya kişi kırılımını karşılamaz; proje etiketleri görünen yanıta da ulaşmalıdır.
   if (expect.groupBy) {
     const wanted = expect.window?.map((value) => resolveDay(value));

@@ -42,6 +42,9 @@ export const OWN_NOTE = 'Bağımlılık: kimlik doğrulama servisinin sürüm y�
 
 export function temporalBenchmarkSeed(today = uiRunDay()) {
   const seed = executiveBenchmarkSeed(today);
+  // Geçmiş dönem kilometre taşı listesi, aralık içinde tamamlanan gerçek bir sentetik satır taşımalıdır.
+  const milestone = seed.tasks.find((task) => task.ProjectId === EXEC_PROJECTS.MEVZUAT && task.Title === 'Politika güncellemesi');
+  milestone.IsMilestone = 1;
   const day = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
   // Türkiye günü içinde öğlen: gün sınırına yakın anlar ayrıca özel kayıtlarla sınanır.
   const at = (offset, hour = 9) => new Date(Date.parse(`${day(offset)}T00:00:00Z`) + (hour - 3) * 3600000).toISOString();

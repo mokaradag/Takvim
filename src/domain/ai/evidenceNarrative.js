@@ -792,10 +792,10 @@ function singleRowSentences(group, collection, row, locale) {
   const role = ROW_ROLES[collection.split('.').at(-1)];
   // Aşama H: dönem (gerçekleşen bitiş / oluşturulma) dağılımının tek grubu "Kayıt sayısı: **1**" değil "**1** görev" diye okunur.
   const numbers = row.entries.filter(({ fact }) => typeof fact.value === 'number');
-  if (numbers.some(({ fact }) => fact.semantic?.group?.notStarted)) {
-    const sample = numbers[0].fact;
-    const title = canonicalGroupLabel(sample, row.subject, locale);
-    return [`${strong(escapedFactText(title))}: ${narrativeValue(sample, locale)}.`];
+  const unstarted = numbers.find(({ fact }) => fact.semantic?.group?.notStarted)?.fact;
+  if (unstarted) {
+    const title = canonicalGroupLabel(unstarted, row.subject, locale);
+    return [`${strong(escapedFactText(title))}: ${narrativeValue(unstarted, locale)}${qualifierText(row.entries, locale)}.`];
   }
   if (group.tool === 'rota_task_analytics' && numbers.length === 1 && /(^|\.)groups\.\d+\.count$/.test(numbers[0].fact.field)
     && !numbers[0].fact.semantic?.group?.partial && !numbers[0].fact.semantic?.series?.partial

@@ -1727,6 +1727,18 @@ test('gecikmiş liste: sıralı önekten satır düştüyse sıralama başı (en
   assert.equal(analyticalFindings([part(0, list(0), ranking)]).some((item) => item.kind === 'longestOverdue'), false, 'ilk satır düştüyse Y en uzun gecikme sayılmaz');
 });
 
+test('yalnızca notu olan gecikmiş görevler genel gecikme sıralamasını belirlemez', () => {
+  const findings = (hasDescription) => {
+    const semantic = { tool: 'rota_task_search', filters: { deadline: 'overdue', hasDescription } };
+    return analyticalFindings([part(0, [fact('R1', 'totalCount', 2, semantic),
+      ...[['Onay', 5], ['Teslim', 2]].flatMap(([title, days], index) => [
+        fact('R1', `data.tasks.${index}.title`, title, semantic), fact('R1', `data.tasks.${index}.overdueDays`, days, semantic)
+      ])])]);
+  };
+  assert.ok(findings(false).some((item) => item.kind === 'longestOverdue'));
+  assert.ok(!findings(true).some((item) => item.kind === 'longestOverdue'));
+});
+
 test('kilometre taşı: metin, iş dağılımı düğümü, öncelik ya da oluşturan koşuluyla daraltılmış liste açık kilometre taşı nüfusu sayılmaz', () => {
   const ranking = { metric: 'task.targetFinish', order: 'asc' };
   for (const [key, value] of [['text', 'Radar'], ['wbsId', 'w-1'], ['priorities', ['critical']], ['createdByMe', true]]) {

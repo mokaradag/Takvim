@@ -35,24 +35,29 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
       const weekLabel = formatRangeLabel(mon, sun, en);
       if (!new RegExp(`(^|[^0-9])${weekLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text)) failures.push(`istenen hafta dönemi görünmüyor: ${expected.periodKind}`);
     } else if (expected.periodKind === 'this_month_vs_last_month') {
-      const curName = (en ? EN_MONTHS : MONTHS)[m - 1];
-      const prevName = (en ? EN_MONTHS : MONTHS)[prevM - 1];
-      // Her ay etiketi ya tek başına tam ay adı (`Ekim 2026`) ya da 1–son gün tam aralığı (`1–31 Ekim 2026`) olmalıdır.
-      // Kısmi bir gün aralığı (`1–10 Ekim 2026`) metnin başka yerindeki yalın ay adıyla geçersiz kılınamaz.
-      const validMonth = (year, month, name, clause) => {
-        const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-        const escaped = `${name} ${year}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const matches = [...(clause || text).matchAll(new RegExp(`(?:(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})|(\\d{1,2}))?\\s*${escaped}`, 'gu'))];
-        const labels = clause ? matches.slice(0, 1) : matches;
-        const full = ([, start, end, single]) => !single && (!start || Number(start) === 1 && Number(end) === lastDay);
-        return labels.some(full) && labels.every((match) => !match[1] || full(match));
+      const months = en ? EN_MONTHS : MONTHS;
+      // Tekil gün ya da kısmi aralık, ait olduğu tam ayın etiketi sayılmaz.
+      const monthReferences = (value) => [...value.matchAll(new RegExp(
+        String.raw`(?<!\d)(?:(\d{1,2})\s*[–-]\s*(\d{1,2})|(\d{1,2}))?\s*(${months.join("|")})\s+(\d{4})(?!\d)`, 'giu'))];
+      const isMonth = (ref, year, month) => ref && Number(ref[5]) === year
+        && ref[4].toLocaleLowerCase(en ? 'en' : 'tr') === months[month - 1].toLocaleLowerCase(en ? 'en' : 'tr');
+      const isFull = ([, start, end, single], year, month) => !single && (!start || Number(start) === 1 && Number(end) === new Date(Date.UTC(year, month, 0)).getUTCDate());
+      const labels = [...text.matchAll(en ? /last month|this month/giu : /geçen ay|bu ay/giu)];
+      const previous = labels.findIndex(([label]) => /^(last|geçen)/iu.test(label));
+      const current = labels.findIndex(([label]) => /^(this|bu)/iu.test(label));
+      const references = monthReferences(text);
+      const validMonth = (year, month, index) => {
+        if (previous >= 0 && current >= 0) {
+          // Her göreli ay ifadesi, bir sonraki ifadeye ya da cümleye geçmeden karşılaştığı ilk tarihi tanımlar.
+          const label = labels[index];
+          const clause = text.slice(label.index + label[0].length, labels[index + 1]?.index).split(/[;\n.]/u, 1)[0];
+          const [first] = monthReferences(clause);
+          return isMonth(first, year, month) && isFull(first, year, month);
+        }
+        const matches = references.filter((ref) => isMonth(ref, year, month));
+        return matches.some((ref) => isFull(ref, year, month)) && matches.every((ref) => !ref[1] || isFull(ref, year, month));
       };
-      // "Geçen ay" / "bu ay" (veya "Last month" / "this month") birlikte geçiyorsa her ay kendi ifadesine bağlı olmalıdır (yer değiştirmiş aylar reddedilir).
-      const prevClause = en ? new RegExp(`Last month[^\\n;]*${prevName} ${prevY}`, 'iu') : new RegExp(`Geçen ay[^\\n;]*${prevName} ${prevY}`, 'iu');
-      const curClause = en ? new RegExp(`this month[^\\n.]*${curName} ${y}`, 'iu') : new RegExp(`bu ay[^\\n.]*${curName} ${y}`, 'iu');
-      const hasBothClauses = en ? (/Last month/iu.test(text) && /this month/iu.test(text)) : (/Geçen ay/iu.test(text) && /bu ay/iu.test(text));
-      const boundClauses = !hasBothClauses || (prevClause.test(text) && curClause.test(text));
-      if (!validMonth(prevY, prevM, prevName, text.match(prevClause)?.[0]) || !validMonth(y, m, curName, text.match(curClause)?.[0]) || !boundClauses) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
+      if (!validMonth(prevY, prevM, previous) || !validMonth(y, m, current)) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
     }
   }
   // Grafik türü ve içerik beklentileri AYNI görünür grafikte aranır: başlıktaki ölçü (`chartTitle`), bütün etiketler (`chartItems`),
