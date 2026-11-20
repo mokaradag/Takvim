@@ -27,17 +27,37 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
     const prevY = m === 1 ? y - 1 : y;
     const prevM = m === 1 ? 12 : m - 1;
     const en = expected.language === 'en';
-    if (expected.periodKind === 'this_week') {
+    if (expected.periodKind === 'this_week' || expected.periodKind === 'last_week') {
       const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
-      const mon = new Date(Date.parse(`${today}T00:00:00Z`) - dow * 86400000).toISOString().slice(0, 10);
+      const offset = expected.periodKind === 'last_week' ? dow + 7 : dow;
+      const mon = new Date(Date.parse(`${today}T00:00:00Z`) - offset * 86400000).toISOString().slice(0, 10);
       const sun = new Date(Date.parse(`${mon}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10);
       const weekLabel = formatRangeLabel(mon, sun, en);
-      if (!new RegExp(`(^|[^0-9])${weekLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text)) failures.push('istenen hafta dönemi görünmüyor: this_week');
+      if (!new RegExp(`(^|[^0-9])${weekLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text)) failures.push(`istenen hafta dönemi görünmüyor: ${expected.periodKind}`);
     } else if (expected.periodKind === 'this_month_vs_last_month') {
       const curName = (en ? EN_MONTHS : MONTHS)[m - 1];
       const prevName = (en ? EN_MONTHS : MONTHS)[prevM - 1];
-      const literalPair = text.includes(`${prevName} ${prevY}`) && text.includes(`${curName} ${y}`);
-      if (!literalPair) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
+      // Her ay etiketi ya tek başına tam ay adı (`Ekim 2026`) ya da 1–son gün tam aralığı (`1–31 Ekim 2026`) olmalıdır.
+      // Kısmi bir gün aralığı (`1–10 Ekim 2026`) metnin başka yerindeki yalın ay adıyla geçersiz kılınamaz.
+      const validMonth = (year, month, name) => {
+        const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+        const escaped = `${name} ${year}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const matches = [...text.matchAll(new RegExp(`(?:(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})|(\\d{1,2}))?\\s*${escaped}`, 'gu'))];
+        if (!matches.length) return false;
+        const hasPartial = matches.some((match) => {
+          const [, start, end, single] = match;
+          if (single) return true;
+          if (start && end) return !(Number(start) === 1 && Number(end) === lastDay);
+          return false;
+        });
+        return !hasPartial;
+      };
+      // "Geçen ay" / "bu ay" (veya "Last month" / "this month") birlikte geçiyorsa her ay kendi ifadesine bağlı olmalıdır (yer değiştirmiş aylar reddedilir).
+      const prevClause = en ? new RegExp(`Last month[^\\n;]*${prevName} ${prevY}`, 'iu') : new RegExp(`Geçen ay[^\\n;]*${prevName} ${prevY}`, 'iu');
+      const curClause = en ? new RegExp(`this month[^\\n.]*${curName} ${y}`, 'iu') : new RegExp(`bu ay[^\\n.]*${curName} ${y}`, 'iu');
+      const hasBothClauses = en ? (/Last month/iu.test(text) && /this month/iu.test(text)) : (/Geçen ay/iu.test(text) && /bu ay/iu.test(text));
+      const boundClauses = !hasBothClauses || (prevClause.test(text) && curClause.test(text));
+      if (!validMonth(prevY, prevM, prevName) || !validMonth(y, m, curName) || !boundClauses) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
     }
   }
   // Grafik türü ve içerik beklentileri AYNI görünür grafikte aranır: başlıktaki ölçü (`chartTitle`), bütün etiketler (`chartItems`),

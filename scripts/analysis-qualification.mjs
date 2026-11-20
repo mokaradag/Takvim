@@ -244,9 +244,10 @@ export function plannerScore(result, expect, today = corpus.today) {
       if (window && compare && !unresolved && ![...keysAt(window)].some((key) => keysAt(compare).has(key))) failures.push('iki dönem aynı ölçüyle okunmuyor');
     }
     if (expect.temporal && !focus.some((item) => ['completed', 'created', 'activity', 'trend'].includes(item)) && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş dönem okunmadı');
-    // "Durum iyileşti mi" sorusu geçmiş DURUMU sorar: dönemlerin tamamlanma sayıları bunu kanıtlamaz; durum yönünün geçmiş sınırı
-    // (`historyUnsupported`) bildirilmelidir (sayımlar ek bağlam olabilir).
-    if (expect.historyLimit && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
+    // "Durum iyileşti mi" sorusu geçmiş DURUMU sorar: dönemlerin tamamlanma sayıları bunu kanıtlamaz; görev durumu yönünün geçmiş sınırı
+    // (`historyUnsupported`) bildirilmelidir (yalnızca öncelik/not gibi başka bir yönün sınırı bu beklentiyi karşılamaz).
+    const STATE_LIMIT_ASPECTS = ['overview', 'status', 'overdue', 'deadlines'];
+    if (expect.historyLimit && !(result.plan?.analysis?.historyUnsupported || []).some((aspect) => STATE_LIMIT_ASPECTS.includes(aspect))) failures.push('geçmiş durum sınırı bildirilmedi');
     // Dönemdeki gelişmeleri bugünkü durumdan ayırmayı isteyen soru (`currentState`): dönemde gözlenen olay okuması ile ayrı, dönemsiz
     // bugünkü durum okuması birlikte gerekir; geçmiş durum sınırı bildirimi olay okumasının yerine geçmez.
     if (expect.currentState) {
@@ -358,16 +359,29 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
     && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
     && (!bucketed || !primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)));
   const stateOnlyLayer = (layer) => Boolean(layer?.focus?.length && !layer.focus.some((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)));
-  const carriesStateFocus = (request, layer, stateFocus) => {
+  const WINDOWED_STATE_FOCUS = new Set(['status', 'upcoming', 'critical', 'schedule']);
+  const HISTORY_GROUP_SET = new Set(['projects', 'workload', 'org']);
+  const carriesStateFocus = (request, layer, stateFocus, range = null) => {
     const f = request.filters || {};
     const m = request.metrics || [];
     const g = request.population?.groupBy;
     const tool = request.population?.tool;
     if (stateFocus === 'horizons') return tool === 'rota_task_analytics' && g === 'due_horizon';
     if (stateFocus === 'notes') return tool === 'rota_task_search' && f.hasDescription === true;
-    if (f.dateFrom || f.dateTo || f.dateField || f.period) return false;
+    const hasDates = Boolean(f.dateFrom || f.dateTo || f.dateField || f.period);
+    const layerHasHistory = Boolean(layer?.focus?.some((focus) => ['completed', 'created', 'trend'].includes(focus)));
+    if (hasDates) {
+      if (range && WINDOWED_STATE_FOCUS.has(stateFocus) && !f.period && (!f.dateField || f.dateField === 'targetFinish')) {
+        const expectedFrom = stateFocus === 'upcoming' && range[0] < today ? today : range[0];
+        if (f.dateFrom !== expectedFrom || f.dateTo !== range[1]) return false;
+      } else if (range && layerHasHistory && HISTORY_GROUP_SET.has(stateFocus) && ['actualFinish', 'createdAt'].includes(f.dateField)) {
+        if (f.dateFrom !== range[0] || f.dateTo !== range[1]) return false;
+      } else {
+        return false;
+      }
+    }
     if (stateFocus === 'overdue') return f.deadline === 'overdue' || m.includes('tasks.overdue');
-    if (stateFocus === 'upcoming') return f.deadline === 'due_next_7_days' || m.includes('tasks.dueNext7Days');
+    if (stateFocus === 'upcoming') return f.deadline === 'due_next_7_days' || m.includes('tasks.dueNext7Days') || Boolean(range && hasDates && tool === 'rota_task_search');
     if (stateFocus === 'critical') return Array.isArray(f.priority) && f.priority.includes('critical');
     if (stateFocus === 'milestones') return f.milestone === true || m.includes('tasks.openMilestones');
     if (stateFocus === 'workload') return tool === 'rota_workload_summary' || g === 'assignee' || (layer?.scope === 'self' && g === 'project');
@@ -380,10 +394,10 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   };
   const reads = (range) => layers.every((layer) => {
     const own = ownMeasures(layer, measures, false);
-    if (!own.length && stateOnlyLayer(layer)) {
-      return layer.focus.every((stateFocus) => requests.some((request) => temporalRequestMatches(request, layer) && carriesStateFocus(request, layer, stateFocus)));
-    }
-    return (own.length ? own : [null]).every((measure) => candidates(layer, measure, range).length);
+    const stateFocuses = (layer?.focus || []).filter((focus) => !['completed', 'created', 'activity', 'trend'].includes(focus));
+    const statesOk = !stateFocuses.length || stateFocuses.every((stateFocus) => requests.some((request) => temporalRequestMatches(request, layer) && carriesStateFocus(request, layer, stateFocus, range)));
+    if (!own.length && stateOnlyLayer(layer)) return statesOk;
+    return statesOk && (own.length ? own : [null]).every((measure) => candidates(layer, measure, range).length);
   });
   const range = expectedRange(expect.window, today);
   if (range && !expect.stateComparison && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
@@ -566,7 +580,7 @@ function explicitExpectations(plan, resolveDay, seed) {
 export function benchmarkExpectation(item) {
   const analysis = item.plan?.analysis;
   const scope = analysis?.scope;
-  const seed = analysisBenchmarkSeed();
+  const seed = analysisBenchmarkSeed(BENCHMARK_TODAY);
   const names = analysis?.names || item.expect?.names || [];
   const resolveDay = (value) => {
     const token = /^T\+(-?\d+)$/.exec(value || '');
@@ -752,7 +766,7 @@ if (direct) {
   } else if (TIER === 'F') {
     await runQualificationCases(pick(benchmark.original), async (t, item) => {
       t.mock.timers.enable({ apis: ['Date'], now: NOW });
-      const seed = analysisBenchmarkSeed();
+      const seed = analysisBenchmarkSeed(BENCHMARK_TODAY);
       t.mock.timers.reset();
       const turn = { text: item.text, requireComposed: item.handling === 'full', expect: benchmarkExpectation(item) };
       const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: BENCH_PROFILES[item.profile] });

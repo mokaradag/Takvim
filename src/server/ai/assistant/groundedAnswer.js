@@ -835,6 +835,9 @@ function pinAnalysisRepair(turn, plan, details) {
     const source = existing?.raw || plan.analysis;
     const primaryWindowed = source.relativeWindow != null || source.dateFrom != null || source.dateTo != null;
     if (/^\$\.analysis\.also\[\d+\]\.(?:relativeWindow|dateFrom|dateTo)$/.test(path) && reason === 'unknown' && !primaryWindowed) for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
+    // İkincil katmandaki `all_time` + tarih çakışması yalnızca o katmanın dönem alanlarını açar; birincilin geçerli dönemi sabit kalır.
+    const secondaryConflict = path.match(/^\$\.analysis\.(also\[\d+\])\.relativeWindow$/);
+    if (secondaryConflict && reason === 'conflict') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(`${secondaryConflict[1]}.${key}`);
   }
   const raw = Object.fromEntries(Object.entries(normalizedBrief(existing?.raw || plan.analysis)).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
   // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
@@ -863,14 +866,37 @@ function analysisRepairMatches(turn, plan) {
   const pin = turn.repairPins.get('analysis');
   if (!pin || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN].includes(plan.intent)) return true;
   const submitted = normalizedBrief(plan.analysis);
-  // Yalnızca `upcoming` çıkarılmış yön listesi, onarım karşılaştırmasında özgün yön listesiyle eşdeğerdir (sıra ve diğer yönler sabit).
-  const analysis = pin.dropUpcoming && Array.isArray(pin.raw.focus) && pin.raw.focus.includes('upcoming') && Array.isArray(submitted?.focus)
-    && JSON.stringify(submitted.focus) === JSON.stringify(pin.raw.focus.filter((item) => item !== 'upcoming')) ? { ...submitted, focus: pin.raw.focus } : submitted;
-  // `upcoming` çıkarıldıysa YA DA planda herhangi bir geçmiş dönem yönü (completed/created/activity/trend) kaldıysa birincil dönem
+  // Yalnızca `upcoming` çıkarılmış yön listesi (birincil ya da etkilenen ek katman), onarım karşılaştırmasında özgün yön listesiyle eşdeğerdir.
+  const onlyDroppedUpcoming = (rawFocus, nextFocus) => Array.isArray(rawFocus) && rawFocus.includes('upcoming') && Array.isArray(nextFocus)
+    && JSON.stringify(nextFocus) === JSON.stringify(rawFocus.filter((item) => item !== 'upcoming'));
+  let analysis = submitted;
+  let droppedUpcoming = false;
+  if (pin.dropUpcoming && submitted) {
+    if (onlyDroppedUpcoming(pin.raw.focus, submitted.focus)) {
+      analysis = { ...analysis, focus: pin.raw.focus };
+      droppedUpcoming = true;
+    }
+    if (Array.isArray(pin.raw.also) && Array.isArray(submitted.also) && pin.raw.also.length === submitted.also.length) {
+      let secondaryDropped = false;
+      const restoredAlso = submitted.also.map((layer, index) => {
+        const rawLayer = pin.raw.also[index];
+        if (onlyDroppedUpcoming(rawLayer?.focus, layer?.focus)) {
+          secondaryDropped = true;
+          return { ...layer, focus: rawLayer.focus };
+        }
+        return layer;
+      });
+      if (secondaryDropped) {
+        analysis = { ...analysis, also: restoredAlso };
+        droppedUpcoming = true;
+      }
+    }
+  }
+  // `upcoming` çıkarıldıysa YA DA planda herhangi bir katmanda geçmiş dönem yönü (completed/created/activity/trend) kaldıysa birincil dönem
   // sabit kalır: uyumsuz `upcoming` yüzünden geçerli geçmiş dönem başka bir döneme kaydırılamaz. Yalnızca geçmiş yönü olmayan
   // (yalnızca `upcoming` içeren) plan dönem alanlarını değiştirebilir/kaldırabilir.
-  const droppedUpcoming = analysis !== submitted;
-  const keepsHistorical = Array.isArray(submitted?.focus) && submitted.focus.some((item) => TEMPORAL_FOCUS.includes(item));
+  const allLayers = [submitted, ...(Array.isArray(submitted?.also) ? submitted.also : [])];
+  const keepsHistorical = allLayers.some((layer) => Array.isArray(layer?.focus) && layer.focus.some((item) => TEMPORAL_FOCUS.includes(item)));
   const keptWindow = (!droppedUpcoming && !(pin.dropUpcoming && keepsHistorical))
     || ['relativeWindow', 'dateFrom', 'dateTo'].every((key) => (submitted[key] ?? null) === (pin.raw[key] ?? null));
   // Çakışma onarımı bir gösterimi kaldırabilir; kalan gösterimin tek bir sınırını bile değiştiremez.
@@ -1135,7 +1161,8 @@ function settlePart(turn, verdict, selectedBy) {
   // kapsamı ayrıca yetkilendirilir. Düzeysiz ret (hiç yönetim kapsamı yok) bütün ekip bölümlerini kapsar.
   if (verdict.scopeDenied) {
     const denied = turn.request?.filters?.teamLevel ?? null;
-    turn.parts = turn.parts.filter((part) => part.request?.filters?.assignee !== 'team' || (denied != null && (part.request.filters.teamLevel ?? null) !== denied));
+    const isTeam = (filters) => filters?.assignee === 'team' || filters?.activityScope === 'team';
+    turn.parts = turn.parts.filter((part) => !isTeam(part.request?.filters) || (denied != null && (part.request.filters.teamLevel ?? null) !== denied));
   }
   while (turn.parts.length) {
     const next = turn.parts.shift();
@@ -1652,10 +1679,12 @@ function completedAnalysisContext(turn, verdict) {
   // Eksik kabul edilmiş analiz sonraki turda daha küçük bir özne kümesine dönüşemez. Tamlık yalnızca ÖZETİN bölümlerinde (bütün
   // kapsamlar) aranır: yalnızca özetin yanındaki açık istek tamamlanamadıysa tamamlanan özet takip bağlamını yine kurar.
   const analysisPart = (index) => !Number.isInteger(intent.analysisParts) || (index ?? 0) < intent.analysisParts;
-  const explicitOnly = Number.isInteger(intent.analysisParts) && turn.answers.length > 0;
+  const optionalPart = (index) => Boolean(intent.optionalParts?.includes(index ?? 0) && !intent.explicitParts?.includes(index ?? 0));
+  const requiredAnalysisPart = (index) => analysisPart(index) && !optionalPart(index);
+  const explicitOnly = (Number.isInteger(intent.analysisParts) || Boolean(intent.optionalParts?.length)) && turn.answers.length > 0;
   if ((verdict.kind !== 'grounded' && !(explicitOnly && verdict.kind === 'unavailable'))
-    || turn.answers.some((answer) => analysisPart(answer.index) && answer.verdict.kind !== 'grounded')
-    || [...(turn.partNotes?.keys() || [])].some((index) => analysisPart(index))) return null;
+    || turn.answers.some((answer) => requiredAnalysisPart(answer.index) && answer.verdict.kind !== 'grounded')
+    || [...(turn.partNotes?.keys() || [])].some((index) => requiredAnalysisPart(index))) return null;
   // Aşama G: takip bağlamı yalnızca ÖZETİN bölümlerinden kurulur. Özetin yanındaki açık listenin varlıkları (ör. adlı proje
   // listesi) özetin öznesi ya da daraltması (within) değildir. Çok kapsamlı yanıtın takip öznesi birincil kapsamdır: yalnızca
   // birincil kapsamın okumaları özneyi, satırları ve sunucunun bağladığı kimlikleri verir; başka kapsamın kimlikleri birincil
@@ -2234,6 +2263,7 @@ function presentationIntent(plan, today) {
       ...(Number.isInteger(analysis.analysisParts) ? { analysisParts: analysis.analysisParts } : {}), ...(analysis.sections ? { sections: analysis.sections } : {}),
       // Açık isteğin birleştiği özet okumaları: o bölüm açık isteğin koşulunu (ör. tam liste) taşır.
       ...(analysis.explicitParts?.length ? { explicitParts: analysis.explicitParts } : {}),
+      ...(analysis.optionalParts?.length ? { optionalParts: analysis.optionalParts } : {}),
       ...(analysis.historyUnsupported?.length ? { historyUnsupported: Object.freeze([...analysis.historyUnsupported]) } : {}) }) : null,
     ...(analysis?.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     ...(analysis?.windowRolling || /^(?:last|next)_\d+_days$/.test(analysis?.relativeWindow || '') ? { windowRolling: true } : {}),

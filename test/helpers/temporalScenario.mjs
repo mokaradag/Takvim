@@ -22,7 +22,7 @@ export const resolveDays = (value) => JSON.parse(JSON.stringify(value ?? null).r
 export const H_FINDING_TEXT = Object.freeze({
   tr: {
     periodSummary: /görev tamamlandı \(gerçekleşen bitiş tarihine göre\)|yeni görev oluşturul(du|madı)|oluşturulmuş ve bugün kayıtlı yeni görev yok|hareket kayde(dildi|tti|ttiniz)|tamamlanan görev yok|hareket kayd(edilmedi|etmedi|etmediniz)|hareket kaydı bulunmuyor/,
-    periodComparison: /İki dönem karşılaştırıldığında|karşılaştırma şimdilik geçici|İki dönem örtüştüğü|karşılaştırılamıyor|İki dönemde de/,
+    periodComparison: /İki dönem karşılaştırıldığında|karşılaştırma şimdilik geçici|İki dönem örtüştüğü|karşılaştırılamıyor|İki dönemde de|bu fark yorumlanmadı|toplam değişim yorumlanmadı/,
     completionTrend: /En yoğun (hafta|ay)|tamamlanma hızı|eğilim söylenemez|eğilim çıkarılmadı|eğilim söylemek için kısa|gerçekleşen bitişi kayıtlı tamamlanan görev yok/,
     activityTrend: /Kaydedilen hareketler en çok|için hareket kaydı yok; bu kovalar bilinmiyor/,
     horizonSpread: /7 gün içinde \*\*\d+\*\*, 14 gün içinde \*\*\d+\*\*, 30 gün içinde \*\*\d+\*\*|önümüzdeki 30 gün içinde .*termini olan açık görev yok/i,
@@ -31,8 +31,8 @@ export const H_FINDING_TEXT = Object.freeze({
     noteDigest: /açık görevin notu(?:nun tamamı)?|tanesinin notu okundu|açıklaması olan açık görev yok|not parçası okundu/
   },
   en: {
-    periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|no task created in this period is (?:currently on record|still present today)|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events?(?: across \*\*\d+\*\* tasks?)? (?:was|were) recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
-    periodComparison: /Comparing the two periods|comparison is provisional|two periods overlap|cannot be compared|In both periods/,
+    periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|no task created in this period is (?:currently on record|still present today)|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events?(?: (?:across|on) (?:\*\*)?\d+(?:\*\*)? tasks?)? (?:was|were) recorded|no task has a recorded completion date|no new task was created|no activity record)/i,
+    periodComparison: /Comparing the two periods|comparison is provisional|two periods overlap|cannot be compared|In both periods|difference is not interpreted|no overall change is interpreted/,
     completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn|no task has a recorded completion date/,
     activityTrend: /Recorded activity peaked|no activity record; those are unknown/,
     horizonSpread: /within 7 days, \*\*\d+\*\* within 14 days|In the next 30 days, no open task is due/,
@@ -176,7 +176,8 @@ export function temporalPopulationViolations(result, analysis, seed) {
       const unrestrictedNotes = (filters) => !filters?.dateFrom && !filters?.dateTo && !filters?.deadline && !filters?.targetFrom && !filters?.targetTo
         && !filters?.priorityCsv && !filters?.priorities?.length && filters?.milestone == null && !filters?.text && !filters?.wbsId && !filters?.createdByMe;
       const seen = kind === 'notes' ? evidence.some((item) => item.ok === true && item.tool === 'rota_task_search' && item.data.filters.hasDescription && open(item.data.filters) && unrestrictedNotes(item.data.filters)
-        && reads.some((read) => matches(read, layer) && read.params.hasDescription && unrestrictedNotes(read.params))
+        && reads.some((read) => matches(read, layer) && read.params.hasDescription && unrestrictedNotes(read.params)
+          && openStatuses((read.params.statusCsv || '').split(',').filter(Boolean)))
         && (item.complete === true && item.totalCount === 0 && item.data.tasks?.length === 0 || item.data.tasks?.length > 0
           && item.data.tasks.every((task) => typeof task.description === 'string' && task.description.trim() && noteIds.has(String(task.taskId).toLowerCase()))))
         : evidence.some((item) => item.ok === true && item.complete === true && item.tool === 'rota_task_analytics' && item.data.groupBy === 'due_horizon' && open(item.data.filters) && !narrowsTasks(item.data.filters)
@@ -184,6 +185,12 @@ export function temporalPopulationViolations(result, analysis, seed) {
           && ['days_0_6', 'days_7_13', 'days_14_29'].every((key) => item.data.groups?.some((group) => group.key === key && Number.isSafeInteger(group.count) && group.count >= 0))
           && reads.some((read) => matches(read, layer) && temporalLogMatches(read, [TEMPORAL_TODAY, shift(29)], 'upcoming')));
       if (!seen) problems.push(`${kind === 'notes' ? 'not' : 'teslim ufku'} kanıtı okunmadı: ${layer.scope}`);
+    }
+    // Gecikme riski (`overdue`) istendiyse o katman için güncel gecikme okuması da yapılmış olmalıdır.
+    if (layer.focus?.includes('overdue')) {
+      const hasOverdueRead = reads.some((read) => matches(read, layer) && read.query === 'task-facts'
+        && (read.params.deadline === 'overdue' || (!read.params.dateFrom && !read.params.dateTo && !read.params.dateField)));
+      if (!hasOverdueRead) problems.push(`gecikme okuması yok: ${layer.scope}`);
     }
   }
   return problems;
@@ -278,14 +285,16 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
         const pair = periods.map((range) => items.find((item) => item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1]));
         if (pair.some((item) => !item || !Number.isFinite(item.data?.totals?.total))) return null;
         const sample = pair[0].data.filters;
-        const teamPart = sample.teamLevel === 'UNIT' ? (english ? 'Your unit' : 'Biriminiz')
-          : sample.teamLevel === 'DEPARTMENT' ? (english ? 'Your department' : 'Bölümünüz')
-            : sample.teamLevel === 'DIRECTORATE' ? (english ? 'Your directorate' : 'Direktörlüğünüz')
+        const level = String(sample.teamLevel || '').toUpperCase();
+        const teamPart = level === 'UNIT' ? (english ? 'Your unit' : 'Biriminiz')
+          : level === 'DEPARTMENT' ? (english ? 'Your department' : 'Bölümünüz')
+            : level === 'DIRECTORATE' ? (english ? 'Your directorate' : 'Direktörlüğünüz')
               : (english ? 'Your team' : 'Ekibiniz');
         const ownerLabel = !sample.person && sample.personSicil == null
           ? (sample.assignee === 'me' ? (english ? 'Your work' : 'Kendi işleriniz') : sample.assignee === 'team' ? teamPart : '')
           : '';
-        const suffix = [sample.project, sample.person, ownerLabel].filter((name) => typeof name === 'string' && name.trim()).join(' — ');
+        // Çizici sırası: kapsam sahibi, proje, kişi (`comparisonCharts` ile birebir aynı).
+        const suffix = [ownerLabel, sample.project, sample.person].filter((name) => typeof name === 'string' && name.trim()).join(' — ');
         return { suffix, counts: pair.map((item) => item.data.totals.total) };
       }).filter(Boolean);
       const matching = charts.filter((item) => item.type === 'bar' && title.test(String(item.title || '')));
@@ -329,8 +338,8 @@ export function expectedCompare(value, window, today = TEMPORAL_TODAY, rolling =
   if (!value) return null;
   if (value === 'previous') {
     const [dateFrom, dateTo] = expectedRange(window, today) || [];
-    // Kayan dönemin ("son N gün") öncesi aynı uzunlukta aralıktır (bkz. analysisWindows).
-    const prior = dateFrom ? previousWindow({ dateFrom, dateTo }, { rolling: rolling || typeof window === 'string' && /^last_\d+_days$/.test(window) }) : null;
+    // Kayan dönemin ("son/önümüzdeki N gün") öncesi aynı uzunlukta aralıktır (bkz. analysisWindows).
+    const prior = dateFrom ? previousWindow({ dateFrom, dateTo }, { rolling: rolling || typeof window === 'string' && /^(?:last|next)_\d+_days$/.test(window) }) : null;
     return prior ? [prior.dateFrom, prior.dateTo] : null;
   }
   return expectedRange(value, today);

@@ -367,6 +367,7 @@
    "expectedTurns": [
     {
      "outcome": "grounded",
+     "periodKind": "last_week",
      "requires": [
       "Geçen hafta",
       "gerçekleşen bitiş tarihine göre"
@@ -447,6 +448,7 @@
    "expectedTurns": [
     {
      "outcome": "grounded",
+     "periodDays": 90,
      "requires": [
       "görev tamamlandı"
      ],
@@ -561,7 +563,7 @@
       "(?:\\d+\\s+(?:gecikmiş (?:görev|iş)|(?:görev|iş)\\s+gecikmiş)(?!\\s+(?:vardı|bulunuyordu))|gecikmiş (?:görev|iş)(?:iniz)?\\s+(?:yok|bulunmuyor)(?!du))"
      ],
      "rejects": [
-      "(?:(?:gecikme\\p{L}*|gecikmiş (?:görev|iş)\\p{L}*)[^.;\\n]{0,60}\\b(?:azaldı|arttı|iyileşti|kötüleşti)(?!\\p{L})(?!\\s+(?:denemez|söylenemez|diyemeyiz|belirlenemez))|\\bdaha (?:az|fazla)\\s+gecikmiş\\s+(?:görev|iş)|\\bgeçen\\s+(?:hafta|ay|dönem)[^.;\\n]{0,60}\\b\\d+\\s+gecikmiş\\s+(?:görev|iş)|\\b\\d+\\s+(?:gecikmiş\\s+(?:görev|iş)|(?:görev|iş)\\s+gecikmiş)\\s+(?:vardı|bulunuyordu)\\b)"
+      "(?:(?:gecikme\\p{L}*|gecikmiş (?:görev|iş)\\p{L}*|geciken (?:görev|iş)\\p{L}*)[^.;\\n]{0,60}\\b(?:azaldı|arttı|düştü|yükseldi|iyileşti|kötüleşti)(?!\\p{L})(?!\\s+(?:denemez|söylenemez|diyemeyiz|belirlenemez))|\\bdaha (?:az|fazla)\\s+gecikmiş\\s+(?:görev|iş)|(?:^|[^\\p{L}])(?:geçen|önceki)\\s+(?:hafta\\p{L}*|ay\\p{L}*|dönem\\p{L}*)[^.;\\n]{0,60}(?:\\b\\d+\\s+(?:gecikmiş\\s+)?(?:görev\\p{L}*|iş\\p{L}*)\\s+(?:gecikmiş\\p{L}*|vardı|bulunuyordu)|\\b\\d+\\s+gecikmiş\\s+(?:görev|iş)|gecikmiş\\s+(?:görev|iş)\\s+sayısı\\s+\\d+)|\\b\\d+\\s+(?:gecikmiş\\s+(?:görev|iş)|(?:görev|iş)\\s+gecikmiş)\\s+(?:vardı|bulunuyordu)\\b)"
      ]
     }
    ]

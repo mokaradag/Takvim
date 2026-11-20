@@ -240,7 +240,9 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
     && (filters.dateField ?? 'targetFinish') === 'targetFinish') problems.push('$.filters.deadline:conflict');
   try {
     // Hareket nüfusunda ekip düzeyi `activityScope: team` ile bildirilir (görev süzgecindeki `assignee: team` karşılığı).
-    normalizeTaskFilters({ ...filters, ...(filters.activityScope === 'team' && filters.teamLevel && filters.assignee == null ? { assignee: 'team' } : {}), ...periodWindow(filters.period, today) });
+    // Açıkça görev ailesi nüfusu seçildiyse uyarlayıcı uygulanmaz; eksik `assignee: team` onarım yoluyla bildirilir.
+    const explicitTaskPopulation = ['rota_task_search', 'rota_task_analytics', 'rota_task_detail'].includes(value.population?.tool);
+    normalizeTaskFilters({ ...filters, ...(!explicitTaskPopulation && filters.activityScope === 'team' && filters.teamLevel && filters.assignee == null ? { assignee: 'team' } : {}), ...periodWindow(filters.period, today) });
   } catch (error) {
     problems.push(...(error.details || ['$.filters:invalid']).map((detail) => detail.replace(/^\$\./, '$.filters.')));
   }

@@ -655,17 +655,17 @@ test('çoklu tohum koşusu sonuçları ezmez, UI_APP_LOG günlüğünü okur ve 
     ]
   }));
   const firstPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
-    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SEED: 'executive', UI_SEED_GROUPS: '1', UI_APP_LOG: join(dir, 'app-B-executive.log')
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SEED: 'executive', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-executive.log')
   });
   assert.equal(firstPass.status, 0, firstPass.stderr);
   const secondPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
-    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SEED: 'temporal', UI_SEED_GROUPS: '1', UI_APP_LOG: join(dir, 'app-B-temporal.log')
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SEED: 'temporal', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-temporal.log')
   });
   assert.equal(secondPass.status, 0, secondPass.stderr);
   const combined = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
   assert.deepEqual(combined.map((row) => [row.conversation, row.failures.length]), [['g-tohumsuz', 0], ['h-tohumlu', 0]]);
 
-  // Betikli köprü UI_BENCHMARK verilmediğinde hem G (executive) hem H (temporal) sorularını yanıtlar.
+  // Betikli köprü UI_BENCHMARK verilmediğinde hem G (executive) hem H (temporal) sorularının gerçek altın planlarını döndürür.
   const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], {
     cwd: root,
     env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: '', BRIDGE_ENFORCE_DAY: '', UI_PROFILE: 'B', UI_BENCHMARK: '', BRIDGE_TODAY: '2026-09-30' },
@@ -679,16 +679,44 @@ test('çoklu tohum koşusu sonuçları ezmez, UI_APP_LOG günlüğünü okur ve 
     child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) settle(done, Number(match[1])); });
     child.once('error', (err) => settle(fail, err));
   });
-  for (const question of [
-    'Direktörlüğümün genel durumunu bölümlere göre özetle.',
-    'Bu hafta projelerimde hangi önemli gelişmeler oldu?'
+  for (const [question, expectedScope] of [
+    ['Direktörlüğümde bugün yönetimin öncelikle ilgilenmesi gereken üç konu nedir? Neden?', 'team'],
+    ['Bu hafta projelerimde hangi önemli gelişmeler oldu?', 'projects']
   ]) {
     const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST',
       body: JSON.stringify({ messages: [{ role: 'user', content: question }] })
     });
     const body = await res.json();
-    assert.ok(body.choices?.[0]?.message?.tool_calls?.length > 0, `köprü soruyu bulamadı: ${question}`);
+    const call = body.choices?.[0]?.message?.tool_calls?.[0];
+    assert.ok(call, `köprü soruyu bulamadı: ${question}`);
+    const plan = JSON.parse(call.function.arguments);
+    assert.equal(plan.intent, 'rota', `köprü açıklama yerine altın rota planını döndürmelidir: ${question}`);
+    assert.equal(plan.analysis?.scope, expectedScope, `köprü beklenen kapsamı döndürmelidir: ${question}`);
   }
+});
+
+test('dönem ve geçmiş durum beklentileri kısmi ay aralığını, yer değiştirmiş ayları, kayan 7 günü ve geçmiş gecikme iddialarını reddeder', async () => {
+  const { semanticFailures } = await import('../scripts/ui-acceptance/expectations.cjs');
+  const nov20 = new Date('2026-11-20T09:00:00Z');
+  const sep30 = new Date('2026-09-30T09:00:00Z');
+  const okTrace = { outcome: 'grounded', evidence: 2 };
+  // Kısmi ay aralıkları ("1–10 Ekim 2026 / 1–10 Kasım 2026") ve yalın ay adıyla karıştırılmış kısmi aralık reddedilir.
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1–10 Ekim 2026 ve 1–10 Kasım 2026 tamamlandı.' }, okTrace, nov20).length > 0);
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Ekim 2026 özeti: 1–10 Ekim 2026 / 1–10 Kasım 2026.' }, okTrace, nov20).length > 0);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Ekim 2026) 4 görev tamamlanmıştı; bu ay (1–30 Kasım 2026) 6 görev tamamlandı.' }, okTrace, nov20), []);
+  // Yer değiştirmiş aylar ("Geçen ay (Eylül 2026) ... bu ay (Ağustos 2026)") reddedilir.
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Eylül 2026) 5 görev tamamlanmıştı; bu ay (Ağustos 2026) 8 görev tamamlandı.' }, okTrace, sep30).length > 0);
+  // Geçen hafta (21–27 Eylül 2026) beklentisi kayan 7 günü (24–30 Eylül 2026) reddeder.
+  assert.ok(semanticFailures({ periodKind: 'last_week' }, { text: 'Geçen hafta (24–30 Eylül 2026) 4 görev tamamlandı.' }, okTrace, sep30).length > 0);
+  assert.deepEqual(semanticFailures({ periodKind: 'last_week' }, { text: 'Geçen hafta (21–27 Eylül 2026) 4 görev tamamlandı.' }, okTrace, sep30), []);
+  // H2-gecmis-durum-siniri yeni yasak kalıpları: iyelikli geçmiş gecikme, ölçü sonrası sayı ve "düştü" iddiası reddedilir; açık belirsizlik geçer.
+  const bScenario = JSON.parse(readFileSync(join(root, 'scripts/ui-acceptance/scenarios/B.json'), 'utf8'));
+  const historyLimit = bScenario.conversations.find((c) => c.name === 'H2-gecmis-durum-siniri').expectedTurns[0];
+  const validBase = 'Geçmişteki durum yeniden kurulamıyor; aşağıdaki sayılar bugünü gösterir. Bugün 2 gecikmiş görev var. Gecikmeleriniz azaldı denemez.';
+  assert.deepEqual(semanticFailures(historyLimit, { text: validBase }, okTrace, sep30), []);
+  assert.ok(semanticFailures(historyLimit, { text: `${validBase} Geçen hafta 3 göreviniz gecikmişti.` }, okTrace, sep30).length > 0);
+  assert.ok(semanticFailures(historyLimit, { text: `${validBase} Önceki haftanın gecikmiş görev sayısı 8'di.` }, okTrace, sep30).length > 0);
+  assert.ok(semanticFailures(historyLimit, { text: `${validBase} Geciken görev sayısı geçen haftaya göre düştü.` }, okTrace, sep30).length > 0);
 });
 

@@ -247,6 +247,13 @@ function organizationGroup(record) {
   return ['department', 'unit'].includes(groupBy) ? groupBy : null;
 }
 
+/** Dönem kovası (ay/hafta) grup satırının gruplaması; değilse `null`. */
+function temporalGroup(record) {
+  if (record.kind !== 'group') return null;
+  const groupBy = record.entries.find(({ fact }) => fact.semantic?.groupBy)?.fact.semantic.groupBy;
+  return ['target_month', 'date_week', 'date_month'].includes(groupBy) ? groupBy : null;
+}
+
 /** Atama durumunu gösteren grup anahtarları (atamasız, açıklanamayan, birimi belirsiz): örgütsel birim değildir. */
 const NON_ENTITY_GROUPS = new Set(['other', 'unassigned', 'unresolved', 'undisclosed', 'none', 'no_unit']);
 
@@ -265,6 +272,8 @@ function scopePhrase(record, locale, { named = false, projects = null } = {}) {
     return organization === 'department' ? (locale === 'en' ? `the ${name} department` : `${name} bölümündeki sorumlularda`)
       : (locale === 'en' ? `the ${name} unit` : `${name} birimindeki sorumlularda`);
   }
+  // Aşama H: proje süzgeçli dönem kovası bir zaman aralığıdır; adı proje adı sayılmaz (seçilen proje ölçütte kalır).
+  if (temporalGroup(record)) return locale === 'en' ? `in ${name}` : `${name} döneminde`;
   if (record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId)) {
     if (named) return locale === 'en' ? 'the project' : 'projede';
     return locale === 'en' ? `the ${name} project` : `${name} projesinde`;
@@ -368,13 +377,14 @@ function recordSentences(record, locale, { rowsCovered = false } = {}) {
   }).map(({ rel, fact }) => ({ key: rel.split('.').at(-1), fact }));
   const projectCount = totals.length ? take((rel, fact) => rel === 'totals.projects' && isCount(fact))[0] : null;
   if (totals.length) {
-    // Örgütsel grup satırında proje özne değildir: seçilen proje ölçütte ayrı niteleyici olarak kalır.
-    const projectNamed = !organizationGroup(record) && (record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId));
+    // Örgütsel ya da dönem kovası grup satırında proje özne değildir: seçilen proje ölçütte ayrı niteleyici olarak kalır.
+    const nonProjectGroup = Boolean(organizationGroup(record) || temporalGroup(record));
+    const projectNamed = !nonProjectGroup && (record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId));
     const scope = scopePhrase(record, locale, { named: sentences.length > 0, projects: projectCount?.fact });
     const assigneeFilters = record.entries.find(({ fact }) => fact.semantic?.filters?.assignee)?.fact.semantic.filters;
     const personScoped = Boolean(resolvedPerson(assigneeFilters)) && record.tool !== 'rota_portfolio_summary' && !projectNamed;
-    // Örgütsel grup satırının öznesi bölüm/birimdir; sorumlu kapsamı (ör. biriminiz) özneyle söylenmediğinden ölçütte kalır.
-    const assigneeScoped = (['me', 'team'].includes(assigneeFilters?.assignee) || personScoped) && !organizationGroup(record)
+    // Örgütsel ya da dönem kovası grup satırında sorumlu kapsamı özneyle söylenmediğinden ölçütte kalır.
+    const assigneeScoped = (['me', 'team'].includes(assigneeFilters?.assignee) || personScoped) && !nonProjectGroup
       && record.tool !== 'rota_portfolio_summary' && !(record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId));
     const scopedQualifiers = assigneeScoped && !qualified
       ? (qualified = true, qualifierText(record.entries, locale, { omit: ['assignee', 'teamLevel', 'person', 'personSicil', ...(projectNamed ? ['project'] : [])] })) : null;

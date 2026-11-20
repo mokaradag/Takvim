@@ -23,21 +23,23 @@ const LEGACY_FOCUS = Object.freeze(FOCUS.slice(0, 12));
 /** Aşama H: dönemin türlü alanları (karşılaştırma dönemi ve dizi kovası) yalnızca güncel sürümde saklanır. */
 const TEMPORAL_KEYS = Object.freeze(['compare', 'compareFrom', 'compareTo', 'bucket']);
 // `windowDay`: adlı dönemin çözüldüğü Türkiye günü; gün değiştikten sonraki takip aynı somut dönemi okur (model görmez).
-// `windowDefaulted` ve `windowRolling`: sunucu varsayılan geçmiş dönemini ve kayan pencere kuralını takiplerde korur (model görmez).
-const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow',
+// `windowDefaulted`, `windowRolling` ve `historicalDateTo`: sunucu varsayılan geçmiş dönemini, kayan pencere kuralını ve karma
+// başlangıç-tekli plandaki geçmiş bitiş gününü (yaklaşan iş ufkundan bağımsız) takiplerde korur (model görmez).
+const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'historicalDateTo', 'visual', 'chart', 'charts', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow',
   'windowDay', 'windowDefaulted', 'windowRolling', ...TEMPORAL_KEYS]);
-const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'windowDay', 'windowDefaulted', 'windowRolling', 'charts', ...TEMPORAL_KEYS].includes(key)));
+const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'windowDay', 'windowDefaulted', 'windowRolling', 'historicalDateTo', 'charts', ...TEMPORAL_KEYS].includes(key)));
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
-const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests',
+const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'windowRolling', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests',
   ...TEMPORAL_KEYS]);
-const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests', ...TEMPORAL_KEYS].includes(key)));
+const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'windowRolling', 'rows', 'act', 'requests', ...TEMPORAL_KEYS].includes(key)));
 const WINDOWS = Object.freeze([...TEMPORAL_WINDOWS, 'all_time']);
 /** Dönemin türlü alanları geçerli mi (kapalı sözlük, gerçek günler, tek biçim)? */
 function validTemporal(value) {
   if (value.relativeWindow != null && (!WINDOWS.includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return false;
   if (value.windowDefaulted != null && (value.windowDefaulted !== true || !value.dateFrom || !value.dateTo || value.relativeWindow)) return false;
   if (value.windowRolling != null && (value.windowRolling !== true || !value.dateFrom || !value.dateTo || value.relativeWindow)) return false;
+  if (value.historicalDateTo != null && (!isIsoDay(value.historicalDateTo) || !value.dateFrom || value.dateTo || value.relativeWindow || value.dateFrom > value.historicalDateTo)) return false;
   if (value.compare != null && (!COMPARE_WINDOWS.includes(value.compare) || value.compareFrom || value.compareTo)) return false;
   if (Boolean(value.compareFrom) !== Boolean(value.compareTo)) return false;
   for (const key of ['compareFrom', 'compareTo']) if (value[key] != null && !isIsoDay(value[key])) return false;
@@ -169,7 +171,7 @@ export function normalizeAnalysisContext(value) {
     // Ayrıntılı istekle listelenen görevlerin bağlamı yalnızca satır göndergesidir (önceki özne olarak kullanılamaz).
     if (value.rowsOnly != null && (value.rowsOnly !== true || !rows.length || rows.some((row) => row && row.type !== 'project'))) return null;
     return Object.freeze({ v: ANALYSIS_CONTEXT_VERSION, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(value.withSelf ? { withSelf: true } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(within ? { within } : {}), focus: Object.freeze([...focus]),
-      ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.windowDay ? { windowDay: value.windowDay } : {}),
+      ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.historicalDateTo ? { historicalDateTo: value.historicalDateTo } : {}), ...(value.windowDay ? { windowDay: value.windowDay } : {}),
       ...(value.windowDefaulted ? { windowDefaulted: true } : {}), ...(value.windowRolling ? { windowRolling: true } : {}), ...(value.visual ? { visual: true } : {}),
       ...(value.chart ? { chart: value.chart } : {}), ...(value.charts ? { charts: Object.freeze([...value.charts]) } : {}), ...(value.table ? { table: true } : {}), rows,
       ...(rowPopulation ? { rowPopulation: Object.freeze(rowPopulation) } : {}), ...(pending ? { pending } : {}), ...(value.rowsOnly ? { rowsOnly: true } : {}), ...temporalFields(value) });

@@ -86,7 +86,7 @@ for P in $PROFILES; do
     SEEDS="$UI_SEED"
     SEED_GROUPS=0
   else
-    SEEDS=$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const set=[...new Set(s.conversations.map(c=>c.seed||"executive"))]; console.log(set.join(" "))' "$HERE/scenarios/$P.json")
+    SEEDS=$(UI_ONLY="${UI_ONLY:-}" node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const only=process.env.UI_ONLY?new Set(process.env.UI_ONLY.split(",").map(v=>v.trim()).filter(Boolean)):null; const convs=only?s.conversations.filter(c=>only.has(c.name)):s.conversations; const pool=convs.length?convs:s.conversations.slice(0,1); const set=[...new Set(pool.map(c=>c.seed||"executive"))]; console.log(set.join(" "))' "$HERE/scenarios/$P.json")
     SEED_GROUPS=$(node -e 'console.log(process.argv.slice(1).length > 1 ? 1 : 0)' $SEEDS)
   fi
   for SEED in $SEEDS; do

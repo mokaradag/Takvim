@@ -7,15 +7,17 @@
  *
  *   BRIDGE_PORT=18741 BRIDGE_CALLS=calls.jsonl UI_PROFILE=B UI_BENCHMARK=test/fixtures/bilgin-executive-benchmark.json node scripts/ui-acceptance/scriptedBridge.mjs
  */
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import { isIsoDay } from '../../src/domain/ai/isoDay.js';
 import { compositionView, coveringBlocks, isCompositionCall } from '../../test/helpers/compositionScenario.mjs';
 
 const PORT = Number(process.env.BRIDGE_PORT ?? 18741);
 const CALLS = process.env.BRIDGE_CALLS || null;
-const benchmarks = (process.env.UI_BENCHMARK
-  ? process.env.UI_BENCHMARK.split(',').filter(Boolean)
+const rawBenchmark = process.env.UI_BENCHMARK || '';
+// Virgül içeren tekil dosya yolu mevcutsa bölünmeden tek kaynak olarak okunur.
+const benchmarks = (rawBenchmark
+  ? (existsSync(rawBenchmark) ? [rawBenchmark] : rawBenchmark.split(',').filter(Boolean))
   : [
     new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url),
     new URL('../../test/fixtures/bilgin-temporal-benchmark.json', import.meta.url)

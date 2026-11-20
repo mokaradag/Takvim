@@ -291,7 +291,9 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // Aşama F: özetin yanına yalnızca ad çözümü çağrıları (kişi/proje arama) yazılmışsa bunlar gereksizdir: adları sunucu
     // özetten kendisi çözer. Çağrılar YÜRÜTÜLMEDEN atılır (yapısal normalleştirme; düzeltme turu açılmaz). Başka araç çağrısı ya da
     // istek ile birlikte özet eskisi gibi reddedilir.
-    const parsed = parseAnalysis(plan.analysis);
+    const replayedRolling = Boolean(replayed && plan.analysis?.windowRolling === true);
+    const analysisInput = replayedRolling ? (({ windowRolling: _rolling, ...rest }) => rest)(plan.analysis) : plan.analysis;
+    const parsed = parseAnalysis(analysisInput);
     // Ek kapsamların adları da özetin adlarıdır: onların ad araması da sunucunun kendi çözümüyle aynıdır.
     const named = [{ scope: parsed.scope, names: parsed.names }, ...(parsed.also || [])].filter((layer) => ['person', 'project'].includes(layer.scope));
     const selectors = [
@@ -338,7 +340,8 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       || (Array.isArray(item.entities) && item.entities.some((entity) => entity && typeof entity === 'object' && Object.hasOwn(entity, 'from'))))) throw invalidArguments(['$.analysis:request']);
     if (explicit.length && (['previous', 'row'].includes(parsed.scope) || explicit.length > PLANNER_LIMITS.maxRequests)) throw invalidArguments(['$.analysis:request']);
     // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
-    const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
+    const resolved = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
+    const analysis = replayedRolling ? Object.freeze({ ...resolved, windowRolling: true }) : resolved;
     const follow = ['previous', 'row'].includes(parsed.scope) && previousAnalysis;
     const visual = !declined && (base.visual === true || parsed.visual === true || Boolean(follow && previousAnalysis.visual));
     const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;
@@ -388,7 +391,9 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     if (sections.length > ANALYSIS_LIMITS.maxParts) throw invalidArguments(['$.analysis.focus:requestBudget']);
     const [request, ...additionalRequests] = sections;
     // Bölümlerin özet sahipliği (kapsam ve yön): sunum başlıkları ve takip bağlamı bunu kullanır; açık istek bölümü özetin değildir.
+    const optionalOnly = (expanded.optionalParts || []).filter((index) => !merged.includes(index));
     const owned = { analysisParts: analysisParts.length, ...(expanded.sections ? { sections: expanded.sections } : {}), ...(merged.length ? { explicitParts: Object.freeze(merged) } : {}),
+      ...(optionalOnly.length ? { optionalParts: Object.freeze(optionalOnly) } : {}),
       // Aşama H: ikinci dönemdeki durumu yeniden kurulamayan yönler (yanıt bunu adıyla söyler).
       ...(expanded.unsupportedHistory ? { historyUnsupported: expanded.unsupportedHistory } : {}) };
     // Ayrılan yer yüzünden okunmayan yön, ayrı bölüm olarak kalan eşdeğer açık istekle zaten okunuyorsa "gösterilmedi" denmez:
@@ -559,7 +564,7 @@ function layeredAnalysis(plan, today = null) {
     if (typeof item.relativeWindow !== 'string') throw invalidArguments([index === 0 ? '$.analysis.relativeWindow:type' : '$.analysis.also:window']);
     if (!VALID_WINDOWS.has(item.relativeWindow)) throw invalidArguments([index === 0 ? '$.analysis.relativeWindow:enum' : '$.analysis.also:window']);
     const dated = item.dateFrom != null || item.dateTo != null;
-    if (item.relativeWindow === 'all_time' && dated) throw invalidArguments(['$.analysis.relativeWindow:conflict']);
+    if (item.relativeWindow === 'all_time' && dated) throw invalidArguments([index === 0 ? '$.analysis.relativeWindow:conflict' : `$.analysis.also[${index - 1}].relativeWindow:conflict`]);
     const focus = effectiveFocusOf(item);
     if (/^next_/.test(item.relativeWindow) && focus.some((entry) => TEMPORAL_FOCUS.includes(entry))) throw invalidArguments(['$.analysis.focus:futureWindow']);
     if (PAST.has(item.relativeWindow) && focus.includes('upcoming')) throw invalidArguments(['$.analysis.dateTo:past']);
@@ -568,13 +573,20 @@ function layeredAnalysis(plan, today = null) {
   // (ör. bugün 30 Eylül iken `this_month` + 1–30 Eylül ile yalnızca `this_month`). Farklı günleri kapsayan katmanlar reddedilir.
   // Geçerli dönemler ÇÖZÜLMÜŞ gün çiftleriyle karşılaştırılır: adlı dönem ile aynı günleri gösteren tarih çifti (farklı katmanlarda da)
   // aynı dönemdir; birincilin yazımı korunur. Kendi içinde çelişen ad + tarih çifti ve bugünü bilinmeyen ad yazıldığı gibi kalır.
+  // Birincil katman `compare: 'previous'` taşıyorsa her katmanın kendi kayan/takvim kuralıyla çözülen önceki dönemi de eşleşmelidir.
+  const comparePrevious = primary.compare === 'previous';
+  const ROLLING_WINDOW = /^(?:last|next)_\d+_days$/;
   const window = (item) => {
     const name = typeof item.relativeWindow === 'string' && item.relativeWindow !== 'all_time' ? item.relativeWindow : null;
     let named = null;
     try { named = today && name ? resolveWindow(name, today) : null; } catch { named = null; }
     const dated = item.dateFrom != null || item.dateTo != null;
     if (name && (!named || (dated && !(item.dateFrom === named.dateFrom && item.dateTo === named.dateTo)))) return JSON.stringify([item.dateFrom ?? null, item.dateTo ?? null, name]);
-    return JSON.stringify(named ? [named.dateFrom, named.dateTo, null] : [item.dateFrom ?? null, item.dateTo ?? null, null]);
+    const current = named ? [named.dateFrom, named.dateTo] : [item.dateFrom ?? null, item.dateTo ?? null];
+    const prev = comparePrevious && current[0] && current[1]
+      ? previousWindow({ dateFrom: current[0], dateTo: current[1] }, { rolling: Boolean(name && ROLLING_WINDOW.test(name)) })
+      : null;
+    return JSON.stringify([...current, null, prev?.dateFrom ?? null, prev?.dateTo ?? null]);
   };
   if (rest.some((item) => window(item) !== window(primary))) throw invalidArguments(['$.analysis.also:window']);
   // Açıkça yazılmış "tüm zamanlar" yalnızca tarihsel yön taşıyan bir katmanda bildirildiyse dönem verilmemesiyle aynı değildir

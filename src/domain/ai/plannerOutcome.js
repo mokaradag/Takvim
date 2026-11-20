@@ -153,8 +153,8 @@ export function renderChartTypeUnavailable({ type, substituted = null, locale = 
   const en = locale === 'en';
   if (type === 'line' && reason === 'coverage') {
     return en
-      ? `_A line chart could not be drawn because recording coverage for the activity series could not be verified; ${observedCounts ? 'the observed counts are shown in the table' : 'the table shows no-record entries for the buckets'}._`
-      : `_Hareket dizisinin kayıt kapsamı doğrulanamadığı için çizgi grafik çizilemedi; ${observedCounts ? 'gözlenen sayılar tabloda gösterildi' : 'tabloda kovalar için kayıt yok bilgisi gösterildi'}._`;
+      ? `_A line chart could not be drawn because recording coverage for the activity series could not be verified; ${observedCounts ? 'the observed counts are shown in the results' : 'the results show no-record entries for the buckets'}._`
+      : `_Hareket dizisinin kayıt kapsamı doğrulanamadığı için çizgi grafik çizilemedi; ${observedCounts ? 'gözlenen sayılar sonuçlarda gösterildi' : 'sonuçlarda kovalar için kayıt yok bilgisi gösterildi'}._`;
   }
   const need = CHART_TYPE_NEEDS[type];
   const name = CHART_TYPE_NAMES[type];

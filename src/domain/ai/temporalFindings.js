@@ -251,7 +251,7 @@ export function temporalFindings(groups, context = null) {
       // Yalnızca aynı nüfus ve dönemin anlatılan tamamlanma sayısı dizi toplamının yerini tutar.
       findings.push({ kind: 'completionTrend', interpretation: 'distribution', scope: entry.scope, filters: {}, today, range: seriesRead.range, series: seriesRead, total,
         position: windowPosition(seriesRead.range, today), evidenceIds: [...new Set([seriesRead.evidenceId, ...(total ? [total.evidenceId] : [])])],
-        completeness: seriesRead.collectionComplete ? ((seriesRead.undated ?? total?.undated) || seriesRead.undatedUnknown || total?.undatedUnknown ? 'partial' : 'complete') : 'incomplete', names: periodNames([seriesRead.range], context),
+        completeness: seriesRead.collectionComplete ? ((seriesRead.undated > 0 || total?.undated > 0 || seriesRead.undatedUnknown || total?.undatedUnknown) ? 'partial' : 'complete') : 'incomplete', names: periodNames([seriesRead.range], context),
         narratedTotal });
     }
     const activitySeries = entry.reads.find((read) => read.kind === 'activitySeries');
@@ -284,8 +284,22 @@ export function temporalFindings(groups, context = null) {
     const scope = fact && taskScope(fact.semantic.filters);
     return scope ? [scopeKey(scope)] : [];
   });
+  // Sorumlu, ekip ya da proje süzgeçli geçmiş görev sayımları bugünkü atamalara göredir (hareket sayımları kaydeden aktöre göredir).
+  const assignments = groups.flatMap((group) => {
+    const fact = group.facts.find((item) => item.semantic?.provenance?.tool === 'rota_task_analytics'
+      && ['actualFinish', 'createdAt'].includes(item.semantic?.filters?.dateField)
+      && ((item.semantic?.filters?.assignee && item.semantic.filters.assignee !== 'any') || item.semantic?.filters?.projectId));
+    const scope = fact && taskScope(fact.semantic.filters);
+    return scope ? [scopeKey(scope)] : [];
+  });
+  const hasTaskMeasure = (finding) => (finding.kind === 'periodComparison' && finding.pairs.some((pair) => pair.kind !== 'activity'))
+    || (finding.kind === 'periodSummary' && finding.reads.some((read) => read.kind !== 'activity'))
+    || finding.kind === 'completionTrend';
   const multi = scopes.length > 1;
-  return findings.map((finding) => Object.freeze({ ...finding, ...(finding.scope && memberships.includes(scopeKey(finding.scope)) ? { currentMembership: true } : {}), ...(multi && finding.scope ? { group: scopeLabel(finding.scope, 'tr'), multi: true } : {}), defaulted: context?.defaulted === true }));
+  return findings.map((finding) => Object.freeze({ ...finding,
+    ...(finding.scope && memberships.includes(scopeKey(finding.scope)) ? { currentMembership: true }
+      : finding.scope && hasTaskMeasure(finding) && assignments.includes(scopeKey(finding.scope)) ? { currentAssignment: true } : {}),
+    ...(multi && finding.scope ? { group: scopeLabel(finding.scope, 'tr'), multi: true } : {}), defaulted: context?.defaulted === true }));
 }
 
 function completenessOf(reads) {
@@ -342,9 +356,9 @@ function comparisonSentences(finding, locale) {
   const [earlier, later] = finding.ranges;
   const open = finding.position?.position === 'current' && finding.position.open;
   const adverb = (range, index, options) => periodAdverb(range, finding.today, locale, finding.names?.[index] || null, options);
-  // Hareket kaydı kısmi ise ya da tamamlanan işlerde bitiş tarihi eksik görev sayısı bilinmiyorsa yön ve yüzde söylenmez.
+  // Hareket kaydı kısmi ise ya da tamamlanan işlerde bitiş tarihi eksik görevler varsa (bilinen ya da bilinmeyen) toplam değişim ve yüzde söylenmez.
   const partial = (pair) => (pair.kind === 'activity' && [pair.earlier, pair.later].some((read) => read.coverage?.status === 'partial'))
-    || (pair.kind === 'completed' && [pair.earlier, pair.later].some((read) => read.undatedUnknown));
+    || (pair.kind === 'completed' && [pair.earlier, pair.later].some((read) => read.undatedUnknown || read.undated > 0));
   const measured = finding.pairs.filter((pair) => valueOf(pair.earlier) != null && valueOf(pair.later) != null);
   const known = measured.filter((pair) => !partial(pair));
   const unknown = finding.pairs.filter((pair) => !measured.includes(pair));
@@ -390,12 +404,31 @@ function comparisonSentences(finding, locale) {
   for (const pair of measured.filter(partial)) {
     const place = [...placeFor(pair), lang ? ', ' : ' '];
     if (pair.kind === 'completed') {
-      out.push({ ...factSentence(lang
-        ? [upper(adverb(earlier, 0), locale), ', ', ...place, n(valueOf(pair.earlier), locale), ' dated tasks were completed; ', adverb(later, 1, { open }), ', ', n(valueOf(pair.later), locale),
-          '. Because the number of completed tasks without a recorded finish date is unknown, the difference is not interpreted.']
-        : [upper(adverb(earlier, 0), locale), ' ', ...place, 'bitiş tarihi kayıtlı ', n(valueOf(pair.earlier), locale), ' görev tamamlanmıştı; ', adverb(later, 1, { open }), ' ', n(valueOf(pair.later), locale),
-          ' görev tamamlandı. Bitiş tarihi eksik tamamlanmış görevlerin sayısı bilinmediğinden bu fark yorumlanmadı.']),
-      states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ['tasks.total'])) });
+      const a = valueOf(pair.earlier);
+      const b = valueOf(pair.later);
+      const unknownUndated = [pair.earlier, pair.later].some((read) => read.undatedUnknown);
+      if (unknownUndated) {
+        out.push({ ...factSentence(lang
+          ? [upper(adverb(earlier, 0), locale), ', ', ...place, n(a, locale), ' dated tasks were completed; ', adverb(later, 1, { open }), ', ', n(b, locale),
+            '. Because the number of completed tasks without a recorded finish date is unknown, the difference is not interpreted.']
+          : [upper(adverb(earlier, 0), locale), ' ', ...place, 'bitiş tarihi kayıtlı ', n(a, locale), ' görev tamamlanmıştı; ', adverb(later, 1, { open }), ' ', n(b, locale),
+            ' görev tamamlandı. Bitiş tarihi eksik tamamlanmış görevlerin sayısı bilinmediğinden bu fark yorumlanmadı.']),
+        states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ['tasks.total'])) });
+      } else if (a === b) {
+        out.push({ ...factSentence(lang
+          ? ['In both periods (', rangeLabel(earlier, locale), ' and ', rangeLabel(later, locale), '), ', ...place,
+            ...(a === 0 ? ['no task has a recorded completion date'] : ['dated completed tasks totalled ', n(a, locale)]), '.']
+          : ['İki dönemde de (', rangeLabel(earlier, locale), ' ve ', rangeLabel(later, locale), ') ', ...place,
+            ...(a === 0 ? ['bitiş tarihi kayıtlı tamamlanan görev yok'] : ['bitiş tarihi kayıtlı ', n(a, locale), ' görev tamamlandı']), '.']),
+        states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ['tasks.total', 'tasks.undatedDone'])) });
+      } else {
+        out.push({ ...factSentence(lang
+          ? [upper(adverb(earlier, 0), locale), ', ', ...place, 'dated completed tasks totalled ', n(a, locale), '; ', adverb(later, 1, { open }), ', ', n(b, locale),
+            '. Because completed tasks without a recorded finish date are not in these counts, no overall change is interpreted.']
+          : [upper(adverb(earlier, 0), locale), ' ', ...place, 'bitiş tarihi kayıtlı ', n(a, locale), ' görev tamamlanmıştı; ', adverb(later, 1, { open }), ' bitiş tarihi kayıtlı ', n(b, locale),
+            ' görev tamamlandı. Bitiş tarihi eksik tamamlanmış görevler bu sayılara girmediğinden toplam değişim yorumlanmadı.']),
+        states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ['tasks.total', 'tasks.undatedDone'])) });
+      }
       continue;
     }
     out.push({ ...factSentence(lang
@@ -624,14 +657,21 @@ function trendSentences(finding, locale) {
   const place = taskPlace(finding.scope, locale);
   const sum = series.rows.reduce((acc, row) => acc + (row.value || 0), 0);
   const seriesStates = states(series.evidenceId, ['tasks.total', 'tasks.groupCount']);
-  const undated = series.undated ?? total?.undated ?? 0;
-  const undatedSource = series.undated != null ? series : total;
-  const undatedUnknown = series.undatedUnknown || (series.undated == null && total?.undatedUnknown === true);
-  const undatedCaveat = undatedUnknown ? undatedUnknownSentence(locale)
-    : undated > 0 ? undatedSentence(undated, locale, [undatedSource.evidenceId]) : null;
+  const seriesUndated = series.undated ?? 0;
+  const totalUndated = total?.undated ?? 0;
+  const undated = Math.max(seriesUndated, totalUndated);
+  const undatedUnknown = Boolean(series.undatedUnknown || total?.undatedUnknown);
+  const undatedCaveats = [];
+  if (undatedUnknown) undatedCaveats.push(undatedUnknownSentence(locale));
+  if (seriesUndated > 0 && totalUndated > 0 && seriesUndated === totalUndated) {
+    undatedCaveats.push(undatedSentence(seriesUndated, locale, [series.evidenceId, total.evidenceId]));
+  } else {
+    if (seriesUndated > 0) undatedCaveats.push(undatedSentence(seriesUndated, locale, [series.evidenceId]));
+    if (totalUndated > 0) undatedCaveats.push(undatedSentence(totalUndated, locale, [total.evidenceId]));
+  }
   if (!series.collectionComplete) {
     out.push({ ...factSentence(lang ? ['The completion series could not be read in full, so no trend is stated.'] : ['Tamamlanma dizisi eksiksiz okunamadığından eğilim söylenmedi.']), caveat: true, states: [] });
-    if (undatedCaveat) out.push(undatedCaveat);
+    out.push(...undatedCaveats);
     return out;
   }
   if (finding.narratedTotal != null && finding.narratedTotal !== sum) {
@@ -639,7 +679,7 @@ function trendSentences(finding, locale) {
       ? ['The separate series read contains ', n(sum, locale), ' dated completions. It differs from the period total, so no trend is inferred.']
       : ['Ayrı dizi okumasında ', n(sum, locale), ' tamamlanmış görevin bitiş tarihi kayıtlı. Bu sayı dönem toplamından farklı olduğundan eğilim çıkarılmadı.']),
     caveat: true, states: seriesStates });
-    if (undatedCaveat) out.push(undatedCaveat);
+    out.push(...undatedCaveats);
     return out;
   }
   if (finding.narratedTotal !== sum) {
@@ -703,7 +743,7 @@ function trendSentences(finding, locale) {
       ? ['The range contains only ', n(full.length, locale), ` full ${unit}${full.length === 1 ? '' : 's'}, which is not enough to state a trend; a longer period is needed.`]
       : ['Bu aralık yalnızca ', n(full.length, locale), ` tam ${unit} içerdiğinden eğilim söylenemez; bunun için daha uzun bir dönem gerekir.`]), caveat: true, states: [] });
   }
-  if (undatedCaveat) out.push(undatedCaveat);
+  if (undatedCaveats.length) out.push(...undatedCaveats);
   else if (total && out.length) out.at(-1).states = [...(out.at(-1).states || []), ...states(total.evidenceId, [...(total.total === sum ? ['tasks.total'] : []), ...(total.undated === 0 ? ['tasks.undatedDone'] : [])])];
   if (series.rows.some((row) => row.partial) && full.length >= 2 && sum > 0) {
     out.push({ ...factSentence(lang ? [`Partial or unfinished ${unit}s in the range are not full ${unit}s; they are included in the total but left out of the peak and trend reading.`]
@@ -762,14 +802,14 @@ function horizonSentences(finding, locale) {
     ? ['These delivery counts include only tasks with status ', selected[0] === 'todo' ? 'To do' : 'In progress', '.']
     : ['Bu teslim sayıları yalnızca ', selected[0] === 'todo' ? 'Yapılacak' : 'Devam ediyor', ' durumundaki görevleri kapsar.']), states: [] });
   if (thirty === 0) {
-    out.push({ ...factSentence(lang ? ['In the next 30 days, no open task is due ', ...place, '.'] : ['Önümüzdeki 30 gün içinde ', ...place, ' termini olan açık görev yok.']), states: horizonStates });
+    out.push({ ...factSentence(lang ? ['In the next 30 days, no open task is due ', ...place, '.'] : ['Önümüzdeki 30 gün içinde ', ...place, ' termini olan açık görev yok.']), requiredInShort: true, states: horizonStates });
     return out;
   }
   out.push({ ...factSentence(lang
     ? ['Counting from today, ', ...place, ', ', n(seven, locale), ' open tasks are due within 7 days, ', n(fourteen, locale), ' within 14 days and ', n(thirty, locale),
       ' within 30 days; the counts are cumulative.']
     : ['Bugünden itibaren ', ...place, ' 7 gün içinde ', n(seven, locale), ', 14 gün içinde ', n(fourteen, locale), ', 30 gün içinde ', n(thirty, locale),
-      ' açık görevin termini var; sayılar birikimlidir.']), states: horizonStates });
+      ' açık görevin termini var; sayılar birikimlidir.']), requiredInShort: true, states: horizonStates });
   if (seven * 2 > thirty) {
     out.push({ ...factSentence(lang ? ['More than half of the next 30 days’ deliveries fall in the first week.'] : ['Önümüzdeki 30 günün teslimatlarının yarısından fazlası ilk haftada toplanıyor.']),
       states: [], interpretive: true });
@@ -871,6 +911,7 @@ export function temporalSentences(findings, locale = 'tr') {
       : finding.kind === 'completionTrend' ? trendSentences(finding, locale) : finding.kind === 'activityTrend' ? activityTrendSentences(finding, locale)
         : finding.kind === 'horizonSpread' ? horizonSentences(finding, locale) : finding.kind === 'noteDigest' ? noteSentences(finding, locale) : historyLimitSentences(finding, locale);
     if (finding.currentMembership) built.push({ ...factSentence(en(locale) ? ['Groups reflect current project, assignee or organizational membership; membership during the historical period is unknown.'] : ['Gruplar görevlerin bugünkü proje, sorumlu ya da birim üyeliğine göredir; geçmiş dönemdeki üyelik bilinmiyor.']), caveat: true, states: [] });
+    else if (finding.currentAssignment) built.push({ ...factSentence(en(locale) ? ['Task counts reflect current assignments and project membership; historical ownership during the period is not tracked.'] : ['Görev sayıları bugünkü atama ve proje üyeliğine göredir; geçmiş dönemdeki sorumlu değişimleri bu sayıya yansımaz.']), caveat: true, states: [] });
     if (finding.defaulted && !noted && built.length && !['horizonSpread', 'historyLimit', 'noteDigest'].includes(finding.kind)) {
       const note = defaultedSentence(finding, locale);
       if (note) built.push(note);
@@ -918,12 +959,16 @@ export function comparisonCharts(finding, locale = 'tr') {
     : null;
   return finding.pairs.filter((pair) => valueOf(pair.earlier) != null && valueOf(pair.later) != null
     && (pair.kind !== 'completed' || ![pair.earlier, pair.later].some((read) => read.undatedUnknown))
-    && (pair.kind !== 'activity' || [pair.earlier, pair.later].every((read) => read.coverage?.status === 'complete'))).map((pair) => ({
+    && (pair.kind !== 'activity' || [pair.earlier, pair.later].every((read) => read.coverage?.status === 'complete'))).map((pair) => {
+    const datedCompleted = pair.kind === 'completed' && [pair.earlier, pair.later].some((read) => read.undated > 0);
+    const baseTitle = datedCompleted ? ['Tamamlanan görev (tarihi kayıtlı)', 'Completed tasks (dated)'][lang] : titles[pair.kind][lang];
+    return {
     // Doğrulanmış kapsam, proje ya da kişi adı başlıkta yer alır: çok kapsamlı ya da çok projeli karşılaştırma grafikleri birbirinden ayırt edilir.
-    kind: pair.kind, title: [titles[pair.kind][lang], ...[ownerLabel, finding.scope?.project, finding.scope?.person].filter((name) => typeof name === 'string' && name.trim())].join(' — '),
-    evidenceIds: [pair.earlier.evidenceId, pair.later.evidenceId],
-    items: [{ label: label(finding.ranges[0], 0), value: valueOf(pair.earlier) }, { label: label(finding.ranges[1], 1), value: valueOf(pair.later) }],
-    change: Math.abs(valueOf(pair.later) - valueOf(pair.earlier)) }));
+      kind: pair.kind, title: [baseTitle, ...[ownerLabel, finding.scope?.project, finding.scope?.person].filter((name) => typeof name === 'string' && name.trim())].join(' — '),
+      evidenceIds: [pair.earlier.evidenceId, pair.later.evidenceId],
+      items: [{ label: label(finding.ranges[0], 0), value: valueOf(pair.earlier) }, { label: label(finding.ranges[1], 1), value: valueOf(pair.later) }],
+      change: Math.abs(valueOf(pair.later) - valueOf(pair.earlier)) };
+  });
 }
 
 /* ── Gövde sunumu için kapsama ──────────────────────────────────────── */
