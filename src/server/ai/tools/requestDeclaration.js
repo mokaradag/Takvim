@@ -22,7 +22,7 @@ import {
   parentProperty,
   propertyOwner,
   rankableMeasure,
-  rankedRowIndexes,
+  rankedRowIndexes, NOTE_SAMPLE,
   REQUEST_ENTITY_TYPES,
   REQUEST_LIMITS,
   REQUEST_OPERATIONS,
@@ -247,7 +247,7 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
     problems.push(...(error.details || ['$.filters:invalid']).map((detail) => detail.replace(/^\$\./, '$.filters.')));
   }
   if (problems.length) throw invalidArguments(problems);
-  return Object.freeze({ ...(value.previousResult ? { previousResult: true } : {}), operation: value.operation, metrics: Object.freeze([...value.metrics]), rank: value.rank ? Object.freeze({ ...value.rank }) : null,
+  return Object.freeze({ ...(raw[NOTE_SAMPLE] === true ? { [NOTE_SAMPLE]: true } : {}), ...(value.previousResult ? { previousResult: true } : {}), operation: value.operation, metrics: Object.freeze([...value.metrics]), rank: value.rank ? Object.freeze({ ...value.rank }) : null,
     entities: Object.freeze(entities), filters: Object.freeze(filters), layout: value.layout || 'auto', reasoning: value.reasoning || 'deterministic',
     population: value.population ? Object.freeze({ ...value.population }) : null, fields: Object.freeze(value.fields || []), bindings: Object.freeze(value.bindings || []) });
 }

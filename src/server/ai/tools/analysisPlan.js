@@ -1,4 +1,5 @@
 import 'server-only';
+import { NOTE_SAMPLE } from '../../../domain/ai/requestContract.js';
 import { PLANNER_LIMITS } from '../../../domain/ai/plannerOutcome.js';
 import { invalidArguments } from './toolErrors.js';
 import { parseToolArguments } from './toolArguments.js';
@@ -347,9 +348,10 @@ export function resolveAnalysisBrief(analysis, { previous = null, today = null }
   const inherited = priorNamed && today ? resolveWindow(priorNamed, anchor || today) : inheritedDefault ? null : previous;
   const inheritedHistoricalEnd = !ownWindow && !relativeWindow && !pinned && !inheritedDefault && previous?.historicalDateTo && focus.some((item) => TEMPORAL_FOCUS.includes(item))
     ? previous.historicalDateTo : null;
+  const dropDefaultStart = previous?.windowDefaulted && !analysis.dateFrom && !focus.some((item) => TEMPORAL_FOCUS.includes(item));
   const window = relativeWindow ? { relativeWindow } : pinned ? { dateFrom: pinned.dateFrom, dateTo: pinned.dateTo }
     : inheritedDefault ? (focus.some((item) => TEMPORAL_FOCUS.includes(item)) ? { defaultRange: inheritedDefault } : {})
-      : { ...(inherited?.dateFrom ? { dateFrom: inherited.dateFrom } : {}), ...(inherited?.dateTo && !(analysis.dateFrom && focus.some((item) => TEMPORAL_FOCUS.includes(item))) ? { dateTo: inherited.dateTo } : {}),
+      : { ...(inherited?.dateFrom && !dropDefaultStart ? { dateFrom: inherited.dateFrom } : {}), ...(inherited?.dateTo && !(analysis.dateFrom && focus.some((item) => TEMPORAL_FOCUS.includes(item))) ? { dateTo: inherited.dateTo } : {}),
         ...(inheritedHistoricalEnd && !focus.includes('upcoming') ? { dateTo: inheritedHistoricalEnd } : {}),
         ...(inheritedHistoricalEnd && focus.includes('upcoming') ? { historicalDateTo: inheritedHistoricalEnd } : {}) };
   const windowRolling = !ownWindow && (Boolean(pinned && ROLLING.test(priorNamed)) || Boolean(!relativeWindow && !pinned && (previous?.windowRolling || inheritedDefault)))
@@ -373,13 +375,17 @@ export function resolveAnalysisBrief(analysis, { previous = null, today = null }
     const range = resolveWindow(priorCompare.compare, anchor);
     if (range) priorCompare = { compareFrom: range.dateFrom, compareTo: range.dateTo };
   }
-  const resolvedSubjects = analysis.scope === 'row' ? (analysis.rows?.length || 0)
+  const resolvedSubjects = analysis.scope === 'row' ? new Set((analysis.rows || []).map((position) => {
+    const row = previous?.rows?.[position - 1];
+    return row ? JSON.stringify([row.type, row.id]) : position;
+  })).size
     : analysis.scope === 'previous' && ['person', 'project'].includes(previous?.scope) ? (previous.subjects?.length || 0) : (analysis.names?.length || 0);
   // Karşılaştırmanın reddedileceği yön kümesine (ör. yalnızca bugünden başlayan teslim ufukları) ya da çok özneli takibe karşılaştırma
   // devralınmaz; modelin açıkça yazdığı desteklenmeyen karşılaştırma reddedilmeye devam eder.
   const comparableFocus = focus.some((item) => COMPARABLE_FOCUS.includes(item))
     || (!focus.some((item) => TEMPORAL_FOCUS.includes(item)) && focus.some((item) => item !== 'horizons'));
-  const compare = !ownCompare && !analysis.withSelf && !withSelf.withSelf && resolvedSubjects <= 1 && priorCompare && comparableFocus && analysis.relativeWindow !== 'all_time' && (!windowChanged || priorCompare.compare === 'previous') ? priorCompare : {};
+  const hasPrimaryPeriod = window.relativeWindow || window.defaultRange || (effective.dateFrom && effective.dateTo) || focus.some((item) => TEMPORAL_FOCUS.includes(item));
+  const compare = hasPrimaryPeriod && !ownCompare && !analysis.withSelf && !withSelf.withSelf && resolvedSubjects <= 1 && priorCompare && comparableFocus && analysis.relativeWindow !== 'all_time' && (!windowChanged || priorCompare.compare === 'previous') ? priorCompare : {};
   const bucket = !analysis.bucket && previous?.bucket && (focus.includes('trend') || focus.includes('activity') || focus.includes('completed')) ? { bucket: previous.bucket } : {};
   const merged = { ...window, ...windowRolling, ...withSelf, ...compare, ...bucket, ...analysis, focus: Object.freeze(focus) };
   if ((merged.withSelf || resolvedSubjects > 1) && (merged.compare || merged.compareFrom)) throw invalidArguments(['$.analysis.compare:scope']);
@@ -396,7 +402,8 @@ export function resolveAnalysisBrief(analysis, { previous = null, today = null }
 export function pinnedWindowFields(analysis, today) {
   const named = analysis.relativeWindow && analysis.relativeWindow !== 'all_time' ? analysis.relativeWindow : null;
   const startOnly = Boolean(analysis.dateFrom && !analysis.dateTo);
-  const own = { ...(analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}), ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}),
+  const own = { ...(analysis.windowRolling ? { windowRolling: true } : {}), ...(analysis.historicalDateTo ? { historicalDateTo: analysis.historicalDateTo } : {}),
+    ...(analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}), ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}),
     ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}), ...(analysis.compare ? { compare: analysis.compare } : {}),
     ...(analysis.compareFrom && analysis.compareTo ? { compareFrom: analysis.compareFrom, compareTo: analysis.compareTo } : {}) };
   // Yalnızca geçmiş dönem yönleri sabitlenir: bugünkü durum ve ileriye dönük ufuk ("bugün", "önümüzdeki 7 gün") seçim gününe göre
@@ -411,7 +418,10 @@ export function pinnedWindowFields(analysis, today) {
   const keepPreviousRule = analysis.compare === 'previous' && Boolean(range || (analysis.dateFrom && analysis.dateTo));
   const compare = analysis.compare && !keepPreviousRule && windows.compare ? windows.compare : null;
   const { relativeWindow: _named, compare: _compare, ...rest } = own;
-  return { ...rest, ...(range ? { dateFrom: range.dateFrom, dateTo: range.dateTo, ...(rolling ? { windowRolling: true } : {}) } : named ? { relativeWindow: named } : analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
+  const pinned = range && { dateFrom: range.dateFrom,
+    ...(windows.inferredEnd && [analysis, ...(analysis.also || [])].some((layer) => layer.focus?.includes('upcoming')) ? { historicalDateTo: range.dateTo } : { dateTo: range.dateTo }),
+    ...(rolling ? { windowRolling: true } : {}) };
+  return { ...rest, ...(pinned || (named ? { relativeWindow: named } : analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {})),
     ...(compare ? { compareFrom: compare.dateFrom, compareTo: compare.dateTo } : analysis.compare ? { compare: analysis.compare } : {}) };
 }
 
@@ -475,6 +485,7 @@ export function analysisWindows(analysis, today = null) {
   // aştıysa geçmiş dönem sabit kalır ve yaklaşan iş okuması süresi dolmuş bitiş tarihini devralmaz.
   const replayExpiredUpcoming = Boolean(analysis.replayPinned && temporal && declared.includes('upcoming') && today && range?.dateTo && range.dateTo < today);
   if (!replayExpiredUpcoming && declared.includes('upcoming') && (PAST_WINDOWS.includes(analysis.relativeWindow) || (today && range?.dateTo && range.dateTo < today))) throw invalidArguments(['$.analysis.dateTo:past']);
+  const inferredEnd = Boolean(temporal && range?.dateFrom && !range.dateTo);
   if (temporal) {
     if (!today) throw invalidArguments(['$.analysis.relativeWindow:required']);
     if (analysis.relativeWindow === 'all_time') throw invalidArguments(['$.analysis.relativeWindow:unsupported']);
@@ -502,7 +513,7 @@ export function analysisWindows(analysis, today = null) {
     if (today && (compare.dateFrom > today || /^next_/.test(analysis.compare || ''))) throw invalidArguments([analysis.compareFrom ? '$.analysis.compareFrom:futureWindow' : '$.analysis.compare:futureWindow']);
     if (Date.parse(`${compare.dateTo}T00:00:00Z`) - Date.parse(`${compare.dateFrom}T00:00:00Z`) > 365 * 86400000) throw invalidArguments(['$.analysis.compareFrom:range']);
   }
-  return { range, compare, defaulted };
+  return { range, compare, defaulted, ...(inferredEnd ? { inferredEnd } : {}) };
 }
 
 /** Geçmiş dönem okumasının görev nüfusu: kapsamın koşulları + dönem; termin dönemi (varsa) bu okumaya taşınmaz. */
@@ -537,12 +548,17 @@ export function trendBucket(analysis, range) {
   return 'month';
 }
 
+// Geçmiş olay okumaları, termin süzgecinden bağımsız olarak çözülmüş olay dönemini kullanır.
+function historyRangeOf(analysis) {
+  return analysis.historyRange || { dateFrom: analysis.dateFrom, dateTo: analysis.dateTo };
+}
+
 /**
  * Geçmiş dönem yönünün okumaları. `range` verilirse (karşılaştırma dönemi) özetin dönemi yerine o kullanılır ve yalnızca sayım
  * okumaları kurulur. İki adlı özne (kişi/proje karşılaştırması) her özne için ayrı okunur.
  */
 function temporalRequest(focus, analysis, base, { range = null, bucket = null } = {}) {
-  const window = range || analysis.defaultRange || { dateFrom: analysis.dateFrom, dateTo: analysis.dateTo };
+  const window = range || historyRangeOf(analysis);
   if (!window.dateFrom || !window.dateTo) throw invalidArguments(['$.analysis.dateFrom:required']);
   const subjects = ['person', 'project'].includes(analysis.scope) ? base.entities.filter((entity) => entity.type === analysis.scope) : [];
   if (subjects.length > 1) {
@@ -579,7 +595,7 @@ function temporalRequest(focus, analysis, base, { range = null, bucket = null } 
 function historyGroups(focus, analysis, base, declared) {
   // Eğilim tamamlanma nüfusudur (gerçekleşen bitiş): eğilimin grup kırılımı da dönemde tamamlananları kırar, terminli açık işleri değil.
   const fields = [...(declared.some((item) => ['completed', 'trend'].includes(item)) ? ['actualFinish'] : []), ...(declared.includes('created') ? ['createdAt'] : [])];
-  const range = analysis.defaultRange || { dateFrom: analysis.dateFrom, dateTo: analysis.dateTo };
+  const range = historyRangeOf(analysis);
   if (!fields.length || !range.dateFrom || !range.dateTo) return null;
   const groupBy = focus === 'projects' ? (analysis.scope === 'project' ? null : 'project') : focus === 'workload' ? (['self', 'person'].includes(analysis.scope) ? 'project' : 'assignee')
     : focus === 'org' ? organizationGroupBy(analysis) || (analysis.scope === 'team' && analysis.level === 'unit' ? 'assignee' : null) : null;
@@ -593,7 +609,7 @@ const HISTORY_GROUP_FOCUS = Object.freeze(['projects', 'workload', 'org']);
 
 /** Dönemde tamamlanan görevlerin en yenileri (isteğe bağlı liste; sayım `completed` okumasındadır). */
 function completedList(base, analysis) {
-  const window = analysis.defaultRange || { dateFrom: analysis.dateFrom, dateTo: analysis.dateTo };
+  const window = historyRangeOf(analysis);
   const { dateFrom: _from, dateTo: _to, dateField: _field, ...filters } = base.filters;
   return ranked({ ...base, filters }, analysis, { metrics: ['tasks.total', 'task.title', 'task.actualFinish'], rank: { metric: 'task.actualFinish', order: 'desc' },
     filters: { status: [...DONE], dateField: 'actualFinish', ...window } });
@@ -601,7 +617,7 @@ function completedList(base, analysis) {
 
 /** Hareket dizisi (yalnızca `activity` ve `trend` birlikte istendiğinde): kaydedilen hareketlerin haftalık/aylık sayıları. */
 function activitySeries(base, analysis, bucket) {
-  const window = analysis.defaultRange || { dateFrom: analysis.dateFrom, dateTo: analysis.dateTo };
+  const window = historyRangeOf(analysis);
   return request({ operation: 'list', metrics: ['activity.events', 'activity.completionEvents'], layout: 'table', population: { tool: 'rota_activity_search', collection: 'series' },
     ...(selectable(base).length ? { entities: selectable(base) } : {}), filters: activityFilters(base, window, bucket) });
 }
@@ -791,14 +807,12 @@ function focusRequest(focus, analysis, base, today = null) {
     base = { ...base, filters };
   }
   const compare = base.entities.filter((entity) => entity.type === (analysis.scope === 'person' ? 'person' : 'project')).length > 1 && ['person', 'project'].includes(analysis.scope);
-  // Karma başlangıç-tekli plandan devralınan geçmiş bitiş (`historicalDateTo`) yaklaşan iş ufkunu kısıtlamaz.
-  const dropHistoricalEnd = focus === 'upcoming' && Boolean(analysis.historicalDateTo) && analysis.dateTo === analysis.historicalDateTo;
-  const window = analysis.dateFrom || (analysis.dateTo && !dropHistoricalEnd)
-    ? { ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo && !dropHistoricalEnd ? { dateTo: analysis.dateTo } : {}) } : null;
+  const window = analysis.dateFrom || analysis.dateTo
+    ? { ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) } : null;
   const ahead = window && focus === 'upcoming' ? upcomingFrom(window, today, { replayPinned: analysis.replayPinned }) : window;
-  if (focus === 'upcoming' && (dropHistoricalEnd || (analysis.replayPinned && ahead == null))) {
+  if (focus === 'upcoming' && analysis.replayPinned && ahead == null) {
     const { dateFrom: _staleFrom, dateTo: _staleTo, ...filters } = base.filters;
-    base = { ...base, filters: dropHistoricalEnd && analysis.dateFrom ? { ...filters, dateFrom: analysis.dateFrom } : filters };
+    base = { ...base, filters };
   }
   if (compare) return comparisonFor(focus, analysis, base, focus === 'upcoming' ? ahead : window, today);
   switch (focus) {
@@ -849,7 +863,7 @@ function focusRequest(focus, analysis, base, today = null) {
       const { dateFrom: _from, dateTo: _to, dateField: _field, ...filters } = base.filters;
       const context = rowContext(analysis, base);
       const fields = context.includes('task.project') ? [{ metric: 'task.project', tool: 'rota_task_search', path: 'data.tasks.*.project.name' }] : [];
-      return request({ operation: 'rank', metrics: ['tasks.total', 'task.title', 'task.note', 'task.updatedAt', ...context].slice(0, 8), rank: { metric: 'task.updatedAt', order: 'desc', limit: NOTE_LIMITS.tasks },
+      return request({ [NOTE_SAMPLE]: true, operation: 'rank', metrics: ['tasks.total', 'task.title', 'task.note', 'task.updatedAt', ...context].slice(0, 8), rank: { metric: 'task.updatedAt', order: 'desc', limit: NOTE_LIMITS.tasks },
         ...(fields.length ? { fields } : {}), population: { tool: 'rota_task_search', collection: 'tasks', textFields: ['description'] },
         ...(base.entities.length ? { entities: base.entities } : {}), filters: { ...filters, status: [...OPEN], hasDescription: true } });
     }
@@ -918,7 +932,9 @@ export function expandAnalysis(analysis, { previous = null, today = null, detail
   // ikinci dönemin durumu yeniden kurulamaz ve bugünkü durum dönem süzgeci olmadan okunur (yanıt sınırı adıyla söyler). Dönem bu
   // okumalara termin süzgeci olarak uygulanmaz: "geçen haftaya göre gecikmeler" sorusu bu haftanın terminlerini sormaz.
   const stateComparison = Boolean(windows.compare) && ![analysis, ...(analysis.also || [])].some((layer) => (layer.focus || []).some((focus) => TEMPORAL_FOCUS.includes(focus)));
-  analysis = { ...undated, ...(stateComparison || windows.defaulted ? {} : windows.range || {}), ...(windows.defaulted ? { defaultRange: windows.range } : {}), ...(windows.compare ? { compareRange: windows.compare } : {}), ...(stateComparison ? { stateComparison: true } : {}) };
+  // Örtük geçmiş kapanışı yalnızca olay okumalarına uygulanır. Termin okumaları bildirilen uçları taşır.
+  const deadlineRange = stateComparison || windows.defaulted ? {} : windows.inferredEnd ? { dateFrom: windows.range.dateFrom } : windows.range;
+  analysis = { ...undated, ...deadlineRange, ...(windows.range ? { historyRange: windows.range } : {}), ...(windows.compare ? { compareRange: windows.compare } : {}), ...(stateComparison ? { stateComparison: true } : {}) };
   // Takip: önceki öznenin kapsamı; yön, ufuk ve görselleştirme yeni sorunundur (model yeniden bildirir). `within` kapsamı
   // DARALTIR (kesişim): kapsam zaten bir projeyle sınırlıysa ikinci proje onun yerine geçmez, plan reddedilir.
   const narrowed = (base) => {
@@ -974,7 +990,7 @@ export function analysisLayers(analysis) {
  * önce her kapsam için aynı tanımlı özet ölçüleri (karşılaştırma bunların üzerindedir), ardından kalan okuma bütçesiyle kapsamların
  * dağılım yönleri bildirim sırasıyla. Kapsamlar birbirini kapsayabilir (birim ⊂ bölüm), bu yüzden sayıları toplanmaz. Bütçeye
  * sığmayan dağılım yönü SESSİZCE düşmez: `omitted` olarak döner ve yanıtta adıyla belirtilir; kapsamların hiçbiri düşmez. Dönem
- * yalnızca dönemli yönlerin okumalarına uygulanır; özet bugünkü durumdur.
+ * genel sayılar istendiğinde bildirilen termin süzgecini taşır. Dönem karşılaştırmasında özet bugünkü durumdur.
  */
 function expandLayers(analysis, today, { chart = null, charts = null, reserve = 0, optionalFits = () => true } = {}) {
   const layers = analysisLayers(analysis);
@@ -994,7 +1010,7 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     if (stateFree(layer)) return [];
     const base = scopeBase(layer);
     return [{ layer: index, part: request({ operation: 'value', metrics: [...LAYER_METRICS], population: { tool: 'rota_task_analytics' },
-      ...(base.entities.length ? { entities: base.entities } : {}), filters: { ...base.filters } }) }];
+      ...(base.entities.length ? { entities: base.entities } : {}), filters: { ...base.filters, ...(analysis.compareRange ? {} : window) } }) }];
   });
   const parts = summaries.map((item) => item.part);
   const seen = new Set(parts.map((part) => JSON.stringify(part)));
@@ -1030,10 +1046,10 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
       const items = (Array.isArray(produced) ? produced : [produced]).filter((item) => !seen.has(JSON.stringify(item)));
       if (!items.length) continue;
       if (parts.length + items.length > budget) {
-        if (!derived && (TEMPORAL_FOCUS.includes(focus) || HISTORY_GROUP_FOCUS.includes(focus) && layer.focus.some((item) => ['completed', 'created', 'trend'].includes(item)))) throw invalidArguments(budgetDetails(analysis));
+        if (mandatory) throw invalidArguments(budgetDetails(analysis));
         omitted.push(Object.freeze({ layer: index, focus })); continue;
       }
-      add(items, { layer: index, focus, required: mandatory });
+      add(items, { layer: index, focus, required: mandatory, optional: derived });
     }
   });
   pass('required');
@@ -1050,7 +1066,7 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
       && layers.some((layer) => layer.focus.some((focus) => TEMPORAL_FOCUS.includes(focus)))) throw invalidArguments(['$.analysis.compare:focus']);
     layers.forEach((layer, index) => {
       for (const focus of layer.focus.filter((item) => COMPARABLE_FOCUS.includes(item) || HISTORY_GROUP_FOCUS.includes(item))) {
-        const compared = { ...layerAnalysisOf(layer), defaultRange: analysis.compareRange };
+        const compared = { ...layerAnalysisOf(layer), historyRange: analysis.compareRange };
         // İkinci dönem grup kırılımı birinci dönemle aynı yön kümesini (ör. `trend` için tamamlanma temeli) kullanır; eğilim dizisi çoğaltılmaz.
         const produced = HISTORY_GROUP_FOCUS.includes(focus) ? historyGroups(focus, compared, basedOf(layer), layer.focus) : temporalRequest(focus, compared, basedOf(layer), { range: analysis.compareRange });
         const items = [].concat(produced || []).filter((item) => !seen.has(JSON.stringify(item)));
@@ -1076,12 +1092,12 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
   layers.forEach((layer, index) => {
     if (!layer.focus.includes('activity') || !layer.focus.includes('trend')) return;
     const layerAnalysis = layerAnalysisOf(layer);
-    const range = analysis.defaultRange || (analysis.dateFrom && analysis.dateTo ? { dateFrom: analysis.dateFrom, dateTo: analysis.dateTo } : null);
-    if (!range) return;
+    const range = historyRangeOf(analysis);
+    if (!range.dateFrom || !range.dateTo) return;
     let produced = null;
     try { produced = activitySeries(basedOf(layer), layerAnalysis, trendBucket(layerAnalysis, range)); } catch (error) { produced = optionalRead(error); }
     const items = [].concat(produced || []).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= budget && optionalFits([...parts, ...items])) add(items, { layer: index, focus: 'activity', required: false });
+    if (items.length && parts.length + items.length <= budget && optionalFits([...parts, ...items])) add(items, { layer: index, focus: 'activity', required: false, optional: true });
   });
   // Adı verilen grafik türünün okuması birincil kapsamdan (tek nüfus; kapsamlar birleştirilmez), yalnızca yer kaldıysa; yoksa
   // grafik notu türün neden çizilemediğini söyler.
@@ -1110,7 +1126,7 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     let produced = null;
     try {
       produced = type === 'donut' ? groups(donutBase, 'status', { open: false }) : type === 'stacked' ? groups(donutBase, 'project', { split: true, future })
-        : type === 'line' && activityOnly(primary.focus) ? activitySeries(based, primaryAnalysis, trendBucket(primaryAnalysis, primaryAnalysis.defaultRange || { dateFrom: primaryAnalysis.dateFrom, dateTo: primaryAnalysis.dateTo }))
+        : type === 'line' && activityOnly(primary.focus) ? activitySeries(based, primaryAnalysis, trendBucket(primaryAnalysis, historyRangeOf(primaryAnalysis)))
           : focus ? focusRequest(focus, primaryAnalysis, based, today) : null;
     } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
@@ -1130,7 +1146,7 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     let produced = null;
     try { produced = focusRequest('org', layerAnalysis, basedOf(layer), today); } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= budget && optionalFits([...parts, ...items])) add(items, { layer: index, focus: 'org', required: false });
+    if (items.length && parts.length + items.length <= budget && optionalFits([...parts, ...items])) add(items, { layer: index, focus: 'org', required: false, optional: true });
   });
   // Bütçe önce bütün kapsamların özetine ayrılır; yanıt sırası ise kapsam kapsamdır (özet ve o kapsamın dağılımları ardışık).
   const ordered = parts.map((part, position) => ({ part, position, layer: owners.get(part).layer })).sort((a, b) => a.layer - b.layer || a.position - b.position).map((item) => item.part);
@@ -1139,7 +1155,8 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     && !(HISTORY_GROUP_FOCUS.includes(focus) && historyGroups(focus, layerAnalysisOf(layer), basedOf(layer), layer.focus)))))] : [];
   // Tek kapsamlı özetteki kural: ikinci dönem okuması ya da sınır bildirimi üretmeyen karşılaştırma reddedilir.
   if (analysis.compareRange && !layers.some((layer) => layer.focus.some((focus) => COMPARABLE_FOCUS.includes(focus))) && !unsupported.length) throw invalidArguments(['$.analysis.compare:focus']);
-  return Object.assign(ordered, { omitted: Object.freeze(omitted), sections: Object.freeze(ordered.map((part) => { const { layer, focus } = owners.get(part); return Object.freeze({ layer, focus }); })),
+  const optionalParts = ordered.flatMap((part, index) => owners.get(part).optional ? [index] : []);
+  return Object.assign(ordered, { ...(optionalParts.length ? { optionalParts: Object.freeze(optionalParts) } : {}), omitted: Object.freeze(omitted), sections: Object.freeze(ordered.map((part) => { const { layer, focus } = owners.get(part); return Object.freeze({ layer, focus }); })),
     ...(unsupported.length ? { unsupportedHistory: Object.freeze(unsupported) } : {}) });
 }
 
@@ -1283,7 +1300,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     const comparable = declared.filter((focus) => COMPARABLE_FOCUS.includes(focus));
     if (!comparable.length && declared.some((focus) => TEMPORAL_FOCUS.includes(focus))) throw invalidArguments(['$.analysis.compare:focus']);
     for (const focus of declared.filter((item) => COMPARABLE_FOCUS.includes(item) || HISTORY_GROUP_FOCUS.includes(item))) {
-      const compared = { ...analysis, defaultRange: analysis.compareRange };
+      const compared = { ...analysis, historyRange: analysis.compareRange };
       // İkinci dönem grup kırılımı birinci dönemle aynı yön kümesini (ör. `trend` için tamamlanma temeli) kullanır.
       const produced = HISTORY_GROUP_FOCUS.includes(focus) ? historyGroups(focus, compared, base, declared) : temporalRequest(focus, compared, base, { range: analysis.compareRange });
       const items = [].concat(produced || []).filter((item) => !seen.has(JSON.stringify(item)));
@@ -1318,7 +1335,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     }
   };
   const lineRequested = [chart, ...(charts || [])].includes('line');
-  if (single && declared.includes('activity') && (declared.includes('trend') || lineRequested && activityOnly(declared))) addOptional(() => activitySeries(base, analysis, trendBucket(analysis, analysis.defaultRange || { dateFrom: analysis.dateFrom, dateTo: analysis.dateTo })));
+  if (single && declared.includes('activity') && (declared.includes('trend') || lineRequested && activityOnly(declared))) addOptional(() => activitySeries(base, analysis, trendBucket(analysis, historyRangeOf(analysis))));
   if (single && declared.includes('completed') && !analysis.compareRange) addOptional(() => completedList(base, analysis));
   // Ayrıntılı yanıt: bildirilen yönlerin yanına sunucu bir bütünleyici okuma ekler (ör. kendi işlerinde projelere göre
   // dağılım, ekipte kişilere göre iş yükü). Sığmayan ya da anlamı olmayan ek okuma sessizce eklenmez; bildirilen yön düşmez.

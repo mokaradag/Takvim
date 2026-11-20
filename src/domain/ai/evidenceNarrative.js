@@ -102,6 +102,7 @@ const dayFact = (value) => (typeof value === 'string' && DAY.test(value) ? { fie
 /** Olgunun Markdown'a güvenli gösterim değeri. Sunucunun biçimlediği sayı ve tarihler kaçış gerektirmez. */
 export function narrativeValue(fact, locale = 'tr') {
   const raw = fact.value;
+  if (fact.semantic?.group?.notStarted && typeof raw === 'number') return locale === 'en' ? 'Not started' : 'Başlamadı';
   if (fact.semantic?.valueType === 'date' && typeof raw === 'string' && DAY.test(raw) && fact.semantic?.displayValue == null) return formatDay(raw, locale);
   if (fact.semantic?.valueType === 'instant' && typeof raw === 'string' && INSTANT.test(raw)) return formatInstant(raw, locale);
   const { value } = factPresentation(fact, locale);
@@ -258,7 +259,8 @@ function temporalGroup(record) {
 const NON_ENTITY_GROUPS = new Set(['other', 'unassigned', 'unresolved', 'undisclosed', 'none', 'no_unit']);
 
 function scopePhrase(record, locale, { named = false, projects = null } = {}) {
-  const name = strong(escapedFactText(record.subject));
+  const subject = temporalGroup(record) ? canonicalGroupLabel(record.entries[0]?.fact, record.subject, locale) : record.subject;
+  const name = strong(escapedFactText(subject));
   if (record.tool === 'rota_portfolio_summary') {
     if (projects) return locale === 'en' ? `your ${strong(narrativeValue(projects, locale))} visible projects` : `görebildiğiniz ${strong(narrativeValue(projects, locale))} projede`;
     return locale === 'en' ? 'your visible projects' : 'görebildiğiniz projelerde';
@@ -598,6 +600,7 @@ export function describeRowCollection(group, collection, locale = 'tr') {
 /** Olgunun kaçışsız gösterim değeri (model girdisi ve grafik etiketi); Markdown'a doğrudan yazılmaz. */
 export function narrativePlainValue(fact, locale = 'tr') {
   const raw = fact.value;
+  if (fact.semantic?.group?.notStarted && typeof raw === 'number') return locale === 'en' ? 'Not started' : 'Başlamadı';
   if (fact.semantic?.valueType === 'date' && typeof raw === 'string' && DAY.test(raw) && fact.semantic?.displayValue == null) return formatDay(raw, locale);
   if (fact.semantic?.valueType === 'instant' && typeof raw === 'string' && INSTANT.test(raw)) return formatInstant(raw, locale);
   const { value } = factPresentation(fact, locale);
@@ -648,7 +651,9 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
   // Aşama F: tek sayı sütunu görev grubunun kayıt sayısıysa liste satırı "Kayıt sayısı: **9**" değil "**9** görev" diye okunur.
   const countOnly = columns.length === 1 && /(^|\.)count$/.test(columns[0]) && rows.every((row) => valuesOf(row, columns[0]).every((fact) => /(^|\.)groups\./.test(fact.field)));
   return { body: rows.map((row) => {
-    const pairs = countOnly ? [`${cell(valuesOf(row, columns[0]), false)} ${locale === 'en' ? englishTasks(valuesOf(row, columns[0])[0]) : 'görev'}`]
+    const count = countOnly ? valuesOf(row, columns[0])[0] : null;
+    const pairs = countOnly ? [count?.semantic?.group?.notStarted ? narrativeValue(count, locale)
+      : `${cell(valuesOf(row, columns[0]), false)} ${locale === 'en' ? englishTasks(count) : 'görev'}`]
       : columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? `${columnLabel(key)}: ${cell(facts, false)}` : null; }).filter(Boolean);
     return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([evidenceId])}`;
   }).join('\n'), criteria: criteria || '' };
@@ -787,6 +792,11 @@ function singleRowSentences(group, collection, row, locale) {
   const role = ROW_ROLES[collection.split('.').at(-1)];
   // Aşama H: dönem (gerçekleşen bitiş / oluşturulma) dağılımının tek grubu "Kayıt sayısı: **1**" değil "**1** görev" diye okunur.
   const numbers = row.entries.filter(({ fact }) => typeof fact.value === 'number');
+  if (numbers.some(({ fact }) => fact.semantic?.group?.notStarted)) {
+    const sample = numbers[0].fact;
+    const title = canonicalGroupLabel(sample, row.subject, locale);
+    return [`${strong(escapedFactText(title))}: ${narrativeValue(sample, locale)}.`];
+  }
   if (group.tool === 'rota_task_analytics' && numbers.length === 1 && /(^|\.)groups\.\d+\.count$/.test(numbers[0].fact.field)
     && !numbers[0].fact.semantic?.group?.partial && !numbers[0].fact.semantic?.series?.partial
     && ['actualFinish', 'createdAt'].includes(numbers[0].fact.semantic?.filters?.dateField)) {

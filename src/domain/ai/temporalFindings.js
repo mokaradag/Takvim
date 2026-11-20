@@ -71,7 +71,7 @@ export function temporalReads(groups) {
       // Okunan not, metni gerçekten dönen açıklamadır: iki okuma arasında boşaltılmış açıklama (boş değer) okunmuş not sayılmaz.
       const shown = new Set(group.facts.filter((fact) => typeof fact.value === 'string' && fact.value.trim()).map((fact) => /^data\.tasks\.(\d+)\.description$/.exec(fact.field || '')?.[1]).filter(Boolean)).size;
       const total = group.facts.find((fact) => fact.field === 'totalCount');
-      if (scope) reads.push({ ...base, filters, kind: 'notes', scope, shown, total: count(total?.value), clipped: group.facts.some((fact) => /\.descriptionClipped$/.test(fact.field || '') && fact.value === true) });
+      if (scope) reads.push({ ...base, filters, kind: 'notes', scope, shown, total: count(total?.value), clipped: group.facts.some((fact) => fact.semantic?.descriptionClipped === true || /\.descriptionClipped$/.test(fact.field || '') && fact.value === true) });
       continue;
     }
     if (tool === 'rota_task_analytics') {
@@ -359,6 +359,7 @@ function comparisonSentences(finding, locale) {
   // Hareket kaydı kısmi ise ya da tamamlanan işlerde bitiş tarihi eksik görevler varsa (bilinen ya da bilinmeyen) toplam değişim ve yüzde söylenmez.
   const partial = (pair) => (pair.kind === 'activity' && [pair.earlier, pair.later].some((read) => read.coverage?.status === 'partial'))
     || (pair.kind === 'completed' && [pair.earlier, pair.later].some((read) => read.undatedUnknown || read.undated > 0));
+  const future = finding.position?.position === 'future';
   const measured = finding.pairs.filter((pair) => valueOf(pair.earlier) != null && valueOf(pair.later) != null);
   const known = measured.filter((pair) => !partial(pair));
   const unknown = finding.pairs.filter((pair) => !measured.includes(pair));
@@ -383,7 +384,19 @@ function comparisonSentences(finding, locale) {
     const lead = lang ? ['Comparing the two periods ', ...body, '.'] : ['İki dönem karşılaştırıldığında ', ...body, '.'];
     out.push({ ...factSentence(lead), states: [] });
   }
-  if (known.length && !eligible && !finding.overlap) out.push({ ...factSentence(open ? (lang ? ['Comparing the two periods, the later period is still in progress; the comparison is provisional and counts are shown side by side.'] : ['İki dönem karşılaştırıldığında ', ...(mixedPopulation ? [] : [...placeFor(known[0]), ' ']), 'sonraki dönem henüz bitmediği için karşılaştırma şimdilik geçici; sayılar yan yana veriliyor.']) : (lang ? ['Comparing the two periods, observation lengths differ; counts are shown side by side.'] : ['İki dönem karşılaştırıldığında gözlem süreleri farklı; sayılar yan yana veriliyor.'])), states: [] });
+  if (known.length && !eligible && !finding.overlap) {
+    const message = open
+      ? (lang ? ['Comparing the two periods, the later period is still in progress; the comparison is provisional and counts are shown side by side.']
+        : ['İki dönem karşılaştırıldığında ', ...(mixedPopulation ? [] : [...placeFor(known[0]), ' ']), 'sonraki dönem henüz bitmediği için karşılaştırma şimdilik geçici; sayılar yan yana veriliyor.'])
+      : future ? (lang ? ['The later period has not started; the counts do not establish a change.']
+        : ['Sonraki dönem henüz başlamadı; bu sayılar bir değişim göstermez.'])
+        : windowLength(earlier) !== windowLength(later)
+          ? (lang ? ['Comparing the two periods, observation lengths differ; counts are shown side by side.']
+            : ['İki dönem karşılaştırıldığında gözlem süreleri farklı; sayılar yan yana veriliyor.'])
+          : (lang ? ['The periods could not be compared; counts are shown side by side.']
+            : ['Dönemler karşılaştırılamadığı için sayılar yan yana veriliyor.']);
+    out.push({ ...factSentence(message), states: [] });
+  }
   for (const pair of known) {
     const spec = COMPARED[pair.kind];
     const a = valueOf(pair.earlier);
@@ -441,15 +454,17 @@ function comparisonSentences(finding, locale) {
   for (const pair of unknown) {
     const both = valueOf(pair.earlier) == null && valueOf(pair.later) == null;
     const missing = valueOf(pair.earlier) == null ? [earlier, 0] : [later, 1];
+    const knownRange = missing[1] === 0 ? later : earlier;
+    const knownLabel = windowPhrase(knownRange, finding.today, locale);
     const other = both ? null : valueOf(pair.earlier) == null ? valueOf(pair.later) : valueOf(pair.earlier);
     if (pair.kind !== 'activity') {
       const spec = COMPARED[pair.kind];
       const place = taskPlace(finding.scope, locale);
       out.push({ ...factSentence(lang
         ? ['Counts of ', spec.count, ' (', ...place, ') cannot be compared: ', ...(both ? ['both periods (', windowPhrase(earlier, finding.today, locale), ' and ', windowPhrase(later, finding.today, locale), ') are unknown, not zero']
-          : ['the count for ', windowPhrase(missing[0], finding.today, locale), ' is unknown, not zero; the other period has ', n(other, locale), ' tasks']), '.']
+          : ['the count for ', windowPhrase(missing[0], finding.today, locale), ' is unknown, not zero; for ', knownLabel, ', the count is ', n(other, locale), ' tasks']), '.']
         : [upper(spec.noun[0], locale), ' sayıları (', ...place, ') karşılaştırılamıyor: ', ...(both ? ['iki dönemin de (', windowPhrase(earlier, finding.today, locale), ' ve ', windowPhrase(later, finding.today, locale), ') görev sayısı bilinmiyor; sıfır sayılmadı']
-          : [windowPhrase(missing[0], finding.today, locale), ' için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde ', n(other, locale), ' görev var']), '.']), caveat: true,
+          : [windowPhrase(missing[0], finding.today, locale), ' için görev sayısı bilinmiyor; sıfır sayılmadı; ', knownLabel, ' için ', n(other, locale), ' görev var']), '.']), caveat: true,
       states: [pair.earlier, pair.later].flatMap((read) => states(read.evidenceId, ['tasks.total'])) });
       continue;
     }
@@ -462,9 +477,9 @@ function comparisonSentences(finding, locale) {
         : ['Kaydedilen hareketler (', ...place, ') karşılaştırılamıyor: iki dönem için de (', windowPhrase(earlier, finding.today, locale), ' ve ', windowPhrase(later, finding.today, locale), ') hareket kaydı yok', ...begins, '. Bu dönemler bilinmiyor; sıfır sayılmadı.'])
       : lang
       ? ['Recorded activity (', ...place, ') cannot be compared: there is no activity record for ', windowPhrase(missing[0], finding.today, locale), ...begins, '. That period is unknown, not zero',
-        ...(other != null ? ['; in the other period ', n(other, locale), other === 1 ? ' activity event was recorded' : ' activity events were recorded'] : []), '.']
+        ...(other != null ? ['; for ', knownLabel, ', ', n(other, locale), other === 1 ? ' activity event was recorded' : ' activity events were recorded'] : []), '.']
       : ['Kaydedilen hareketler (', ...place, ') karşılaştırılamıyor: ', windowPhrase(missing[0], finding.today, locale), ' için hareket kaydı yok', ...begins, '. Bu dönem bilinmiyor; sıfır sayılmadı',
-        ...(other != null ? ['; öteki dönemde ', n(other, locale), ' hareket kaydedildi'] : []), '.']), caveat: true,
+        ...(other != null ? ['; ', knownLabel, ' için ', n(other, locale), ' hareket kaydedildi'] : []), '.']), caveat: true,
     states: [...states(pair.earlier.evidenceId, ['activity.events']), ...states(pair.later.evidenceId, ['activity.events'])] });
   }
   if (finding.pairs.some((pair) => pair.kind === 'activity')) out.push({ ...factSentence(en(locale) ? ['Activity counts refer to actions by ', ...(finding.scope.owner === 'self' ? ['you'] : finding.scope.owner === 'team' ? [(TEAM_SUBJECT[finding.scope.level] || ['ekibiniz', 'your team'])[1]] : [finding.scope.person ? plainFact(finding.scope.person) : 'the selected visible actors']), ', independently of task assignment.'] : ['Hareket sayıları görev sorumluluğuna göre değil, ', ...(finding.scope.owner === 'self' ? ['sizin'] : finding.scope.owner === 'team' ? [(TEAM_OF[finding.scope.level] || ['ekibinizin'])[0]] : [finding.scope.person ? plainFact(finding.scope.person) : 'görünür işlem yapanların']), ' kaydettiği işlemlere göredir.']), caveat: true, states: [] });
@@ -489,9 +504,10 @@ function comparisonCaveats(finding, locale, { open }) {
       : ['Dönemlerden en az biri henüz bitmediğinden bu sayılar değişebilir.']);
   } else if (open) {
     // Açılış cümlesi dönemin bitmediğini söylemiştir: çekince yalnızca konumu ve yüzde değişimin neden verilmediğini ekler.
-    add(lang ? ['Today is day ', n(finding.position.elapsedDays, locale), ' of ', n(finding.position.length, locale), '; a percentage change is given only once the period has ended.']
+    add(lang ? ['Today is day ', n(finding.position.elapsedDays, locale), ' of ', n(finding.position.length, locale), '; no percentage change is given while the period is in progress.']
       : ['Bugün ', n(finding.position.length, locale), ' günlük dönemin ', n(finding.position.elapsedDays, locale), '. günü; yüzde değişim dönem bitmeden verilmez.']);
-  } else if (!finding.comparable) {
+  }
+  if (!finding.overlap && windowLength(earlier) !== windowLength(later)) {
     add(lang ? ['The periods differ in length (', n(windowLength(earlier), locale), ' and ', n(windowLength(later), locale), ' days), so the counts are shown side by side without a percentage change.']
       : ['Dönemlerin uzunluğu farklı (', n(windowLength(earlier), locale), ' ve ', n(windowLength(later), locale), ' gün) olduğundan sayılar yan yana verildi, yüzde değişim hesaplanmadı.']);
   }
@@ -738,7 +754,7 @@ function trendSentences(finding, locale) {
     }
   }
   // Sıfır toplamlı kısa dizi de eğilim kuramaz: tepe iddiası yazılmaz, yalnızca dizinin kısalığı söylenir.
-  if (sum === 0 && full.length < TEMPORAL_LIMITS.minTrendBuckets) {
+  if (sum === 0 && full.length < TEMPORAL_LIMITS.trendSpan * 2) {
     out.push({ ...factSentence(lang
       ? ['The range contains only ', n(full.length, locale), ` full ${unit}${full.length === 1 ? '' : 's'}, which is not enough to state a trend; a longer period is needed.`]
       : ['Bu aralık yalnızca ', n(full.length, locale), ` tam ${unit} içerdiğinden eğilim söylenemez; bunun için daha uzun bir dönem gerekir.`]), caveat: true, states: [] });
@@ -800,7 +816,7 @@ function horizonSentences(finding, locale) {
   const selected = finding.filters.statuses || [];
   if (selected.length === 1) out.push({ ...factSentence(lang
     ? ['These delivery counts include only tasks with status ', selected[0] === 'todo' ? 'To do' : 'In progress', '.']
-    : ['Bu teslim sayıları yalnızca ', selected[0] === 'todo' ? 'Yapılacak' : 'Devam ediyor', ' durumundaki görevleri kapsar.']), states: [] });
+    : ['Bu teslim sayıları yalnızca ', selected[0] === 'todo' ? 'Yapılacak' : 'Devam ediyor', ' durumundaki görevleri kapsar.']), requiredInShort: true, states: [] });
   if (thirty === 0) {
     out.push({ ...factSentence(lang ? ['In the next 30 days, no open task is due ', ...place, '.'] : ['Önümüzdeki 30 gün içinde ', ...place, ' termini olan açık görev yok.']), requiredInShort: true, states: horizonStates });
     return out;
@@ -864,7 +880,7 @@ function noteSentences(finding, locale) {
   const selected = finding.filters.statuses || [];
   if (selected.length === 1) out.push({ ...factSentence(lang
     ? ['Only tasks with status ', selected[0] === 'todo' ? 'To do' : 'In progress', ' are included in this note population.']
-    : ['Bu not nüfusu yalnızca ', selected[0] === 'todo' ? 'Yapılacak' : 'Devam ediyor', ' durumundaki görevleri kapsar.']), states: [] });
+    : ['Bu not nüfusu yalnızca ', selected[0] === 'todo' ? 'Yapılacak' : 'Devam ediyor', ' durumundaki görevleri kapsar.']), requiredInShort: true, states: [] });
   if (!finding.shown && finding.total !== 0) return [...out, { ...factSentence(lang ? ['No note excerpt was returned; this does not establish that the population has no notes.'] : ['Not parçası dönmedi; bu sonuç nüfusta hiç not olmadığını göstermiyor.']), caveat: true, states: [] }];
   if (!finding.shown) {
     out.push({ ...factSentence(lang ? ['No open task ', ...place, ' has a description to read.'] : [...capital(place, locale), ' açıklaması olan açık görev yok.']),

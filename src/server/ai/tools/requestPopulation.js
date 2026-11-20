@@ -595,7 +595,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [], dec
     hints.push('Hareket özetinde teamLevel yalnızca activityScope team ile verilir');
   }
   if (tool.name === 'rota_activity_search' && request.filters.activityView && request.filters.activityKind) {
-    problems.push('$.filters.activityKind:unsupported');
+    problems.push('$.filters.activityView:conflict');
     hints.push('Toplu hareket görünümünde activityKind verilmez; tür süzgeci için activityView kaldırılır');
   }
   // Aracın toplu görünümde reddettiği seçici ve metin alanları yürütmeden önce reddedilir (onarım ipucuyla).
@@ -657,12 +657,23 @@ export function requestCapabilityProblems(request, { allowedTextFields = [], dec
       hints.push(`${metric}: yalnızca toplu hareket görünümünde döner; filters.activityView "period" bildir`);
       return;
     }
-    // Dizi listesi (`series`) skaler özet yoluna (`data.summary.*`) bağlanamaz; kova başına dizi alanı seçilmelidir.
-    if (tool.name === 'rota_activity_search' && request.operation !== 'value' && population.collection === 'series'
-      && (request.fields || []).some((field) => field.metric === metric && field.tool === tool.name && !field.path.startsWith('data.series.'))) {
-      problems.push(`$.metrics[${index}]:view`);
-      hints.push(`${metric}: series listesinde data.series.* alanına bağlanır (dönem toplamı için operation value ve activityView "period")`);
-      return;
+    // Açık alanların her biri seçilen hareket görünümünde bulunmalıdır. Kendiliğinden seçilen taşıyıcılar ayrı değerlendirilir.
+    if (tool.name === 'rota_activity_search') {
+      const view = request.filters.activityView;
+      const series = view === 'week' || view === 'month';
+      const list = request.operation !== 'value';
+      const invalid = (request.fields || []).flatMap((field, at) => {
+        if (field.metric !== metric || field.tool !== tool.name) return [];
+        const path = field.path;
+        const available = list && series ? path.startsWith('data.series.')
+          : path.startsWith('data.summary.') || !view && path.startsWith('data.items.');
+        return available ? [] : [at];
+      });
+      if (invalid.length) {
+        for (const at of invalid) problems.push('$.fields[' + at + '].path:view');
+        hints.push(metric + ': seçilen hareket görünümünde bulunan bir ölçü yoluna bağlanır');
+        return;
+      }
     }
     // Toplam, sayım ve satır alanı nüfus koşullarının tamamını ifade edebilen araçtan gelmelidir;
     // değer isteğinde bildirilen varlığın kendi özelliği koşullardan bağımsızdır.

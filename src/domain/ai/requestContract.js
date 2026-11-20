@@ -39,6 +39,9 @@ export { concreteCollections, provesEmptyCollection } from './evidencePopulation
 
 export const REQUEST_OPERATIONS = Object.freeze(['value', 'list', 'rank']);
 export const REQUEST_ENTITY_TYPES = Object.freeze(['project', 'task', 'person', 'wbs', 'baseline']);
+/** Sabit boyutlu not örneği yalnızca sunucunun özet açılımından gelir. */
+export const NOTE_SAMPLE = Symbol('noteSample');
+
 export const REQUEST_LIMITS = Object.freeze({ maxMetrics: 8, maxEntities: 4, maxRankLimit: 10, maxPreviousResultRows: 50 });
 
 /** Önceki sonuç yalnızca sunucunun doğruladığı sınırlı görev kimliklerini taşır; veri ya da yetki değildir. */
@@ -274,7 +277,7 @@ function rankPlan(request, source, collection) {
   const boundary = ranked[limit - 1].value;
   // Not örneği (`hasDescription` + `task.updatedAt` azalan): araç eşit güncelleme anlarını `(başlık, kimlik)` ile belirlenimci kırar;
   // örnek boyu sabittir ve sayfa sınırındaki eşit zaman damgası örneği geçersiz kılmaz.
-  const boundedSample = source.tool === 'rota_task_search' && request?.filters?.hasDescription === true
+  const boundedSample = request[NOTE_SAMPLE] === true && source.tool === 'rota_task_search' && request?.filters?.hasDescription === true
     && request?.rank?.metric === 'task.updatedAt' && request?.rank?.order === 'desc';
   const order = ranked.filter((item, position) => position < limit || (!boundedSample && item.value === boundary)).map((item) => item.index);
   return { rows, ranked, boundary, order, direction, rankValue, boundedSample };

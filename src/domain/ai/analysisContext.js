@@ -30,9 +30,9 @@ const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dat
 const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'windowDay', 'windowDefaulted', 'windowRolling', 'historicalDateTo', 'charts', ...TEMPORAL_KEYS].includes(key)));
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
-const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'windowRolling', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests',
+const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'historicalDateTo', 'windowRolling', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests',
   ...TEMPORAL_KEYS]);
-const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'windowRolling', 'rows', 'act', 'requests', ...TEMPORAL_KEYS].includes(key)));
+const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'windowRolling', 'historicalDateTo', 'rows', 'act', 'requests', ...TEMPORAL_KEYS].includes(key)));
 const WINDOWS = Object.freeze([...TEMPORAL_WINDOWS, 'all_time']);
 /** Dönemin türlü alanları geçerli mi (kapalı sözlük, gerçek günler, tek biçim)? */
 function validTemporal(value) {
@@ -85,7 +85,8 @@ export function normalizePendingAnalysis(value) {
     return Object.freeze({ ...(requests ? { requests: Object.freeze(requests) } : {}), language: value.language, scope: value.scope, focus: Object.freeze([...focus]), ...(value.names ? { names: Object.freeze([...value.names]) } : {}),
       ...(value.level ? { level: value.level } : {}), ...(value.withSelf != null ? { withSelf: value.withSelf } : {}), ...(value.within ? { within: value.within } : {}),
       ...(value.rows ? { rows: Object.freeze([...value.rows]) } : {}), ...(value.act ? { act: value.act } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}),
-      ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual != null ? { visual: value.visual } : {}), ...(value.chart ? { chart: value.chart } : {}),
+      ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.historicalDateTo ? { historicalDateTo: value.historicalDateTo } : {}),
+      ...(value.windowRolling ? { windowRolling: true } : {}), ...(value.visual != null ? { visual: value.visual } : {}), ...(value.chart ? { chart: value.chart } : {}),
       ...(value.charts ? { charts: Object.freeze([...value.charts]) } : {}), ...(value.table != null ? { table: value.table } : {}), ...temporalFields(value) });
   } catch {
     return null;

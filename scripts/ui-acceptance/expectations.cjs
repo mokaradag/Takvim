@@ -18,7 +18,7 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
   for (const source of expected.rejects || []) if (new RegExp(source, 'iu').test(String(rendered.text || ''))) failures.push('yasak görünür ifade var: ' + source);
   // Bugün dâhil son N günün aralığı (Türkiye günü) yanıtta görünmelidir: daha kısa bir dönemin grafiği dönem denetimini geçmez.
   // Dönem etiketi bütün olarak aranır: "13 Temmuz – 30 Eylül" metni "3 Temmuz – 30 Eylül" beklentisini sonek eşleşmesiyle geçmez.
-  if (Number.isSafeInteger(expected.periodDays) && !new RegExp(`(^|[^0-9])${periodLabel(expected.periodDays, now).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(String(rendered.text || ''))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays, now)}`);
+  if (Number.isSafeInteger(expected.periodDays) && !new RegExp(`(^|[^0-9])${periodLabel(expected.periodDays, now, expected.language === 'en').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(String(rendered.text || ''))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays, now, expected.language === 'en')}`);
   // İstenen takvim dönemi (ör. bu hafta ya da bu ay/geçen ay) çözülen takvim aralığıyla doğrulanır; göreli etiket tek başına yetmez.
   if (expected.periodKind) {
     const text = String(rendered.text || '');
@@ -39,14 +39,14 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
       const prevName = (en ? EN_MONTHS : MONTHS)[prevM - 1];
       // Her ay etiketi ya tek başına tam ay adı (`Ekim 2026`) ya da 1–son gün tam aralığı (`1–31 Ekim 2026`) olmalıdır.
       // Kısmi bir gün aralığı (`1–10 Ekim 2026`) metnin başka yerindeki yalın ay adıyla geçersiz kılınamaz.
-      const validMonth = (year, month, name) => {
+      const validMonth = (year, month, name, clause) => {
         const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
         const escaped = `${name} ${year}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const matches = [...text.matchAll(new RegExp(`(?:(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})|(\\d{1,2}))?\\s*${escaped}`, 'gu'))];
+        const matches = [...(clause || text).matchAll(new RegExp(`(?:(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})|(\\d{1,2}))?\\s*${escaped}`, 'gu'))];
         if (!matches.length) return false;
-        const hasPartial = matches.some((match) => {
+        const hasPartial = (clause ? matches.slice(0, 1) : matches).some((match) => {
           const [, start, end, single] = match;
-          if (single) return true;
+          if (single) return Boolean(clause) || matches.length === 1;
           if (start && end) return !(Number(start) === 1 && Number(end) === lastDay);
           return false;
         });
@@ -57,7 +57,7 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
       const curClause = en ? new RegExp(`this month[^\\n.]*${curName} ${y}`, 'iu') : new RegExp(`bu ay[^\\n.]*${curName} ${y}`, 'iu');
       const hasBothClauses = en ? (/Last month/iu.test(text) && /this month/iu.test(text)) : (/Geçen ay/iu.test(text) && /bu ay/iu.test(text));
       const boundClauses = !hasBothClauses || (prevClause.test(text) && curClause.test(text));
-      if (!validMonth(prevY, prevM, prevName) || !validMonth(y, m, curName) || !boundClauses) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
+      if (!validMonth(prevY, prevM, prevName, text.match(prevClause)?.[0]) || !validMonth(y, m, curName, text.match(curClause)?.[0]) || !boundClauses) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
     }
   }
   // Grafik türü ve içerik beklentileri AYNI görünür grafikte aranır: başlıktaki ölçü (`chartTitle`), bütün etiketler (`chartItems`),
@@ -85,10 +85,10 @@ function formatRangeLabel(from, to, en = false) {
   if (from.slice(0, 7) === to.slice(0, 7)) return `${Number(from.slice(8, 10))}–${part(to)} ${to.slice(0, 4)}`;
   return from.slice(0, 4) === to.slice(0, 4) ? `${part(from)} – ${part(to)} ${to.slice(0, 4)}` : `${part(from)} ${from.slice(0, 4)} – ${part(to)} ${to.slice(0, 4)}`;
 }
-function periodLabel(days, now = new Date()) {
+function periodLabel(days, now = new Date(), en = false) {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
   const from = new Date(Date.parse(`${today}T00:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);
-  return formatRangeLabel(from, today, false);
+  return formatRangeLabel(from, today, en);
 }
 // Tamamlanmamış ürün yanıtı, senaryonun anlamsal beklentisi olmasa da kabul kanıtı değildir.
 function completionFailures(rendered, trace) {

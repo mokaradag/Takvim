@@ -352,11 +352,12 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   // ölçüler (kendi için hareket, ekip için tamamlanan) geçmez.
   const ownMeasures = (layer, fallback, compared) => (layer?.focus && !expect.focusAll && !expect.focusAny
     ? layer.focus.filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus) && !(compared && focus === 'trend')) : fallback);
-  const layers = atoms.length ? atoms : [null];
+  const requiredFocus = expect.focusAll || (expect.focusAny || []).filter((item) => focus.includes(item));
+  const layers = (atoms.length ? atoms : [{}]).map((layer) => ({ ...layer, focus: layer.focus || requiredFocus }));
   const inRange = (request, range) => !range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1];
   const candidates = (layer, measure, range, primary = true, bucketed = true) => requests.filter((request) => inRange(request, range)
     && (!primary || !expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1)
-    && (!layer || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
+    && (!layer?.scope && !layer?.scopeAny || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
     && (!bucketed || !primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)));
   const stateOnlyLayer = (layer) => Boolean(layer?.focus?.length && !layer.focus.some((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)));
   const WINDOWED_STATE_FOCUS = new Set(['status', 'upcoming', 'critical', 'schedule']);
@@ -370,21 +371,19 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
     if (stateFocus === 'notes') return tool === 'rota_task_search' && f.hasDescription === true;
     const hasDates = Boolean(f.dateFrom || f.dateTo || f.dateField || f.period);
     const layerHasHistory = Boolean(layer?.focus?.some((focus) => ['completed', 'created', 'trend'].includes(focus)));
-    if (hasDates) {
-      if (range && WINDOWED_STATE_FOCUS.has(stateFocus) && !f.period && (!f.dateField || f.dateField === 'targetFinish')) {
-        const expectedFrom = stateFocus === 'upcoming' && range[0] < today ? today : range[0];
-        if (f.dateFrom !== expectedFrom || f.dateTo !== range[1]) return false;
-      } else if (range && layerHasHistory && HISTORY_GROUP_SET.has(stateFocus) && ['actualFinish', 'createdAt'].includes(f.dateField)) {
-        if (f.dateFrom !== range[0] || f.dateTo !== range[1]) return false;
-      } else {
-        return false;
-      }
+    if (range && WINDOWED_STATE_FOCUS.has(stateFocus)) {
+      if (f.period || f.dateField && f.dateField !== 'targetFinish') return false;
+      const expectedFrom = stateFocus === 'upcoming' && range[0] < today ? today : range[0];
+      if (f.dateFrom !== expectedFrom || f.dateTo !== range[1]) return false;
+    } else if (hasDates) {
+      if (!range || !layerHasHistory || !HISTORY_GROUP_SET.has(stateFocus) || !['actualFinish', 'createdAt'].includes(f.dateField)) return false;
+      if (f.dateFrom !== range[0] || f.dateTo !== range[1]) return false;
     }
     if (stateFocus === 'overdue') return f.deadline === 'overdue' || m.includes('tasks.overdue');
     if (stateFocus === 'upcoming') return f.deadline === 'due_next_7_days' || m.includes('tasks.dueNext7Days') || Boolean(range && hasDates && tool === 'rota_task_search');
     if (stateFocus === 'critical') return Array.isArray(f.priority) && f.priority.includes('critical');
     if (stateFocus === 'milestones') return f.milestone === true || m.includes('tasks.openMilestones');
-    if (stateFocus === 'workload') return tool === 'rota_workload_summary' || g === 'assignee' || (layer?.scope === 'self' && g === 'project');
+    if (stateFocus === 'workload') return tool === 'rota_workload_summary' || g === 'assignee' || (['self', 'person'].includes(layer?.scope) && g === 'project');
     if (stateFocus === 'projects') return tool === 'rota_portfolio_summary' || g === 'project';
     if (stateFocus === 'org') return ['department', 'unit', 'assignee'].includes(g) || tool === 'rota_workload_summary';
     if (stateFocus === 'priority') return g === 'priority';
@@ -395,13 +394,13 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
   const reads = (range) => layers.every((layer) => {
     const own = ownMeasures(layer, measures, false);
     const stateFocuses = (layer?.focus || []).filter((focus) => !['completed', 'created', 'activity', 'trend'].includes(focus));
-    const statesOk = !stateFocuses.length || stateFocuses.every((stateFocus) => requests.some((request) => temporalRequestMatches(request, layer) && carriesStateFocus(request, layer, stateFocus, range)));
+    const statesOk = !stateFocuses.length || stateFocuses.every((stateFocus) => requests.some((request) => (!layer.scope && !layer.scopeAny || temporalRequestMatches(request, layer)) && carriesStateFocus(request, layer, stateFocus, range)));
     if (!own.length && stateOnlyLayer(layer)) return statesOk;
     return statesOk && (own.length ? own : [null]).every((measure) => candidates(layer, measure, range).length);
   });
   const range = expectedRange(expect.window, today);
   if (range && !expect.stateComparison && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
-  if (!range && atoms.some(stateOnlyLayer) && !reads(null)) failures.push('durum katmanı yönü okunmuyor');
+  if (!range && !expect.stateComparison && layers.some((layer) => layer.focus?.some((item) => !['completed', 'created', 'activity', 'trend'].includes(item))) && !reads(null)) failures.push('durum katmanı yönü okunmuyor');
   const prior = expectedCompare(expect.compare, expect.window, today);
   if (prior && !expect.stateComparison && !requests.some((request) => inRange(request, prior))) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
   if (prior && !expect.stateComparison && !layers.every((layer) => {
@@ -806,8 +805,8 @@ if (direct) {
     });
   } else if (TIER === 'H') {
     // Hedefli ve (soru metniyle koşulabilen) olumsuz vakalar: plan modeldendir, altın plan kullanılmaz. Son açıklama öncesi yetki iptali
-    // (a20, `revokeFinal`) canlı koşuda kurulmaz: yalnızca belirlenimci sınamadır ve canlı puana katılmaz (kurulmayan iptal geçmiş sayılmaz).
-    const cases = [...temporal.targeted, ...temporal.adversarial.filter((entry) => entry.plan && !entry.expect.finishNot && entry.expect.test !== 'revokeFinal')];
+    // Erişim iptali (`revoke`, `revokeFinal`) canlı koşuda kurulmaz: yalnızca belirlenimci sınamadır ve canlı puana katılmaz (kurulmayan iptal geçmiş sayılmaz).
+    const cases = [...temporal.targeted, ...temporal.adversarial.filter((entry) => entry.plan && !entry.expect.finishNot && !['revoke', 'revokeFinal'].includes(entry.expect.test))];
     await runQualificationCases(pick(cases), async (t, item) => {
       t.mock.timers.enable({ apis: ['Date'], now: NOW });
       const seed = temporalBenchmarkSeed(temporal.today);

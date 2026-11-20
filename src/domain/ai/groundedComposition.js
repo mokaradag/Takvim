@@ -483,13 +483,14 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
                 || item.fact?.semantic?.series?.partial === true || item.fact?.semantic?.series?.recorded === false)));
         if (partialActivitySeries && described.rows.length >= 3 && chartAllowed(ordinal)) {
           unverifiedActivitySeries = true;
-          if (presentation.facts.some((item) => item.evidenceId === group.evidenceId && /^data\.series\.\d+\.events$/.test(item.fact?.field || '') && Number.isFinite(item.fact?.value))) {
+          if (presentation.facts.some((item) => item.evidenceId === group.evidenceId && /^data\.series\.\d+\.(?:events|completionEvents|creationEvents)$/.test(item.fact?.field || '') && Number.isFinite(item.fact?.value))) {
             unverifiedActivityObserved = true;
           }
         }
-        const dated = (cover?.kind === 'series' || cover?.kind === 'activitySeries' && cover.verified) && complete && described.rows.length >= 3;
+        const observed = described.rows.map((row, index) => row.entries.some(({ fact }) => fact.semantic?.group?.notStarted) ? -1 : index).filter((index) => index >= 0);
+        const dated = (cover?.kind === 'series' || cover?.kind === 'activitySeries' && cover.verified) && complete && observed.length >= 3;
         described.columns.forEach((column, index) => {
-          if (partialActivitySeries || !column.numeric || !labels) return;
+          if (partialActivitySeries || !column.numeric || !labels || observed.length !== described.rows.length && !dated) return;
           const rowLimit = monthly || dated ? ANSWER_CHART_LIMITS.maxLineItems : ANSWER_CHART_LIMITS.maxBarItems;
           if (described.rows.length < ANSWER_CHART_LIMITS.minItems || described.rows.length > rowLimit) return;
           const values = described.rows.map((row) => row.cells[index]);
@@ -510,7 +511,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           // Tarih kovaları sıralamadan bağımsız olarak kronolojik çizilir (kanonik kova anahtarı); tablo istenen sırayı korur.
           const bucketKeyOf = (row) => { const semantic = row.entries.find(({ fact }) => fact.semantic?.group || fact.semantic?.series)?.fact.semantic; return semantic?.group?.key ?? semantic?.series?.key ?? null; };
           const chronological = dated && described.rows.every((row) => typeof bucketKeyOf(row) === 'string')
-            ? described.rows.map((row, position) => ({ key: bucketKeyOf(row), position })).sort((a, b) => a.key.localeCompare(b.key)).map((item) => items[item.position]) : null;
+            ? observed.map((position) => ({ key: bucketKeyOf(described.rows[position]), position })).sort((a, b) => a.key.localeCompare(b.key)).map((item) => items[item.position]) : null;
           // Zaman dizisi: termin ayına göre tam gruplar sıralı dönemlerdir (çizgi); diğer sütunlar kategorik karşılaştırmadır.
           const months = monthly && unit === 'count' && values.every(([fact]) => fact.semantic?.groupBy === 'target_month')
             && described.rows.length <= ANSWER_CHART_LIMITS.maxLineItems;

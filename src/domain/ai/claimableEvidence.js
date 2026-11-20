@@ -399,11 +399,13 @@ export function evidenceSemantic(envelope, path, value, label, changeField = nul
     unit: lagUnit || registered?.display || DISPLAY_UNITS[measure] || null,
     entity: envelope.entity || null,
     row,
+    ...(envelope.tool === 'rota_task_search' && canonical === 'tasks.*.description' && envelope.data?.tasks?.[Number(parts[2])]?.descriptionClipped === true ? { descriptionClipped: true } : {}),
     renderable: true,
     displayValue: parts.at(-1) === 'rule' ? parts.slice(1, -1).reduce((data, key) => data?.[key], envelope.data)?.ruleDescription || null : null,
     filters: row?.project ? { ...(envelope.data?.filters || {}), project: row.project } : envelope.data?.filters || null,
     groupBy: envelope.data?.groupBy || null,
-    group: group ? { key: group.key, label: group.label, ...(group.partial ? { partial: true } : {}) } : null,
+    group: group ? { key: group.key, label: group.label, ...(group.partial ? { partial: true } : {}),
+      ...(['actualFinish', 'createdAt'].includes(envelope.data?.filters?.dateField) && group.dateFrom && envelope.today && group.dateFrom > envelope.today ? { notStarted: true } : {}) } : null,
     // Aşama H — tarihsel tamlık sözleşmesi olguyla birlikte taşınır (sunum bu bağlamı düşüremez): gerçekleşen bitişe göre dönem
     // okumasının tarihi kayıtlı olmayan tamamlanmış görev sayısı; hareket özetinin kayıt kapsamı; dizinin kovası ve satırı.
     history: envelope.data?.history ? { basis: envelope.data.history.basis, undatedDone: envelope.data.history.undatedDone } : null,

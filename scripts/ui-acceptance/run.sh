@@ -86,10 +86,11 @@ for P in $PROFILES; do
     SEEDS="$UI_SEED"
     SEED_GROUPS=0
   else
-    SEEDS=$(UI_ONLY="${UI_ONLY:-}" node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const only=process.env.UI_ONLY?new Set(process.env.UI_ONLY.split(",").map(v=>v.trim()).filter(Boolean)):null; const convs=only?s.conversations.filter(c=>only.has(c.name)):s.conversations; const pool=convs.length?convs:s.conversations.slice(0,1); const set=[...new Set(pool.map(c=>c.seed||"executive"))]; console.log(set.join(" "))' "$HERE/scenarios/$P.json")
-    SEED_GROUPS=$(node -e 'console.log(process.argv.slice(1).length > 1 ? 1 : 0)' $SEEDS)
+    SEEDS=$(UI_ONLY="${UI_ONLY:-}" node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const only=process.env.UI_ONLY?new Set(process.env.UI_ONLY.split(",").map(v=>v.trim()).filter(Boolean)):null; const convs=only?s.conversations.filter(c=>only.has(c.name)):s.conversations; const pool=convs.length?convs:s.conversations.slice(0,1); const set=[...new Set(pool.map(c=>c.seed||"base"))]; console.log(set.join(" "))' "$HERE/scenarios/$P.json")
+    SEED_GROUPS=1
   fi
   for SEED in $SEEDS; do
+    test "$(TZ=Europe/Istanbul date +%F)" = "$UI_RUN_DAY" || { printf 'Kabul koşusunda Türkiye günü değişti.\n' >&2; exit 1; }
     probe_port "$PORT"
     LOG="$UI_ACCEPTANCE_DIR/app-$P-$SEED.log"
     UI_SEED=$SEED NEXT_TELEMETRY_DISABLED=1 MERGEN_ROTA_DB_SERVER=sql.ui.internal MERGEN_ROTA_DB_DATABASE=MERGEN_Rota MERGEN_ROTA_AUTH_MODE=development \
@@ -107,6 +108,7 @@ for P in $PROFILES; do
     done
     [ "$ready" = 1 ]
     UI_SEED=$SEED UI_SEED_GROUPS=$SEED_GROUPS UI_APP_LOG="$LOG" node "$HERE/drive.cjs" "$HERE/scenarios/$P.json" "$UI_ACCEPTANCE_DIR/out" | tee -a "$UI_ACCEPTANCE_DIR/run.log"
+    test "$(TZ=Europe/Istanbul date +%F)" = "$UI_RUN_DAY" || { printf 'Kabul koşusunda Türkiye günü değişti.\n' >&2; exit 1; }
     kill "$APP"; wait "$APP" 2>/dev/null || true; APP=''
   done
 done

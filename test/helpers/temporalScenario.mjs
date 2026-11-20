@@ -5,7 +5,7 @@
  * yanıt geçmez.
  */
 import { readFileSync } from 'node:fs';
-import { namedWindow, previousWindow, rangeLabel, resolveWindow, windowName, windowPosition } from '../../src/domain/ai/temporalWindow.js';
+import { englishBucketLabel, namedWindow, previousWindow, rangeLabel, resolveWindow, windowName, windowPosition } from '../../src/domain/ai/temporalWindow.js';
 import { answerQuality } from './answerQuality.mjs';
 import { renderedCharts } from './phase4eScenario.mjs';
 
@@ -49,11 +49,12 @@ const narrowsTasks = (filters) => Boolean(filters.deadline || filters.priorityCs
   || filters.assigneeMode === 'unassigned' || filters.assignee === 'unassigned' || filters.previousResult);
 const openStatuses = (statuses) => statuses?.length === 2 && ['todo', 'in_progress'].every((status) => statuses.includes(status));
 
+const day = (value) => value == null || !Number.isFinite(new Date(value).getTime()) ? null : new Date(value).toISOString().slice(0, 10);
+
 /** SQL günlüğünde dönem ve olay ölçüsü birlikte eşleşir; termin okuması tamamlanma kanıtı değildir. */
 function temporalLogMatches(row, range, measure = null) {
   if (row.ok !== true || !['task-facts', 'activity'].includes(row.query)) return false;
   const p = row.params;
-  const day = (value) => value == null || !Number.isFinite(new Date(value).getTime()) ? null : new Date(value).toISOString().slice(0, 10);
   const from = row.query === 'activity' ? day(new Date(p.startUtc).getTime() + 10800000) : day(p.dateFrom);
   const to = row.query === 'activity' ? day(new Date(p.endUtc).getTime() + 10800000 - 86400000) : day(p.dateTo);
   if (range && (from !== range[0] || to !== range[1])) return false;
@@ -188,8 +189,22 @@ export function temporalPopulationViolations(result, analysis, seed) {
     }
     // Gecikme riski (`overdue`) istendiyse o katman için güncel gecikme okuması da yapılmış olmalıdır.
     if (layer.focus?.includes('overdue')) {
-      const hasOverdueRead = reads.some((read) => matches(read, layer) && read.query === 'task-facts'
-        && (read.params.deadline === 'overdue' || (!read.params.dateFrom && !read.params.dateTo && !read.params.dateField)));
+      const hasOverdueRead = reads.some((read) => {
+        if (!matches(read, layer) || read.query !== 'task-facts') return false;
+        const p = read.params;
+        const statuses = (p.statusCsv || '').split(',').filter(Boolean);
+        const fullOpenPopulation = !statuses.length || ['todo', 'in_progress'].every((status) => statuses.includes(status));
+        if (!fullOpenPopulation || p.dateField && p.dateField !== 'targetFinish') return false;
+        if (p.deadline === 'overdue') {
+          const beforeToday = shift(-1);
+          const from = day(p.dateFrom);
+          const to = day(p.dateTo);
+          const expectedEnd = to && to < beforeToday ? to : beforeToday;
+          return (!from || from === window?.[0]) && (!to || to === window?.[1] || to === analysis.dateTo)
+            && (!p.targetFrom || day(p.targetFrom) === from) && (!p.targetTo || day(p.targetTo) === expectedEnd);
+        }
+        return !p.deadline && !p.dateFrom && !p.dateTo && !p.targetFrom && !p.targetTo;
+      });
       if (!hasOverdueRead) problems.push(`gecikme okuması yok: ${layer.scope}`);
     }
   }
@@ -225,17 +240,31 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
     if (!H_FINDING_TEXT[locale === 'en' ? 'en' : 'tr'][kind]?.test(content)) problems.push(`bulgu yok: ${kind}`);
   }
   for (const pattern of expect.says || []) if (!new RegExp(pattern, 'u').test(content)) problems.push(`beklenen ifade yok: ${pattern}`);
+  if (expect.completionCount) {
+    const range = expect.window.map((value) => resolveDay(value));
+    const visible = content.replace(/\*\*/g, '');
+    const count = (result.evidence || []).find((item) => item.ok === true && item.tool === 'rota_task_analytics' && !item.data?.groupBy
+      && item.data?.filters?.dateField === 'actualFinish' && item.data.filters.dateFrom === range[0] && item.data.filters.dateTo === range[1])?.data?.totals?.total;
+    const matches = count === 0 ? /tamamlanan görev yok|no task has a recorded completion date/iu.test(visible)
+      : Number.isSafeInteger(count) && new RegExp('(?:^|[^0-9])' + count + ' (?:görev tamamlandı|tasks? (?:was|were) completed)', 'iu').test(visible);
+    if (!matches) problems.push('tamamlanma sayısı aynı dönemin kanıtıyla eşleşmiyor');
+  }
   // İstenen tablo: Markdown tablosu gerçek satırlarla çizilmiş ya da sunucu tablo üretilemediğini açıkça bildirmiş olmalıdır.
   if (expect.table && !/(?:^|\n)\|[^\n]+\|\n\|(?:\s*:?-+:?\s*\|)+\n\|[^\n]+\|/u.test(content)
     && !/tablo olarak gösterilebilecek satır koleksiyonu yok|no row collection.*table|İstenen tablo güvenle hazırlanamadı|requested table could not be rendered safely/iu.test(content)) problems.push('beklenen tablo yok');
-  // Kişi başına tamamlanma kırılımı (ör. t36): yalnızca ekip toplamı yetmez; sorumluya göre gruplanmış tamamlanma okuması gerekir.
-  if (expect.groupBy && !(result.evidence || []).some((item) => {
-    const filters = item.data?.filters || {};
+  // Toplam, tarihsel proje veya kişi kırılımını karşılamaz; proje etiketleri görünen yanıta da ulaşmalıdır.
+  if (expect.groupBy) {
     const wanted = expect.window?.map((value) => resolveDay(value));
-    return item.ok === true && item.tool === 'rota_task_analytics' && item.data?.groupBy === expect.groupBy
-      && (!wanted || (filters.dateFrom === wanted[0] && filters.dateTo === wanted[1]))
-      && (!expect.measures?.includes('completed') || (filters.dateField === 'actualFinish' && filters.statuses?.length === 1 && filters.statuses[0] === 'done'));
-  })) problems.push(`beklenen kırılım okunmadı: ${expect.groupBy}`);
+    const breakdowns = (result.evidence || []).filter((item) => {
+      const filters = item.data?.filters || {};
+      return item.ok === true && item.tool === 'rota_task_analytics' && item.data?.groupBy === expect.groupBy
+        && (!wanted || filters.dateFrom === wanted[0] && filters.dateTo === wanted[1])
+        && (!expect.measures?.includes('completed') || filters.dateField === 'actualFinish' && filters.statuses?.length === 1 && filters.statuses[0] === 'done');
+    });
+    if (!breakdowns.length) problems.push(`beklenen kırılım okunmadı: ${expect.groupBy}`);
+    const labels = breakdowns.flatMap((item) => (item.data.groups || []).filter((group) => group.count > 0).map((group) => group.label)).filter(Boolean);
+    if (expect.groupBy === 'project' && labels.length && !labels.some((label) => content.includes(label))) problems.push('proje kırılımı yanıtta gösterilmedi');
+  }
   // "Hangileri devam ediyor" sorusu bugünkü durum okumasını ister (durum dağılımı kanıtı): yalnızca tamamlanma özeti geçmez.
   if (expect.statusRead && !(result.evidence || []).some((item) => {
     const filters = item.data?.filters;
@@ -316,6 +345,25 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
   }
   // Grafik değerleri sayı, etiketleri boş olmayan metindir; çizgi grafiğin en az üç noktası vardır (tek tük gözlemden eğilim çizilmez).
   for (const chart of charts) {
+    if (chart.type === 'line' && expect.measures?.includes('trend')) {
+      const localeKey = locale === 'en' ? 'en' : 'tr';
+      const ranges = expect.window?.map((value) => resolveDay(value));
+      const matching = (result.evidence || []).some((item) => {
+        const groupBy = item.data?.groupBy;
+        const filters = item.data?.filters;
+        if (!item.ok || item.tool !== 'rota_task_analytics' || !['date_week', 'date_month'].includes(groupBy)
+          || filters?.dateField !== 'actualFinish' || ranges && (filters.dateFrom !== ranges[0] || filters.dateTo !== ranges[1])) return false;
+        const groups = [...(item.data.groups || [])].filter((group) => group.dateFrom <= (item.today || TEMPORAL_TODAY))
+          .sort((a, b) => a.key.localeCompare(b.key));
+        return chart.items?.length === groups.length && groups.every((group, index) => {
+          const label = rangeLabel({ dateFrom: group.dateFrom, dateTo: group.dateTo }, localeKey);
+          const localized = localeKey === 'en' ? englishBucketLabel(group.label) : group.label;
+          const suffix = group.partial ? (localeKey === 'en' ? ' (partial)' : ' (kısmi)') : '';
+          return chart.items[index].value === group.count && [label, localized].some((name) => chart.items[index].label === name + suffix);
+        });
+      });
+      if (!matching) problems.push('çizgi grafik noktaları kova kanıtıyla eşleşmiyor');
+    }
     if (chart.type === 'line' && (chart.items || []).length < 3) problems.push('çizgi grafik üçten az noktayla çizildi');
     if (['bar', 'line', 'pie'].includes(chart.type) && (chart.items || []).some((item) => !Number.isFinite(item.value) || item.value < 0)) problems.push('grafikte geçersiz değer');
   }

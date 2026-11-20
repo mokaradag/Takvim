@@ -803,6 +803,10 @@ function pinAnalysisRepair(turn, plan, details) {
     }
     // Aşama H — karşılaştırma dönemi: çakışan iki yazımdan biri kaldırılabilir; birincil dönem eksikse yalnızca dönem alanları eklenebilir
     // (kapsam ve yönler sabit kalır; var olan geçerli dönem bu yolla değiştirilemez).
+    if (path === '$.analysis.compare' && reason === 'enum') {
+      const source = existing?.raw || plan.analysis;
+      for (const key of ['compareFrom', 'compareTo']) if (source[key] == null) paths.add(key);
+    }
     if (path === '$.analysis.compare' && reason === 'conflict') for (const key of ['compare', 'compareFrom', 'compareTo']) paths.add(key);
     // Tek özne ya da birincilden farklı ikinci dönem isteyen ret, ikinci dönemin iki gösterimini de açar: sorunu çıkaran tarih çifti de
     // kaldırılabilir (yalnızca `compare` açılırsa çift sabit kalır ve onarım sonuçsuz döner).
@@ -855,7 +859,7 @@ function pinAnalysisRepair(turn, plan, details) {
   // karşılaştırmayı sessizce kaldırarak onarılamaz; yalnızca kapsam ya da yön karşılaştırmayı desteklemiyorsa (`compare:scope` / `compare:focus`)
   // ikinci dönem tamamen kaldırılabilir.
   const keepCompare = Boolean(existing?.keepCompare)
-    || details.some((detail) => ['$.analysis.compare:same', '$.analysis.compare:futureWindow', '$.analysis.compareFrom:futureWindow'].includes(String(detail)));
+    || details.some((detail) => ['$.analysis.compare:same', '$.analysis.compare:enum', '$.analysis.compare:futureWindow', '$.analysis.compareFrom:futureWindow'].includes(String(detail)));
   const dropCompare = Boolean(existing?.dropCompare) || details.some((detail) => ['$.analysis.compare:scope', '$.analysis.compare:focus'].includes(String(detail)));
   turn.repairPins.set('analysis', { raw, paths: pinnedPaths, projection: analysisRepairProjection(raw, pinnedPaths), presentation, presentationPaths, explicit, explicitPaths, dropUpcoming, keepCompare, dropCompare,
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
@@ -1771,9 +1775,11 @@ function completedAnalysisContext(turn, verdict) {
   const windowDay = pinsFollowUpWindow({ relativeWindow, focus: savedFocus, compare: turn.presentationIntent?.compare?.compare });
   const explicitFrom = turn.presentationIntent?.window?.dateFrom || null;
   // Başlangıç-tekli geçmiş dönem ("1 Kasım'dan beri") çözüldüğü bitiş gününü de saklar; ertesi günkü takip dönemi sessizce kaydırmaz.
-  const explicitTo = turn.presentationIntent?.window?.dateTo
-    || (explicitFrom && !turn.presentationIntent?.temporal?.defaulted && turn.presentationIntent?.temporal?.window?.dateTo && !savedFocus.includes('upcoming')
-      ? turn.presentationIntent.temporal.window.dateTo : null);
+  const declaredTo = turn.presentationIntent?.window?.dateTo;
+  const inferredTo = explicitFrom && !declaredTo && !relativeWindow && !turn.presentationIntent?.temporal?.defaulted
+    ? turn.presentationIntent?.temporal?.window?.dateTo : null;
+  const mixed = (intent.layers || [intent]).some((layer) => layer.focus?.includes('upcoming'));
+  const explicitTo = declaredTo || (mixed ? null : inferredTo);
   const defaultedWindow = !turn.presentationIntent?.window && !relativeWindow && turn.presentationIntent?.temporal?.defaulted && turn.presentationIntent.temporal.window
     ? turn.presentationIntent.temporal.window : null;
   return normalizeAnalysisContext({ v: ANALYSIS_CONTEXT_VERSION, scope, ...(level ? { level } : {}), ...(intent.withSelf ? { withSelf: true } : {}),
@@ -1784,6 +1790,7 @@ function completedAnalysisContext(turn, verdict) {
     ...(windowDay ? { windowDay: turn.context.today } : {}),
     ...(explicitFrom ? { dateFrom: explicitFrom } : {}),
     ...(explicitTo ? { dateTo: explicitTo } : {}),
+    ...(mixed && inferredTo ? { historicalDateTo: inferredTo } : {}),
     ...(!relativeWindow && explicitFrom && explicitTo && turn.presentationIntent?.windowRolling ? { windowRolling: true } : {}),
     // Dönem yazılmayan geçmiş özetin sunucunun çözdüğü varsayılan günleri geçmişe özel kökeniyle saklanır: ertesi günkü takip
     // aynı günleri yalnızca geçmiş okumalarına uygular, güncel gecikme gibi durum okumalarını daraltmaz.

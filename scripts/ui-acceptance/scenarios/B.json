@@ -369,8 +369,10 @@
      "outcome": "grounded",
      "periodKind": "last_week",
      "requires": [
-      "Geçen hafta",
-      "gerçekleşen bitiş tarihine göre"
+      "Geçen hafta"
+     ],
+     "matches": [
+      "(?:[\\d.]+ görev tamamlandı \\(gerçekleşen bitiş tarihine göre\\)|gerçekleşen bitişi kayıtlı tamamlanan görev yok)"
      ]
     }
    ]
@@ -387,7 +389,7 @@
      "outcome": "grounded",
      "periodKind": "this_month_vs_last_month",
      "matches": [
-      "(?:Geçen ay[^\\n;]*[\\d.]+ görev tamamlanmıştı; bu ay[^\\n;]*[\\d.]+ görev tamamlandı|İki dönemde de \\([^)]+ ve [^)]+\\)[^\\n.]*(?:görev tamamlandı|tamamlanan görev yok)|Tamamlanan iş sayıları(?: \\([^)]+\\))? karşılaştırılamıyor: (?:iki dönemin de (?:\\([^)]+\\) )?görev sayısı bilinmiyor|[^\\n]*için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde (?:\\([^)]+\\) )?[\\d.]+ görev var))"
+      "(?:Geçen ay[^\\n;]*[\\d.]+ görev tamamlanmıştı; bu ay[^\\n;]*[\\d.]+ görev tamamlandı|İki dönemde de \\([^)]+ ve [^)]+\\)[^\\n.]*(?:görev tamamlandı|tamamlanan görev yok)|Tamamlanan iş sayıları(?: \\([^)]+\\))? karşılaştırılamıyor: (?:iki dönemin de (?:\\([^)]+\\) )?görev sayısı bilinmiyor|[^\\n]*için görev sayısı bilinmiyor; sıfır sayılmadı; (?:öteki dönemde (?:\\([^)]+\\) )?|[^.;\\n]+ için )[\\d.]+ görev var))"
      ]
     }
    ]
@@ -523,6 +525,9 @@
      "matches": [
       "siz .*hareket kaydettiniz|sizin kaydettiğiniz hareketlerde kayıt bulunmuyor",
       "ekibiniz .*hareket kaydetti|ekibinizin kaydettiği hareketlerde kayıt bulunmuyor"
+     ],
+     "rejects": [
+      "(?:birleşik|ortak|iki kapsamın|siz ve ekibinizin)\\s+(?:toplam(?:ı|da)?\\s*)?(?:hareket(?:\\s+sayısı)?\\s*)?[:=]?\\s*[\\d.]+(?:\\s+hareket)?|(?:iki kapsam|siz ve ekibiniz)[^.;\\n]{0,24}toplamda?\\s+[\\d.]+\\s+hareket"
      ]
     }
    ]
@@ -540,7 +545,7 @@
      "periodKind": "this_month_vs_last_month",
      "language": "en",
      "matches": [
-      "(?:Last month[^\\n;]*completed tasks totalled [\\d,]+; this month[^\\n;]*, [\\d,]+|In both periods \\([^)]+ and [^)]+\\)[^\\n.]*(?:completed tasks totalled [\\d,]+|no task was completed)|Counts of completed tasks(?: \\([^)]+\\))? cannot be compared: (?:both periods (?:\\([^)]+\\) )?are unknown|the count for [^\\n]* is unknown, not zero; the other period has [\\d,]+ tasks))"
+      "(?:Last month[^\\n;]*completed tasks totalled [\\d,]+; this month[^\\n;]*, [\\d,]+|In both periods \\([^)]+ and [^)]+\\)[^\\n.]*(?:completed tasks totalled [\\d,]+|no task was completed)|Counts of completed tasks(?: \\([^)]+\\))? cannot be compared: (?:both periods (?:\\([^)]+\\) )?are unknown|the count for [^\\n]* is unknown, not zero; (?:the other period has [\\d,]+ tasks|for [^.;\\n]+, the count is [\\d,]+ tasks)))"
      ]
     }
    ]
@@ -563,7 +568,7 @@
       "(?:\\d+\\s+(?:gecikmiş (?:görev|iş)|(?:görev|iş)\\s+gecikmiş)(?!\\s+(?:vardı|bulunuyordu))|gecikmiş (?:görev|iş)(?:iniz)?\\s+(?:yok|bulunmuyor)(?!du))"
      ],
      "rejects": [
-      "(?:(?:gecikme\\p{L}*|gecikmiş (?:görev|iş)\\p{L}*|geciken (?:görev|iş)\\p{L}*)[^.;\\n]{0,60}\\b(?:azaldı|arttı|düştü|yükseldi|iyileşti|kötüleşti)(?!\\p{L})(?!\\s+(?:denemez|söylenemez|diyemeyiz|belirlenemez))|\\bdaha (?:az|fazla)\\s+gecikmiş\\s+(?:görev|iş)|(?:^|[^\\p{L}])(?:geçen|önceki)\\s+(?:hafta\\p{L}*|ay\\p{L}*|dönem\\p{L}*)[^.;\\n]{0,60}(?:\\b\\d+\\s+(?:gecikmiş\\s+)?(?:görev\\p{L}*|iş\\p{L}*)\\s+(?:gecikmiş\\p{L}*|vardı|bulunuyordu)|\\b\\d+\\s+gecikmiş\\s+(?:görev|iş)|gecikmiş\\s+(?:görev|iş)\\s+sayısı\\s+\\d+)|\\b\\d+\\s+(?:gecikmiş\\s+(?:görev|iş)|(?:görev|iş)\\s+gecikmiş)\\s+(?:vardı|bulunuyordu)\\b)"
+      "(?:(?:gecikme\\p{L}*|gecikmiş (?:görev|iş)\\p{L}*|geciken (?:görev|iş)\\p{L}*)[^.;\\n]{0,60}\\b(?:azaldı|arttı|düştü|yükseldi|iyileşti|kötüleşti)(?!\\p{L})(?!\\s+(?:denemez|söylenemez|diyemeyiz|belirlenemez))|\\bdaha (?:az|fazla)\\s+gecikmiş\\s+(?:görev|iş)|(?:^|[^\\p{L}])(?:geçen|önceki)\\s+(?:hafta\\p{L}*|ay\\p{L}*|dönem\\p{L}*)[^.;\\n]{0,60}(?:\\b\\d+\\s+(?:gecikmiş\\s+)?(?:görev\\p{L}*|iş\\p{L}*)\\s+(?:gecikmiş\\p{L}*|vardı|bulunuyordu)|\\b\\d+\\s+gecikmiş\\s+(?:görev|iş)|gecikmiş\\s+(?:görev|iş)\\s+sayısı\\s*:?\\s*\\d+)|\\b\\d+\\s+(?:gecikmiş\\s+(?:görev|iş)|(?:görev|iş)\\s+gecikmiş)\\s+(?:vardı|bulunuyordu)\\b)"
      ]
     }
    ]

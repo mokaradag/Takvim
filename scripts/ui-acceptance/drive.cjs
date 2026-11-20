@@ -102,9 +102,9 @@ function scriptedQuestions() {
   const resultFile = path.join(outDir, `${scenario.profile}.json`);
   const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
   const groupedSeeds = process.env.UI_SEED_GROUPS === '1';
-  // Çok veri kümeli koşuda (`UI_SEED_GROUPS=1`) `run.sh` tohumsuz konuşmaları `executive` grubuna ayırır; sürücü de aynı varsayılanı
+  // Çok veri kümeli koşuda (`UI_SEED_GROUPS=1`) `run.sh` tohumsuz konuşmaları `base` grubuna ayırır; sürücü de aynı varsayılanı
   // kullanarak tohumsuz konuşmaların sonraki veri kümesinde (ör. `temporal`) yeniden koşulmasını ve önceki grubun sonuçlarını ezmesini önler.
-  const effectiveSeed = (conversation) => conversation.seed || (groupedSeeds ? 'executive' : null);
+  const effectiveSeed = (conversation) => conversation.seed || (groupedSeeds ? 'base' : null);
   const seedMismatch = (conversation) => Boolean(effectiveSeed(conversation)) && effectiveSeed(conversation) !== (process.env.UI_SEED || null);
   const uncovered = [];
   if (process.env.UI_SCRIPTED === '1') {

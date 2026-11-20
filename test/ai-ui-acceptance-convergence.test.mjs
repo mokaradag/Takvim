@@ -525,7 +525,7 @@ exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}
   const scenario = { profile: 'B', port: 8102, appLog: 'app.log', conversations: [{ name: 'rıza', detail: 'balanced', turns: ['Notları oku'], includeText: [0] }] };
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
   // Üst kabuğun görünüm değişkeni (ör. UI_VIEWPORT=mobile) sınamayı etkilemez.
-  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_THEME: '', UI_VIEWPORT: '', UI_SCRIPTED: '', UI_ONLY: '' });
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_THEME: '', UI_VIEWPORT: '', UI_SCRIPTED: '', UI_ONLY: '', UI_SEED_GROUPS: '', UI_SEED: '' });
   assert.equal(result.status, 1, result.stderr);
   const row = JSON.parse(readFileSync(join(dir, 'out', 'B.json')))[0];
   assert.equal(row.rendered.status, 'driver-error');
@@ -613,6 +613,14 @@ test('arayüz kabulü iki dönemin ölçüsünü, yanıt dilini ve geçmiş duru
   assert.ok(score('H2-gecmis-durum-siniri', limited + ' Ancak gecikmeleriniz azaldı.').length);
   assert.ok(score('H2-gecmis-durum-siniri', limited + ' Geçen haftaya göre daha az gecikmiş işiniz var.').length);
   assert.ok(score('H2-gecmis-durum-siniri', limited + ' Geçen hafta 3 gecikmiş görev vardı.').length);
+  assert.ok(score('H2-gecmis-durum-siniri', limited + ' Geçen haftaki gecikmiş görev sayısı: 8.').length);
+  const week = 'Geçen hafta (21–27 Eylül 2026) için ';
+  assert.ok(score('H1-gecen-hafta', week + 'gerçekleşen bitiş tarihine göre bir sonuç sunamıyorum.').length);
+  assert.deepEqual(score('H1-gecen-hafta', week + '4 görev tamamlandı (gerçekleşen bitiş tarihine göre).'), []);
+  const activity = 'Bu hafta (28 Eylül – 4 Ekim 2026) siz 3 hareket kaydettiniz; ekibiniz 8 hareket kaydetti. Sayılar toplanmaz.';
+  assert.deepEqual(score('H6-ic-ice-kapsam', activity), []);
+  assert.ok(score('H6-ic-ice-kapsam', activity + ' Birleşik hareket sayısı: 11.').length);
+  assert.deepEqual(score('H2-donem-kiyasi', turkish + ' Ayrıca 5 Eylül 2026 tarihli iş açık.'), []);
   assert.ok(score('H2-gecmis-durum-siniri', 'Geçen haftanın durumu yeniden kurulamıyor.').length);
   // H3-egilim-cizgisi hareket çizgi grafiğini tamamlanma eğilimi olarak kabul etmez.
   const trendText = 'Tamamlanmış görevler 3 Temmuz – 30 Eylül 2026 döneminde haftalık tamamlanma hızı en yüksek 14–20 Eylül 2026 haftasındaydı.';
@@ -655,7 +663,7 @@ test('çoklu tohum koşusu sonuçları ezmez, UI_APP_LOG günlüğünü okur ve 
     ]
   }));
   const firstPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
-    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SEED: 'executive', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-executive.log')
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SEED: 'base', UI_SEED_GROUPS: '1', UI_ONLY: '', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-base.log')
   });
   assert.equal(firstPass.status, 0, firstPass.stderr);
   const secondPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
