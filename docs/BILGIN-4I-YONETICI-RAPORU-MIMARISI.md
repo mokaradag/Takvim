@@ -197,8 +197,11 @@ olabilirler. Yazarın görevi bunları **kanıtın ötesine geçmeden** profesyo
   görünür; rıza yoksa hiçbir not ya da değişiklik metni okunmaz.
 - **Kapsam:** dönemde **tamamlanan** görevler + dönemde **hareket gören** açık görevler + yaklaşan/geciken
   kritik görevler. Yalnızca açık görevlere dayanmaz.
-- **Kayıt zamanı:** açıklamanın dönem içindeki sürümleri `MR_AuditLog` önce/sonra değerlerinden okunur; her not
-  sürümü `kayit_zamani` taşır. Denetim kaydı olmayan eski açıklama "kayıt zamanı bilinmiyor" olarak işaretlenir.
+- **Kayıt zamanı:** açıklamanın dönem içindeki sürümleri `MR_AuditLog` önce/sonra değerlerinden okunur; denetim
+  kaydındaki `OccurredAt` yalnızca o olayla yazılan **yeni (`sonra`)** not sürümünün `kayit_zamani` değeridir.
+  Değiştirilen **önceki (`önce`)** metne değiştirme olayının zamanı atanmaz; önceki sürümün zamanı onu oluşturan
+  daha eski denetim kaydından alınır, böyle bir kayıt yoksa `"kayıt zamanı bilinmiyor"` olarak işaretlenir. Denetim
+  kaydı olmayan eski açıklama da `"kayıt zamanı bilinmiyor"` olarak işaretlenir.
 - **Önceliklendirme (belirlenimci):** dönem ilgisi (dönemde yazılmış/güncellenmiş) → yönetim önemi (kritik/yüksek
   öncelik, gecikme, kilometre taşı, bağımlılık) → yenilik. Örneklemin büyüklüğü ve dışarıda kalan sayısı
   tamlık alanında söylenir.

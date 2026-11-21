@@ -3,22 +3,31 @@ import { posix } from 'node:path';
 import { JSDOM } from 'jsdom';
 
 const REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
+const REL_TYPE = 'application/vnd.openxmlformats-package.relationships+xml';
 const TYPES = 'http://schemas.openxmlformats.org/package/2006/content-types';
 const MAIN_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml';
-const { DOMParser } = new JSDOM('').window;
+const { DOMParser, XMLSerializer } = new JSDOM('').window;
 const namespaces = {
   a: 'http://schemas.openxmlformats.org/drawingml/2006/main',
   asvg: 'http://schemas.microsoft.com/office/drawing/2016/SVG/main',
   cp: 'http://schemas.openxmlformats.org/package/2006/metadata/core-properties',
   custom: 'http://schemas.openxmlformats.org/officeDocument/2006/custom-properties',
   dc: 'http://purl.org/dc/elements/1.1/',
+  dcterms: 'http://purl.org/dc/terms/',
   ep: 'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties',
+  mc: 'http://schemas.openxmlformats.org/markup-compatibility/2006',
   o: 'urn:schemas-microsoft-com:office:office',
   r: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
   svg: 'http://www.w3.org/2000/svg',
+  v: 'urn:schemas-microsoft-com:vml',
   w: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
   wp: 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
 };
+
+/** Ayrıştırılmış XML belgesini diziye çevirir (sınama mutasyonları için). */
+export function serializeDocxXml(document) {
+  return new XMLSerializer().serializeToString(document);
+}
 
 function qualified(tag) {
   const [prefix, local] = tag.split(':');
@@ -100,20 +109,99 @@ function readRelationships(document, name, pkg) {
   return rows;
 }
 
-/** Yalnızca kanonik şablonun yerel sayfa ve başlık sayaçlarına izin verir. */
+function enclosingParagraph(node) {
+  let current = node.parentNode;
+  while (current) {
+    if (current.namespaceURI === namespaces.w && current.localName === 'p') return current;
+    current = current.parentNode;
+  }
+  return null;
+}
+
+function paragraphTextWithoutFields(paragraph) {
+  const fields = all(paragraph, 'w:fldSimple');
+  return all(paragraph, 'w:t')
+    .filter((node) => !fields.some((field) => field.contains(node)))
+    .map((node) => node.textContent)
+    .join('');
+}
+
+/** Yalnızca kanonik şablonun yerel sayfa ve başlık sayaçlarına izin verir; revizyon ve gizli metni reddeder. */
 function checkWordFields(document, name) {
-  for (const tag of ['w:object', 'o:OLEObject', 'w:altChunk', 'w:hyperlink', 'w:attachedTemplate', 'w:updateFields',
-    'w:instrText', 'w:delInstrText', 'w:fldChar']) {
+  const disallowed = [
+    'w:object', 'o:OLEObject', 'w:altChunk', 'w:hyperlink', 'w:attachedTemplate', 'w:updateFields',
+    'w:instrText', 'w:delInstrText', 'w:fldChar',
+    // İzlenen değişiklikler, taşınan aralıklar, biçim revizyonları ve açıklamalar kanonik şablonda bulunamaz.
+    'w:del', 'w:delText', 'w:ins', 'w:moveFrom', 'w:moveTo',
+    'w:moveFromRangeStart', 'w:moveFromRangeEnd', 'w:moveToRangeStart', 'w:moveToRangeEnd',
+    'w:rPrChange', 'w:pPrChange', 'w:sectPrChange', 'w:tblPrChange', 'w:trPrChange', 'w:tcPrChange',
+    'w:commentReference', 'w:commentRangeStart', 'w:commentRangeEnd'
+  ];
+  for (const tag of disallowed) {
     assert.equal(all(document, tag).length, 0, name + ': izin verilmeyen öğe ' + tag);
+  }
+  // Zorunlu metni gizleyebilecek doğrudan ya da stil tabanlı gizleme biçimleri yasaktır.
+  for (const hiddenTag of ['w:vanish', 'w:webHidden']) {
+    for (const element of all(document, hiddenTag)) {
+      assert.equal(on(element), false, name + ': gizli metin biçimi yasak (' + hiddenTag + ')');
+    }
   }
   const fields = all(document, 'w:fldSimple');
   const allowed = {
     'word/document.xml': ['SEQ Şekil \\* ARABIC', 'SEQ Tablo \\* ARABIC'],
     'word/footer1.xml': ['PAGE', 'NUMPAGES']
   };
-  assert.deepEqual(fields.map((field) => (attr(field, 'w:instr') ?? '').trim().replace(/\s+/gu, ' ')),
-    allowed[name] ?? [], name + ': Word alan komutları');
+  const instructions = fields.map((field) => (attr(field, 'w:instr') ?? '').trim().replace(/\s+/gu, ' '));
+  assert.deepEqual(instructions, allowed[name] ?? [], name + ': Word alan komutları');
+
+  // İzinli sayaç alanlarının önbellekteki görünür metni yalnızca boş ya da sayısal sayaç değeri olabilir.
+  for (const [index, field] of fields.entries()) {
+    const cached = all(field, 'w:t').map((node) => node.textContent).join('').trim();
+    assert.match(cached, /^\d*$/u, name + ': Word alan sonucu sayısal veya boş olmalıdır');
+    const paragraph = enclosingParagraph(field);
+    assert.ok(paragraph, name + ': Word alanı paragraf içinde olmalıdır');
+    const style = attr(child(child(paragraph, 'w:pPr'), 'w:pStyle'));
+    const text = paragraphTextWithoutFields(paragraph);
+    const instr = instructions[index];
+    if (name === 'word/document.xml' && instr === 'SEQ Şekil \\* ARABIC') {
+      assert.equal(style, 'Caption', 'şekil sayacı başlık stilinde olmalıdır');
+      assert.ok(text.startsWith('Şekil ') && text.includes('{{SEKIL_1_BASLIGI}}'), 'şekil sayacı şekil başlığında olmalıdır');
+    } else if (name === 'word/document.xml' && instr === 'SEQ Tablo \\* ARABIC') {
+      assert.equal(style, 'Caption', 'tablo sayacı başlık stilinde olmalıdır');
+      assert.ok(text.startsWith('Tablo ') && text.includes('{{TABLO_1_BASLIGI}}'), 'tablo sayacı tablo başlığında olmalıdır');
+    } else if (name === 'word/footer1.xml') {
+      assert.equal(style, 'Footer', 'sayfa sayaçları alt bilgi paragrafında olmalıdır');
+    }
+  }
+  if (name === 'word/footer1.xml') {
+    const paragraph = enclosingParagraph(fields[0]);
+    assert.equal(enclosingParagraph(fields[1]), paragraph, 'PAGE ve NUMPAGES aynı alt bilgi paragrafında olmalıdır');
+    const parts = [...paragraph.children].map((node) => {
+      if (node === fields[0]) return '<PAGE>';
+      if (node === fields[1]) return '<NUMPAGES>';
+      return all(node, 'w:t').map((t) => t.textContent).join('');
+    }).join('');
+    assert.ok(parts.includes('Sayfa <PAGE> / <NUMPAGES>'), 'alt bilgide sayfa sayaç konumu geçersiz');
+  }
 }
+
+const REQUIRED_ROOT_RELATIONS = [
+  ['officeDocument', namespaces.r + '/officeDocument', MAIN_TYPE, namespaces.w, 'document'],
+  ['core', 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties',
+    'application/vnd.openxmlformats-package.core-properties+xml', namespaces.cp, 'coreProperties'],
+  ['app', namespaces.r + '/extended-properties',
+    'application/vnd.openxmlformats-officedocument.extended-properties+xml', namespaces.ep, 'Properties'],
+  ['custom', namespaces.r + '/custom-properties',
+    'application/vnd.openxmlformats-officedocument.custom-properties+xml', namespaces.custom, 'Properties']
+];
+
+const REQUIRED_DOCUMENT_RELATIONS = [
+  ['styles', namespaces.r + '/styles', 'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml', namespaces.w, 'styles'],
+  ['settings', namespaces.r + '/settings', 'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml', namespaces.w, 'settings'],
+  ['fontTable', namespaces.r + '/fontTable', 'application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml', namespaces.w, 'fonts'],
+  ['numbering', namespaces.r + '/numbering', 'application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml', namespaces.w, 'numbering'],
+  ['theme', namespaces.r + '/theme', 'application/vnd.openxmlformats-officedocument.theme+xml', namespaces.a, 'theme']
+];
 
 /** Okunabilir XML parçalarını ve paket içi bağlantıları kanonik DOCX sözleşmesine göre denetler. */
 export function validateDocxXml(pkg) {
@@ -149,21 +237,46 @@ export function validateDocxXml(pkg) {
       defaults.set(extension, type);
     }
   }
-  const contentType = (name) => overrides.get('/' + name) ?? defaults.get(posix.extname(name).slice(1).toLowerCase());
+  const contentType = (name) => overrides.get('/' + name)
+    ?? (/\.rels$/iu.test(name) ? defaults.get('rels') : defaults.get(posix.extname(name).slice(1).toLowerCase()));
   for (const name of pkg.names) {
     if (name === '[Content_Types].xml') continue;
-    const type = /\.rels$/iu.test(name) ? defaults.get('rels') : contentType(name);
+    if (/\.rels$/iu.test(name)) {
+      assert.equal(contentType(name), REL_TYPE, name + ': OPC ilişki içerik türü geçersiz');
+      continue;
+    }
+    const type = contentType(name);
     assert.ok(type, name + ': içerik türü eksik');
   }
-  assert.equal(overrides.get('/word/document.xml'), MAIN_TYPE, 'ana belge içerik türü');
-  assertRoot(xml('word/document.xml'), namespaces.w, 'document', 'word/document.xml');
-  const rootRelationships = [...(relations.get('_rels/.rels') ?? new Map()).values()];
-  assert.deepEqual(rootRelationships.filter(({ type }) => type === namespaces.r + '/officeDocument')
-    .map(({ target }) => target), ['word/document.xml'], 'paket kökü ana belge ilişkisi');
+
+  const parts = new Map();
+  const resolveSingleRelation = (relsName, key, relType, expectedContentType, rootNs, rootLocal, label) => {
+    const rows = [...(relations.get(relsName) ?? new Map()).values()];
+    const matches = rows.filter(({ type }) => type === relType);
+    assert.equal(matches.length, 1, label + ': tekil ilişki zorunludur');
+    const [{ target }] = matches;
+    assert.equal(contentType(target), expectedContentType, label + ': içerik türü geçersiz');
+    assertRoot(xml(target), rootNs, rootLocal, target);
+    parts.set(key, target);
+    return target;
+  };
+
+  const mainPart = resolveSingleRelation('_rels/.rels', ...REQUIRED_ROOT_RELATIONS[0], 'paket kökü ana belge ilişkisi');
+  assert.equal(mainPart, 'word/document.xml', 'paket kökü ana belge ilişkisi');
+  for (const [key, relType, expectedContentType, rootNs, rootLocal] of REQUIRED_ROOT_RELATIONS.slice(1)) {
+    resolveSingleRelation('_rels/.rels', key, relType, expectedContentType, rootNs, rootLocal, 'paket kökü ' + key + ' ilişkisi');
+  }
+  for (const [key, relType, expectedContentType, rootNs, rootLocal] of REQUIRED_DOCUMENT_RELATIONS) {
+    resolveSingleRelation('word/_rels/document.xml.rels', key, relType, expectedContentType, rootNs, rootLocal, 'ana belge ' + key + ' ilişkisi');
+  }
 
   return {
     xml,
     contentType,
+    part: (key) => {
+      assert.ok(parts.has(key), 'çözümlenmiş parça yok: ' + key);
+      return parts.get(key);
+    },
     documentRelationship: (id, type) => {
       const relation = relations.get('word/_rels/document.xml.rels')?.get(id);
       assert.equal(relation?.type, namespaces.r + '/' + type, 'ana belge ilişki türü: ' + id);

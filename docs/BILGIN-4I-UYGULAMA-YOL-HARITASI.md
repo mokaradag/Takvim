@@ -213,9 +213,9 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
    taslakları; kör insan puanları; model başına A/B/D sonuçları.
 7. **Gerekli referans görüntüleri ve varlıklar** — Model kataloğu görüntüleri (aday kimlikleri); insan dili örnek
    rapor (editoryal hedef).
-8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Kabul çerçevesi §5: A kesin kapıları, B eşikleri (genel ≥ 4,0;
-   ölçüt ≥ 3,5; mekanik döküm ≤ %5), D bütçeleri. **Kritik kapı:** çıktı veritabanı dökümü gibi okunuyorsa artım
-   olgusal doğruluktan bağımsız olarak başarısızdır.
+8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Kabul çerçevesi §5: 4I-B taslak A kapıları, B eşikleri (genel ≥ 4,0;
+   uygulanabilir her ölçüt ≥ 3,5; aday düzeyinde mekanik döküm ≤ %5), D bütçeleri. **Kritik kapı:** aday düzeyinde
+   mekanik döküm oranı %5'i aşıyorsa artım olgusal doğruluktan bağımsız olarak başarısızdır.
 9. **Güvenlik ve yetki sınamaları** — Yazara yalnızca yetkili kanıt ve anlatı için gerekli kapsam/tamlık bilgisi gider.
    Not içi yönerge izlenmez ve gerçek risk korunur (R6, K19). Kısmi erişim toplamı görünür görevlerden hesaplanır
    ve kapalı varlık adı kesin kapıdır (R8). İçerik günlüğe girmez.

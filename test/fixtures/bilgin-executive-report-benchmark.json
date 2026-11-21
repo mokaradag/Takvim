@@ -280,6 +280,11 @@
    "karsilastirma_donemi": {
     "baslangic": "2026-10-10",
     "bitis": "2026-10-19"
+   },
+   "gecersiz_karsilastirma_donemi": {
+    "baslangic": "2026-10-10",
+    "bitis": "2026-10-18",
+    "beklenen": "reddedilir_yuzde_uretilmez"
    }
   },
   {
@@ -980,7 +985,13 @@
    "destekleyici_belgeler": "yok",
    "gorseller": "temel",
    "durum": "Üretim sırasında bir projenin erişimi kaldırılıyor.",
-   "sinanan": "Sonlandırma öncesi yeniden yetki denetimi; yetkisi kalkan içeriğin çıkarılması.",
+   "sinanan": "İlk ve sonraki önizlemeler, sonlandırma ve her indirme öncesinde yeniden yetki denetimi; yetkisi kalkan içeriğin çıkarılması veya erişimin reddi.",
+   "yetki_kaldirma_noktalari": [
+    "ilk_onizleme",
+    "sonraki_onizleme",
+    "sonlandirma",
+    "indirme"
+   ],
    "boyutlar": [
     "A",
     "D"
@@ -1176,7 +1187,7 @@
    ],
    "taslak": [
     "Kuzey, Ufuk ve Pusula projelerinde hafta boyunca toplam 18 görev tamamlandı. Bu toplamın altısı Ufuk, beşi Pusula projesine aitti.",
-    "Ufuk projesinde 6 görev tamamlandı ve arayüz doğrulama senaryoları ile veri akışı düzenlemeleri sonuçlandırıldı. Entegrasyon planına ilişkin harici onay ise terminini aşmış durumda ve takip gerektiriyor. Ufuk projesinde müşteri kabul belgesi 6 Kasım’da imzalandı.",
+    "Ufuk projesinde 6 görev tamamlandı; görev notunda arayüz doğrulama senaryolarının tamamlandığı ve veri akışı düzenlemesinin kapandığı belirtiliyor. Entegrasyon planına ilişkin harici onay ise terminini aşmış durumda ve takip gerektiriyor. Ufuk projesinde müşteri kabul belgesi 6 Kasım’da imzalandı.",
     "Pusula projesinde beş görev tamamlandı. Ufuk’taki harici onayın hedef tarihi geçtiği için bir sonraki dönemde bu onayın durumu öncelikle izlenmelidir."
    ],
    "beklenen": {
@@ -1216,7 +1227,7 @@
      },
      {
       "sinif": "nesnel_olgu",
-      "ifade": "Ufuk’ta arayüz doğrulama senaryoları ve veri akışı düzenlemesi tamamlandı.",
+      "ifade": "Görev notunda Ufuk’taki arayüz doğrulama senaryolarının tamamlandığı ve veri akışı düzenlemesinin kapandığı belirtiliyor.",
       "kanitlar": [
        "E3"
       ]
@@ -1256,6 +1267,15 @@
      "id": "E1",
      "tur": "olcu",
      "kaynak": "rota_task_analytics",
+     "kapsam": [
+      "PRJ-KUZEY",
+      "PRJ-UFUK",
+      "PRJ-PUSULA"
+     ],
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     },
      "olcu": "tamamlanan",
      "deger": 18
     },
@@ -1263,6 +1283,15 @@
      "id": "E2",
      "tur": "olcu",
      "kaynak": "rota_task_analytics",
+     "kapsam": [
+      "PRJ-KUZEY",
+      "PRJ-UFUK",
+      "PRJ-PUSULA"
+     ],
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     },
      "olcu": "acik",
      "deger": 52
     },
@@ -1270,6 +1299,15 @@
      "id": "E3",
      "tur": "olcu",
      "kaynak": "rota_task_analytics",
+     "kapsam": [
+      "PRJ-KUZEY",
+      "PRJ-UFUK",
+      "PRJ-PUSULA"
+     ],
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     },
      "olcu": "geciken",
      "deger": 7
     },
@@ -1277,6 +1315,15 @@
      "id": "E4",
      "tur": "olcu",
      "kaynak": "rota_task_analytics",
+     "kapsam": [
+      "PRJ-KUZEY",
+      "PRJ-UFUK",
+      "PRJ-PUSULA"
+     ],
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     },
      "olcu": "yaklasan_7_gun",
      "deger": 14
     }
@@ -1331,7 +1378,7 @@
     "desteklenen_ifadeler": [
      {
       "sinif": "nesnel_olgu",
-      "ifade": "Daha önce 12 Kasım’a planlanan entegrasyon testi ertelendi.",
+      "ifade": "Görev notlarına göre daha önce 12 Kasım’a planlandığı belirtilen entegrasyon testinin ertelendiği bildirildi.",
       "kanitlar": [
        "E1",
        "E2"

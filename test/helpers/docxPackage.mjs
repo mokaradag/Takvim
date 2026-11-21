@@ -32,6 +32,7 @@ function findEndOfCentralDirectory(buffer) {
 export function readZipEntries(buffer) {
   requireZip(buffer.length <= MAX_ARCHIVE_BYTES, 'ZIP paket boyutu sınırı aşıldı');
   const end = findEndOfCentralDirectory(buffer);
+  requireZip(buffer.readUInt16LE(end + 20) === 0, 'ZIP EOCD yorumu yasak');
   const count = buffer.readUInt16LE(end + 10);
   requireZip(buffer.readUInt16LE(end + 4) === 0 && buffer.readUInt16LE(end + 6) === 0
     && buffer.readUInt16LE(end + 8) === count, 'çok parçalı ZIP desteklenmez');
@@ -59,6 +60,7 @@ export function readZipEntries(buffer) {
     const localOffset = buffer.readUInt32LE(offset + 42);
     const next = offset + 46 + nameLength + extraLength + commentLength;
     requireZip(next <= end && nameLength > 0, 'ZIP merkezî dizin girdi aralığı geçersiz');
+    requireZip(commentLength === 0, 'ZIP girdi yorumu yasak');
     requireZip(buffer.readUInt16LE(offset + 34) === 0, 'çok parçalı ZIP girdisi desteklenmez');
     const nameBytes = buffer.subarray(offset + 46, offset + 46 + nameLength);
     const name = utf8.decode(nameBytes);
@@ -100,6 +102,14 @@ export function readZipEntries(buffer) {
     offset = next;
   }
   requireZip(offset === end, 'ZIP merkezî dizin uzunluğu uyuşmuyor');
+  // Yerel girdiler [0, centralStart) aralığını kayıtsız boşluk bırakmadan tam kaplamalıdır.
+  ranges.sort((a, b) => a[0] - b[0]);
+  let cursor = 0;
+  for (const [start, finish] of ranges) {
+    requireZip(start === cursor, 'ZIP yerel girdileri arasında kayıtsız baytlar var');
+    cursor = finish;
+  }
+  requireZip(cursor === centralStart, 'ZIP merkezî dizin öncesinde kayıtsız baytlar var');
   return entries;
 }
 
