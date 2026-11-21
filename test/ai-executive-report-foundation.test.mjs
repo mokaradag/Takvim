@@ -13,9 +13,10 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { JSDOM } from 'jsdom';
 import yaml from 'js-yaml';
-import { readDocxPackage } from './helpers/docxPackage.mjs';
+import { readDocxPackage, readZipEntries } from './helpers/docxPackage.mjs';
+import { all, attr, child, children, on, parseDocxXml, validateDocxXml } from './helpers/docxXml.mjs';
+import { validateCoverPng } from './helpers/coverPng.mjs';
 import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 
 registerServerOnlyShim();
@@ -28,16 +29,8 @@ const { validateModelRegistry } = await import('../src/domain/ai/aiModelRegistry
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
 const operationalRegistry = JSON.parse(await read('config/ai-model-registry.onprem.json'));
 
-const { DOMParser } = new JSDOM('').window;
-const xml = (name) => new DOMParser().parseFromString(docx.text(name), 'application/xml');
-const children = (element, tag) => (element ? [...element.childNodes].filter((node) => node.nodeName === tag) : []);
-const child = (element, tag) => children(element, tag)[0] ?? null;
-const all = (element, tag) => [...element.getElementsByTagName(tag)];
-const attr = (element, name = 'w:val') => element?.getAttribute(name) ?? null;
-const insideField = (node) => {
-  for (let current = node.parentNode; current; current = current.parentNode) if (current.nodeName === 'w:fldSimple') return true;
-  return false;
-};
+const { xml, contentType, documentRelationship } = validateDocxXml(docx);
+const insideField = (node) => all(node.ownerDocument, 'w:fldSimple').some((field) => field.contains(node));
 const PLACEHOLDER = /\{\{([A-Z0-9_]+)\}\}/g;
 
 /** Palet anahtarı → onaltılık renk (stil belgesindeki adlandırmayla). */
@@ -157,18 +150,27 @@ test('stil belgesi: logo politikası mevcut ayarı korur, uydurmayı ve ağ kayn
 
 // ------------------------------------------------------------------ kanonik şablon
 
-test('şablon: paket güvenlidir — makro, gömülü nesne, ActiveX ve dış bağlantı yoktur; yalnızca kapak medyası vardır', () => {
-  for (const name of docx.names) {
-    assert.doesNotMatch(name, /vbaProject|embeddings\/|activeX|oleObject/i, name);
-  }
-  assert.doesNotMatch(docx.text('[Content_Types].xml'), /macroEnabled|vbaProject|oleObject/i);
-  for (const name of docx.names.filter((entry) => entry.endsWith('.rels'))) {
-    assert.doesNotMatch(docx.text(name), /TargetMode="External"/, name);
-  }
-  assert.doesNotMatch(docx.text('word/settings.xml'), /attachedTemplate|w:updateFields/);
-  assert.doesNotMatch(docx.text('word/document.xml'), /<w:object|<o:OLEObject|<w:altChunk|<w:hyperlink/);
+test('şablon: paket güvenliği ve ana belge ilişkileri doğrulanır, yalnızca kapak medyası vardır', () => {
   assert.deepEqual(docx.names.filter((name) => name.startsWith('word/media/')).sort(), [...spec.gorseller.kapak_yedigeni.medya].sort());
 });
+
+function checkHeaderFooter(partXml, relationship, section) {
+  assert.ok(on(child(section, 'w:titlePg')), 'kapak farklı ilk sayfadır');
+  for (const [kind, rootTag] of [['header', 'w:hdr'], ['footer', 'w:ftr']]) {
+    const references = children(section, 'w:' + kind + 'Reference');
+    assert.equal(references.length, 2, kind + ': kapak ve gövde başvuruları');
+    for (const [mode, index] of [['default', 1], ['first', 2]]) {
+      const ref = references.find((item) => attr(item, 'w:type') === mode);
+      const part = relationship(attr(ref, 'r:id'), kind);
+      assert.equal(part, 'word/' + kind + index + '.xml', kind + ': ' + mode);
+      const document = partXml(part);
+      assert.equal(all(document, rootTag)[0], document.documentElement, part + ': parça kökü');
+      if (mode === 'first') {
+        assert.equal(all(document, 'w:t').map((node) => node.textContent).join('').trim(), '', part + ': kapakta boştur');
+      }
+    }
+  }
+}
 
 test('şablon: A4 dikey sayfa, kenar boşlukları, üst/alt bilgi uzaklığı ve boş kapak üst/alt bilgisi stil belgesiyle aynıdır', () => {
   const sect = all(xml('word/document.xml'), 'w:sectPr');
@@ -183,14 +185,9 @@ test('şablon: A4 dikey sayfa, kenar boşlukları, üst/alt bilgi uzaklığı ve
   }
   assert.equal(attr(margin, 'w:header'), String(spec.sayfa.ust_bilgi_twip));
   assert.equal(attr(margin, 'w:footer'), String(spec.sayfa.alt_bilgi_twip));
-  assert.ok(child(sect[0], 'w:titlePg'), 'kapak farklı ilk sayfadır');
-  const rels = xml('word/_rels/document.xml.rels');
-  const target = (id) => all(rels, 'Relationship').find((rel) => rel.getAttribute('Id') === id).getAttribute('Target');
-  for (const tag of ['w:headerReference', 'w:footerReference']) {
-    const first = children(sect[0], tag).find((ref) => attr(ref, 'w:type') === 'first');
-    assert.ok(first, `${tag} first`);
-    const part = `word/${target(first.getAttribute('r:id'))}`;
-    assert.equal(all(xml(part), 'w:t').map((node) => node.textContent).join('').trim(), '', `${part} kapakta boştur`);
+  checkHeaderFooter(xml, documentRelationship, sect[0]);
+  for (const [name, type] of [['header1', 'header'], ['header2', 'header'], ['footer1', 'footer'], ['footer2', 'footer']]) {
+    assert.equal(contentType('word/' + name + '.xml'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.' + type + '+xml');
   }
 });
 
@@ -215,8 +212,8 @@ test('şablon: stil belgesindeki her Word stili aynı ad, yazı rolü, boyut, re
     const pPr = child(element, 'w:pPr');
     assert.equal(attr(child(rPr, 'w:sz')), String(Math.round(entry.boyut * 2)), `${id} boyut`);
     assert.equal(attr(child(rPr, 'w:color')), paletteColor(entry.renk), `${id} renk`);
-    assert.equal(Boolean(child(rPr, 'w:b')), Boolean(entry.kalin), `${id} kalın`);
-    assert.equal(Boolean(child(rPr, 'w:i')), Boolean(entry.italik), `${id} italik`);
+    assert.equal(on(child(rPr, 'w:b')), Boolean(entry.kalin), `${id} kalın`);
+    assert.equal(on(child(rPr, 'w:i')), Boolean(entry.italik), `${id} italik`);
     assert.equal(attr(child(rPr, 'w:rFonts'), 'w:asciiTheme'), entry.yazi === 'baslik' ? 'majorHAnsi' : 'minorHAnsi', `${id} yazı rolü`);
     assert.equal(attr(child(rPr, 'w:rFonts'), 'w:ascii'), null, `${id} doğrudan yazı tipi adı taşımaz`);
     const spacing = child(pPr, 'w:spacing');
@@ -224,26 +221,44 @@ test('şablon: stil belgesindeki her Word stili aynı ad, yazı rolü, boyut, re
     if (entry.sonra != null) assert.equal(attr(spacing, 'w:after'), String(Math.round(entry.sonra * 20)), `${id} sonra`);
     if (entry.satir != null) assert.equal(attr(spacing, 'w:line'), String(Math.round(entry.satir * 240)), `${id} satır`);
     assert.equal(attr(child(pPr, 'w:jc')), entry.hiza ? JC[entry.hiza] : null, `${id} hiza`);
-    assert.equal(Boolean(child(pPr, 'w:pageBreakBefore')), Boolean(entry.yeni_sayfa), `${id} yeni sayfa`);
+    assert.equal(on(child(pPr, 'w:pageBreakBefore')), Boolean(entry.yeni_sayfa), `${id} yeni sayfa`);
     const borders = child(pPr, 'w:pBdr');
     for (const [key, side] of [['ust_cizgi', 'w:top'], ['sol_cizgi', 'w:left'], ['alt_cizgi', 'w:bottom']]) {
       assert.equal(attr(child(borders, side), 'w:color'), entry[key] ? paletteColor(entry[key]) : null, `${id} ${key}`);
     }
     assert.equal(attr(child(pPr, 'w:shd'), 'w:fill'), entry.golge ? paletteColor(entry.golge) : null, `${id} gölge`);
   }
-  // Numaralı başlık "01" biçimi ve vurgu rengi; madde işareti lacivert.
-  const numbering = xml('word/numbering.xml');
-  const abstractFor = (numId) => {
+});
+
+function checkNumbering(numbering, styles, body) {
+  const levelFor = (style) => {
+    const element = all(styles, 'w:style').find((node) => attr(node, 'w:styleId') === style);
+    const properties = child(child(element, 'w:pPr'), 'w:numPr');
+    const numId = attr(child(properties, 'w:numId'));
+    const level = attr(child(properties, 'w:ilvl')) ?? '0';
+    assert.equal(level, '0', style + ': numara düzeyi');
     const num = all(numbering, 'w:num').find((node) => attr(node, 'w:numId') === numId);
+    assert.ok(num, style + ': numara tanımı yok');
+    assert.equal(children(num, 'w:lvlOverride').length, 0, style + ': düzey geçersiz kılınamaz');
     const abstractId = attr(child(num, 'w:abstractNumId'));
-    return child(all(numbering, 'w:abstractNum').find((node) => attr(node, 'w:abstractNumId') === abstractId), 'w:lvl');
+    const definition = all(numbering, 'w:abstractNum').find((node) => attr(node, 'w:abstractNumId') === abstractId);
+    return children(definition, 'w:lvl').find((node) => attr(node, 'w:ilvl') === level);
   };
-  const headingLevel = abstractFor(attr(child(child(child(byId.get('Heading1'), 'w:pPr'), 'w:numPr'), 'w:numId')));
+  const headingLevel = levelFor('Heading1');
   assert.equal(attr(child(headingLevel, 'w:numFmt')), 'decimalZero');
+  assert.equal(attr(child(headingLevel, 'w:start')), '1', 'başlık numarası 01 ile başlar');
+  assert.equal(attr(child(headingLevel, 'w:lvlText')), '%1', 'başlık numarası biçimi');
   assert.equal(attr(child(child(headingLevel, 'w:rPr'), 'w:color')), paletteColor(spec.stiller.Heading1.numara_rengi));
-  const bulletLevel = abstractFor(attr(child(child(child(byId.get('BilginListeMaddesi'), 'w:pPr'), 'w:numPr'), 'w:numId')));
+  for (const heading of all(body, 'w:p').filter((paragraph) => paragraphStyle(paragraph) === 'Heading1')) {
+    assert.equal(child(child(heading, 'w:pPr'), 'w:numPr'), null, 'başlık numarası paragrafta değiştirilemez');
+  }
+  const bulletLevel = levelFor('BilginListeMaddesi');
   assert.equal(attr(child(bulletLevel, 'w:numFmt')), 'bullet');
   assert.equal(attr(child(child(bulletLevel, 'w:rPr'), 'w:color')), paletteColor(spec.stiller.BilginListeMaddesi.madde_rengi));
+}
+
+test('şablon: bölüm numaraları 01 ile başlar, sıra ve madde işareti stillerden gelir', () => {
+  checkNumbering(xml('word/numbering.xml'), xml('word/styles.xml'), xml('word/document.xml'));
 });
 
 test('şablon: yazı tipleri yalnızca tema üzerinden ve etkin profildendir; Nexa denetimsiz ikameye bırakılmaz', () => {
@@ -255,46 +270,85 @@ test('şablon: yazı tipleri yalnızca tema üzerinden ve etkin profildendir; Ne
   assert.equal(latin('a:minorFont'), profile.govde);
   const allowed = new Set([profile.baslik, profile.govde]);
   for (const name of docx.names.filter((entry) => /^word\/.*\.xml$/.test(entry))) {
-    for (const element of docx.text(name).match(/<w:rFonts\b[^>]*>/g) || []) {
-      for (const match of element.matchAll(/w:(?:ascii|hAnsi|cs|eastAsia)="([^"]+)"/g)) assert.ok(allowed.has(match[1]), `${name}: ${match[1]}`);
+    for (const element of all(xml(name), 'w:rFonts')) {
+      for (const key of ['w:ascii', 'w:hAnsi', 'w:cs', 'w:eastAsia']) {
+        const value = attr(element, key);
+        if (value !== null) assert.ok(allowed.has(value), name + ': ' + value);
+      }
     }
   }
   for (const font of all(xml('word/fontTable.xml'), 'w:font')) assert.ok(allowed.has(attr(font, 'w:name')), attr(font, 'w:name'));
-  assert.equal(spec.yazi_tipi.etkin_profil, 'calibri_uyumlu', 'Nexa yalnızca kurulum/lisans doğrulanınca açılır');
+  assert.equal(spec.yazi_tipi.etkin_profil, 'calibri_uyumlu', 'Nexa için kurulum ya da lisanslı, doğrulanmış gömme gerekir');
 });
+
+function checkPalette(document, name) {
+  const wordColors = new Set(all(document, 'w:color'));
+  const drawingColors = new Set(all(document, 'a:srgbClr'));
+  for (const element of document.getElementsByTagName('*')) {
+    const colors = [attr(element, 'w:color'), attr(element, 'w:fill')];
+    if (wordColors.has(element)) colors.push(attr(element));
+    if (drawingColors.has(element)) colors.push(attr(element, 'val'));
+    if (name.endsWith('.svg')) {
+      for (const key of ['stroke', 'fill']) {
+        const value = attr(element, key);
+        if (value?.startsWith('#')) colors.push(value.slice(1));
+      }
+    }
+    for (const value of colors) {
+      if (value === null || value === 'auto') continue;
+      assert.ok(ALLOWED_COLORS.has(value.toUpperCase()), name + ': izinli olmayan renk ' + value);
+    }
+  }
+}
 
 test('şablon: kullanılan her renk kurumsal paletten ya da nötrlerdendir (kapak yedigeni dâhil)', () => {
-  for (const name of docx.names.filter((entry) => /\.(xml|svg)$/.test(entry))) {
-    const text = docx.text(name);
-    const found = [
-      ...[...text.matchAll(/w:(?:color|fill)="([^"]+)"/g)].map((match) => match[1]),
-      ...[...text.matchAll(/srgbClr val="([^"]+)"/g)].map((match) => match[1]),
-      ...[...text.matchAll(/(?:stroke|fill)="#([0-9A-Fa-f]{6})"/g)].map((match) => match[1])
-    ];
-    for (const value of found) {
-      if (value === 'auto') continue;
-      assert.ok(ALLOWED_COLORS.has(value.toUpperCase()), `${name}: izinli olmayan renk ${value}`);
-    }
-  }
+  for (const name of docx.names.filter((entry) => /\.(xml|svg)$/.test(entry))) checkPalette(xml(name), name);
 });
 
-test('şablon: yer tutucular bölünmez, stil belgesiyle bire bir aynıdır ve bölümlerinde belge sırasıyla durur', () => {
-  const tokens = new Map();
-  for (const name of ['word/document.xml', 'word/header1.xml', 'word/header2.xml', 'word/footer1.xml', 'word/footer2.xml']) {
-    const found = [];
-    for (const node of all(xml(name), 'w:t')) {
-      const text = node.textContent;
-      for (const match of text.matchAll(PLACEHOLDER)) found.push(match[1]);
-      assert.doesNotMatch(text.replace(PLACEHOLDER, ''), /\{\{|\}\}/, `${name}: bölünmüş yer tutucu "${text}"`);
+function placeholders(element, name) {
+  return all(element, 'w:t').flatMap((node) => {
+    const text = node.textContent;
+    assert.doesNotMatch(text.replace(PLACEHOLDER, ''), /\{\{|\}\}/, name + ': bölünmüş yer tutucu');
+    return [...text.matchAll(PLACEHOLDER)].map((match) => match[1]);
+  });
+}
+
+function checkSectionPlaceholders(document) {
+  const sections = spec.yapi.bolumler;
+  const body = all(document, 'w:body')[0];
+  const tokens = [[]];
+  for (const block of body.children) {
+    const style = paragraphStyle(block);
+    const section = sections[tokens.length];
+    const isHeading = ['Heading1', 'BilginEkBasligi'].includes(style);
+    if (isHeading || (section?.paragraf_stili && style === section.paragraf_stili)) {
+      assert.ok(section, 'beklenmeyen bölüm');
+      if (isHeading) {
+        assert.equal(paragraphText(block), section.baslik, 'bölüm başlığı ve belge sırası');
+        assert.equal(style, section.numarali ? 'Heading1' : 'BilginEkBasligi', section.kimlik);
+      }
+      if (tokens.length === 1) {
+        assert.ok(on(child(child(block, 'w:pPr'), 'w:pageBreakBefore')), 'gövde kapaktan sonra yeni sayfada başlar');
+      }
+      tokens.push([]);
     }
-    tokens.set(name, found);
+    tokens.at(-1).push(...placeholders(block, 'word/document.xml'));
   }
-  const everything = new Set([...tokens.values()].flat());
-  assert.deepEqual([...everything].sort(), Object.keys(spec.yer_tutucular).sort());
-  const expectedOrder = spec.yapi.bolumler.flatMap((section) => section.yer_tutucular || []);
-  assert.deepEqual(tokens.get('word/document.xml'), expectedOrder, 'gövde yer tutucuları bölüm sırasıyla');
-  assert.deepEqual(tokens.get('word/header1.xml'), ['RAPOR_TURU', 'DONEM']);
-  assert.deepEqual([...tokens.get('word/header2.xml'), ...tokens.get('word/footer1.xml'), ...tokens.get('word/footer2.xml')], []);
+  assert.equal(tokens.length, sections.length, 'bölüm sayısı');
+  for (const [index, section] of sections.entries()) {
+    assert.deepEqual(tokens[index], section.yer_tutucular ?? [], section.kimlik + ': bölüm yer tutucuları');
+  }
+  return tokens.flat();
+}
+
+test('şablon: yer tutucular bölünmez, stil belgesiyle bire bir aynıdır ve ilgili bölümde doğru sıradadır', () => {
+  const body = checkSectionPlaceholders(xml('word/document.xml'));
+  const header = placeholders(xml('word/header1.xml'), 'word/header1.xml');
+  assert.deepEqual([...new Set([...body, ...header])].sort(), Object.keys(spec.yer_tutucular).sort());
+  assert.deepEqual(header, ['RAPOR_TURU', 'DONEM']);
+  for (const part of ['word/header2.xml', 'word/footer1.xml', 'word/footer2.xml']) {
+    assert.deepEqual(placeholders(xml(part), part), []);
+  }
 });
 
 test('şablon: yer tutucu dışındaki her görünen metin stil belgesinde ilan edilmiştir (kurum adı ya da başıboş metin yok)', () => {
@@ -322,7 +376,16 @@ test('şablon: yer tutucu dışındaki her görünen metin stil belgesinde ilan 
   assert.equal(all(core, 'dc:title')[0].textContent, spec.sablon.cekirdek.baslik);
   assert.equal(all(core, 'dc:creator')[0].textContent, spec.sablon.cekirdek.olusturan);
   assert.equal(all(core, 'cp:lastModifiedBy')[0].textContent, '');
+  checkExtendedProperties(xml('docProps/app.xml'));
 });
+
+function checkExtendedProperties(document) {
+  const root = document.documentElement;
+  assert.equal(root, all(document, 'ep:Properties')[0], 'genişletilmiş belge özellikleri kökü');
+  assert.equal(root.children.length, 2, 'şablonda yalnızca izinli genişletilmiş özellikler bulunur');
+  assert.equal(child(root, 'ep:Application')?.textContent, spec.sablon.cekirdek.olusturan);
+  assert.equal(child(root, 'ep:DocSecurity')?.textContent, '0');
+}
 
 test('şablon: numaralı bölüm başlıkları ve ek başlığı stil belgesindeki sırayla yazılıdır; tablo sütunları aynıdır', () => {
   const paragraphs = all(xml('word/document.xml'), 'w:p');
@@ -334,13 +397,13 @@ test('şablon: numaralı bölüm başlıkları ve ek başlığı stil belgesinde
   const summary = tables.filter((table) => attr(child(child(table, 'w:tblPr'), 'w:tblStyle')) === spec.tablolar.donem_gorev_ozeti.stil);
   assert.equal(summary.length, 1);
   const headerRow = children(summary[0], 'w:tr')[0];
-  assert.ok(child(child(headerRow, 'w:trPr'), 'w:tblHeader'), 'başlık satırı her sayfada yinelenir');
+  assert.ok(on(child(child(headerRow, 'w:trPr'), 'w:tblHeader')), 'başlık satırı her sayfada yinelenir');
   assert.deepEqual(children(headerRow, 'w:tc').map((cell) => paragraphText(cell)), spec.tablolar.donem_gorev_ozeti.sutunlar);
 });
 
 test('şablon: sürüm ve kimlik belge özellikleri stil belgesiyle aynıdır', () => {
   const custom = xml('docProps/custom.xml');
-  const properties = Object.fromEntries(all(custom, 'property').map((node) => [node.getAttribute('name'), node.textContent]));
+  const properties = Object.fromEntries(all(custom, 'custom:property').map((node) => [node.getAttribute('name'), node.textContent]));
   assert.deepEqual(properties, spec.sablon.belge_ozellikleri);
 });
 
@@ -355,13 +418,134 @@ test('şablon: kapak yedigeni uygulamadaki yetkili yedigen yollarını aynen kul
     assert.ok(svg.includes(`<path d="${d}" stroke="#${stroke}"`), `yol ve renk korunur (${tone})`);
   }
   assert.ok(svg.includes(`fill="#${paletteColor(spec.gorseller.kapak_yedigeni.zemin)}"`));
-  assert.doesNotMatch(svg, /<script|foreignObject|href=|\son[a-z]+=/i);
+  checkCoverSvg(xml('word/media/kapak-yedigen.svg'));
+  assert.equal(contentType('word/media/kapak-yedigen.svg'), 'image/svg+xml');
+  assert.equal(contentType('word/media/kapak-yedigen.png'), 'image/png');
+  validateCoverPng(docx.buffer('word/media/kapak-yedigen.png'));
+  checkCoverRelationships(xml('word/document.xml'), documentRelationship);
+});
+
+function checkCoverSvg(document) {
+  const allowed = {
+    svg: ['width', 'height', 'viewBox'],
+    rect: ['fill', 'height', 'width', 'x', 'y'],
+    g: ['fill', 'stroke-linejoin', 'transform'],
+    path: ['d', 'stroke', 'stroke-width']
+  };
+  assert.equal(all(document, 'svg:svg')[0], document.documentElement, 'SVG kök öğesi');
+  assert.equal([...document.childNodes].filter((node) => node.nodeType === 7).length, 0, 'SVG işlem yönergesi yasak');
+  for (const element of document.getElementsByTagName('*')) {
+    const attributes = allowed[element.localName];
+    assert.ok(element.namespaceURI === document.documentElement.namespaceURI && Array.isArray(attributes), 'SVG öğesi yasak');
+    for (const { localName, namespaceURI, value } of element.attributes) {
+      if (namespaceURI === 'http://www.w3.org/2000/xmlns/') continue;
+      assert.ok(namespaceURI === null && attributes.includes(localName), 'SVG özniteliği yasak');
+      if (localName === 'fill' || localName === 'stroke') {
+        assert.match(value, /^(?:none|#[0-9A-Fa-f]{6})$/u, 'SVG boya değeri yerel renk olmalıdır');
+      }
+    }
+  }
+  assert.equal(document.documentElement.textContent.trim(), '', 'SVG serbest metin taşımaz');
+}
+
+function checkCoverRelationships(document, relationship) {
+  const anchors = all(document, 'wp:anchor');
+  assert.equal(anchors.length, 1, 'tek kapak çizimi');
+  const [anchor] = anchors;
+  assert.ok(['1', 'true'].includes(attr(anchor, 'behindDoc')), 'kapak çizimi metnin arkasındadır');
+  assert.equal(anchor.parentNode?.parentNode?.parentNode, all(document, 'w:body')[0].firstElementChild,
+    'kapak çizimi ilk paragraftadır');
+  const png = all(anchor, 'a:blip');
+  const svg = all(anchor, 'asvg:svgBlip');
+  assert.equal(png.length, 1, 'kapak PNG başvurusu');
+  assert.equal(svg.length, 1, 'kapak SVG başvurusu');
+  assert.ok(png[0].contains(svg[0]), 'kapak PNG ve SVG aynı çizimdedir');
+  assert.equal(relationship(attr(png[0], 'r:embed'), 'image'), 'word/media/kapak-yedigen.png');
+  assert.equal(relationship(attr(svg[0], 'r:embed'), 'image'), 'word/media/kapak-yedigen.svg');
+}
+
+test('şablon: çok parçalı, çakışan, tutarsız veya bozuk ZIP girdileri reddedilir', async () => {
+  const original = await readFile(path.join(ROOT, spec.sablon.dosya));
+  const end = original.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const central = original.readUInt32LE(end + 16);
+  const local = original.readUInt32LE(central + 42);
+  const next = central + 46 + original.readUInt16LE(central + 28)
+    + original.readUInt16LE(central + 30) + original.readUInt16LE(central + 32);
+  assert.equal(readZipEntries(original).size, docx.names.length);
+  for (const [mutate, expected] of [
+    [(copy) => copy.writeUInt16LE(1, end + 4), /çok parçalı ZIP/],
+    [(copy) => copy.writeUInt16LE(1, central + 34), /çok parçalı ZIP girdisi/],
+    [(copy) => { copy[local + 30] ^= 1; }, /yerel başlığı merkezî dizinle uyuşmuyor/],
+    [(copy) => {
+      const checksum = (copy.readUInt32LE(central + 16) ^ 1) >>> 0;
+      copy.writeUInt32LE(checksum, central + 16);
+      copy.writeUInt32LE(checksum, local + 14);
+    }, /girdi sağlama toplamı uyuşmuyor/],
+    [(copy) => {
+      // İkinci kayda aynı ada sahip merkezî kayıt yazılır.
+      original.copy(copy, next, central, next);
+    }, /yinelenen ZIP parça adı/],
+    [(copy) => copy.writeUInt32LE(0xffffffff, central + 20), /yerel girdi aralığı/]
+  ]) {
+    const copy = Buffer.from(original);
+    mutate(copy);
+    assert.throws(() => readZipEntries(copy), expected);
+  }
+});
+
+test('şablon: geçersiz OOXML, dış ilişki, ana belge türü ve yerel olmayan alan komutu reddedilir', () => {
+  for (const [name, before, after, expected] of [
+    ['word/header2.xml', '</w:hdr>', '', /bozuk XML/],
+    ['_rels/.rels', 'Id="rId1"', "Id='rId1' TargetMode='External'", /dış ilişki yasak/],
+    ['_rels/.rels', 'Target="word/document.xml"', 'Target="word/header1.xml"', /paket kökü ana belge ilişkisi/],
+    ['[Content_Types].xml', /<Override PartName="\/word\/document\.xml"[^>]*\/>/u, '', /ana belge içerik türü/],
+    ['word/footer1.xml', 'w:instr=" PAGE "', 'w:instr=" UNKNOWN "', /Word alan komutları/]
+  ]) {
+    const original = docx.text(name);
+    const changed = original.replace(before, after);
+    assert.notEqual(changed, original, name + ': sınama değişikliği uygulandı');
+    const copy = { ...docx, text: (part) => part === name ? changed : docx.text(part) };
+    assert.throws(() => validateDocxXml(copy), expected);
+  }
+});
+
+test('şablon: bölüm, kapak, numara ve üstveri sınamaları bozulmaları yakalar', () => {
+  const body = () => parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+  const wrongSection = body();
+  const heading = all(wrongSection, 'w:p').find((p) => paragraphStyle(p) === 'Heading1' && paragraphText(p) === spec.yapi.bolumler[2].baslik);
+  const callout = heading.previousElementSibling;
+  heading.parentNode.insertBefore(heading, callout);
+  assert.throws(() => checkSectionPlaceholders(wrongSection), /yonetici_degerlendirmesi: bölüm yer tutucuları/);
+  const wrongHeader = body();
+  const section = all(wrongHeader, 'w:sectPr')[0];
+  children(section, 'w:headerReference').find((node) => attr(node, 'w:type') === 'default').remove();
+  assert.throws(() => checkHeaderFooter(xml, documentRelationship, section), /kapak ve gövde başvuruları/);
+  const wrongCover = body();
+  all(wrongCover, 'asvg:svgBlip')[0].remove();
+  assert.throws(() => checkCoverRelationships(wrongCover, documentRelationship), /kapak SVG başvurusu/);
+  const styles = parseDocxXml(docx.text('word/styles.xml'), 'word/styles.xml');
+  const appendix = all(styles, 'w:style').find((node) => attr(node, 'w:styleId') === 'BilginEkBasligi');
+  const pageBreak = child(child(appendix, 'w:pPr'), 'w:pageBreakBefore');
+  assert.equal(on(pageBreak), true);
+  pageBreak.setAttributeNS(pageBreak.namespaceURI, 'w:val', '0');
+  assert.equal(on(pageBreak), false);
+  const wrongColor = body();
+  const color = all(wrongColor, 'w:color')[0];
+  color.setAttributeNS(color.namespaceURI, 'w:val', '123456');
+  assert.throws(() => checkPalette(wrongColor, 'word/document.xml'), /izinli olmayan renk 123456/);
+  const numbering = docx.text('word/numbering.xml').replace('w:val="%1"', 'w:val="%1."');
+  assert.throws(() => checkNumbering(parseDocxXml(numbering, 'word/numbering.xml'), styles, body()), /başlık numarası biçimi/);
+  const properties = docx.text('docProps/app.xml').replace('</Properties>', '<Company>Örnek Kurum</Company></Properties>');
+  assert.throws(() => checkExtendedProperties(parseDocxXml(properties, 'docProps/app.xml')), /izinli genişletilmiş özellikler/);
+});
+
+test('şablon: PNG kapağın görüntü verisi ve parça bütünlüğü zorunludur', () => {
   const png = docx.buffer('word/media/kapak-yedigen.png');
-  assert.equal(png.subarray(1, 4).toString('latin1'), 'PNG');
-  // A4 oranlı kapak görseli (en ≈ boy × 210/297).
-  const [width, height] = [png.readUInt32BE(16), png.readUInt32BE(20)];
-  assert.ok(Math.abs(width / height - 210 / 297) < 0.002, `${width}×${height}`);
-  assert.match(docx.text('word/document.xml'), /behindDoc="1"/);
+  assert.throws(() => validateCoverPng(png.subarray(0, 24)), /PNG parça aralığı/);
+  assert.throws(() => validateCoverPng(png.subarray(0, -12)), /PNG görüntü verisi veya bitişi eksik/);
+  const damaged = Buffer.from(png);
+  damaged[42] ^= 1;
+  assert.throws(() => validateCoverPng(damaged), /PNG parça sağlama toplamı/);
 });
 
 // ------------------------------------------------------------------ rapor model rolleri
@@ -396,9 +580,11 @@ test('model rolleri: ölçüm olmadan hiçbir model nitelikli ya da seçili ilan
       assert.equal(entry.secili, null, role);
     }
   }
-  const writer = policy.roller.rapor_yazari_otomatik.secili;
   const reviewer = policy.roller.bagimsiz_denetci.secili;
-  if (writer && reviewer) assert.notEqual(writer, reviewer);
+  for (const role of ['rapor_yazari_otomatik', 'rapor_yazari_yuksek_kalite']) {
+    const writer = policy.roller[role].secili;
+    if (writer && reviewer) assert.notEqual(writer, reviewer, role + ': denetçi yazardan farklıdır');
+  }
   assert.equal(policy.nitelendirme.kiyas, 'test/fixtures/bilgin-executive-report-benchmark.json');
 });
 
@@ -452,6 +638,10 @@ test('4I-0 sınırı: çalışma zamanı rapor motoru, yükleme hizmeti ya da ka
   };
   await walk('src');
   assert.deepEqual(offenders, [], '4I-A ve sonrası bu sınamayı bilinçli olarak günceller');
-  const upgrades = (await readdir(path.join(ROOT, 'database'))).filter((name) => /^MR_Upgrade_\d{4}_/.test(name)).sort();
-  assert.equal(upgrades.at(-1), 'MR_Upgrade_0019_Creation_Allocations.sql', '4I-0 yeni veritabanı geçişi eklemez');
+  const reportMigration = /bilgin.{0,8}(?:rapor|report)|(?:y[oö]netici.{0,3}rapor|executive.{0,3}report)/iu;
+  for (const name of await readdir(path.join(ROOT, 'database'))) {
+    if (!/^MR_Upgrade_\d{4}_.*\.sql$/u.test(name)) continue;
+    const migration = await read(path.posix.join('database', name));
+    assert.doesNotMatch(name + '\n' + migration, reportMigration, 'yönetici raporu için kalıcılık 4J kapsamındadır: ' + name);
+  }
 });

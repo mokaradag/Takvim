@@ -72,7 +72,7 @@ Yönetici isteği (tür, dönem, kapsam, ayrıntı, odak, notlar, karşılaştı
    ▼
 4I-D  Belge         ── kanonik şablon + sunucu tabloları/grafikleri/kartları + logo politikası → DOCX
    ▼
-4I-E  Stüdyo        ── önizleme, bölüm düzeltme, metin düzenleme, sonlandırma (yetki yeniden denetlenir), indirme
+4I-E  Stüdyo        ── önizleme, bölüm düzeltme, metin düzenleme, sonlandırma, indirme (her içerik çıkışında yetki yeniden denetlenir)
 ```
 
 Her aşama sınırlıdır: model çağrısı, SQL süresi, kanıt boyutu, onarım denemesi ve uçtan uca süre bütçeleri vardır.
@@ -100,17 +100,19 @@ tanım gereği mekanik bir dökümdür. Bu nedenle 4I **ayrı ve sıkı denetlen
 
 ## 5. Yönetici kanıt paketi sözleşmesi (`4i-kanit-1`)
 
-Kanıt paketi, yazarın ve doğrulayıcının gördüğü **tek veri kaynağıdır**. Sunucuda kurulur, istek boyunca değişmez
-ve içeriği günlüğe yazılmaz.
+Kanıt paketi, yazarın ve doğrulayıcının gördüğü **tek veri kaynağıdır**. Sunucuda kurulur ve içeriği günlüğe
+yazılmaz. Her sürüm sabittir. Yetki veya rıza değişirse eski sürüm kullanılamaz (§14).
+Sicil, FULL/PARTIAL/READ kararları ve yönetim kapsamı ayrı sunucu bağlamında tutulur. Model girdisine yalnızca
+yetkili kanıtlar ve anlatı için gerekli kapsam/tamlık açıklamaları aktarılır.
 
 ```jsonc
 {
   "sema": "4i-kanit-1",
   "istek": { "rapor_turu": "haftalik", "donem": { "baslangic": "2026-11-02", "bitis": "2026-11-08", "ad": "geçen hafta" },
              "kapsam": { "tur": "projeler", "kimlikler": ["…"] }, "ayrinti": "standart", "odak": "dengeli",
-             "notlar": "dahil", "karsilastirma": "onceki_donem" },
+             "notlar": "dahil", "karsilastirma": "ozel_donem",
+             "karsilastirma_donemi": { "baslangic": "2026-10-26", "bitis": "2026-11-01" } },
   "veri_ani": "2026-11-09T08:30:00+03:00",
-  "yetki": { "sicil_ozeti": "…", "erisim": "FULL|PARTIAL|READ karışımı", "yonetim_kapsami": "…" },  // kimlik özetidir, yetki vermez
   "kanitlar": [
     { "id": "E1", "tur": "olcu",    "kaynak": "rota_task_analytics", "olcu": "tamamlanan", "deger": 18, "kapsam": ["…"], "tamlik": "complete" },
     { "id": "E2", "tur": "gorev",   "kaynak": "rota_task_search", "gorev": "…", "proje": "…", "durum": "…", "hedef_bitis": "…", "gerceklesen_bitis": null },
@@ -137,8 +139,13 @@ Kurallar:
   işaretler; hangisinin doğru olduğuna karar vermez, zaman sırasını verir.
 - **Bütçe.** Paket boyutu sınırlıdır (öneri: en çok 120 kanıt, 120 000 karakter). Ağ geçidinin ileti sınırı
   (ileti başına 32 KiB, istek başına 50 ileti) **yükseltilmez**; paket birden çok kanıt iletisine bölünür.
-- **Yetki.** Paket yalnızca isteğin yapıldığı andaki yetkiyle kurulur; kapsam istemek kapsam vermez. Sonlandırma ve
-  indirme öncesinde görünürlük yeniden okunur (§14).
+- **Özel karşılaştırma.** Yalnızca `ozel_donem` seçiminde `karsilastirma_donemi.baslangic` ve
+  `karsilastirma_donemi.bitis` zorunludur. Sunucu, ISO takvim tarihlerini, başlangıç ve bitiş sırasını, her iki
+  dönemin tamamlanmış olduğunu, karşılaştırma döneminin rapor döneminden önce bittiğini ve gün sayılarının
+  eşitliğini (iki sınır da dâhil) doğrular. Eksik veya uygunsuz özel aralık reddedilir. Karşılaştırmalı olgu
+  için iki dönemin yetkili ve karşılaştırılabilir kanıtı gerekir.
+- **Yetki.** Paket üretim anındaki yetkiyle kurulur. Her önizleme, sonlandırma ve indirme öncesinde görünürlük ve
+  rıza yeniden doğrulanır (§14). Rapor kapsamı yetki vermez.
 - **Güvenilmez veri.** Not ve belge metni veridir; içindeki yönerge izlenmez. Paket, metin alanlarını yazara
   açıkça "kayıtlı kullanıcı metni" olarak işaretleyerek verir.
 
@@ -152,8 +159,9 @@ olabilirler. Yazarın görevi bunları **kanıtın ötesine geçmeden** profesyo
 
 > Örnek not: `montaj bitti. test cihazı yok. saha testi haftaya. tarih kesin değil.`
 >
-> Kabul edilebilir anlatım: mekanik montaj tamamlanmış; saha testine geçiş test cihazının temin edilmesine bağlı;
-> notun kaydedildiği güne göre test bir sonraki haftaya işaret ediyor ancak tarih henüz kesinleşmemiş.
+> Kabul edilebilir anlatım: mekanik montaj tamamlanmış. Notta test cihazının mevcut olmadığı belirtiliyor.
+> Cihazın kullanılabilirliği saha testine geçiş için önem taşıyor. Not, kayıt gününü izleyen haftaya işaret
+> ediyor ve kesin bir test günü vermiyor.
 >
 > Kabul edilemez: "Saha testleri gelecek hafta yapılacak." (kesinlik uydurur) · "Tedarikçi gecikmesi nedeniyle…"
 > (neden uydurur) · notu kısaltılmış biçimiyle aynen aktarmak (editoryal kusur).
@@ -220,7 +228,8 @@ işaretleme ve 4I-C doğrulaması.
   belirsizlik dili, güvenilmez veri kuralı. Kararlı ve önbelleğe alınabilir önek.
 - Bölüm planı (sunucu): bölüm kimlikleri, her bölüme ayrılan kanıt kimlikleri, ayrıntı düzeyine göre sözcük
   bütçesi, zorunlu açıklamalar (ör. kısmi kayıt, tarihsiz tamamlanan).
-- Kanıt paketi (§5), en çok 32 KiB'lık kanıt iletilerine bölünmüş.
+- Yetki bağlamı hariç kanıt paketi (§5), en çok 32 KiB'lık kanıt iletilerine bölünmüş. Aynı sınır onarım,
+  yeniden sıralama ve bağımsız denetim girdileri için geçerlidir.
 
 ### 7.2 Çıktı
 
@@ -274,11 +283,16 @@ aynı cümleler değil:** bölüm başlıkları sabittir; cümleler her raporda 
 1. **Belirlenimci nesnel denetim (her zaman):** düzyazıdan sayı, yüzde, tarih/aralık, proje ve kişi adları, durum
    sözcükleri çıkarılır; her biri kanıt defterindeki bir değere ya da türetime bağlanmalıdır. Kanıt paketinde
    bulunmayan proje/kişi adı **kesin kapıdır** (uydurma ya da yetkisiz varlık).
-2. **Anlamsal destek denetimi (yorum ve iddialar):** cümle ya da iddia başına ilgili kanıtlar yeniden sıralayıcıyla
-   (rol `kanit_yeniden_siralama`) öne alınır; nitelikli bağımsız denetçi (rol `bagimsiz_denetci`, yazardan farklı
-   model) her maddi ifadeyi dört sınıftan birine yerleştirir ve destekleyen kanıtı gösterir. Denetçi kararı
-   yapılandırılmış ve doğrulanmış çıktıdır; tek başına yayın kararı vermez, onarım sinyalidir.
-3. **İnsan incelemesi:** çözülemeyen kritik sorunlar ve nitelenmiş ifadeler önizlemede işaretlenir.
+2. **Anlamsal destek denetimi (zorunlu):** Her maddi ifadenin yetkili kanıtla ilişkisi doğrulanır. Nitelikli
+   bağımsız denetçi kullanıldığında model fiilî yazardan farklıdır. Denetçi dört iddia sınıfını ve kanıt
+   göndergelerini döndürür. Sunucu bu çıktıyı doğrular ve onarım sinyali olarak kullanır. Kanıt seçimi için
+   belirlenimci eşleştirme temel yoldur. İsteğe bağlı toplu yeniden sıralama, doğrulama çağrılarına gerekecek
+   pay ayrıldıktan sonra kalan bütçeyi kullanır. İlk denetim ve onarım sonrası denetim dâhil, denetçi ve yeniden
+   sıralayıcı toplamda en çok iki çağrı kullanır.
+3. **İnsan incelemesi:** Bağımsız denetçi kullanılamadığında eşdeğer kanıta dayalı denetim veya yetkili insan
+   incelemesi gerekir. Bu inceleme tamamlanana kadar dışarı dönen taslakta doğrulanamayan maddi iddianın
+   yerine inceleme işareti gösterilir. İddia ancak destek doğrulanınca veya kanıtla uyumlu biçimde nitelenince
+   kullanılabilir. Çözülemeyen kritik sorun sonlandırmayı engeller.
 
 Doğrulama **birebir cümle eşleşmesi aramaz**. Editoryal dil için kanıt istenmez; yorum için kanıtın desteği yeterlidir.
 
@@ -340,7 +354,7 @@ geçmez (mevcut mimari sınaması bunu sohbet kodu için zaten zorunlu kılar).
 | `rapor_yazari_yuksek_kalite` | En yüksek kaliteli yazar (daha uzun süre kabul edilir) | chat | 131072 |
 | `rapor_yazari_kullanici_secimi` | Yöneticinin seçebileceği nitelikli yazarlar | chat | 131072 |
 | `kanit_yeniden_siralama` | Doğrulamada cümleye en ilgili kanıtı öne alma | rerank | 8192 |
-| `bagimsiz_denetci` | İsteğe bağlı iddia denetçisi; yazardan farklı model | chat | 131072 |
+| `bagimsiz_denetci` | Kullanıldığında fiilî yazardan farklı olan iddia denetçisi | chat | 131072 |
 
 Yazar adayları: `DeepSeek-V4.1-Flash-1017`, `Qwen3.8-Flash-Next-FP8` ve taban olarak bugün üretimde çalışan
 `gemma-4-31B-it`, `Qwen3-Next-80B-A3B-Instruct` ile `openai/gpt-oss-120b`. Yeniden sıralayıcı adayları:
@@ -359,7 +373,9 @@ korur). Hangi modelin "en yetenekli" olduğu ölçülmeden söylenmez.
 - 4I-B, nitelendirmeden **sonra** model kaydına rapor profilleri (öneri: `report.writer`, `report.writer.quality`,
   `report.review`) ekler; profil → model eşlemesi yine veridir. Yeni model geldiğinde: kayda eklenir → kıyas koşulur
   → geçerse role yazılır. İş kodu değişmez.
-- Stüdyo'daki model seçici yalnızca `nitelikli_modeller` listesini gösterir; teknik ayar göstermez.
+- Stüdyo'daki model seçici yalnızca `nitelikli_modeller` listesini gösterir. Otomatik, yüksek kalite ve yönetici
+  seçimi için denetçinin bağımsızlığı fiilen kullanılan yazar modeline göre değerlendirilir. Aynı model
+  eşleşmesinde §8.2'deki güvenli inceleme yolu uygulanır.
 
 ---
 
@@ -374,8 +390,9 @@ korur). Hangi modelin "en yetenekli" olduğu ölçülmeden söylenmez.
   ve destek renkleri (`#077780`, `#FF8022`, `#EBEBEE`); metin için akromatik nötrler. Kılavuzdaki `#002D7A`
   yazımı tanımlı CMYK/RGB/Pantone/RAL değerleriyle çeliştiğinden yetkili değer `#003087` kabul edildi.
 - **Yazı tipi:** stiller yazı tipini tema üzerinden (başlık = major, gövde = minor) alır; etkin profil Calibri'dir.
-  Nexa ancak raporu açacak bilgisayarlarda kurulu olduğu ya da lisansı DOCX'e gömmeye izin verdiği doğrulanınca,
-  yalnızca tema yazı tipi değiştirilerek açılır. Word'ün denetimsiz yazı tipi ikamesine bırakılmaz.
+  Nexa, iki aile üyesi bütün hedef istemcilerde kuruluysa ya da lisansa uygun biçimde gerçekten DOCX'e gömülüp
+  Nexa kurulu olmayan hedef Word ortamında açılış ve sayfalama doğrulanırsa tema üzerinden seçilebilir.
+  Bu koşullardan biri sağlanana kadar Calibri kullanılır.
 - **Kapak:** lacivert zemin ve sağ altta kırpılmış yedigen çizgileri. Yedigen, `src/components/ui.jsx`
   içindeki `HEPT_PATHS` yollarından **aynen** üretilmiştir (renk eşlemesi: teal → `#077780`, orange → `#FF5620`);
   şablonda vektör SVG ve aynı görüntünün PNG yedeği bulunur. Resmî logo taklit edilmez (§11).
@@ -468,10 +485,11 @@ panelindedir:
   yapay zekâ desteği bildirimi ve inceleme gerektiren sorunlar sunum tercihiyle gizlenemez.
 - **Kurumsal biçim seçeneklerden bağımsızdır:** hiçbir ayar palet, yazı tipi, sayfa düzeni ya da bölüm sırasını
   değiştirmez.
-- **Yetki:** kapsam seçenekleri sunucudan gelir; sonlandırma ve indirme öncesinde yetki yeniden doğrulanır; yetkisi
-  kalkan içerik çıkarılır ve kullanıcıya söylenir.
+- **Yetki:** kapsam seçenekleri sunucudan gelir. İlk önizleme, düzeltme sonrası önizlemeler, sonlandırma ve her
+  indirme öncesinde §14 uygulanır. Kullanıcıya yetki değişikliği korunan içerik veya kimlik gösterilmeden bildirilir.
 - **Düzenleme:** yöneticinin değiştirdiği bölümler belge özelliklerinde (`BilginDuzenlenenBolumler`) kaydedilir;
-  düzenlenen metin doğrulamadan geçmiş sayılmaz ve yöneticinin sorumluluğundadır.
+  değiştirdiği metinden yönetici sorumludur. Önceki doğrulama değiştirilen metne taşınmaz. İçerik çıkarılmadan önce
+  yetki denetimi ve yayımlanacak maddi iddia desteği için §14 ve §8.2 uygulanır.
 - **Görsel dil:** mevcut uygulama tasarım değişkenleri, açık/koyu tema, kurumsal lacivert ve sınırlı turuncu;
   masaüstü ve dar ekranda okunabilir; klavye ile kullanılabilir; teknik model ayarı gösterilmez.
 - **Taslak durumu:** 4I'de sunucuda kalıcı saklama yoktur. Önizleme ile sonlandırma arasındaki taslak ya bellekte,
@@ -484,13 +502,14 @@ panelindedir:
 ## 14. Güvenlik, yetki ve gizlilik değişmezleri
 
 - Sicil yalnızca güvenilir oturumdan; FULL/PARTIAL/READ, proje/görev görünürlüğü ve yönetim kapsamı aynen.
-- Kanıt üretim anındaki yetkiyle; son yetki denetimi sonlandırma ve indirme öncesinde (sohbetin son çizim öncesi
-  yeniden denetim ilkesinin raporda karşılığı).
+- Kanıt üretim anındaki yetkiyle toplanır. Her içerik çıkışında (ilk ve sonraki önizlemeler, sonlandırma, her
+  indirme) güncel görünürlük ve rıza doğrulanır. Yetkisi değişen kanıta dayalı düzyazı, sayılar, tablolar,
+  grafikler ve belge yeniden kurulur veya çıkarılır. Önceden hazırlanmış çıktı yeni denetimi atlayamaz.
 - Model SQL üretmez; yeni araç ya da açık uçlu sorgu yüzeyi yoktur; sabit, parametreli sorgular.
 - Korunan metin (not, ileti, değişiklik metni, belge) yalnızca rapor başına açık rızayla.
 - İçerik günlüğe, telemetriye ve başka kullanıcının bağlamına girmez; içeriksiz telemetri (süre, çağrı, belirteç,
   sonuç kodu) tutulur.
-- Kapalı başarısızlık: yetki ya da kanıt doğrulanamazsa rapor üretilmez veya sonlandırılmaz.
+- Yetki veya rıza doğrulanamazsa içerik döndürülmez. Kanıt desteği doğrulanamayan maddi iddialar için §8.2 uygulanır.
 - 4I-0 yeni uç, kalıcı tablo, arka plan işçisi, zamanlanmış görev ya da küresel değişebilir durum eklemez.
 
 ---

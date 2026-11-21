@@ -86,9 +86,9 @@ yazi_tipi:
     nexa_kurumsal:  { baslik: "Nexa Heavy", govde: "Nexa Book" }
   denetimli_uyumluluk: >-
     Şablondaki stiller yazı tipini doğrudan değil, tema yazı tipleri (başlık = major, gövde = minor) üzerinden alır.
-    Etkin profil Calibri'dir. Nexa profili yalnızca (a) yazı tipinin raporu açacak bütün kurum bilgisayarlarında
-    kurulu olduğu ya da (b) lisansının DOCX'e gömmeye izin verdiği doğrulanınca, yalnızca tema yazı tipi değiştirilerek
-    açılır. Word'ün denetimsiz yazı tipi ikamesine (satır ölçüsü ve sayfa düzeni kayması) bırakılmaz.
+    Etkin profil Calibri'dir. Nexa profili, iki yazı tipi bütün hedef istemcilerde kuruluysa ya da lisansa uygun
+    biçimde DOCX'e gerçekten gömülüp Nexa kurulu olmayan hedef Word ortamında açılış ve sayfalama doğrulanırsa açılır.
+    Tema seçimi her iki durumda da Nexa'yı göstermelidir. Bu koşullar sağlanana kadar Calibri kullanılır.
   dil: tr-TR
 
 # Word stilleri. `kimlik` = w:styleId, `ad` = w:name. Boyutlar punto. Renk adları palet anahtarlarıdır.
@@ -147,7 +147,7 @@ yapi:
     - { kimlik: riskler, baslik: "Riskler, Engeller ve Bağımlılıklar", numarali: true, zorunlu: false, sahip: model, yer_tutucular: [RISKLER] }
     - { kimlik: oncelikler, baslik: "Önümüzdeki Dönem Öncelikleri", numarali: true, zorunlu: false, sahip: model, yer_tutucular: [ONCELIKLER] }
     - { kimlik: genel_sonuc, baslik: "Genel Sonuç ve Değerlendirme", numarali: true, zorunlu: true, sahip: model, yer_tutucular: [GENEL_SONUC] }
-    - { kimlik: kaynak_ve_yontem, baslik: null, zorunlu: true, sahip: sunucu, kaldirilamaz: true, yer_tutucular: [KAYNAK_VE_YONTEM_NOTU] }
+    - { kimlik: kaynak_ve_yontem, baslik: null, paragraf_stili: BilginKaynakNotu, zorunlu: true, sahip: sunucu, kaldirilamaz: true, yer_tutucular: [KAYNAK_VE_YONTEM_NOTU] }
     - { kimlik: ekler, baslik: "Ekler", numarali: false, zorunlu: false, sahip: sunucu, yer_tutucular: [EKLER] }
   bolum_kurallari:
     kisi_kapsami: "Bireysel raporda 'Proje Faaliyetleri ve İlerleme' başlığı 'Faaliyetler ve İlerleme' olarak yazılabilir; sıra değişmez."
@@ -317,6 +317,11 @@ onarim:
   birim: paragraf
   adimlar: [tespit_et, yerini_belirle, kanitla_yeniden_yazdir, yeniden_dogrula, nitele_ya_da_cikar, inceleme_iste]
   deneme_butcesi: { paragraf_basina: 2, rapor_basina: 8 }
+  denetim_ve_yeniden_siralama_cagri_tavani: 2
+  anlamsal_denetim: >-
+    Maddi iddiaların kanıt desteği doğrulanır. Bağımsız denetçi yoksa eşdeğer kanıta dayalı denetim veya yetkili insan
+    incelemesi gerekir. Doğrulanamayan iddia kullanıcıya sunulmadan önce nitelenir ya da çıkarılır; çözülemeyen kritik
+    sorun sonlandırmayı engeller.
   yasaklar:
     - butun_raporu_tek_ifade_icin_reddetmek
     - paragrafi_hazir_sunucu_metniyle_degistirmek
@@ -337,6 +342,10 @@ ozellestirme:
     destekleyici_belgeler: [yok, var]
     gorseller: [temel, ayrintili, duzyazi_agirlikli]
     model: [otomatik, nitelikli_model]
+  ozel_karsilastirma_donemi:
+    istek_alani: karsilastirma_donemi
+    zorunlu_alanlar: [baslangic, bitis]
+    kurallar: [gecerli_takvim_tarihleri, bitmis_donemler, rapordan_once, esit_gun_sayisi]
   sabit:
     - palet
     - yazi_tipi
@@ -387,7 +396,7 @@ model_politikasi:
       nitelikli_modeller: []
       secili: null
     bagimsiz_denetci:
-      amac: "İsteğe bağlı bağımsız iddia denetçisi; yazardan farklı model olmalıdır"
+      amac: "Bağımsız iddia denetçisi, kullanıldığında fiilî yazardan farklı model olmalıdır"
       gerekli_yetenekler: [chat]
       en_az_baglam: 131072
       adaylar: [DeepSeek-V4.1-Flash-1017, Qwen3.8-Flash-Next-FP8, gemma-4-31B-it, openai/gpt-oss-120b, Qwen3-Next-80B-A3B-Instruct]
@@ -413,7 +422,13 @@ surumleme:
 
 guvenlik:
   kimlik: "Sicil yalnızca güvenilir oturumdan alınır."
-  yetki: "Kanıt üretim anındaki yetkiyle toplanır; sonlandırma ve indirme öncesinde yeniden doğrulanır."
+  yetki: >-
+    Kanıt üretim anındaki yetkiyle toplanır. İlk ve sonraki önizlemeler, sonlandırma ve her indirme öncesinde
+    görünürlük ve rıza yeniden doğrulanır. Yetkisi kalkan kanıta dayalı içerik yeniden kurulur ya da çıkarılır;
+    yetki doğrulanamıyorsa işlem içerik döndürmez.
+  model_girdisi: >-
+    Model yalnızca yetkili kanıtı ve anlatı için gerekli kapsam/tamlık bilgisini alır.
+    Sicil, erişim kararları ve yönetim kapsamı sunucuda kalır.
   kapsam: "FULL/PARTIAL/READ, proje/görev görünürlüğü ve yönetim kapsamı aynen uygulanır; rapor kapsamı yetki vermez."
   korunan_metin: "Görev notu ve iletiler yalnızca açık rızayla okunur; rıza başka rapora taşınmaz."
   gunluk: "Rapor, not ve belge içeriği uygulama günlüğüne yazılmaz; yalnızca içeriksiz telemetri tutulur."
@@ -424,9 +439,12 @@ insan_incelemesi:
   taslak: "Rapor yönetici sonlandırana dek taslaktır."
   sonlandirma_kosullari:
     - cozulmemis_kritik_sorun_yok
-    - nitelenen_ya_da_cikarilan_ifadeler_onizlemede_gorunur
+    - yayimlanacak_maddi_iddialarin_kanit_destegi_dogrulandi
+    - nitelenen_ya_da_cikarilan_ifadelerin_isaretleri_onizlemede_gorunur
     - yapay_zeka_destegi_bildirimi_kaynak_notunda
-  kullanici_duzenlemesi: "Yöneticinin değiştirdiği bölümler belge özelliklerinde kaydedilir; düzenlenen metin yöneticinin sorumluluğundadır."
+  kullanici_duzenlemesi: >-
+    Yöneticinin değiştirdiği bölümler belge özelliklerinde kaydedilir. Yöneticinin metin üzerindeki sorumluluğu,
+    yayımlama öncesinde yetki ve maddi iddia desteğinin doğrulanması koşullarını kaldırmaz.
 
 belge_kabulu:
   - "Word uyarı ya da onarım istemeden açar; bütün metin düzenlenebilir."

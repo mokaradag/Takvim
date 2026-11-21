@@ -22,8 +22,8 @@ yapılmamıştır**; fikstürün `olcumler` alanı boştur ve belirlenimci sına
   **destekleyici** kanıttır, tek başına kapı değildir.
 - Belirli düzyazıyı, bağlaçları ya da cümle kalıplarını bekleyen **kırılgan sınama yazılmaz**. Doğrulaması kolay
   diye mekanik dil ödüllendirilmez: olgusal olarak doğru ama mekanik rapor (K17) editoryal kapıdan **düşer**.
-- Eşikler karşılaştırmalı deneylerden **önce** tanımlanır (§5); deney başladıktan sonra yalnızca karar günlüğüne
-  gerekçesiyle yazılarak ve bütün adaylar için birlikte değiştirilebilir.
+- Eşikler ve puanlama kuralları karşılaştırmalı deney başlamadan önce tanımlanır (§5) ve koşu boyunca sabit kalır.
+  Gerekçeli değişiklik karar günlüğüne yazılır ve ancak bütün adayların yeniden koşulduğu yeni deneyde uygulanır.
 - Üç kanıt düzeyi karıştırılmaz: **belirlenimci geçiş** (sentetik veri, sahte sağlayıcı), **kurum içi model
   nitelendirmesi** (gerçek on-prem modeller, sentetik kıyas), **kurum içi kabul** (gerçek altyapı, Windows VM, Word).
 
@@ -71,9 +71,9 @@ Temsili vakaların sınadığı zor noktalar:
 | R3 | Doğru ama mekanik taslak → bütünlük geçer, editoryal kapı düşer |
 | R4 | Çelişen iki not → zaman sırası, değişikliğin açıkça söylenmesi, yeni tarih uydurmama |
 | R5 | Tarihsiz tamamlanma → gecikme iddiası kurulmaz |
-| R6 | Not içi yönerge → izlenmez; görev açık kalır |
+| R6 | Not içi yönerge izlenmez. Görev açık kalır ve bağımsız kanıtla belgelenen risk belirtilir. |
 | R7 | Değişiklik yok → kısa, dürüst; uydurma etkinlik yok |
-| R8 | Kanıtta olmayan, kullanıcıya kapalı proje adı → kesin kapı (yetkisiz açıklama) |
+| R8 | PARTIAL projede ekip toplamı yalnızca görünür görevlerden hesaplanır. Kapalı proje ya da görev yayımlanmadan kesin kapıda tutulur. |
 
 ---
 
@@ -97,8 +97,10 @@ gerçekçi yükte güvenilirlik; mevcut Bilgin yeteneklerinde regresyon yok.
 ## 4. İnsan editoryal kalite ölçütü
 
 İki bağımsız puanlayıcı, **model kimliği gizli** ve rastgele sırada, her raporu dokuz ölçütte 1–5 puanlar.
-Puanlar arasında 1'den büyük fark olan ölçüt üçüncü puanlayıcıya gider. Ayrıca her rapor için ikili
-**mekanik döküm** bayrağı verilir.
+Her rapor ve ölçütte ilk iki puanın farkı en çok 1 ise aritmetik ortalamaları alınır. Fark 1'den büyükse
+üçüncü kör puanlayıcı aynı ölçütü puanlar ve üç puanın medyanı kullanılır. Ölçüt ortalaması raporlar
+arasındaki bu nihai puanlardan, genel ortalama ise dokuz ölçütün ortalamasından hesaplanır. Ayrıca her
+rapor için ikili **mekanik döküm** bayrağı verilir.
 
 | Ölçüt | 5 (örnek alınacak) | 3 (kabul sınırı altı) | 1 (başarısız) |
 | --- | --- | --- | --- |
@@ -117,9 +119,10 @@ kayıt alanlarının cümleye çevrilmesinden oluşması. Bayrak tek başına B 
 
 **Ayar örnekleri (sentetik):**
 
-- *5 düzeyine yakın:* "Kuzey projesinde saha prototipinin mekanik montajı tamamlandı; ancak saha testlerine geçiş
-  için gereken test cihazı henüz teslim edilmediğinden bir sonraki adım cihazın ulaşmasına bağlı. Görev notları
-  testlerin gelecek hafta yapılabileceğine işaret etse de yeni tarih henüz kesinleşmiş değil."
+- *5 düzeyine yakın (R1):* "Kuzey projesinde saha prototipinin mekanik montajı tamamlandı. Görev kaydında
+  gerçekleşen bitiş tarihi 5 Kasım. 6 Kasım tarihli notta test cihazının mevcut olmadığı belirtiliyor. Saha
+  testlerine geçiş için cihazın kullanılabilirliği izlenmeli. Not, testlerin 9 Kasım’da başlayan haftada
+  yapılabileceğine işaret ediyor. Kesin gün belirtilmemiş."
 - *1 düzeyi (R3):* "Bu dönemde toplam 18 görev tamamlanmıştır. Toplam 52 görev açıktır. Toplam 7 görev
   gecikmiştir. Toplam 14 görev yaklaşan görevdir."
 
@@ -136,7 +139,7 @@ gizli kimliği kullanır, puanları insan puanlarıyla ayrı raporlanır ve insa
 | **A** (yazar nitelendirmesi) | Onarım öncesi taslakta nesnel olgu doğruluğu en az **%95** |
 | **B** | 1–5 ölçekte genel ortalama en az **4,0**; hiçbir ölçütün ortalaması **3,5**'in altında değil; mekanik döküm oranı en çok **%5**; iki kör puanlayıcı, fark > 1 ise üçüncü |
 | **C** | Word'ün onarım istemeden açtığı belge oranı **%100**; standart ayrıntıda **2–3** sayfa (kapak ve ekler hariç); bütün sayfalar görsel incelenir; stil sözleşmesi sınaması geçer |
-| **D** | Rapor başına en çok **11** model çağrısı (1 yazım + 8 onarım + 2 denetim); standart raporda uçtan uca p95 en çok **240 sn** (ilk eşik); iptal sonrası geçici veri kalmaz; mevcut Bilgin regresyonu **0** |
+| **D** | Rapor başına en çok **11** model çağrısı (1 yazım + 8 onarım + denetim ve yeniden sıralama için ortak 2 çağrı); standart raporda uçtan uca p95 en çok **240 sn** (ilk eşik); iptal sonrası geçici veri kalmaz; mevcut Bilgin regresyonu **0** |
 | **4I-C onarım** | Onarım sonrası editoryal puan düşüşü en çok **0,3**; tekil sorunların en az **%90**'ı yerel onarımla insan incelemesine gerek kalmadan çözülür; bütün raporun hazır metne düşmesi **0** |
 
 **Seçim kuralı:** bütün A kapılarını geçen adaylar arasında `rapor_yazari_otomatik`, B eşiklerini geçen ve D süre
@@ -151,16 +154,22 @@ geçenler arasında en yüksek B ortalamalısıdır (p95 ≤ 600 sn). Hiçbir ad
 1. **Adaylar:** `DeepSeek-V4.1-Flash-1017`, `Qwen3.8-Flash-Next-FP8`; taban: `gemma-4-31B-it`,
    `Qwen3-Next-80B-A3B-Instruct`, `openai/gpt-oss-120b` (stil belgesi `model_politikasi`).
 2. **Ön koşul:** kimlikler kurum içi `GET /models` yanıtında doğrulanır; doğrulanamayan model koşulmaz.
-3. **Aynı koşullar:** aynı kanıt paketleri, aynı yönerge sürümü, sabit sıcaklık/örnekleme ayarları, aynı çıktı
-   sınırı; düşünme kipi ve nicemleme (ör. FP8) kaydedilir.
+3. **Aynı koşullar:** Puanlanan küme §2'deki 48 senaryodur. R1–R8 için kaynak, ilgili temsili vakanın fikstürdeki
+   kanıtıdır. Diğer senaryolar için (ör. S04) 4I-A'nın sentetik veri ve kanıt kurucusuyla senaryo kimliğine bağlı,
+   sürümlü kanıt paketleri hazırlanır. 4I-B başlamadan önce tüm paketler gözden geçirilir ve sabitlenir. Bir paket
+   eksikse koşu başlamaz. Her aday aynı paketleri, yönerge sürümünü, sıcaklık/örnekleme ayarlarını ve çıktı
+   sınırını kullanır. Düşünme kipi ve nicemleme (ör. FP8) kaydedilir.
 4. **Kimlik doğrulaması:** her yanıttaki bildirilen model kimliği kaydedilir; beklenenle uyuşmayan ya da
    doğrulanamayan koşu **GEÇERSİZ/DOĞRULANMAMIŞ** sayılır, geçiş raporlanmaz.
-5. **Bütçe:** koşudan önce çağrı ve belirteç bütçesi konur; kota, kimlik ya da altyapı hatasında durulur; daha
-   güçlü modele sessiz geçiş yoktur.
+5. **Bütçe:** Çağrı ve belirteç sınırları koşudan önce belirlenir. §5'teki 11 çağrıya yazım, onarım, bağımsız model
+   denetimi ve yeniden sıralama dâhildir. Önce gereken denetim çağrılarının payı ayrılır. Yalnızca kalan payla
+   toplu yeniden sıralama çağrılabilir. Pay kalmadığında kanıt belirlenimci olarak seçilir ve maddi iddia desteği
+   mimari §8.2'ye göre doğrulanır. Kota, kimlik veya altyapı hatasında koşu durur. Başka modele sessiz geçiş yasaktır.
 6. **Ölçüm:** A için belirlenimci denetim + insan doğrulaması; B için §4; C için 4I-D'den sonra; D için çağrı,
    belirteç, süre (p50/p95), iptal ve temizlik.
-7. **Kayıt:** sonuçlar fikstürün `olcumler` alanına (model, tarih, ortam, ayarlar, A/B/C/D sonuçları, puanlayıcı
-   sayısı) ve yol haritasının oturum devrine yazılır; nitelikli modeller stil belgesindeki role işlenir.
+7. **Kayıt:** 4I-B nitelendirme kaydı sentetik fikstürden ayrı ve sürümlü tutulur (model, tarih, ortam, ayarlar,
+   kanıt paketi sürümleri, A/B/C/D sonuçları, puanlayıcı sayısı). Fikstürün `olcumler` alanı boş kalır. Sonuç
+   kaydı yol haritasının oturum devrine bağlanır ve nitelikli modeller stil belgesindeki role işlenir.
 
 ---
 
@@ -173,7 +182,7 @@ geçenler arasında en yüksek B ortalamalısıdır (p95 ≤ 600 sn). Hiçbir ad
 | **4I-B** | Gerçek on-prem modellerle tam taslaklar; A kesin kapıları ve **B eşikleri**; mekanik döküm görünüyorsa olgusal doğruluktan bağımsız olarak **başarısız** |
 | **4I-C** | Önce/sonra raporları; tekil sorunların yerel onarımı; **hem bütünlük hem anlatı kalitesi** korunur |
 | 4I-D | Word'de açılış, bütün sayfaların görsel incelemesi, stil sözleşmesi, Türkçe karakter, sunucu görselleri |
-| 4I-E | Yönetici geliştirici yardımı olmadan oluşturur, düzeltir, sonlandırır, indirir; yetki yeniden denetimi |
+| 4I-E | Yönetici geliştirici yardımı olmadan oluşturur, düzeltir, önizler, sonlandırır ve indirir. Her içerik çıkışında yetki yeniden denetlenir. |
 | 4I-F | Ek bilgi raporu iyileştirir; yüklenen içerik izin verilen süreden sonra kalmaz; güvenlik sınamaları |
 
 ---

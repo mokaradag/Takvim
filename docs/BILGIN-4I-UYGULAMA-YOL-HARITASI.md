@@ -174,8 +174,9 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 7. **Gerekli referans görüntüleri ve varlıklar** — Gerekmez (görsel çıktı yok).
 8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Dönemde tamamlanan işin notları pakette; not kayıt zamanı
    ile olay tarihi ayrı; tamlık ve kırpma doğru; çelişkiler işaretli; paket sınırları içinde; SQL süresi bütçede.
-9. **Güvenlik ve yetki sınamaları** — FULL/PARTIAL/READ, yönetim kapsamı, Sicil yalıtımı; rıza yokken hiçbir not ya
-   da değişiklik metni okunmaz; silinmiş/taşınmış görev ve gizli proje hareketi Görev Hareketleri kuralıyla;
+   Özel karşılaştırma tarihleri ve eşit, tamamlanmış dönem koşulları mimari §5'e göre doğrulanır (S09).
+9. **Güvenlik ve yetki sınamaları** — FULL/PARTIAL/READ, yönetim kapsamı, Sicil yalıtımı. Yetki kararları ve Sicil
+   sunucuda kalır. Rıza yokken hiçbir not ya da değişiklik metni okunmaz; silinmiş/taşınmış görev ve gizli proje hareketi Görev Hareketleri kuralıyla;
    kullanıcılar arası sızıntı yok; not içi yönerge veri olarak işaretli; içerik günlüğe girmez.
 10. **Doğal dil kalite gereksinimleri** — Doğrudan düzyazı yok; ama paket, 4I-B'nin doğal anlatı kurabilmesi için
     ilişkili notları, zaman sırasını ve yönetim önemini taşımalıdır (yalnızca sayılar değil).
@@ -215,8 +216,9 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Kabul çerçevesi §5: A kesin kapıları, B eşikleri (genel ≥ 4,0;
    ölçüt ≥ 3,5; mekanik döküm ≤ %5), D bütçeleri. **Kritik kapı:** çıktı veritabanı dökümü gibi okunuyorsa artım
    olgusal doğruluktan bağımsız olarak başarısızdır.
-9. **Güvenlik ve yetki sınamaları** — Yazara yalnızca paket gider; not içi yönerge izlenmez (R6, K19); kapalı
-   varlık adı çıktıda kesin kapı (R8); içerik günlüğe girmez.
+9. **Güvenlik ve yetki sınamaları** — Yazara yalnızca yetkili kanıt ve anlatı için gerekli kapsam/tamlık bilgisi gider.
+   Not içi yönerge izlenmez ve gerçek risk korunur (R6, K19). Kısmi erişim toplamı görünür görevlerden hesaplanır
+   ve kapalı varlık adı kesin kapıdır (R8). İçerik günlüğe girmez.
 10. **Doğal dil kalite gereksinimleri** — Stil belgesi `anlati`: bağlantılı paragraflar, sentez, somutluk, kalıp
     tekrarından kaçınma, belirsizliğin ölçülü anlatımı, notların profesyonel dönüşümü, suç atfı yok.
 11. **Regresyon gereksinimleri** — Sohbet profilleri, yönergesi ve kıyas kapıları değişmez; ağ geçidi sınırları
@@ -237,7 +239,7 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 
 1. **Amaç ve kullanıcı değeri** — Olgusal hataları, iyi yazılmış düzyazıyı yok etmeden yerinde düzeltmek.
 2. **İşlevsel kapsam** — Nesnel olgu doğrulaması (sayı, tarih, kimlik, durum; biçim normalleştirme); desteklenen
-   yorumun anlamsal destek denetimi (yeniden sıralayıcı + bağımsız denetçi); paragraf/cümle düzeyinde yerel onarım;
+   zorunlu anlamsal destek denetimi (bağımsız denetçi veya eşdeğer inceleme, isteğe bağlı yeniden sıralama); paragraf/cümle düzeyinde yerel onarım;
    sınırlı deneme (paragraf başına 2, rapor başına 8); nitele ya da çıkar; kritik hata ve insan incelemesi politikası.
 3. **Yeniden kullanılan altyapı** — Kanıt paketi (`E#`/`F#`), sayı ve tarih biçimleme yardımcıları, anlamsal
    katmanın yeniden sıralama profili, ağ geçidi.
@@ -256,12 +258,13 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 10. **Doğal dil kalite gereksinimleri** — Onarılan paragraf çevresiyle doğal biçimde bağlanır; nitelemeler ölçülü;
     çıkarma sonrası paragraf bütünlüğü korunur.
 11. **Regresyon gereksinimleri** — 4I-B kalite puanları onarımla anlamlı düşmez; sohbet doğrulayıcıları değişmez.
-12. **Başarım ve kaynak** — Rapor başına toplam model çağrısı ≤ 11; onarım isteği yalnızca ilgili paragraf ve kanıtı
-    taşır (küçük bağlam).
-13. **Bağımlılıklar** — 4I-B; yeniden sıralayıcı ve denetçi rollerinin nitelendirilmesi.
+12. **Başarım ve kaynak** — Rapor başına en çok 11 model çağrısı (1 yazım, 8 onarım, denetim ve yeniden sıralama
+    için ortak 2 çağrı). Onarım isteği yalnızca ilgili paragrafı ve kanıtı taşır.
+13. **Bağımlılıklar** — 4I-B. Model kullanıldığında denetçi ve yeniden sıralayıcı rolleri nitelendirilir.
 14. **Riskler ve geri alma** — Denetçinin aşırı katılığı (yorumu reddetmesi) → eşik ve insan kalibrasyonu;
-    denetçi kararının yayın kararı sayılmaması; geri alma: denetçi isteğe bağlıdır, belirlenimci nesnel denetim kalır.
-15. **Kapsam dışı** — Kullanıcı düzenlemesinin doğrulanması (yöneticinin sorumluluğu), DOCX.
+    denetçi kararının yayın kararı sayılmaması. Denetçi geri alınırsa belirlenimci nesnel denetim korunur ve
+    maddi iddia desteği eşdeğer incelemeyle doğrulanır. Doğrulanamayan içerik ve kritik sorunlar için mimari §8.2 uygulanır.
+15. **Kapsam dışı** — Stüdyo'daki kullanıcı düzenlemeleri (4I-E) ve DOCX (4I-D).
 16. **Durum ve doğrulama kanıtı** — Henüz uygulanmadı.
 
 ---
@@ -322,8 +325,9 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
    nitelikli seçenekler).
 8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Varsayılan görünüm sade; gelişmiş seçenekler göze batmaz;
    kurumsal biçim seçeneklerden bağımsız; erişilebilirlik ve klavye; dar ekranda okunur.
-9. **Güvenlik ve yetki sınamaları** — Kapsam seçenekleri yalnızca yetkili; sonlandırma/indirme öncesi yetki yeniden
-   denetimi (yetkisi kalkan içerik çıkarılır, K20/S48); oturumlar arası yalıtım; CSRF ve mevcut uç güvenliği.
+9. **Güvenlik ve yetki sınamaları** — Yetkili kapsam seçenekleri, ilk ve sonraki önizlemeler ile sonlandırma ve her
+   indirme öncesi güncel yetki/rıza denetimi (K20/S48), oturumlar arası yalıtım, CSRF ve mevcut uç güvenliği.
+   Elle düzenlenen metin de maddi iddia desteği ve yetki koşullarını karşılar.
 10. **Doğal dil kalite gereksinimleri** — Bölüm düzeltme isteği yerel yeniden yazımdır (4I-C kurallarıyla);
     arayüz metinleri sade Türkçe.
 11. **Regresyon gereksinimleri** — Mevcut Raporlar sekmeleri, sohbet ve gezinme değişmez.
@@ -390,7 +394,7 @@ Aşağıdakiler **Aşama 4J**'ye aittir ve 4I'ye sessizce taşınmaz:
 | 2026-11-21 | Rapor düzyazısını dil modeli yazar; sohbetin kapalı yuva sözleşmesi rapor için kullanılmaz ve değiştirilmez | Sunucu cümlelerinden kurulan rapor tanım gereği mekanik dökümdür; sohbet güvenliği korunur |
 | 2026-11-21 | Doğrulama orantılı ve yereldir; kesin kapılar yalnızca güvenlik, yetkisiz açıklama ve çözülemeyen kritik olgu hatası | Tek ifade yüzünden bütün raporun düşmesi ürün değerini yok eder |
 | 2026-11-21 | Stil belgesi tek doğruluk kaynağı; şablon onu yansıtır ve uyum belirlenimci sınanır | İki kaynak birbirinden sessizce ayrışmasın |
-| 2026-11-21 | Etkin yazı tipi Calibri; Nexa yalnızca kurulum ya da gömme lisansı doğrulanınca, tema üzerinden | Denetimsiz ikame sayfa düzenini bozar |
+| 2026-11-21 | Etkin yazı tipi Calibri; Nexa, tüm hedef istemcilerde kurulum ya da lisanslı gömme ve hedef Word doğrulaması tamamlanınca, tema üzerinden | Denetimsiz ikame sayfa düzenini bozar |
 | 2026-11-21 | Ana renk `#003087` (kılavuzdaki `#002D7A` yazımı tutarsız) | CMYK/RGB/Pantone/RAL tanımları `#003087` |
 | 2026-11-21 | Kapak yedigeni uygulama `HEPT_PATHS` yollarından aynen; resmî logo taklit edilmez, eksikse alan boş | Yetkili geometri; kurumsal varlık uydurulmaz |
 | 2026-11-21 | Model kimlikleri katalogdaki tam yazıma çevrildi; görünmeyen modeller silinmedi, aday sayılmadı | Kanıta dayalı uzlaştırma; profil eşlemeleri değişmez |
