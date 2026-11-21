@@ -101,14 +101,25 @@ test('stil belgesi: yer tutucuların sahibi ve türü kapalı sözlüktendir; he
   }
 });
 
-test('stil belgesi: kaynak ve yöntem notu ile zorunlu bölümler sunum tercihiyle kapatılamaz', () => {
-  const byId = new Map(spec.yapi.bolumler.map((section) => [section.kimlik, section]));
+function checkMandatorySections(styleSpec) {
+  const byId = new Map(styleSpec.yapi.bolumler.map((section) => [section.kimlik, section]));
   assert.equal(byId.get('kaynak_ve_yontem').kaldirilamaz, true);
   for (const fixed of ['kaynak_ve_yontem_notu', 'zorunlu_bolumler', 'palet', 'yazi_tipi', 'stiller', 'bolum_sirasi']) {
-    assert.ok(spec.ozellestirme.sabit.includes(fixed), fixed);
+    assert.ok(styleSpec.ozellestirme.sabit.includes(fixed), fixed);
   }
-  for (const id of ['kapak', 'yonetici_degerlendirmesi', 'genel_sonuc', 'kaynak_ve_yontem']) assert.equal(byId.get(id).zorunlu, true, id);
-  assert.match(spec.yapi.bolum_kurallari.dengeli_sunum, /gizleyemez/);
+  for (const id of ['kapak', 'yonetici_degerlendirmesi', 'one_cikan_gelismeler', 'faaliyetler', 'genel_sonuc', 'kaynak_ve_yontem']) {
+    assert.equal(byId.get(id)?.zorunlu, true, 'zorunlu bölüm kapatılamaz: ' + id);
+  }
+  assert.match(styleSpec.yapi.bolum_kurallari.dengeli_sunum, /gizleyemez/);
+}
+
+test('stil belgesi: kaynak ve yöntem notu ile zorunlu bölümler sunum tercihiyle kapatılamaz', () => {
+  checkMandatorySections(spec);
+  for (const id of ['one_cikan_gelismeler', 'faaliyetler']) {
+    const mutated = structuredClone(spec);
+    mutated.yapi.bolumler.find((section) => section.kimlik === id).zorunlu = false;
+    assert.throws(() => checkMandatorySections(mutated), new RegExp('zorunlu bölüm kapatılamaz: ' + id));
+  }
 });
 
 test('stil belgesi: dört iddia sınıfı ve orantılı yerel onarım politikası tanımlıdır', () => {
@@ -224,18 +235,25 @@ function checkSectionLayout(document) {
   return sect[0];
 }
 
+function checkPageMargins(sect) {
+  const margin = child(sect, 'w:pgMar');
+  assert.ok(margin, 'sayfa kenar boşluğu tanımı zorunludur');
+  for (const [side, key] of [['ust', 'w:top'], ['alt', 'w:bottom'], ['sol', 'w:left'], ['sag', 'w:right']]) {
+    assert.equal(attr(margin, key), String(spec.sayfa.kenar_twip[side]), side);
+  }
+  assert.equal(attr(margin, 'w:header'), String(spec.sayfa.ust_bilgi_twip));
+  assert.equal(attr(margin, 'w:footer'), String(spec.sayfa.alt_bilgi_twip));
+  const gutter = attr(margin, 'w:gutter');
+  assert.ok(gutter === null || gutter === '0', 'cilt payı (w:gutter) sıfır olmalıdır');
+}
+
 test('şablon: A4 dikey sayfa, kenar boşlukları, üst/alt bilgi uzaklığı ve boş kapak üst/alt bilgisi stil belgesiyle aynıdır', () => {
   const sect = checkSectionLayout(xml(part('officeDocument')));
   const size = child(sect, 'w:pgSz');
   assert.equal(attr(size, 'w:w'), String(spec.sayfa.genislik_twip));
   assert.equal(attr(size, 'w:h'), String(spec.sayfa.yukseklik_twip));
   assert.notEqual(attr(size, 'w:orient'), 'landscape');
-  const margin = child(sect, 'w:pgMar');
-  for (const [side, key] of [['ust', 'w:top'], ['alt', 'w:bottom'], ['sol', 'w:left'], ['sag', 'w:right']]) {
-    assert.equal(attr(margin, key), String(spec.sayfa.kenar_twip[side]), side);
-  }
-  assert.equal(attr(margin, 'w:header'), String(spec.sayfa.ust_bilgi_twip));
-  assert.equal(attr(margin, 'w:footer'), String(spec.sayfa.alt_bilgi_twip));
+  checkPageMargins(sect);
   checkHeaderFooter(xml, documentRelationship, sect, xml(part('settings')));
   for (const [name, type] of [['header1', 'header'], ['header2', 'header'], ['footer1', 'footer'], ['footer2', 'footer']]) {
     assert.equal(contentType('word/' + name + '.xml'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.' + type + '+xml');
@@ -302,11 +320,33 @@ function checkDirectFontSizes(document, name) {
   }
 }
 
+/** BilginGovde paragraflarında stil tanımıyla çelişen doğrudan paragraf aralığı geçersiz kılmalarını reddeder. */
+function checkDirectParagraphSpacing(document, name) {
+  const govde = spec.stiller.BilginGovde;
+  const expectedBefore = String(Math.round(govde.once * 20));
+  const expectedAfter = String(Math.round(govde.sonra * 20));
+  const expectedLine = String(Math.round(govde.satir * 240));
+  for (const paragraph of all(document, 'w:p')) {
+    if (paragraphStyle(paragraph) !== 'BilginGovde') continue;
+    const spacing = child(child(paragraph, 'w:pPr'), 'w:spacing');
+    if (!spacing) continue;
+    const before = attr(spacing, 'w:before');
+    const after = attr(spacing, 'w:after');
+    const line = attr(spacing, 'w:line');
+    const lineRule = attr(spacing, 'w:lineRule');
+    assert.ok(before === null || before === expectedBefore, `${name}: BilginGovde doğrudan w:before çelişiyor`);
+    assert.ok(after === null || after === expectedAfter, `${name}: BilginGovde doğrudan w:after çelişiyor`);
+    assert.ok(line === null || line === expectedLine, `${name}: BilginGovde doğrudan w:line çelişiyor`);
+    assert.ok(lineRule === null || lineRule === 'auto', `${name}: BilginGovde doğrudan w:lineRule auto olmalıdır`);
+  }
+}
+
 test('şablon: stil belgesindeki her Word stili aynı ad, yazı rolü, boyut, renk, aralık ve kenarlıkla tanımlıdır', () => {
   checkStyles(xml(part('styles')));
   for (const name of [part('officeDocument'), 'word/header1.xml', 'word/header2.xml', 'word/footer1.xml', 'word/footer2.xml']) {
     checkDirectFontSizes(xml(name), name);
   }
+  checkDirectParagraphSpacing(xml(part('officeDocument')), part('officeDocument'));
 });
 
 function checkNumbering(numbering, styles, body) {
@@ -474,6 +514,33 @@ function checkCoreProperties(document) {
   assert.equal(child(root, 'dc:language')?.textContent, spec.yazi_tipi.dil);
 }
 
+/** Kapak künye tablosundaki her etiketin doğru değer yer tutucusuyla eşleştiğini doğrular. */
+function checkCoverMetadata(document) {
+  const expectedPairs = [
+    ['Rapor Dönemi', '{{DONEM}}'],
+    ['Kapsam', '{{KAPSAM}}'],
+    ['Hazırlayan', '{{HAZIRLAYAN}}'],
+    ['Birim / Müdürlük', '{{BIRIM}}'],
+    ['Hazırlanma Tarihi', '{{HAZIRLANMA_TARIHI}}'],
+    ['Veri Anı', '{{VERI_ANI}}'],
+    ['Sınıflandırma', 'Kurum İçi']
+  ];
+  const metaTables = all(document, 'w:tbl').filter((table) =>
+    all(table, 'w:p').some((paragraph) => paragraphStyle(paragraph) === 'BilginKapakMetaEtiketi')
+  );
+  assert.equal(metaTables.length, 1, 'kapak künye tablosu tekil olmalıdır');
+  const rows = children(metaTables[0], 'w:tr');
+  assert.equal(rows.length, expectedPairs.length, 'kapak künye satır sayısı');
+  const actualPairs = rows.map((row) => {
+    const cells = children(row, 'w:tc');
+    assert.equal(cells.length, 2, 'kapak künye satırı iki hücreli olmalıdır');
+    assert.equal(paragraphStyle(child(cells[0], 'w:p')), 'BilginKapakMetaEtiketi', 'kapak künye etiket stili');
+    assert.equal(paragraphStyle(child(cells[1], 'w:p')), 'BilginKapakMetaDegeri', 'kapak künye değer stili');
+    return [paragraphText(cells[0]), paragraphText(cells[1])];
+  });
+  assert.deepEqual(actualPairs, expectedPairs, 'kapak künye etiket ve değer eşleşmesi bozulmuş');
+}
+
 test('şablon: yer tutucu dışındaki her görünen metin stil belgesinde ilan edilmiştir (kurum adı ya da başıboş metin yok)', () => {
   const titles = spec.yapi.bolumler.map((section) => section.baslik).filter(Boolean);
   const declared = {
@@ -494,6 +561,7 @@ test('şablon: yer tutucu dışındaki her görünen metin stil belgesinde ilan 
     }
     assert.deepEqual([...allowed].filter((text) => !seen.has(text)), [], `${name}: ilan edilen ama şablonda olmayan metin`);
   }
+  checkCoverMetadata(xml(part('officeDocument')));
   // Belge özelliklerinde de kişi ya da kurum adı yoktur.
   checkCoreProperties(xml(part('core')));
   checkExtendedProperties(xml(part('app')));
@@ -511,6 +579,9 @@ function checkSummaryTable(document) {
   const tables = all(document, 'w:tbl');
   const summary = tables.filter((table) => attr(child(child(table, 'w:tblPr'), 'w:tblStyle')) === spec.tablolar.donem_gorev_ozeti.stil);
   assert.equal(summary.length, 1);
+  const expectedColumnCount = spec.tablolar.donem_gorev_ozeti.sutunlar.length;
+  const gridCols = children(child(summary[0], 'w:tblGrid'), 'w:gridCol');
+  assert.equal(gridCols.length, expectedColumnCount, 'özet tablo ızgara sütun sayısı');
   const tblLook = child(child(summary[0], 'w:tblPr'), 'w:tblLook');
   assert.ok(tblLook, 'özet tabloda w:tblLook zorunludur');
   assert.equal(attr(tblLook, 'w:firstRow'), '1', 'özet tabloda ilk satır koşullu biçimi etkin olmalıdır');
@@ -522,6 +593,20 @@ function checkSummaryTable(document) {
   }
   const rows = children(summary[0], 'w:tr');
   assert.equal(rows.length, 3, 'özet tablo başlık, veri şablonu ve toplam satırından oluşmalıdır');
+  // Her satır 1. ızgara sütunundan başlamalı ve her hücre tam olarak 1 sütun kaplamalıdır.
+  for (const row of rows) {
+    const trPr = child(row, 'w:trPr');
+    const gridBefore = attr(child(trPr, 'w:gridBefore'));
+    const gridAfter = attr(child(trPr, 'w:gridAfter'));
+    assert.ok(gridBefore === null || gridBefore === '0', 'özet tablo satırı ilk ızgara sütunundan başlamalıdır');
+    assert.ok(gridAfter === null || gridAfter === '0', 'özet tablo satırında fazladan ızgara boşluğu bulunamaz');
+    const cells = children(row, 'w:tc');
+    assert.equal(cells.length, expectedColumnCount, 'özet tablo satır hücre sayısı sütun sayısına eşit olmalıdır');
+    for (const cell of cells) {
+      const span = attr(child(child(cell, 'w:tcPr'), 'w:gridSpan'));
+      assert.ok(span === null || span === '1', 'özet tablo hücresi birden fazla sütuna yayılamaz');
+    }
+  }
   const [headerRow, dataRow, totalRow] = rows;
   assert.ok(on(child(child(headerRow, 'w:trPr'), 'w:tblHeader')), 'başlık satırı her sayfada yinelenir');
   assert.deepEqual(children(headerRow, 'w:tc').map((cell) => paragraphText(cell)), spec.tablolar.donem_gorev_ozeti.sutunlar);
@@ -554,8 +639,12 @@ function checkCustomProperties(document) {
     const name = element.getAttribute('name');
     const pid = element.getAttribute('pid');
     assert.ok(name && !Object.hasOwn(properties, name), 'özel özellik adı tekil olmalıdır: ' + name);
-    assert.ok(pid && !pids.has(pid), 'özel özellik pid değeri tekil olmalıdır: ' + pid);
-    pids.add(pid);
+    assert.match(pid ?? '', /^\d+$/u, 'özel özellik pid değeri geçerli tamsayı olmalıdır: ' + pid);
+    const pidNumber = Number(pid);
+    assert.ok(Number.isSafeInteger(pidNumber) && pidNumber >= 2 && pidNumber <= 2147483647,
+      'özel özellik pid değeri geçerli aralıkta (≥ 2) olmalıdır: ' + pid);
+    assert.ok(!pids.has(pidNumber), 'özel özellik pid değeri tekil olmalıdır: ' + pid);
+    pids.add(pidNumber);
     properties[name] = element.textContent;
   }
   assert.deepEqual(properties, spec.sablon.belge_ozellikleri);
@@ -565,7 +654,12 @@ test('şablon: sürüm ve kimlik belge özellikleri stil belgesiyle aynıdır', 
   checkCustomProperties(xml(part('custom')));
 });
 
-test('şablon: kapak yedigeni uygulamadaki yetkili yedigen yollarını aynen kullanır ve etkin içerik taşımaz', async () => {
+const APPROVED_COVER_VIEWBOX = [0, 0, 210, 297];
+const APPROVED_COVER_MATRIX = [0.62, 0, 0, 0.62, 191.652, 180.493];
+const APPROVED_COVER_EXTENT_EMU = { cx: 210 * 36000, cy: 297 * 36000 };
+
+/** Yetkili HEPT_PATHS tanımından ve kurumsal paletten beklenen kapak SVG yol ve zemin renklerini türetir. */
+async function loadAuthorizedCoverExpectations() {
   const ui = await read(spec.gorseller.kapak_yedigeni.kaynak);
   const block = ui.slice(ui.indexOf('const HEPT_PATHS = ['), ui.indexOf('];', ui.indexOf('const HEPT_PATHS = [')));
   const paths = [...block.matchAll(/\{ tone: '(teal|orange)', d: '([^']+)' \}/g)];
@@ -575,6 +669,11 @@ test('şablon: kapak yedigeni uygulamadaki yetkili yedigen yollarını aynen kul
     stroke: '#' + paletteColor(spec.gorseller.kapak_yedigeni.renk_eslemesi[tone]).toUpperCase()
   }));
   const expectedBg = '#' + paletteColor(spec.gorseller.kapak_yedigeni.zemin).toUpperCase();
+  return { expectedPaths, expectedBg };
+}
+
+test('şablon: kapak yedigeni uygulamadaki yetkili yedigen yollarını aynen kullanır ve etkin içerik taşımaz', async () => {
+  const { expectedPaths, expectedBg } = await loadAuthorizedCoverExpectations();
   checkCoverSvg(xml('word/media/kapak-yedigen.svg'), expectedPaths, expectedBg);
   assert.equal(contentType('word/media/kapak-yedigen.svg'), 'image/svg+xml');
   assert.equal(contentType('word/media/kapak-yedigen.png'), 'image/png');
@@ -609,13 +708,24 @@ function checkCoverSvg(document, expectedPaths, expectedBackground) {
     }
   }
   assert.equal(document.documentElement.textContent.trim(), '', 'SVG serbest metin taşımaz');
+  const viewBox = (document.documentElement.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/u).map(Number);
+  assert.deepEqual(viewBox, APPROVED_COVER_VIEWBOX, 'kapak SVG viewBox değeri A4 görünüm alanıyla eşleşmelidir');
   if (expectedBackground) {
     const rects = all(document, 'svg:rect');
     assert.equal(rects.length, 1, 'kapak SVG zemin dikdörtgeni tekil olmalıdır');
-    assert.equal(rects[0].getAttribute('fill')?.toUpperCase(), expectedBackground, 'kapak SVG zemin rengi');
+    const bgRect = rects[0];
+    assert.equal(bgRect.getAttribute('fill')?.toUpperCase(), expectedBackground, 'kapak SVG zemin rengi');
+    const rx = bgRect.getAttribute('x') === null ? 0 : Number(bgRect.getAttribute('x'));
+    const ry = bgRect.getAttribute('y') === null ? 0 : Number(bgRect.getAttribute('y'));
+    const rw = bgRect.getAttribute('width') === '100%' ? APPROVED_COVER_VIEWBOX[2] : Number(bgRect.getAttribute('width'));
+    const rh = bgRect.getAttribute('height') === '100%' ? APPROVED_COVER_VIEWBOX[3] : Number(bgRect.getAttribute('height'));
+    assert.ok(rx === 0 && ry === 0 && rw === APPROVED_COVER_VIEWBOX[2] && rh === APPROVED_COVER_VIEWBOX[3],
+      'kapak SVG zemin dikdörtgeni onaylı A4 görünüm alanını tam kaplamalıdır');
   }
   if (expectedPaths) {
-    const actualPaths = all(document, 'svg:path').map((node) => {
+    const groups = all(document, 'svg:g');
+    const pathNodes = all(document, 'svg:path');
+    const actualPaths = pathNodes.map((node) => {
       const width = Number(node.getAttribute('stroke-width'));
       assert.ok(Number.isFinite(width) && width > 0, 'SVG yol çizgi kalınlığı pozitif olmalıdır');
       return {
@@ -624,6 +734,17 @@ function checkCoverSvg(document, expectedPaths, expectedBackground) {
       };
     });
     assert.deepEqual(actualPaths, expectedPaths, 'kapak SVG yedigen yolları yetkili tanımla bire bir eşleşmelidir');
+    assert.equal(groups.length, 1, 'kapak SVG yedigen grubu tekil olmalıdır');
+    assert.ok(pathNodes.every((node) => groups[0].contains(node)), 'kapak SVG yedigen yolları onaylı grubun içinde olmalıdır');
+    const transform = (groups[0].getAttribute('transform') ?? '').trim();
+    const matrixMatch = /^matrix\(\s*([^)]+)\s*\)$/u.exec(transform);
+    assert.ok(matrixMatch, 'kapak SVG yedigen grup dönüşümü onaylı matris biçiminde olmalıdır');
+    const values = matrixMatch[1].split(/[\s,]+/u).map(Number);
+    assert.equal(values.length, APPROVED_COVER_MATRIX.length, 'kapak SVG yedigen dönüşüm matrisi geçersiz');
+    for (let i = 0; i < APPROVED_COVER_MATRIX.length; i += 1) {
+      assert.ok(Number.isFinite(values[i]) && Math.abs(values[i] - APPROVED_COVER_MATRIX[i]) < 1e-3,
+        'kapak SVG yedigen yerleşimi onaylı konumdan sapamaz');
+    }
   }
 }
 
@@ -634,6 +755,13 @@ function checkCoverRelationships(document, relationship) {
   assert.ok(['1', 'true'].includes(attr(anchor, 'behindDoc')), 'kapak çizimi metnin arkasındadır');
   assert.equal(anchor.parentNode?.parentNode?.parentNode, all(document, 'w:body')[0].firstElementChild,
     'kapak çizimi ilk paragraftadır');
+  const wpExtent = child(anchor, 'wp:extent');
+  assert.equal(Number(wpExtent?.getAttribute('cx')), APPROVED_COVER_EXTENT_EMU.cx, 'kapak wp:extent genişliği A4 ile eşleşmelidir');
+  assert.equal(Number(wpExtent?.getAttribute('cy')), APPROVED_COVER_EXTENT_EMU.cy, 'kapak wp:extent yüksekliği A4 ile eşleşmelidir');
+  const picSpPr = all(anchor, 'pic:spPr')[0];
+  const picExt = child(child(picSpPr, 'a:xfrm'), 'a:ext');
+  assert.equal(Number(picExt?.getAttribute('cx')), APPROVED_COVER_EXTENT_EMU.cx, 'kapak pic:spPr/a:xfrm/a:ext genişliği A4 ile eşleşmelidir');
+  assert.equal(Number(picExt?.getAttribute('cy')), APPROVED_COVER_EXTENT_EMU.cy, 'kapak pic:spPr/a:xfrm/a:ext yüksekliği A4 ile eşleşmelidir');
   const png = all(anchor, 'a:blip');
   const svg = all(anchor, 'asvg:svgBlip');
   assert.equal(png.length, 1, 'kapak PNG başvurusu');
@@ -680,6 +808,44 @@ test('şablon: çok parçalı, çakışan, tutarsız, kayıtsız baytlı veya bo
   const shiftedEnd = end + payload.length;
   withGap.writeUInt32LE(central + payload.length, shiftedEnd + 16);
   assert.throws(() => readZipEntries(withGap), /kayıtsız baytlar var/);
+
+  // Yerel veya merkezî başlıkta ek alan kaydının uzunluğu kendi alanını aştığında reddedilmeli, geçerli ek alan kabul edilmelidir.
+  const buildSingleEntryZip = (localExtra, centralExtra) => {
+    const name = Buffer.from('test.txt', 'utf8');
+    const data = Buffer.from('merhaba', 'utf8');
+    const sum = crc32(data);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt32LE(sum, 14);
+    localHeader.writeUInt32LE(data.length, 18);
+    localHeader.writeUInt32LE(data.length, 22);
+    localHeader.writeUInt16LE(name.length, 26);
+    localHeader.writeUInt16LE(localExtra.length, 28);
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt32LE(sum, 16);
+    centralHeader.writeUInt32LE(data.length, 20);
+    centralHeader.writeUInt32LE(data.length, 24);
+    centralHeader.writeUInt16LE(name.length, 28);
+    centralHeader.writeUInt16LE(centralExtra.length, 30);
+    const centralOffset = localHeader.length + name.length + localExtra.length + data.length;
+    const centralLen = centralHeader.length + name.length + centralExtra.length;
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(1, 8);
+    eocd.writeUInt16LE(1, 10);
+    eocd.writeUInt32LE(centralLen, 12);
+    eocd.writeUInt32LE(centralOffset, 16);
+    return Buffer.concat([localHeader, name, localExtra, data, centralHeader, name, centralExtra, eocd]);
+  };
+  const validExtra = Buffer.from([0x55, 0x54, 0x04, 0x00, 0x01, 0x02, 0x03, 0x04]);
+  const overflowExtra = Buffer.from([0x55, 0x54, 0x10, 0x00, 0x01, 0x02, 0x03, 0x04]);
+  assert.equal(readZipEntries(buildSingleEntryZip(validExtra, validExtra)).get('test.txt').toString('utf8'), 'merhaba');
+  assert.throws(() => readZipEntries(buildSingleEntryZip(overflowExtra, Buffer.alloc(0))), /ZIP ek alan kayıt uzunluğu sınırı aşıyor/);
+  assert.throws(() => readZipEntries(buildSingleEntryZip(Buffer.alloc(0), overflowExtra)), /ZIP ek alan kayıt uzunluğu sınırı aşıyor/);
 });
 
 function mutateXmlPart(name, mutator) {
@@ -751,6 +917,34 @@ test('şablon: geçersiz OOXML, dış ilişki, içerik türü, revizyon, gizli m
     t.textContent = 'İlan edilmemiş kurum adı';
   })), /Word alan sonucu sayısal veya boş olmalıdır/);
 
+  // Kilitli PAGE veya SEQ alanları reddedilmeli, açıkça kilitli olmayan (false/0) alanlar kabul edilmelidir.
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/footer1.xml', (doc) => {
+    const field = all(doc, 'w:fldSimple').find((el) => (attr(el, 'w:instr') ?? '').trim() === 'PAGE');
+    field.setAttributeNS(field.namespaceURI, 'w:fldLock', 'true');
+  })), /kilitli Word alanı yasak/);
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/document.xml', (doc) => {
+    const field = all(doc, 'w:fldSimple').find((el) => (attr(el, 'w:instr') ?? '').includes('SEQ Şekil'));
+    field.setAttributeNS(field.namespaceURI, 'w:fldLock', '1');
+  })), /kilitli Word alanı yasak/);
+  validateDocxXml(mutateXmlPart('word/footer1.xml', (doc) => {
+    const field = all(doc, 'w:fldSimple').find((el) => (attr(el, 'w:instr') ?? '').trim() === 'PAGE');
+    field.setAttributeNS(field.namespaceURI, 'w:fldLock', 'false');
+  }));
+
+  // Şekil ve Tablo sayaçları başlık etiketinin önüne taşındığında reddedilmelidir.
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/document.xml', (doc) => {
+    const field = all(doc, 'w:fldSimple').find((el) => (attr(el, 'w:instr') ?? '').includes('SEQ Şekil'));
+    const paragraph = field.parentNode;
+    const firstRun = children(paragraph, 'w:r')[0];
+    paragraph.insertBefore(field, firstRun);
+  })), /şekil sayacı Şekil etiketinden sonra/);
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/document.xml', (doc) => {
+    const field = all(doc, 'w:fldSimple').find((el) => (attr(el, 'w:instr') ?? '').includes('SEQ Tablo'));
+    const paragraph = field.parentNode;
+    const firstRun = children(paragraph, 'w:r')[0];
+    paragraph.insertBefore(field, firstRun);
+  })), /tablo sayacı Tablo etiketinden sonra/);
+
   // Şekil sayacı başlık dışına (kapak paragrafına) taşındığında
   assert.throws(() => validateDocxXml(mutateXmlPart('word/document.xml', (doc) => {
     const field = all(doc, 'w:fldSimple').find((el) => (attr(el, 'w:instr') ?? '').includes('SEQ Şekil'));
@@ -789,9 +983,10 @@ test('şablon: geçersiz OOXML, dış ilişki, içerik türü, revizyon, gizli m
   assert.throws(() => checkPackageParts(withExtraPart), /ilan edilmemiş veya eksik parça/);
 });
 
-test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numara ve üstveri bozulmaları yakalanır', () => {
+test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numara ve üstveri bozulmaları yakalanır', async () => {
   const body = () => parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
   const wNs = xml('word/document.xml').documentElement.namespaceURI;
+  const { expectedPaths, expectedBg } = await loadAuthorizedCoverExpectations();
 
   // Bölüm sırası bozulduğunda
   const wrongSection = body();
@@ -806,6 +1001,12 @@ test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numar
   const firstPPr = child(all(movedSect, 'w:body')[0].firstElementChild, 'w:pPr');
   firstPPr.appendChild(sectEl);
   assert.throws(() => checkSectionLayout(movedSect), /w:body sonunda doğrudan çocuk olmalıdır/);
+
+  // Sıfırdan büyük w:gutter (cilt payı) etkin kenar boşluklarını daralttığında reddedilir
+  const withGutter = body();
+  const gutterSect = all(withGutter, 'w:sectPr')[0];
+  child(gutterSect, 'w:pgMar').setAttributeNS(wNs, 'w:gutter', '720');
+  assert.throws(() => checkPageMargins(gutterSect), /cilt payı \(w:gutter\) sıfır olmalıdır/);
 
   // Gövde içine doğrudan <w:br w:type="page"/> eklendiğinde
   const withPageBreak = body();
@@ -846,11 +1047,27 @@ test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numar
   oddEvenSettings.documentElement.appendChild(oddEvenSettings.createElementNS(wNs, 'w:evenAndOddHeaders'));
   assert.throws(() => checkDocumentSettings(oddEvenSettings), /çift sayfa üst\/alt bilgi kipi kapalı olmalıdır/);
 
-  // Satır aralığı kuralı exact yapıldığında ve yinelenen w:styleId eklendiğinde reddedilir
+  // Satır aralığı kuralı exact yapıldığında, doğrudan çelişen paragraf aralığı eklendiğinde ve yinelenen w:styleId bulunduğunda reddedilir
   const wrongLineRule = parseDocxXml(docx.text('word/styles.xml'), 'word/styles.xml');
   const govdeStyle = all(wrongLineRule, 'w:style').find((node) => attr(node, 'w:styleId') === 'BilginGovde');
   child(child(govdeStyle, 'w:pPr'), 'w:spacing').setAttributeNS(wNs, 'w:lineRule', 'exact');
   assert.throws(() => checkStyles(wrongLineRule), /satır aralığı kuralı auto olmalıdır/);
+
+  const conflictingSpacing = body();
+  const govdeParagraph = all(conflictingSpacing, 'w:p').find((p) => paragraphStyle(p) === 'BilginGovde');
+  const directSpacing = conflictingSpacing.createElementNS(wNs, 'w:spacing');
+  directSpacing.setAttributeNS(wNs, 'w:line', '20');
+  directSpacing.setAttributeNS(wNs, 'w:lineRule', 'exact');
+  child(govdeParagraph, 'w:pPr').appendChild(directSpacing);
+  assert.throws(() => checkDirectParagraphSpacing(conflictingSpacing, 'word/document.xml'), /BilginGovde doğrudan w:line çelişiyor/);
+
+  const matchingSpacing = body();
+  const govdeMatchParagraph = all(matchingSpacing, 'w:p').find((p) => paragraphStyle(p) === 'BilginGovde');
+  const validDirectSpacing = matchingSpacing.createElementNS(wNs, 'w:spacing');
+  validDirectSpacing.setAttributeNS(wNs, 'w:line', '276');
+  validDirectSpacing.setAttributeNS(wNs, 'w:lineRule', 'auto');
+  child(govdeMatchParagraph, 'w:pPr').appendChild(validDirectSpacing);
+  checkDirectParagraphSpacing(matchingSpacing, 'word/document.xml');
 
   const dupStyle = parseDocxXml(docx.text('word/styles.xml'), 'word/styles.xml');
   const headingStyle = all(dupStyle, 'w:style').find((node) => attr(node, 'w:styleId') === 'Heading1');
@@ -869,17 +1086,58 @@ test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numar
   targetText.parentNode.insertBefore(szRPr, targetText.parentNode.firstChild);
   assert.throws(() => checkDirectFontSizes(wrongSize, 'word/document.xml'), /doğrudan yazı boyutu geçersiz kılması yasak/);
 
-  // Kapak SVG ilişkisi eksik olduğunda ve SVG yolları yorum içine alındığında reddedilir
+  // Kapak künyesinde Hazırlayan ve Veri Anı etiketleri yer değiştirdiğinde reddedilir
+  const swappedCoverLabels = body();
+  const labelNodes = all(swappedCoverLabels, 'w:t');
+  const hazirlayanNode = labelNodes.find((t) => t.textContent === 'Hazırlayan');
+  const veriAniNode = labelNodes.find((t) => t.textContent === 'Veri Anı');
+  assert.ok(hazirlayanNode && veriAniNode);
+  hazirlayanNode.textContent = 'Veri Anı';
+  veriAniNode.textContent = 'Hazırlayan';
+  assert.throws(() => checkCoverMetadata(swappedCoverLabels), /kapak künye etiket ve değer eşleşmesi bozulmuş/);
+
+  // Kapak SVG ilişkisi eksik olduğunda veya kapak çizimi 1×1 EMU boyutuna küçültüldüğünde reddedilir
   const wrongCover = body();
   all(wrongCover, 'asvg:svgBlip')[0].remove();
   assert.throws(() => checkCoverRelationships(wrongCover, documentRelationship), /kapak SVG başvurusu/);
+
+  const tinyWpExtent = body();
+  const wpExtentEl = child(all(tinyWpExtent, 'wp:anchor')[0], 'wp:extent');
+  wpExtentEl.setAttribute('cx', '1');
+  wpExtentEl.setAttribute('cy', '1');
+  assert.throws(() => checkCoverRelationships(tinyWpExtent, documentRelationship), /wp:extent genişliği A4 ile eşleşmelidir/);
+
+  const tinyPicExt = body();
+  const picExtEl = child(child(all(tinyPicExt, 'pic:spPr')[0], 'a:xfrm'), 'a:ext');
+  picExtEl.setAttribute('cx', '1');
+  picExtEl.setAttribute('cy', '1');
+  assert.throws(() => checkCoverRelationships(tinyPicExt, documentRelationship), /pic:spPr\/a:xfrm\/a:ext genişliği A4 ile eşleşmelidir/);
+
+  // Sağlam kapak SVG yetkili beklentilerle geçmeli; yollar yorumlandığında, zemin daraltıldığında veya grup kaydırıldığında reddedilmelidir
+  const intactSvg = parseDocxXml(docx.text('word/media/kapak-yedigen.svg'), 'word/media/kapak-yedigen.svg');
+  checkCoverSvg(intactSvg, expectedPaths, expectedBg);
 
   const commentedSvg = parseDocxXml(
     docx.text('word/media/kapak-yedigen.svg').replace(/<g [^>]*>[\s\S]*<\/g>/u, (match) => `<!-- ${match} -->`),
     'word/media/kapak-yedigen.svg'
   );
-  assert.throws(() => checkCoverSvg(commentedSvg, [{ d: 'M0 0', stroke: '#077780' }], '#003087'),
+  assert.throws(() => checkCoverSvg(commentedSvg, expectedPaths, expectedBg),
     /kapak SVG yedigen yolları yetkili tanımla bire bir eşleşmelidir/);
+
+  const shiftedSvg = parseDocxXml(docx.text('word/media/kapak-yedigen.svg'), 'word/media/kapak-yedigen.svg');
+  all(shiftedSvg, 'svg:g')[0].setAttribute('transform', 'matrix(0.62,0,0,0.62,500,500)');
+  assert.throws(() => checkCoverSvg(shiftedSvg, expectedPaths, expectedBg),
+    /kapak SVG yedigen yerleşimi onaylı konumdan sapamaz/);
+
+  const zeroWidthBgSvg = parseDocxXml(docx.text('word/media/kapak-yedigen.svg'), 'word/media/kapak-yedigen.svg');
+  all(zeroWidthBgSvg, 'svg:rect')[0].setAttribute('width', '0');
+  assert.throws(() => checkCoverSvg(zeroWidthBgSvg, expectedPaths, expectedBg),
+    /zemin dikdörtgeni onaylı A4 görünüm alanını tam kaplamalıdır/);
+
+  const offsetBgSvg = parseDocxXml(docx.text('word/media/kapak-yedigen.svg'), 'word/media/kapak-yedigen.svg');
+  all(offsetBgSvg, 'svg:rect')[0].setAttribute('x', '50');
+  assert.throws(() => checkCoverSvg(offsetBgSvg, expectedPaths, expectedBg),
+    /zemin dikdörtgeni onaylı A4 görünüm alanını tam kaplamalıdır/);
 
   // Stil pageBreakBefore aç/kapa ve palet kontrolleri (tema rengi + DrawingML dönüşümü dâhil)
   const styles = parseDocxXml(docx.text('word/styles.xml'), 'word/styles.xml');
@@ -906,7 +1164,7 @@ test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numar
   srgb.appendChild(shade);
   assert.throws(() => checkPalette(drawingShade, 'word/theme/theme1.xml'), /DrawingML renk dönüşümü yasak/);
 
-  // Özet tablo w:tblLook kapatıldığında veya veri hücresi yer tutucusu başka sütuna kaydığında reddedilir
+  // Özet tablo w:tblLook kapatıldığında, hücre sütun genişlemesi/kayması olduğunda veya yer tutucu kaydığında reddedilir
   const wrongTblLook = body();
   const summaryTbl = all(wrongTblLook, 'w:tbl').find((t) => attr(child(child(t, 'w:tblPr'), 'w:tblStyle')) === spec.tablolar.donem_gorev_ozeti.stil);
   const look = child(child(summaryTbl, 'w:tblPr'), 'w:tblLook');
@@ -919,6 +1177,29 @@ test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numar
   all(dataCells[0], 'w:t')[0].textContent = '{{SATIR_PROJE}}{{SATIR_TAM}}';
   all(dataCells[1], 'w:t')[0].textContent = '';
   assert.throws(() => checkSummaryTable(wrongTblCell), /veri satırı yer tutucuları ilgili sütun hücrelerinde olmalıdır/);
+
+  const spannedTbl = body();
+  const spannedSummary = all(spannedTbl, 'w:tbl').find((t) => attr(child(child(t, 'w:tblPr'), 'w:tblStyle')) === spec.tablolar.donem_gorev_ozeti.stil);
+  const spanCell = children(children(spannedSummary, 'w:tr')[1], 'w:tc')[0];
+  const gridSpan = spannedTbl.createElementNS(wNs, 'w:gridSpan');
+  gridSpan.setAttributeNS(wNs, 'w:val', '2');
+  child(spanCell, 'w:tcPr').appendChild(gridSpan);
+  assert.throws(() => checkSummaryTable(spannedTbl), /birden fazla sütuna yayılamaz/);
+
+  const shiftedTbl = body();
+  const shiftedSummary = all(shiftedTbl, 'w:tbl').find((t) => attr(child(child(t, 'w:tblPr'), 'w:tblStyle')) === spec.tablolar.donem_gorev_ozeti.stil);
+  const shiftedRow = children(shiftedSummary, 'w:tr')[1];
+  const gridBefore = shiftedTbl.createElementNS(wNs, 'w:gridBefore');
+  gridBefore.setAttributeNS(wNs, 'w:val', '1');
+  child(shiftedRow, 'w:trPr').appendChild(gridBefore);
+  assert.throws(() => checkSummaryTable(shiftedTbl), /ilk ızgara sütunundan başlamalıdır/);
+
+  const explicitSingleSpan = body();
+  const singleSpanSummary = all(explicitSingleSpan, 'w:tbl').find((t) => attr(child(child(t, 'w:tblPr'), 'w:tblStyle')) === spec.tablolar.donem_gorev_ozeti.stil);
+  const singleSpan = explicitSingleSpan.createElementNS(wNs, 'w:gridSpan');
+  singleSpan.setAttributeNS(wNs, 'w:val', '1');
+  child(children(children(singleSpanSummary, 'w:tr')[1], 'w:tc')[0], 'w:tcPr').appendChild(singleSpan);
+  checkSummaryTable(explicitSingleSpan);
 
   // Numaralandırma ve belge üstverileri (core, app, custom) bozulmaları
   const numbering = docx.text('word/numbering.xml').replace('w:val="%1"', 'w:val="%1."');
@@ -939,12 +1220,29 @@ test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numar
   dupCustom.documentElement.insertBefore(clone, dupCustom.documentElement.firstElementChild);
   assert.throws(() => checkCustomProperties(dupCustom), /özel özellik adı tekil olmalıdır/);
 
+  const nonNumericPid = parseDocxXml(docx.text('docProps/custom.xml'), 'docProps/custom.xml');
+  nonNumericPid.documentElement.lastElementChild.setAttribute('pid', 'abc');
+  assert.throws(() => checkCustomProperties(nonNumericPid), /pid değeri geçerli tamsayı olmalıdır/);
+
+  const reservedPid = parseDocxXml(docx.text('docProps/custom.xml'), 'docProps/custom.xml');
+  reservedPid.documentElement.lastElementChild.setAttribute('pid', '1');
+  assert.throws(() => checkCustomProperties(reservedPid), /pid değeri geçerli aralıkta/);
+
   const badRootCustom = parseDocxXml(
     docx.text('docProps/custom.xml').replace('<Properties ', '<GecersizKok ').replace('</Properties>', '</GecersizKok>'),
     'docProps/custom.xml'
   );
   assert.throws(() => checkCustomProperties(badRootCustom), /özel belge özellikleri kökü geçersiz/);
 });
+
+function buildPngChunk(type, data) {
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(data.length, 0);
+  header.write(type, 4, 'latin1');
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([header.subarray(4), data])), 0);
+  return Buffer.concat([header, data, crc]);
+}
 
 function buildSolidA4Png(r, g, b) {
   const width = 210;
@@ -959,14 +1257,6 @@ function buildSolidA4Png(r, g, b) {
       raw[start + 1 + x * 3 + 2] = b;
     }
   }
-  const chunk = (type, data) => {
-    const header = Buffer.alloc(8);
-    header.writeUInt32BE(data.length, 0);
-    header.write(type, 4, 'latin1');
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(crc32(Buffer.concat([header.subarray(4), data])), 0);
-    return Buffer.concat([header, data, crc]);
-  };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
@@ -974,9 +1264,9 @@ function buildSolidA4Png(r, g, b) {
   ihdr[9] = 2;
   return Buffer.concat([
     Buffer.from('89504e470d0a1a0a', 'hex'),
-    chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0))
+    buildPngChunk('IHDR', ihdr),
+    buildPngChunk('IDAT', deflateSync(raw)),
+    buildPngChunk('IEND', Buffer.alloc(0))
   ]);
 }
 
@@ -987,6 +1277,20 @@ test('şablon: PNG kapağın görüntü verisi, parça bütünlüğü ve onaylı
   const damaged = Buffer.from(png);
   damaged[42] ^= 1;
   assert.throws(() => validateCoverPng(damaged), /PNG parça sağlama toplamı/);
+  // IDAT öncesinde geçerli bir pHYs parçası kabul edilmeli, IDAT sonrasında veya bozuk uzunlukta reddedilmelidir.
+  const ihdrEnd = 8 + 12 + png.readUInt32BE(8);
+  const physData = Buffer.alloc(9);
+  physData.writeUInt32BE(5906, 0);
+  physData.writeUInt32BE(5906, 4);
+  physData[8] = 1;
+  const validPhys = buildPngChunk('pHYs', physData);
+  const withPreIdatPhys = Buffer.concat([png.subarray(0, ihdrEnd), validPhys, png.subarray(ihdrEnd)]);
+  validateCoverPng(withPreIdatPhys);
+  const withPostIdatPhys = Buffer.concat([png.subarray(0, -12), validPhys, png.subarray(-12)]);
+  assert.throws(() => validateCoverPng(withPostIdatPhys), /PNG parça sırası veya türü geçersiz/);
+  const badLengthPhys = buildPngChunk('pHYs', Buffer.alloc(4));
+  const withBadPhys = Buffer.concat([png.subarray(0, ihdrEnd), badLengthPhys, png.subarray(ihdrEnd)]);
+  assert.throws(() => validateCoverPng(withBadPhys), /PNG yardımcı parça uzunluğu geçersiz/);
   // Düz beyaz veya yedigensiz düz lacivert A4 PNG reddedilmelidir.
   assert.throws(() => validateCoverPng(buildSolidA4Png(255, 255, 255)), /PNG kapak zemini onaylı ana lacivert değil/);
   assert.throws(() => validateCoverPng(buildSolidA4Png(0, 48, 135)), /onaylı yedigen çizgi rengi bulunamadı/);
@@ -1039,13 +1343,18 @@ function checkModelQualification(policy, measurements = []) {
 
 test('model rolleri: ölçüm olmadan hiçbir model nitelikli ya da seçili ilan edilmez; denetçi yazardan bağımsızdır', async () => {
   const benchmark = JSON.parse(await read(spec.model_politikasi.nitelendirme.kiyas));
+  // 4I-0'da fikstürün olcumler alanı boştur; 4I-B tamamlandığında ölçüm kaydı ayrı sürümlü dosyadan verilir.
   checkModelQualification(spec.model_politikasi, benchmark.olcumler);
   // Nitelendirme durumu "tamamlandi" yapıldığında geçen ölçüm kaydı olmadan model nitelikli ilan edilemez.
-  const withoutMeasurements = structuredClone(spec.model_politikasi);
-  withoutMeasurements.nitelendirme.durum = 'tamamlandi';
-  withoutMeasurements.roller.rapor_yazari_otomatik.nitelikli_modeller = ['DeepSeek-V4.1-Flash-1017'];
-  withoutMeasurements.roller.rapor_yazari_otomatik.secili = 'DeepSeek-V4.1-Flash-1017';
-  assert.throws(() => checkModelQualification(withoutMeasurements, []), /ölçüm kaydı zorunludur/);
+  const completedPolicy = structuredClone(spec.model_politikasi);
+  completedPolicy.nitelendirme.durum = 'tamamlandi';
+  completedPolicy.roller.rapor_yazari_otomatik.nitelikli_modeller = ['DeepSeek-V4.1-Flash-1017'];
+  completedPolicy.roller.rapor_yazari_otomatik.secili = 'DeepSeek-V4.1-Flash-1017';
+  assert.throws(() => checkModelQualification(completedPolicy, []), /ölçüm kaydı zorunludur/);
+  // Ayrı ölçüm kaydında geçen sonuç varsa tamamlanan nitelendirme geçer; denetçi yazardan farklı kalır.
+  checkModelQualification(completedPolicy, [
+    { rol: 'rapor_yazari_otomatik', model: 'DeepSeek-V4.1-Flash-1017', sonuc: 'gecer' }
+  ]);
 });
 
 // ------------------------------------------------------------------ belgeler ve 4I-0 sınırı
@@ -1084,8 +1393,10 @@ test('belgeler: yol haritası 4I-0…4I-F artımlarını on altı başlıkla, du
   assert.ok(management.includes('(BILGIN-4I-UYGULAMA-YOL-HARITASI.md)'), 'yönetim yol haritası ayrıntılı 4I belgesine bağlanır');
 });
 
-function stripSqlComments(sql) {
-  return sql.replace(/\/\*[\s\S]*?\*\//gu, ' ').replace(/--[^\r\n]*/gu, ' ');
+/** SQL yorumlarını ve metin sabitlerini temizleyerek yalnızca gerçek şema işlemlerini rapor adlarına göre denetler. */
+function hasReportSchemaOperation(sql) {
+  const cleaned = sql.replace(/\/\*[\s\S]*?\*\/|--[^\r\n]*|N?'(?:''|[^'])*'/gu, ' ');
+  return /\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|VIEW|INDEX|UNIQUE\s+INDEX|NONCLUSTERED\s+INDEX|CLUSTERED\s+INDEX|PROC(?:EDURE)?|TRIGGER|SCHEMA)\s+[^;\r\n]*(?:bilgin\w{0,8}(?:rapor|report)|y[oö]netici\w{0,3}rapor|executive\w{0,3}report)/iu.test(cleaned);
 }
 
 test('4I-0 sınırı: çalışma zamanı rapor motoru, yükleme hizmeti ya da kalıcılık yoktur; sözleşmeler yalnızca sınanır', async () => {
@@ -1102,13 +1413,16 @@ test('4I-0 sınırı: çalışma zamanı rapor motoru, yükleme hizmeti ya da ka
   };
   await walk('src');
   assert.deepEqual(offenders, [], '4I-A ve sonrası bu sınamayı bilinçli olarak günceller');
-  const reportMigration = /bilgin.{0,8}(?:rapor|report)|(?:y[oö]netici.{0,3}rapor|executive.{0,3}report)/iu;
-  // SQL yorumları yanlış pozitif üretmemeli, gerçek şema deyimleri yakalanmalıdır.
-  assert.doesNotMatch(stripSqlComments('-- No executive report tables are changed here\nSELECT 1;'), reportMigration);
-  assert.match(stripSqlComments('CREATE TABLE dbo.MR_BilginRaporlar (Id INT);'), reportMigration);
+  const reportFileName = /bilgin.{0,8}(?:rapor|report)|(?:y[oö]netici.{0,3}rapor|executive.{0,3}report)/iu;
+  // SQL yorumları ve PRINT tanı iletileri yanlış pozitif üretmemeli, gerçek şema deyimleri yakalanmalıdır.
+  assert.equal(hasReportSchemaOperation('-- No executive report tables are changed here\nSELECT 1;'), false);
+  assert.equal(hasReportSchemaOperation("PRINT N'No executive report tables are changed here';"), false);
+  assert.equal(hasReportSchemaOperation('CREATE TABLE dbo.MR_BilginRaporlar (Id INT);'), true);
+  assert.equal(hasReportSchemaOperation('ALTER TABLE [dbo].[MR_YoneticiRaporlari] ADD Durum NVARCHAR(32);'), true);
   for (const name of await readdir(path.join(ROOT, 'database'))) {
     if (!/^MR_Upgrade_\d{4}_.*\.sql$/u.test(name)) continue;
-    const migration = stripSqlComments(await read(path.posix.join('database', name)));
-    assert.doesNotMatch(name + '\n' + migration, reportMigration, 'yönetici raporu için kalıcılık 4J kapsamındadır: ' + name);
+    assert.doesNotMatch(name, reportFileName, 'yönetici raporu için kalıcılık 4J kapsamındadır: ' + name);
+    assert.equal(hasReportSchemaOperation(await read(path.posix.join('database', name))), false,
+      'yönetici raporu için kalıcılık 4J kapsamındadır: ' + name);
   }
 });

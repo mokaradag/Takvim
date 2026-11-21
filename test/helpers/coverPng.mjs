@@ -16,6 +16,15 @@ function paeth(a, b, c) {
   return pb <= pc ? b : c;
 }
 
+/** IDAT öncesinde izin verilen metinsiz yardımcı PNG parçaları ve beklenen bayt uzunlukları (null = değişken). */
+const PRE_IDAT_ANCILLARY_LENGTHS = new Map([
+  ['pHYs', 9],
+  ['sRGB', 1],
+  ['gAMA', 4],
+  ['cHRM', 32],
+  ['sBIT', null]
+]);
+
 /** Kanonik kapak yedeğinin 8 bit RGB/RGBA PNG verisini, A4 oranını ve onaylı kapak piksel içeriğini denetler. */
 export function validateCoverPng(png, expected = { background: '003087', strokes: ['077780', 'FF5620'] }) {
   assert.ok(png.subarray(0, 8).equals(SIGNATURE), 'PNG imzası geçersiz');
@@ -24,6 +33,7 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
   let height = 0;
   let bpp = 0;
   let rowBytes = 0;
+  let idatSeen = false;
   let endSeen = false;
   for (let offset = 8; offset < png.length;) {
     assert.ok(offset + 12 <= png.length, 'PNG parça başlığı eksik');
@@ -44,10 +54,18 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
       bpp = data[9] === 2 ? 3 : 4;
       rowBytes = 1 + width * bpp;
     } else if (type === 'IDAT') {
+      assert.equal(endSeen, false, 'PNG parça sırası veya bitişi geçersiz');
+      idatSeen = true;
       imageData.push(data);
-    } else {
-      assert.ok(type === 'IEND' && length === 0 && end + 4 === png.length, 'PNG parça sırası veya bitişi geçersiz');
+    } else if (type === 'IEND') {
+      assert.ok(length === 0 && end + 4 === png.length, 'PNG parça sırası veya bitişi geçersiz');
       endSeen = true;
+    } else if (!idatSeen && PRE_IDAT_ANCILLARY_LENGTHS.has(type)) {
+      const expectedLength = PRE_IDAT_ANCILLARY_LENGTHS.get(type);
+      const validLength = expectedLength === null ? length === bpp : length === expectedLength;
+      assert.ok(validLength, `PNG yardımcı parça uzunluğu geçersiz: ${type}`);
+    } else {
+      assert.fail('PNG parça sırası veya türü geçersiz: ' + type);
     }
     offset = end + 4;
   }

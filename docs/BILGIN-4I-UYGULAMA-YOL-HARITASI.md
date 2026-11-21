@@ -213,9 +213,11 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
    taslakları; kör insan puanları; model başına A/B/D sonuçları.
 7. **Gerekli referans görüntüleri ve varlıklar** — Model kataloğu görüntüleri (aday kimlikleri); insan dili örnek
    rapor (editoryal hedef).
-8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Kabul çerçevesi §5: 4I-B taslak A kapıları, B eşikleri (genel ≥ 4,0;
-   uygulanabilir her ölçüt ≥ 3,5; aday düzeyinde mekanik döküm ≤ %5), D bütçeleri. **Kritik kapı:** aday düzeyinde
-   mekanik döküm oranı %5'i aşıyorsa artım olgusal doğruluktan bağımsız olarak başarısızdır.
+8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Kabul çerçevesi §5: 4I-B taslak A kapıları (rapor başına
+   nesnel olgu doğruluğu ≥ %95), B eşikleri (genel ≥ 4,0; uygulanabilir her ölçüt ≥ 3,5; aday düzeyinde mekanik
+   döküm ≤ %5) ve D bütçeleri (`rapor_yazari_otomatik` için standart raporda p95 ≤ 240 sn; rapor başına en çok
+   11 çağrı). 4I-B kabulü için `rapor_yazari_otomatik` rolünün dolması zorunludur. **Kritik kapı:** aday
+   düzeyinde mekanik döküm oranı %5'i aşıyorsa artım olgusal doğruluktan bağımsız olarak başarısızdır.
 9. **Güvenlik ve yetki sınamaları** — Yazara yalnızca yetkili kanıt ve anlatı için gerekli kapsam/tamlık bilgisi gider.
    Not içi yönerge izlenmez ve gerçek risk korunur (R6, K19). Kısmi erişim toplamı görünür görevlerden hesaplanır
    ve kapalı varlık adı kesin kapıdır (R8). İçerik günlüğe girmez.
@@ -223,11 +225,13 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
     tekrarından kaçınma, belirsizliğin ölçülü anlatımı, notların profesyonel dönüşümü, suç atfı yok.
 11. **Regresyon gereksinimleri** — Sohbet profilleri, yönergesi ve kıyas kapıları değişmez; ağ geçidi sınırları
     yükseltilmez.
-12. **Başarım ve kaynak** — Rapor başına en çok 1 yazım çağrısı (+ 4I-C onarımları); standart raporda p95 ≤ 240 sn
-    ilk eşiği; çıktı belirteci sınırı profil üzerinden.
+12. **Başarım ve kaynak** — Rapor başına en çok 1 yazım çağrısı (+ 4I-C onarımları); standart raporda p95 eşiği
+    `rapor_yazari_otomatik` için ≤ 240 sn, `rapor_yazari_yuksek_kalite` için ≤ 600 sn; çıktı belirteci sınırı
+    profil üzerinden.
 13. **Bağımlılıklar** — 4I-A; canlı model kataloğu doğrulaması; kurum içi model erişimi.
-14. **Riskler ve geri alma** — Hiçbir aday eşikleri geçmezse rol boş kalır ve artım **ENGELLİ** olur (eşik
-    gevşetilmez); uzun süre → yüksek kalite rolü ayrı; geri alma: rapor profilleri kayıttan kaldırılır.
+14. **Riskler ve geri alma** — `rapor_yazari_otomatik` için hiçbir aday A, B ve p95 ≤ 240 sn eşiklerini geçmezse
+    `rapor_yazari_yuksek_kalite` dolsa bile 4I-B kabulü **ENGELLİ** olur (eşik gevşetilmez); uzun süre → yüksek
+    kalite rolü ayrı (p95 ≤ 600 sn); geri alma: rapor profilleri kayıttan kaldırılır.
 15. **Kapsam dışı** — Onarım döngüsü (4I-C), DOCX (4I-D), arayüz (4I-E).
 16. **Durum ve doğrulama kanıtı** — Henüz uygulanmadı.
 

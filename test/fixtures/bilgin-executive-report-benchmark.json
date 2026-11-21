@@ -68,6 +68,8 @@
    "uydurma_kimlik_ya_da_tarih": 0,
    "yayimlanan_nesnel_olgu_dogrulugu": 1.0,
    "taslak_nesnel_olgu_dogrulugu_en_az": 0.95,
+   "taslak_nesnel_olgu_dogrulugu_birimi": "rapor_basina",
+   "taslak_nesnel_olgu_dogrulugu_sifir_payda": "uygulanmaz",
    "celiskili_ya_da_eksik_kanitin_acik_islenmesi": 1.0
   },
   "B_editoryal_kalite": {
@@ -94,6 +96,7 @@
   "D_isletim_kalitesi": {
    "rapor_basina_model_cagrisi_en_fazla": 11,
    "standart_rapor_uctan_uca_p95_saniye_en_fazla": 240,
+   "yuksek_kalite_rapor_uctan_uca_p95_saniye_en_fazla": 600,
    "iptal_sonrasi_gecici_veri_kalmamasi": 1.0,
    "mevcut_bilgin_regresyonu": 0
   },
@@ -820,7 +823,11 @@
    "odak": "dengeli",
    "notlar": "dahil",
    "karsilastirma": "yok",
-   "destekleyici_belgeler": "var",
+   "destekleyici_belgeler": "yok",
+   "ek_bilgi_girisi": {
+    "tur": "yonetici_metni",
+    "koken": "yonetici_beyani"
+   },
    "gorseller": "temel",
    "durum": "Yönetici ek bilgi alanına kayıtlarda olmayan bir toplantı kararını yazdı.",
    "sinanan": "Kullanıcı beyanının kaynağıyla anılması; doğrulanmış kayıt gibi sunulmaması.",
@@ -1448,6 +1455,9 @@
      "id": "E2",
      "tur": "olcu",
      "kaynak": "rota_task_analytics",
+     "kapsam": [
+      "PRJ-UFUK"
+     ],
      "olcu": "history.undatedDone",
      "deger": 1,
      "veri_ani": "2026-11-08T23:59:59+03:00"
@@ -1537,7 +1547,7 @@
     "desteklenen_ifadeler": [
      {
       "sinif": "nesnel_olgu",
-      "ifade": "Sürüm paketinin derlemesi sürüyor.",
+      "ifade": "Yazılım sürüm paketi görevi devam ediyor; görev notunda paket derlemesinin sürdüğü belirtiliyor.",
       "kanitlar": [
        "E1",
        "E2"
@@ -1586,6 +1596,7 @@
      "id": "E1",
      "tur": "olcu",
      "kaynak": "rota_activity_search",
+     "sorumlu": "Ece Tunalı",
      "olcu": "hareket",
      "deger": 0,
      "kayit_kapsami": "complete",
@@ -1598,6 +1609,7 @@
      "id": "E2",
      "tur": "olcu",
      "kaynak": "rota_task_analytics",
+     "sorumlu": "Ece Tunalı",
      "olcu": "acik",
      "deger": 4,
      "veri_ani": "2026-11-08T23:59:59+03:00"
@@ -1715,7 +1727,12 @@
        "E1",
        "E3",
        "E4"
-      ]
+      ],
+      "beklenen_olcu": {
+       "olcu": "tamamlanan",
+       "proje": "PRJ-UFUK",
+       "deger": 2
+      }
      }
     ]
    },

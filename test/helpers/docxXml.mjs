@@ -17,6 +17,7 @@ const namespaces = {
   ep: 'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties',
   mc: 'http://schemas.openxmlformats.org/markup-compatibility/2006',
   o: 'urn:schemas-microsoft-com:office:office',
+  pic: 'http://schemas.openxmlformats.org/drawingml/2006/picture',
   r: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
   svg: 'http://www.w3.org/2000/svg',
   v: 'urn:schemas-microsoft-com:vml',
@@ -118,14 +119,6 @@ function enclosingParagraph(node) {
   return null;
 }
 
-function paragraphTextWithoutFields(paragraph) {
-  const fields = all(paragraph, 'w:fldSimple');
-  return all(paragraph, 'w:t')
-    .filter((node) => !fields.some((field) => field.contains(node)))
-    .map((node) => node.textContent)
-    .join('');
-}
-
 /** Yalnızca kanonik şablonun yerel sayfa ve başlık sayaçlarına izin verir; revizyon ve gizli metni reddeder. */
 function checkWordFields(document, name) {
   const disallowed = [
@@ -154,21 +147,29 @@ function checkWordFields(document, name) {
   const instructions = fields.map((field) => (attr(field, 'w:instr') ?? '').trim().replace(/\s+/gu, ' '));
   assert.deepEqual(instructions, allowed[name] ?? [], name + ': Word alan komutları');
 
-  // İzinli sayaç alanlarının önbellekteki görünür metni yalnızca boş ya da sayısal sayaç değeri olabilir.
+  // İzinli sayaç alanlarının kilidi kapalı olmalı ve önbellekteki görünür metni yalnızca boş ya da sayısal olmalıdır.
   for (const [index, field] of fields.entries()) {
+    const fldLock = attr(field, 'w:fldLock');
+    assert.ok([null, 'false', '0', 'off'].includes(fldLock),
+      name + ': kilitli Word alanı yasak (w:fldLock=' + fldLock + ')');
     const cached = all(field, 'w:t').map((node) => node.textContent).join('').trim();
     assert.match(cached, /^\d*$/u, name + ': Word alan sonucu sayısal veya boş olmalıdır');
     const paragraph = enclosingParagraph(field);
     assert.ok(paragraph, name + ': Word alanı paragraf içinde olmalıdır');
     const style = attr(child(child(paragraph, 'w:pPr'), 'w:pStyle'));
-    const text = paragraphTextWithoutFields(paragraph);
+    const ordered = [...paragraph.children].map((node) => {
+      if (node === field) return '<FIELD>';
+      return all(node, 'w:t').map((t) => t.textContent).join('');
+    }).join('');
     const instr = instructions[index];
     if (name === 'word/document.xml' && instr === 'SEQ Şekil \\* ARABIC') {
       assert.equal(style, 'Caption', 'şekil sayacı başlık stilinde olmalıdır');
-      assert.ok(text.startsWith('Şekil ') && text.includes('{{SEKIL_1_BASLIGI}}'), 'şekil sayacı şekil başlığında olmalıdır');
+      assert.ok(ordered.startsWith('Şekil <FIELD>: ') && ordered.includes('{{SEKIL_1_BASLIGI}}'),
+        'şekil sayacı Şekil etiketinden sonra ve şekil başlığında olmalıdır');
     } else if (name === 'word/document.xml' && instr === 'SEQ Tablo \\* ARABIC') {
       assert.equal(style, 'Caption', 'tablo sayacı başlık stilinde olmalıdır');
-      assert.ok(text.startsWith('Tablo ') && text.includes('{{TABLO_1_BASLIGI}}'), 'tablo sayacı tablo başlığında olmalıdır');
+      assert.ok(ordered.startsWith('Tablo <FIELD>: ') && ordered.includes('{{TABLO_1_BASLIGI}}'),
+        'tablo sayacı Tablo etiketinden sonra ve tablo başlığında olmalıdır');
     } else if (name === 'word/footer1.xml') {
       assert.equal(style, 'Footer', 'sayfa sayaçları alt bilgi paragrafında olmalıdır');
     }

@@ -19,6 +19,18 @@ function requireZip(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+/** ZIP ek alanındaki kayıt uzunluklarının çevreleyen ek alan sınırları içinde kaldığını doğrular. */
+function validateExtraField(buffer, start, length, label) {
+  let cursor = start;
+  const finish = start + length;
+  while (cursor < finish) {
+    requireZip(cursor + 4 <= finish, 'ZIP ek alan kaydı eksik: ' + label);
+    const dataSize = buffer.readUInt16LE(cursor + 2);
+    cursor += 4 + dataSize;
+    requireZip(cursor <= finish, 'ZIP ek alan kayıt uzunluğu sınırı aşıyor: ' + label);
+  }
+}
+
 function findEndOfCentralDirectory(buffer) {
   const lowest = Math.max(0, buffer.length - 22 - 0xffff);
   for (let offset = buffer.length - 22; offset >= lowest; offset -= 1) {
@@ -70,16 +82,19 @@ export function readZipEntries(buffer) {
     'ZIP parça adı geçersiz: ' + name);
     requireZip(!names.has(normalized), 'yinelenen ZIP parça adı: ' + name);
     names.add(normalized);
+    validateExtraField(buffer, offset + 46 + nameLength, extraLength, name);
     requireZip(method === 0 || method === 8, 'desteklenmeyen ZIP sıkıştırma yöntemi: ' + name);
     requireZip((flags & ~(method === 8 ? 0x806 : 0x800)) === 0, 'desteklenmeyen ZIP girdi bayrakları: ' + name);
     requireZip(localOffset + 30 <= centralStart && buffer.readUInt32LE(localOffset) === LOCAL_SIGNATURE,
       'ZIP yerel başlığı bozuk: ' + name);
     const localNameStart = localOffset + 30;
     const localNameEnd = localNameStart + buffer.readUInt16LE(localOffset + 26);
-    const dataStart = localNameEnd + buffer.readUInt16LE(localOffset + 28);
+    const localExtraLength = buffer.readUInt16LE(localOffset + 28);
+    const dataStart = localNameEnd + localExtraLength;
     const dataEnd = dataStart + compressedSize;
     requireZip(dataEnd <= centralStart && !ranges.some(([start, finish]) => localOffset < finish && dataEnd > start),
       'ZIP yerel girdi aralığı geçersiz: ' + name);
+    validateExtraField(buffer, localNameEnd, localExtraLength, name);
     ranges.push([localOffset, dataEnd]);
     requireZip(nameBytes.equals(buffer.subarray(localNameStart, localNameEnd))
       && buffer.readUInt16LE(localOffset + 6) === flags && buffer.readUInt16LE(localOffset + 8) === method
