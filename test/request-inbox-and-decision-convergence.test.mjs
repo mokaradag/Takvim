@@ -875,6 +875,12 @@ test('birleşik gelen kutusu imleçli sayfalamada araya yeni kayıt girse de yin
     assert.equal(new Set(combined).size, 4, 'imleçli sayfalama araya yeni kayıt girse de yinelenen satır üretmez');
     assert.deepEqual(second.items.map((item) => item.taskTitle), ['Olay 2', 'Olay 1']);
 
+    // Karar bekleyen tarih talebi `actionable` alanı taşımasa da imleçte a=1 olarak kodlanır.
+    const scheduleCursor = inbox.encodeRequestInboxCursor({
+      source: 'SCHEDULE_REQUEST', id: TASK_ID, isDecisionOwner: true, status: 'PENDING', taskAvailable: true, createdAt: '2026-10-05T10:00:00Z'
+    });
+    assert.equal(JSON.parse(Buffer.from(scheduleCursor, 'base64url').toString('utf8')).a, 1);
+
     // Geçersiz imleç 400 ile reddedilir ve sorgu tam geçmişi @items tablo değişkenine yığmaz.
     await assert.rejects(() => asUser(EXTERNAL, () => page({ tab: 'history', cursor: 'bozuk-imlec' })), (err) => err.status === 400);
     assert.doesNotMatch(read('src/server/notifications/requestInboxQueries.js'), /DECLARE @items TABLE/);

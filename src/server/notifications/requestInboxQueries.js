@@ -69,6 +69,14 @@ function normalizeDate(value) {
   return value;
 }
 
+function isInboxItemActionable(item) {
+  if (!item) return false;
+  if (item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST) {
+    return Boolean(item.isDecisionOwner) && item.status === 'PENDING' && item.taskAvailable !== false;
+  }
+  return Boolean(item.actionable);
+}
+
 /** Sonraki sayfa geçişi için belirlenimci sıralama sınırını kodlar. */
 export function encodeRequestInboxCursor(item) {
   if (!item) return null;
@@ -78,7 +86,7 @@ export function encodeRequestInboxCursor(item) {
   const sortAt = item.sortAt || item.decidedAt || item.createdAt || item.occurredAt;
   if (!sortAt || !Number.isFinite(Date.parse(sortAt))) return null;
   return Buffer.from(JSON.stringify({
-    a: item.actionable ? 1 : 0,
+    a: isInboxItemActionable(item) ? 1 : 0,
     t: new Date(sortAt).toISOString(),
     s: source,
     i: id
@@ -314,10 +322,7 @@ function itemBelongsToTab(item, tab, actorSicil) {
     if (item.source === NOTIFICATION_SOURCES.TASK_EVENT) {
       return Boolean(item.unread) && item.taskAvailable !== false;
     }
-    const actionable = item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST
-      ? Boolean(item.isDecisionOwner) && item.status === 'PENDING' && item.taskAvailable !== false
-      : Boolean(item.actionable);
-    if (actionable) return true;
+    if (isInboxItemActionable(item)) return true;
     const ownPending = String(item.requesterSicil ?? '') === String(actorSicil) && item.status === 'PENDING';
     return Boolean(item.unread) && item.taskAvailable !== false && !ownPending;
   }
