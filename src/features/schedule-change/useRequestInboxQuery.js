@@ -30,7 +30,12 @@ export function useRequestInboxQuery(query, enabled = true) {
     const timer = setTimeout(async () => {
       const result = await fetchRequestInbox(JSON.parse(key));
       if (cancelled) return;
-      setState({ key, data: result.ok ? result.value : EMPTY, loading: false, error: result.ok ? null : result.message });
+      setState((current) => ({
+        key,
+        data: result.ok ? result.value : (current.key === key ? current.data : EMPTY),
+        loading: false,
+        error: result.ok ? null : result.message
+      }));
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [actual, enabled, key, revision, summary, notificationSummary]);

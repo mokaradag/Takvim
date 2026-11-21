@@ -9,6 +9,7 @@ import {
 } from '../../domain/assignment/assignmentCoordination.js';
 import { fmt } from '../../scheduling/dates/index.js';
 import { useModalFocusTrap } from '../schedule-change/useModalFocusTrap.js';
+import { selectFresherRecord } from '../schedule-change/requestInboxPresentation.js';
 import { DirectoryPersonSearch } from './DirectoryPersonSearch.jsx';
 
 /**
@@ -38,16 +39,29 @@ export function AssignmentCoordinationDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
-  // Sunucunun kararla birlikte döndürdüğü YETKİLİ kayıt. Pencere açık kalırsa
-  // (güncelliğini yitirme, yenileme hatası) liste henüz yenilenmemiş olsa da
-  // eski durum ve eski karar düğmeleri yeniden gösterilmez.
-  const [committedRecord, setCommittedRecord] = useState(null);
-  const record = committedRecord && committedRecord.id === recordProp.id ? committedRecord : recordProp;
+  // Sunucunun kararla birlikte döndürdüğü YETKİLİ kayıt. Liste yenilenene dek
+  // eski durum/düğmeler gösterilmez; ancak daha yeni bir sunucu kaydı gelirse
+  // elde tutulan kopyanın yerini alır.
+  const [committedState, setCommittedState] = useState(null);
+  // Sonucu doğrulanamayan ağ/zaman aşımı yanıtında, aynı eski sürüm üzerinden
+  // yinelenen karar verilmesini engelleyen kilit.
+  const [unconfirmed, setUnconfirmed] = useState(null);
+  const record = committedState && String(committedState.record.id) === String(recordProp.id)
+    ? selectFresherRecord(recordProp, committedState.record, { supersededVersion: committedState.baseVersion })
+    : recordProp;
+  const outcomeUnconfirmed = Boolean(
+    unconfirmed
+    && String(unconfirmed.id) === String(record.id)
+    && (!record.version || unconfirmed.version === record.version)
+  );
   const closeRef = useRef(null);
   const dialogRef = useRef(null);
   useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: closeRef, restoreFocusRef, onClose, blocked: busy });
 
-  const decisions = useMemo(() => record.allowedDecisions || [], [record.allowedDecisions]);
+  const decisions = useMemo(
+    () => (outcomeUnconfirmed ? [] : (record.allowedDecisions || [])),
+    [outcomeUnconfirmed, record.allowedDecisions]
+  );
   const canSuggest = decisions.includes(COORDINATION_DECISIONS.REQUEST_CHANGE);
   // Etiket yanıt notunu "değişiklik isteğinde zorunlu" diye bildirir; düğme de
   // aynı kuralı uygular. Uygulanmadığında boş notlu istek gidiyor ve kullanıcı
@@ -55,6 +69,7 @@ export function AssignmentCoordinationDialog({
   const noteMissing = !message.trim();
 
   const decide = async (decision) => {
+    const submittedVersion = record.version;
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -63,7 +78,7 @@ export function AssignmentCoordinationDialog({
       result = await onDecide(record.id, {
         decision,
         message: message.trim(),
-        version: record.version,
+        version: submittedVersion,
         suggestedAssigneeSicil: decision === COORDINATION_DECISIONS.REQUEST_CHANGE ? suggested?.sicil ?? null : null
       });
     } catch (decisionError) {
@@ -73,10 +88,19 @@ export function AssignmentCoordinationDialog({
       setBusy(false);
     }
     if (!result?.ok) {
+      if (result?.code === 'OUTCOME_UNKNOWN') {
+        if (result.record) {
+          setCommittedState({ record: result.record, baseVersion: submittedVersion });
+          setUnconfirmed(null);
+        } else {
+          setUnconfirmed({ id: record.id, version: submittedVersion });
+        }
+      }
       setError(result?.message || result?.error?.message || 'Karar kaydedilemedi.');
       return;
     }
-    if (result.value?.record) setCommittedRecord(result.value.record);
+    setUnconfirmed(null);
+    if (result.value?.record) setCommittedState({ record: result.value.record, baseVersion: submittedVersion });
     if (result.value?.outcome === 'STALE') {
       setError(result.value.message);
       return;

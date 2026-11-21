@@ -9,6 +9,7 @@ import { loadAuthorizationContext } from '../authorization/loadAuthorizationCont
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { activityDateRange } from '../reports/activityDates.js';
+import { encodeVersion } from '../repository/versionTokens.js';
 import { mapRequest } from '../schedule-change/scheduleRequestMapping.js';
 import { SCHEDULE_REQUEST_SQL, readSchedulePage } from '../schedule-change/scheduleRequestQueries.js';
 import { isMissingNotificationInboxSchema } from './notificationInboxQueries.js';
@@ -28,19 +29,22 @@ import { TASK_NOTIFICATION_SQL, mapTaskNotification } from './taskNotificationQu
  * parametrelidir ve geçmişin tamamı uygulama anlık görüntüsüne yüklenmez.
  *
  * Sekme anlamı (bkz. docs/TALEPLER-VE-BILDIRIMLER.md):
- *   · Gelenler: kararınızı bekleyen kayıtlar + okunmamış ve temizlenmemiş
- *     bildirimler. Okundu işareti bilgilendirme satırını buradan çıkarır; karar
- *     bekleyen kayıt okunsa da kalır. Kullanıcının kendi açık talebi gelen
- *     sayılmaz (Gönderdiklerim'dedir); sonuçlandığında yanıtı gelen olur.
+ *   · Gelenler: kararınızı bekleyen kayıtlar + etkin görevlere ait okunmamış
+ *     ve temizlenmemiş bildirimler. Okundu işareti bilgilendirme satırını
+ *     buradan çıkarır; karar bekleyen kayıt okunsa da kalır. Kullanıcının kendi
+ *     açık talebi gelen sayılmaz (Gönderdiklerim'dedir); sonuçlandığında yanıtı
+ *     gelen olur.
  *   · Gönderdiklerim: kullanıcının gönderdiği tarih ve atama talepleri. Olay
  *     bildirimleri ve doğrudan atama bildirimleri (NOTICE) talep sayılmaz.
- *   · Geçmiş: sonuçlanan talepler ile atama olaylarının tamamı. Okundu/
- *     temizlendi durumundan BAĞIMSIZDIR: okumak silmek değildir.
+ *   · Geçmiş: sonuçlanan talepler, görevi silinen/projesi kapalı kayıtlar ve
+ *     atama olaylarının tamamı. Okundu/temizlendi durumundan BAĞIMSIZDIR:
+ *     okumak silmek değildir.
  */
 
 const SCHEDULE_STATUS_CODES = new Set(['PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED', 'STALE']);
 const STATUS_CODES = new Set([...SCHEDULE_STATUS_CODES, ...Object.keys(COORDINATION_STATUSES)]);
 const CATEGORY_CODES = new Set(Object.values(REQUEST_INBOX_CATEGORIES));
+const CURSOR_SOURCES = new Set(Object.values(NOTIFICATION_SOURCES));
 
 function invalid(message) {
   throw new ServerPersistenceError('MUTATION_FAILED', message, { status: 400 });
@@ -65,6 +69,40 @@ function normalizeDate(value) {
   return value;
 }
 
+/** Sonraki sayfa geçişi için belirlenimci sıralama sınırını kodlar. */
+export function encodeRequestInboxCursor(item) {
+  if (!item) return null;
+  const source = item.source;
+  const id = canonicalActualId(item.id);
+  if (!CURSOR_SOURCES.has(source) || !id) return null;
+  const sortAt = item.sortAt || item.decidedAt || item.createdAt || item.occurredAt;
+  if (!sortAt || !Number.isFinite(Date.parse(sortAt))) return null;
+  return Buffer.from(JSON.stringify({
+    a: item.actionable ? 1 : 0,
+    t: new Date(sortAt).toISOString(),
+    s: source,
+    i: id
+  }), 'utf8').toString('base64url');
+}
+
+function decodeRequestInboxCursor(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || value.length > 512) invalid('Sayfalama imleci geçersiz.');
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+  } catch {
+    invalid('Sayfalama imleci geçersiz.');
+  }
+  if (!parsed || typeof parsed !== 'object') invalid('Sayfalama imleci geçersiz.');
+  const actionable = parsed.a === 1 ? 1 : parsed.a === 0 ? 0 : null;
+  const source = CURSOR_SOURCES.has(parsed.s) ? parsed.s : null;
+  const id = canonicalActualId(parsed.i);
+  const sortAt = typeof parsed.t === 'string' && Number.isFinite(Date.parse(parsed.t)) ? new Date(parsed.t) : null;
+  if (actionable == null || !source || !id || !sortAt) invalid('Sayfalama imleci geçersiz.');
+  return { actionable, sortAt, source, id };
+}
+
 export function normalizeRequestInboxQuery(input = {}) {
   const tab = input.tab || REQUEST_INBOX_TABS.INCOMING;
   if (!Object.values(REQUEST_INBOX_TABS).includes(tab)) invalid('Talep sekmesi geçersiz.');
@@ -81,8 +119,9 @@ export function normalizeRequestInboxQuery(input = {}) {
   const from = normalizeDate(input.from || null);
   const to = normalizeDate(input.to || null);
   if (from && to && from > to) invalid('Başlangıç tarihi bitişten sonra olamaz.');
+  const cursor = decodeRequestInboxCursor(input.cursor || null);
   return {
-    tab, page, pageSize, projectId, status, category, from, to,
+    tab, page, pageSize, projectId, status, category, from, to, cursor,
     search: String(input.search || '').trim().slice(0, 200),
     requester: String(input.requester || '').trim().slice(0, 100)
   };
@@ -95,102 +134,163 @@ const SCHEDULE_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
 const text = (expression) => `${expression} COLLATE Turkish_100_CI_AI`;
 const matches = (needle, haystack) => `CHARINDEX(${needle}, ${text(`COALESCE(${haystack}, '')`)}) > 0`;
 
+const S_INCOMING = `(${S.ACTIONABLE} OR (${S.UNREAD} AND ${S.VISIBLE} AND ${SCHEDULE_AVAILABLE}
+  AND NOT (r.RequesterSicil = @sicil AND r.Status = 'PENDING')))`;
+const S_SENT = '(r.RequesterSicil = @sicil)';
+const S_HISTORY = `(r.Status <> 'PENDING' OR NOT ${SCHEDULE_AVAILABLE})`;
+const S_SORT_AT = 'COALESCE(r.DecidedAt, r.CreatedAt)';
+const S_ACTIONABLE_BIT = `CASE WHEN ${S.ACTIONABLE} THEN 1 ELSE 0 END`;
+const S_FILTERS = `(@projectId IS NULL OR COALESCE(r.ProjectIdSnapshot, t.ProjectId) = @projectId)
+  AND (@status IS NULL OR r.Status = @status)
+  AND (@fromUtc IS NULL OR r.CreatedAt >= @fromUtc)
+  AND (@toUtc IS NULL OR r.CreatedAt < @toUtc)
+  AND (@requester = '' OR ${matches('@requester', 'requester.DisplayName')}
+    OR CONVERT(varchar(20), r.RequesterSicil) = @requester)
+  AND (@search = '' OR CHARINDEX(@search, ${text(`CONCAT(COALESCE(r.TaskTitleSnapshot, t.Title), ' ',
+    COALESCE(r.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(r.ProjectCodeSnapshot, p.ProjectCode), ' ',
+    requester.DisplayName, ' ', r.RequesterMessage)`)}) > 0)`;
+
+const C_INCOMING = `(${C.ACTIONABLE} OR (${C.UNREAD} AND ${C.VISIBLE} AND ${C.TASK_AVAILABLE}
+  AND NOT (c.RequesterSicil = @sicil AND c.Status = 'PENDING')))`;
+const C_SENT = "(c.RequesterSicil = @sicil AND c.Mode = 'REQUEST')";
+const C_HISTORY = `(c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${C.TASK_AVAILABLE})`;
+const C_SORT_AT = 'COALESCE(c.DecidedAt, c.CreatedAt)';
+const C_ACTIONABLE_BIT = `CASE WHEN ${C.ACTIONABLE} THEN 1 ELSE 0 END`;
+const C_FILTERS = `(@category IS NULL OR (@category = 'ASSIGNMENT_REQUEST' AND c.Mode = 'REQUEST')
+    OR (@category = 'ASSIGNMENT_NOTICE' AND c.Mode = 'NOTICE'))
+  AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
+  AND (@status IS NULL OR c.Status = @status)
+  AND (@fromUtc IS NULL OR c.CreatedAt >= @fromUtc)
+  AND (@toUtc IS NULL OR c.CreatedAt < @toUtc)
+  AND (@requester = '' OR ${matches('@requester', 'requester.DisplayName')}
+    OR CONVERT(varchar(20), c.RequesterSicil) = @requester)
+  AND (@search = '' OR CHARINDEX(@search, ${text(`CONCAT(COALESCE(c.TaskTitleSnapshot, t.Title), ' ',
+    COALESCE(c.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(c.ProjectCodeSnapshot, p.ProjectCode), ' ',
+    requester.DisplayName, ' ', COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot), ' ',
+    c.RequesterMessage)`)}) > 0)`;
+
+const N_INCOMING = `(${N.UNREAD} AND ${N.VISIBLE} AND ${N.TASK_AVAILABLE})`;
+// Çok projeli toplu atama bildirimi kasıtlı olarak tek proje kimliği taşımaz
+// (ProjectIdSnapshot NULL ve TaskCount > 1); proje süzgecinde yalnızca ilk
+// görevin projesine yanlış biçimde bağlanmaz.
+const N_FILTERS = `(@category IS NULL OR n.Kind = @category)
+  AND (@projectId IS NULL OR n.ProjectIdSnapshot = @projectId
+    OR (n.ProjectIdSnapshot IS NULL AND n.TaskCount <= 1 AND t.ProjectId = @projectId))
+  AND (@fromUtc IS NULL OR n.OccurredAt >= @fromUtc)
+  AND (@toUtc IS NULL OR n.OccurredAt < @toUtc)
+  AND (@requester = '' OR ${matches('@requester', 'COALESCE(n.ActorNameSnapshot, actor.DisplayName)')}
+    OR CONVERT(varchar(20), n.ActorSicil) = @requester)
+  AND (@search = '' OR CHARINDEX(@search, ${text(`CONCAT(n.TaskTitleSnapshot, ' ', n.ProjectNameSnapshot, ' ',
+    n.ProjectCodeSnapshot, ' ', COALESCE(n.ActorNameSnapshot, actor.DisplayName))`)}) > 0)`;
+
+function cursorAfter(actionableExpr, sortAtExpr, sourceLiteral, idExpr) {
+  return `(@hasCursor = 0
+    OR ${actionableExpr} < @cursorActionable
+    OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} < @cursorSortAt)
+    OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} = @cursorSortAt AND '${sourceLiteral}' > @cursorSource)
+    OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} = @cursorSortAt AND '${sourceLiteral}' = @cursorSource AND ${idExpr} < @cursorItemId))`;
+}
+
 /**
- * Her kaynak satırını ORTAK anahtara indirger: kaynak, kimlik, sıralama zamanı
- * ve sekme bayrakları. Sayfa yalnızca bu anahtarlarla kesilir; ayrıntı satırı
- * ancak sayfadaki kimlikler için ve kaynağın kendi alan listesiyle okunur.
+ * Sayaçlar tam geçmişi tablo değişkenine yığmadan akar toplamla hesaplanır;
+ * sayfa adayları yalnızca etkin sekme ve sayfa penceresiyle sınırlanır.
+ * Ayrıntı okuması, sayfa üyeliği sırasında yakalanan sürüm ve okunmamışlık
+ * bayraklarıyla karşılaştırılır.
  */
 const REQUEST_INBOX_SQL = `
   /* rota-request-inbox */
-  DECLARE @items TABLE (
+  DECLARE @incomingCount int = 0, @sentCount int = 0, @historyCount int = 0;
+
+  IF @category IS NULL OR @category = 'SCHEDULE_REQUEST'
+  SELECT
+    @incomingCount += COALESCE(SUM(CASE WHEN ${S_INCOMING} THEN 1 ELSE 0 END), 0),
+    @sentCount += COALESCE(SUM(CASE WHEN ${S_SENT} THEN 1 ELSE 0 END), 0),
+    @historyCount += COALESCE(SUM(CASE WHEN ${S_HISTORY} THEN 1 ELSE 0 END), 0)
+  ${S.SOURCE} WHERE ${S.PARTICIPANT} AND ${S_FILTERS};
+
+  IF @category IS NULL OR @category IN ('ASSIGNMENT_REQUEST', 'ASSIGNMENT_NOTICE')
+  SELECT
+    @incomingCount += COALESCE(SUM(CASE WHEN ${C_INCOMING} THEN 1 ELSE 0 END), 0),
+    @sentCount += COALESCE(SUM(CASE WHEN ${C_SENT} THEN 1 ELSE 0 END), 0),
+    @historyCount += COALESCE(SUM(CASE WHEN ${C_HISTORY} THEN 1 ELSE 0 END), 0)
+  ${C.SOURCE} WHERE ${C.PARTICIPANT} AND ${C_FILTERS};
+
+  IF @status IS NULL AND (@category IS NULL OR @category IN ('TASK_ASSIGNED', 'TASK_UNASSIGNED'))
+  SELECT
+    @incomingCount += COALESCE(SUM(CASE WHEN ${N_INCOMING} THEN 1 ELSE 0 END), 0),
+    @historyCount += COUNT(*)
+  ${N.SOURCE} WHERE ${N.OWNED} AND ${N_FILTERS};
+
+  SELECT @incomingCount AS IncomingCount, @sentCount AS SentCount, @historyCount AS HistoryCount;
+  -- Atama Koordinasyonu sekmesinin süzgeçsiz "Tüm kayıtlar" sayısı: sekme
+  -- kendi bağımsız süzgeçleriyle açıldığında aynı sayıyı readCoordinationPage verir.
+  SELECT COUNT(*) AS CoordinationCount ${C.COUNT_SOURCE} WHERE ${C.PARTICIPANT};
+
+  DECLARE @total int = CASE
+    WHEN @tab = 'pending' THEN @incomingCount
+    WHEN @tab = 'sent' THEN @sentCount
+    ELSE @historyCount
+  END;
+  DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
+  DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
+  DECLARE @windowSize int = CASE WHEN @hasCursor = 1 THEN @pageSize ELSE (@safePage + 1) * @pageSize END;
+  SELECT @total AS Total, @safePage AS Page;
+
+  DECLARE @pageCandidates TABLE (
     Source varchar(30) NOT NULL, ItemId uniqueidentifier NOT NULL, SortAt datetime2 NULL,
-    Actionable bit NOT NULL, IsIncoming bit NOT NULL, IsSent bit NOT NULL, IsHistory bit NOT NULL,
+    Actionable bit NOT NULL, ItemVersion binary(8) NULL, UnreadFlag bit NOT NULL,
     PRIMARY KEY (Source, ItemId));
 
   IF @category IS NULL OR @category = 'SCHEDULE_REQUEST'
-  INSERT @items
-  SELECT 'SCHEDULE_REQUEST', r.RequestId, COALESCE(r.DecidedAt, r.CreatedAt),
-    CASE WHEN ${S.ACTIONABLE} THEN 1 ELSE 0 END,
-    CASE WHEN ${S.ACTIONABLE} OR (${S.UNREAD} AND ${S.VISIBLE} AND ${SCHEDULE_AVAILABLE}
-      AND NOT (r.RequesterSicil = @sicil AND r.Status = 'PENDING')) THEN 1 ELSE 0 END,
-    CASE WHEN r.RequesterSicil = @sicil THEN 1 ELSE 0 END,
-    CASE WHEN r.Status <> 'PENDING' OR NOT ${SCHEDULE_AVAILABLE} THEN 1 ELSE 0 END
+  INSERT @pageCandidates
+  SELECT TOP (@windowSize) 'SCHEDULE_REQUEST', r.RequestId, ${S_SORT_AT},
+    ${S_ACTIONABLE_BIT}, r.RowVersion, CASE WHEN ${S.UNREAD} THEN 1 ELSE 0 END
   ${S.SOURCE}
-  WHERE ${S.PARTICIPANT}
-    AND (@projectId IS NULL OR COALESCE(r.ProjectIdSnapshot, t.ProjectId) = @projectId)
-    AND (@status IS NULL OR r.Status = @status)
-    AND (@fromUtc IS NULL OR r.CreatedAt >= @fromUtc)
-    AND (@toUtc IS NULL OR r.CreatedAt < @toUtc)
-    AND (@requester = '' OR ${matches('@requester', 'requester.DisplayName')}
-      OR CONVERT(varchar(20), r.RequesterSicil) = @requester)
-    AND (@search = '' OR CHARINDEX(@search, ${text(`CONCAT(COALESCE(r.TaskTitleSnapshot, t.Title), ' ',
-      COALESCE(r.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(r.ProjectCodeSnapshot, p.ProjectCode), ' ',
-      requester.DisplayName, ' ', r.RequesterMessage)`)}) > 0);
+  WHERE ${S.PARTICIPANT} AND ${S_FILTERS}
+    AND ((@tab = 'pending' AND ${S_INCOMING}) OR (@tab = 'sent' AND ${S_SENT}) OR (@tab = 'history' AND ${S_HISTORY}))
+    AND ${cursorAfter(S_ACTIONABLE_BIT, S_SORT_AT, 'SCHEDULE_REQUEST', 'r.RequestId')}
+  ORDER BY ${S_ACTIONABLE_BIT} DESC, ${S_SORT_AT} DESC, r.RequestId DESC;
 
   IF @category IS NULL OR @category IN ('ASSIGNMENT_REQUEST', 'ASSIGNMENT_NOTICE')
-  INSERT @items
-  SELECT 'ASSIGNMENT_COORDINATION', c.CoordinationId, COALESCE(c.DecidedAt, c.CreatedAt),
-    CASE WHEN ${C.ACTIONABLE} THEN 1 ELSE 0 END,
-    CASE WHEN ${C.ACTIONABLE} OR (${C.UNREAD} AND ${C.VISIBLE} AND ${C.TASK_AVAILABLE}
-      AND NOT (c.RequesterSicil = @sicil AND c.Status = 'PENDING')) THEN 1 ELSE 0 END,
-    CASE WHEN c.RequesterSicil = @sicil AND c.Mode = 'REQUEST' THEN 1 ELSE 0 END,
-    CASE WHEN c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${C.TASK_AVAILABLE} THEN 1 ELSE 0 END
+  INSERT @pageCandidates
+  SELECT TOP (@windowSize) 'ASSIGNMENT_COORDINATION', c.CoordinationId, ${C_SORT_AT},
+    ${C_ACTIONABLE_BIT}, c.RowVersion, CASE WHEN ${C.UNREAD} THEN 1 ELSE 0 END
   ${C.SOURCE}
-  WHERE ${C.PARTICIPANT}
-    AND (@category IS NULL OR (@category = 'ASSIGNMENT_REQUEST' AND c.Mode = 'REQUEST')
-      OR (@category = 'ASSIGNMENT_NOTICE' AND c.Mode = 'NOTICE'))
-    AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
-    AND (@status IS NULL OR c.Status = @status)
-    AND (@fromUtc IS NULL OR c.CreatedAt >= @fromUtc)
-    AND (@toUtc IS NULL OR c.CreatedAt < @toUtc)
-    AND (@requester = '' OR ${matches('@requester', 'requester.DisplayName')}
-      OR CONVERT(varchar(20), c.RequesterSicil) = @requester)
-    AND (@search = '' OR CHARINDEX(@search, ${text(`CONCAT(COALESCE(c.TaskTitleSnapshot, t.Title), ' ',
-      COALESCE(c.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(c.ProjectCodeSnapshot, p.ProjectCode), ' ',
-      requester.DisplayName, ' ', COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot), ' ',
-      c.RequesterMessage)`)}) > 0);
+  WHERE ${C.PARTICIPANT} AND ${C_FILTERS}
+    AND ((@tab = 'pending' AND ${C_INCOMING}) OR (@tab = 'sent' AND ${C_SENT}) OR (@tab = 'history' AND ${C_HISTORY}))
+    AND ${cursorAfter(C_ACTIONABLE_BIT, C_SORT_AT, 'ASSIGNMENT_COORDINATION', 'c.CoordinationId')}
+  ORDER BY ${C_ACTIONABLE_BIT} DESC, ${C_SORT_AT} DESC, c.CoordinationId DESC;
 
-  IF @status IS NULL AND (@category IS NULL OR @category IN ('TASK_ASSIGNED', 'TASK_UNASSIGNED'))
-  INSERT @items
-  SELECT 'TASK_EVENT', n.NotificationId, n.OccurredAt,
-    0,
-    CASE WHEN ${N.UNREAD} AND ${N.VISIBLE} AND ${N.TASK_AVAILABLE} THEN 1 ELSE 0 END,
-    0,
-    1
+  IF @status IS NULL AND @tab <> 'sent' AND (@category IS NULL OR @category IN ('TASK_ASSIGNED', 'TASK_UNASSIGNED'))
+  INSERT @pageCandidates
+  SELECT TOP (@windowSize) 'TASK_EVENT', n.NotificationId, n.OccurredAt,
+    0, n.RowVersion, CASE WHEN ${N.UNREAD} THEN 1 ELSE 0 END
   ${N.SOURCE}
-  WHERE ${N.OWNED}
-    AND (@category IS NULL OR n.Kind = @category)
-    AND (@projectId IS NULL OR COALESCE(n.ProjectIdSnapshot, t.ProjectId) = @projectId)
-    AND (@fromUtc IS NULL OR n.OccurredAt >= @fromUtc)
-    AND (@toUtc IS NULL OR n.OccurredAt < @toUtc)
-    AND (@requester = '' OR ${matches('@requester', 'COALESCE(n.ActorNameSnapshot, actor.DisplayName)')}
-      OR CONVERT(varchar(20), n.ActorSicil) = @requester)
-    AND (@search = '' OR CHARINDEX(@search, ${text(`CONCAT(n.TaskTitleSnapshot, ' ', n.ProjectNameSnapshot, ' ',
-      n.ProjectCodeSnapshot, ' ', COALESCE(n.ActorNameSnapshot, actor.DisplayName))`)}) > 0);
+  WHERE ${N.OWNED} AND ${N_FILTERS}
+    AND ((@tab = 'pending' AND ${N_INCOMING}) OR @tab = 'history')
+    AND ${cursorAfter('0', 'n.OccurredAt', 'TASK_EVENT', 'n.NotificationId')}
+  ORDER BY n.OccurredAt DESC, n.NotificationId DESC;
 
-  SELECT COALESCE(SUM(CAST(IsIncoming AS int)), 0) AS IncomingCount,
-    COALESCE(SUM(CAST(IsSent AS int)), 0) AS SentCount,
-    COALESCE(SUM(CAST(IsHistory AS int)), 0) AS HistoryCount
-  FROM @items;
-  -- Atama Koordinasyonu sekmesinin süzgeçsiz "Tüm kayıtlar" sayısı: sekme
-  -- kendi süzgeçleriyle açıldığında aynı sayıyı readCoordinationPage verir.
-  SELECT COUNT(*) AS CoordinationCount ${C.COUNT_SOURCE} WHERE ${C.PARTICIPANT};
-
-  DECLARE @pageItems TABLE (Ordinal int NOT NULL PRIMARY KEY, Source varchar(30) NOT NULL, ItemId uniqueidentifier NOT NULL);
-  DECLARE @total int = (SELECT COUNT(*) FROM @items WHERE (@tab = 'pending' AND IsIncoming = 1)
-    OR (@tab = 'sent' AND IsSent = 1) OR (@tab = 'history' AND IsHistory = 1));
-  DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
-  DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
-  SELECT @total AS Total, @safePage AS Page;
+  DECLARE @pageItems TABLE (
+    Ordinal int NOT NULL PRIMARY KEY, Source varchar(30) NOT NULL, ItemId uniqueidentifier NOT NULL,
+    ItemVersion binary(8) NULL, UnreadFlag bit NOT NULL, ActionableFlag bit NOT NULL);
   -- Belirlenimci sıra: karar bekleyen önce, sonra en yeni; eşitlikte kaynak
-  -- ve kimlik. Sayfalar arasında yinelenen ya da kaybolan satır olmaz.
-  INSERT @pageItems(Ordinal, Source, ItemId)
-  SELECT ROW_NUMBER() OVER (ORDER BY Actionable DESC, SortAt DESC, Source, ItemId DESC), Source, ItemId
-  FROM @items
-  WHERE (@tab = 'pending' AND IsIncoming = 1) OR (@tab = 'sent' AND IsSent = 1) OR (@tab = 'history' AND IsHistory = 1)
-  ORDER BY Actionable DESC, SortAt DESC, Source, ItemId DESC
-  OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
-  SELECT Ordinal, Source, ItemId FROM @pageItems ORDER BY Ordinal;
+  -- ve kimlik. İmleç varken kaydırma yapılmaz; sayfa sınırı kararlı kalır.
+  IF @hasCursor = 1
+    INSERT @pageItems(Ordinal, Source, ItemId, ItemVersion, UnreadFlag, ActionableFlag)
+    SELECT TOP (@pageSize) ROW_NUMBER() OVER (ORDER BY Actionable DESC, SortAt DESC, Source, ItemId DESC),
+      Source, ItemId, ItemVersion, UnreadFlag, Actionable
+    FROM @pageCandidates
+    ORDER BY Actionable DESC, SortAt DESC, Source, ItemId DESC;
+  ELSE
+    INSERT @pageItems(Ordinal, Source, ItemId, ItemVersion, UnreadFlag, ActionableFlag)
+    SELECT ROW_NUMBER() OVER (ORDER BY Actionable DESC, SortAt DESC, Source, ItemId DESC),
+      Source, ItemId, ItemVersion, UnreadFlag, Actionable
+    FROM @pageCandidates
+    ORDER BY Actionable DESC, SortAt DESC, Source, ItemId DESC
+    OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+
+  SELECT Ordinal, Source, ItemId, ItemVersion, UnreadFlag, ActionableFlag FROM @pageItems ORDER BY Ordinal;
 
   SELECT ${S.FIELDS} ${S.SOURCE}
   WHERE r.RequestId IN (SELECT ItemId FROM @pageItems WHERE Source = 'SCHEDULE_REQUEST') AND ${S.PARTICIPANT};
@@ -208,26 +308,70 @@ function scheduleItem(row, sicil) {
   return { ...mapRequest(row, sicil), source: NOTIFICATION_SOURCES.SCHEDULE_REQUEST };
 }
 
+function itemBelongsToTab(item, tab, actorSicil) {
+  if (!item) return false;
+  if (tab === REQUEST_INBOX_TABS.INCOMING) {
+    if (item.source === NOTIFICATION_SOURCES.TASK_EVENT) {
+      return Boolean(item.unread) && item.taskAvailable !== false;
+    }
+    const actionable = item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST
+      ? Boolean(item.isDecisionOwner) && item.status === 'PENDING' && item.taskAvailable !== false
+      : Boolean(item.actionable);
+    if (actionable) return true;
+    const ownPending = String(item.requesterSicil ?? '') === String(actorSicil) && item.status === 'PENDING';
+    return Boolean(item.unread) && item.taskAvailable !== false && !ownPending;
+  }
+  if (tab === REQUEST_INBOX_TABS.SENT) {
+    if (item.source === NOTIFICATION_SOURCES.TASK_EVENT) return false;
+    if (item.source === NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION) {
+      return String(item.requesterSicil ?? '') === String(actorSicil) && item.mode === 'REQUEST';
+    }
+    return String(item.requesterSicil ?? '') === String(actorSicil);
+  }
+  return true;
+}
+
+function hasPageSnapshotDrift(order, details, tab, actorSicil) {
+  for (const entry of order) {
+    const detail = details.get(`${entry.Source}:${idKey(entry.ItemId)}`);
+    if (!detail) return true;
+    if (!itemBelongsToTab(detail, tab, actorSicil)) return true;
+    if (entry.ItemVersion != null) {
+      const expectedVersion = Buffer.isBuffer(entry.ItemVersion)
+        ? encodeVersion(entry.ItemVersion)
+        : String(entry.ItemVersion);
+      if (detail.version && expectedVersion && detail.version !== expectedVersion) return true;
+    }
+    if (entry.UnreadFlag != null && Boolean(detail.unread) !== Boolean(entry.UnreadFlag)) return true;
+    if (entry.ActionableFlag != null && entry.Source !== NOTIFICATION_SOURCES.SCHEDULE_REQUEST
+      && Boolean(detail.actionable) !== Boolean(entry.ActionableFlag)) return true;
+  }
+  return false;
+}
+
 /**
  * Göç (0015) uygulanmamış kurulumda Talepler eskisi gibi yalnızca tarih
  * taleplerini gösterir; görev yazması ve zil etkilenmez.
  */
 async function readScheduleOnlyPage(executor, actor, query) {
-  const empty = { items: [], total: 0, page: 0, pageSize: query.pageSize, counts: { pending: 0, sent: 0, history: 0, coordination: 0 } };
+  const empty = { items: [], total: 0, page: 0, pageSize: query.pageSize, nextCursor: null, counts: { pending: 0, sent: 0, history: 0, coordination: 0 } };
   if ((query.status && !SCHEDULE_STATUS_CODES.has(query.status))
     || (query.category && query.category !== REQUEST_INBOX_CATEGORIES.SCHEDULE_REQUEST)) return empty;
   const page = await readSchedulePage(executor, actor, {
     tab: query.tab, page: query.page, pageSize: query.pageSize, search: query.search,
     projectId: query.projectId, requester: query.requester, status: query.status, from: query.from, to: query.to
   });
+  const items = page.items.map((item) => ({ ...item, source: NOTIFICATION_SOURCES.SCHEDULE_REQUEST }));
+  const hasMore = (page.page + 1) * query.pageSize < page.total;
   return {
     ...page,
-    items: page.items.map((item) => ({ ...item, source: NOTIFICATION_SOURCES.SCHEDULE_REQUEST })),
+    items,
+    nextCursor: hasMore && items.length ? encodeRequestInboxCursor(items[items.length - 1]) : null,
     counts: { ...page.counts, coordination: 0 }
   };
 }
 
-export async function readRequestInboxPage(executor, actor, input = {}) {
+export async function readRequestInboxPage(executor, actor, input = {}, attempt = 0) {
   const query = normalizeRequestInboxQuery(input);
   const fromUtc = query.from ? activityDateRange({ period: 'custom', from: query.from, to: query.from }).startUtc : null;
   const toUtc = query.to ? activityDateRange({ period: 'custom', from: query.to, to: query.to }).endUtc : null;
@@ -244,6 +388,11 @@ export async function readRequestInboxPage(executor, actor, input = {}) {
   request.input('category', sql.VarChar(30), query.category);
   request.input('fromUtc', sql.DateTime2, fromUtc);
   request.input('toUtc', sql.DateTime2, toUtc);
+  request.input('hasCursor', sql.Bit, query.cursor ? 1 : 0);
+  request.input('cursorActionable', sql.Bit, query.cursor ? query.cursor.actionable : 0);
+  request.input('cursorSortAt', sql.DateTime2, query.cursor ? query.cursor.sortAt : null);
+  request.input('cursorSource', sql.VarChar(30), query.cursor ? query.cursor.source : '');
+  request.input('cursorItemId', sql.UniqueIdentifier, query.cursor ? query.cursor.id : null);
   let result;
   try {
     result = await request.query(REQUEST_INBOX_SQL);
@@ -260,11 +409,23 @@ export async function readRequestInboxPage(executor, actor, input = {}) {
   for (const row of sets[4] || []) details.set(`${NOTIFICATION_SOURCES.SCHEDULE_REQUEST}:${idKey(row.RequestId)}`, scheduleItem(row, actor.sicil));
   for (const row of sets[5] || []) details.set(`${NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION}:${idKey(row.CoordinationId)}`, mapCoordination(row, actor.sicil));
   for (const row of sets[6] || []) details.set(`${NOTIFICATION_SOURCES.TASK_EVENT}:${idKey(row.NotificationId)}`, mapTaskNotification(row));
+  // Sayfa üyeliği ile ayrıntı okuması arasında eşzamanlı bir yazma satırı
+  // değiştirdiyse tutarlı bir okuma için sınırlı olarak bir kez yinelenir.
+  if (attempt === 0 && hasPageSnapshotDrift(order, details, query.tab, actor.sicil)) {
+    return readRequestInboxPage(executor, actor, input, 1);
+  }
+  const items = order
+    .map((entry) => details.get(`${entry.Source}:${idKey(entry.ItemId)}`))
+    .filter((item) => itemBelongsToTab(item, query.tab, actor.sicil));
+  const total = Number(pagination.Total || 0);
+  const page = Number(pagination.Page || 0);
+  const hasMore = items.length === query.pageSize && (page + 1) * query.pageSize < total;
   return {
-    items: order.map((entry) => details.get(`${entry.Source}:${idKey(entry.ItemId)}`)).filter(Boolean),
-    total: Number(pagination.Total || 0),
-    page: Number(pagination.Page || 0),
+    items,
+    total,
+    page,
     pageSize: query.pageSize,
+    nextCursor: hasMore && items.length ? encodeRequestInboxCursor(items[items.length - 1]) : null,
     counts: {
       pending: Number(counts.IncomingCount || 0),
       sent: Number(counts.SentCount || 0),

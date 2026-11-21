@@ -42,6 +42,63 @@ export function sameRequestInboxItem(left, right) {
   return Boolean(left && right) && requestInboxKey(left) === requestInboxKey(right);
 }
 
+/** 8 baytlık SQL Server `rowversion` belirtecini karşılaştırılabilir tam sayıya çevirir. */
+function decodeRowVersionBigInt(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9+/]{11}=$/.test(value)) return null;
+  let bytes;
+  try {
+    if (typeof globalThis.atob === 'function') {
+      const binary = globalThis.atob(value);
+      if (binary.length !== 8) return null;
+      bytes = new Uint8Array(8);
+      for (let i = 0; i < 8; i += 1) bytes[i] = binary.charCodeAt(i);
+    } else if (typeof Buffer !== 'undefined') {
+      bytes = Buffer.from(value, 'base64');
+      if (bytes.length !== 8) return null;
+    } else return null;
+  } catch {
+    return null;
+  }
+  let result = 0n;
+  for (let i = 0; i < 8; i += 1) result = (result << 8n) | BigInt(bytes[i]);
+  return result;
+}
+
+/**
+ * Aynı kaydın iki kopyasından yetkili ve daha güncel olanı seçer.
+ *
+ * Karar yanıtıyla elde tutulan kayıt, henüz yenilenmemiş eski liste satırına
+ * ezilmez; ancak sunucudan en az o kadar güncel ya da daha yeni sürüm/durum
+ * taşıyan bir kayıt geldiğinde elde tutulan kopyanın yerini alır.
+ */
+export function selectFresherRecord(incoming, retained, { supersededVersion = null } = {}) {
+  if (!retained) return incoming;
+  if (!incoming || String(incoming.id) !== String(retained.id)) return incoming || retained;
+  const incomingVersion = incoming.version ?? null;
+  const retainedVersion = retained.version ?? null;
+  if (incomingVersion && retainedVersion) {
+    if (incomingVersion === retainedVersion) return incoming;
+    const incomingSeq = decodeRowVersionBigInt(incomingVersion);
+    const retainedSeq = decodeRowVersionBigInt(retainedVersion);
+    if (incomingSeq != null && retainedSeq != null) {
+      return incomingSeq >= retainedSeq ? incoming : retained;
+    }
+    if (supersededVersion && incomingVersion === supersededVersion && retainedVersion !== supersededVersion) {
+      return retained;
+    }
+  }
+  if (retained.status && retained.status !== 'PENDING' && incoming.status === 'PENDING') {
+    return retained;
+  }
+  const incomingDecided = incoming.decidedAt ? Date.parse(incoming.decidedAt) : NaN;
+  const retainedDecided = retained.decidedAt ? Date.parse(retained.decidedAt) : NaN;
+  if (Number.isFinite(incomingDecided) && Number.isFinite(retainedDecided)) {
+    return incomingDecided >= retainedDecided ? incoming : retained;
+  }
+  if (Number.isFinite(retainedDecided) && !Number.isFinite(incomingDecided)) return retained;
+  return incoming;
+}
+
 function scheduleRow(item) {
   const actionable = Boolean(item.isDecisionOwner) && item.status === 'PENDING' && item.taskAvailable !== false;
   return {

@@ -13,7 +13,8 @@ import {
   REQUEST_CATEGORY_FILTER_OPTIONS,
   REQUEST_STATUS_FILTER_OPTIONS,
   requestInboxRow,
-  sameRequestInboxItem
+  sameRequestInboxItem,
+  selectFresherRecord
 } from './requestInboxPresentation.js';
 import { useRequestInboxQuery } from './useRequestInboxQuery.js';
 
@@ -26,7 +27,7 @@ const TABS = [
   // açılmaz, var olan talep altyapısı olduğu gibi korunur.
   { id: COORDINATION_TAB, label: 'Atama Koordinasyonu', hint: 'Süzgeçlerinize uyan bütün atama koordinasyonu kayıtları' }
 ];
-const INITIAL = { tab: 'pending', search: '', projectId: '', requester: '', category: '', status: '', from: '', to: '', page: 0 };
+const INITIAL = { tab: 'pending', search: '', projectId: '', requester: '', category: '', status: '', from: '', to: '', page: 0, cursor: '' };
 
 function dateTime(value) {
   return value ? new Date(value).toLocaleString('tr-TR') : '—';
@@ -41,6 +42,7 @@ function dateTime(value) {
  */
 export function ScheduleRequestsView() {
   const [query, setQuery] = useState(INITIAL);
+  const [pageCursors, setPageCursors] = useState({});
   const [activeTab, setActiveTab] = useState('pending');
   const [selected, setSelected] = useState(null);
   const [coordinationTotal, setCoordinationTotal] = useState(null);
@@ -62,7 +64,10 @@ export function ScheduleRequestsView() {
   const openerRef = useRef(null);
   const tabsRef = useRef(null);
   const [readError, setReadError] = useState(null);
-  const change = (key, value) => setQuery((current) => ({ ...current, [key]: value, page: 0 }));
+  const change = (key, value) => {
+    setPageCursors({});
+    setQuery((current) => ({ ...current, [key]: value, page: 0, cursor: '' }));
+  };
   const selectTab = (id) => {
     setActiveTab(id);
     // Sekme değişimi açık talep ayrıntısını KAPATIR. Seçim korunduğunda,
@@ -111,7 +116,19 @@ export function ScheduleRequestsView() {
     await markRead(item);
   };
 
-  const selectedRecord = selected ? data.items.find((item) => sameRequestInboxItem(item, selected)) || selected : null;
+  // Okundu işareti satırı Gelenler listesinden kaldırdığında pencere kapanınca
+  // klavye odağı belge gövdesine düşmemesi için etkin sekmeye geri verilir.
+  const closeDetails = () => {
+    if (!openerRef.current?.isConnected) {
+      openerRef.current = tabsRef.current?.querySelector('[role="tab"][aria-selected="true"]') || null;
+    }
+    setSelected(null);
+  };
+
+  const inboxMatch = selected ? data.items.find((item) => sameRequestInboxItem(item, selected)) : null;
+  const selectedRecord = selected
+    ? (inboxMatch ? selectFresherRecord(inboxMatch, selected) : selected)
+    : null;
   const activeHint = TABS.find((tab) => tab.id === activeTab)?.hint;
 
   return <div className="requests-view">
@@ -146,7 +163,7 @@ export function ScheduleRequestsView() {
         <label><span>Durum</span><select className="input" value={query.status} onChange={(event) => change('status', event.target.value)}><option value="">Tüm durumlar</option>{REQUEST_STATUS_FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label><span>Tarih · İlk</span><DateInput ariaLabel="İlk kayıt tarihi" value={query.from} onChange={(value) => change('from', value)} /></label>
         <label><span>Tarih · Son</span><DateInput ariaLabel="Son kayıt tarihi" value={query.to} onChange={(value) => change('to', value)} /></label>
-        <button type="button" className="btn ghost sm" onClick={() => setQuery({ ...INITIAL, tab: query.tab })}>Filtreleri temizle</button>
+        <button type="button" className="btn ghost sm" onClick={() => { setPageCursors({}); setQuery({ ...INITIAL, tab: query.tab }); }}>Filtreleri temizle</button>
       </div>
       {(error || readError) && <p role="alert" className="schedule-modal-error">{error || readError}<button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button></p>}
       {!actual && <p className="empty">Talepler ve bildirimler Gerçek Sistem kipinde kullanılabilir.</p>}
@@ -170,11 +187,17 @@ export function ScheduleRequestsView() {
         {actual && !loading && !error && !data.items.length && <p className="empty">Bu görünümde kayıt bulunamadı.</p>}
       </div>
       <TaskTablePagination page={data.page} pageCount={Math.max(1, Math.ceil(data.total / data.pageSize))} label="Talep sayfaları"
-        setPage={(update) => setQuery((current) => ({ ...current, page: typeof update === 'function' ? update(data.page) : update }))} />
+        setPage={(update) => {
+          const nextPage = typeof update === 'function' ? update(data.page) : update;
+          const nextCursors = { ...pageCursors };
+          if (data.nextCursor) nextCursors[data.page + 1] = data.nextCursor;
+          setPageCursors(nextCursors);
+          setQuery((current) => ({ ...current, page: nextPage, cursor: nextPage === 0 ? '' : (nextCursors[nextPage] || '') }));
+        }} />
       </>}
     </section>
     {!coordinationActive && selectedRecord?.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST && <ScheduleRequestDetails request={selectedRecord}
-      restoreFocusRef={openerRef} onClose={() => setSelected(null)} onOpenTask={openTask}
+      restoreFocusRef={openerRef} onClose={closeDetails} onOpenTask={openTask}
       onDecide={async (...args) => {
         const result = await decideScheduleChange(...args);
         refresh();
@@ -182,10 +205,12 @@ export function ScheduleRequestsView() {
         return result;
       }} />}
     {!coordinationActive && selectedRecord?.source === NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION && <AssignmentCoordinationDialog
-      record={selectedRecord} restoreFocusRef={openerRef} onClose={() => setSelected(null)} onOpenTask={openTask}
+      record={selectedRecord} restoreFocusRef={openerRef} onClose={closeDetails} onOpenTask={openTask}
       onDecide={async (...args) => {
         const result = await decideAssignmentCoordination(...args);
         refresh();
+        const updatedRecord = result?.value?.record || result?.record;
+        if (updatedRecord) setSelected({ ...updatedRecord, source: NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION });
         return result;
       }} />}
   </div>;

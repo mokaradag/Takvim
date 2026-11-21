@@ -25,10 +25,14 @@ const { createDataRefreshRequestGuard, createDataRefreshSingleFlight } = await i
 const { createDataReloadOperation, dataReloadSingleFlightOptions } = await import('../src/state/dataReloadLifecycle.js');
 const { appStateReducer, createInitialState } = await import('../src/state/appState.js');
 const { createNotificationActions, OUTCOME_UNKNOWN_MESSAGE, OUTCOME_UNKNOWN_UNRECONCILED_MESSAGE } = await import('../src/state/notificationActions.js');
-const { requestInboxRow, requestInboxKey } = await import('../src/features/schedule-change/requestInboxPresentation.js');
+const { requestInboxRow, requestInboxKey, selectFresherRecord } = await import('../src/features/schedule-change/requestInboxPresentation.js');
 const { AssignmentCoordinationDialog } = await import('../src/features/assignment-coordination/AssignmentCoordinationDialog.jsx');
+const { ScheduleRequestDetails } = await import('../src/features/schedule-change/ScheduleRequestCenter.jsx');
 const { ScheduleRequestsView } = await import('../src/features/schedule-change/ScheduleRequestsView.jsx');
+const { useRequestInboxQuery } = await import('../src/features/schedule-change/useRequestInboxQuery.js');
+const { fetchRequestInbox } = await import('../src/data/api/assignmentCoordinationClient.js');
 const store = await import('../src/server/assignment/assignmentCoordinationStore.js');
+const coordinationQueries = await import('../src/server/assignment/assignmentCoordinationQueries.js');
 const inbox = await import('../src/server/notifications/requestInboxQueries.js');
 const notificationQueries = await import('../src/server/notifications/notificationInboxQueries.js');
 
@@ -377,22 +381,42 @@ function actionsHarness({ decide, reload = async () => ({ ok: true }), mark } = 
     reloadData: async (...args) => { calls.reload += 1; return reload(...args); },
     applyStateAction: (action) => calls.applied.push(action),
     beginInboxRead: () => ++sequence,
+    getInboxSequence: () => sequence,
     markItems: mark || (async () => ({ ok: true, value: { ok: true } })),
     decideCoordination: async (...args) => { calls.decide += 1; return decide(...args); }
   });
-  return { actions, calls };
+  return { actions, calls, bumpSequence: () => ++sequence, getSequence: () => sequence };
 }
 
-test('belirsiz karar sonucu yeniden gönderilmez; önce güncel durum okunur', async () => {
-  const { actions, calls } = actionsHarness({ decide: async () => ({ ok: false, code: 'NETWORK', message: 'Sunucuya ulaşılamadı.' }) });
-  const result = await actions.decideAssignmentCoordination('c1', { decision: 'APPROVE', version: 'v1' });
+test('belirsiz karar sonucu yeniden gönderilmez; ön-işlem okuması kesin uzlaştırma sayılmaz ve zaman aşımı da uzlaştırılır', async () => {
+  // Karar sonrası yeni sürüm gözlendiğinde uzlaştırma kesinleşir ve güncel kayıt döner.
+  const committedRecord = { id: 'c1', status: 'APPROVED', version: 'v2', allowedDecisions: [] };
+  const confirmed = actionsHarness({
+    decide: async () => ({ ok: false, code: 'NETWORK', message: 'Sunucuya ulaşılamadı.' }),
+    reload: async () => ({ ok: true, snapshot: { assignmentCoordinations: [committedRecord] } })
+  });
+  const result = await confirmed.actions.decideAssignmentCoordination('c1', { decision: 'APPROVE', version: 'v1' });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'OUTCOME_UNKNOWN');
+  assert.equal(result.reconciled, true);
+  assert.deepEqual(result.record, committedRecord);
   assert.equal(result.message, OUTCOME_UNKNOWN_MESSAGE);
-  assert.equal(calls.decide, 1, 'karar isteği tekrarlanmaz');
-  assert.equal(calls.reload, 1, 'yetkili durum yeniden okunur');
+  assert.equal(confirmed.calls.decide, 1, 'karar isteği tekrarlanmaz');
+  assert.equal(confirmed.calls.reload, 1, 'yetkili durum yeniden okunur');
 
-  // Yenileme de başarısızsa ileti durumun yüklendiğini İDDİA etmez.
+  // Erken okuma hâlâ karar öncesi aynı sürümü görüyorsa kesin uzlaştırma sayılmaz.
+  const preCommit = actionsHarness({
+    decide: async () => ({ ok: false, code: 'REQUEST_TIMEOUT', message: 'İstek zaman aşımına uğradı.' }),
+    reload: async () => ({ ok: true, snapshot: { assignmentCoordinations: [{ id: 'c1', status: 'PENDING', version: 'v1' }] } })
+  });
+  const unconfirmed = await preCommit.actions.decideAssignmentCoordination('c1', { decision: 'APPROVE', version: 'v1' });
+  assert.equal(unconfirmed.code, 'OUTCOME_UNKNOWN');
+  assert.equal(unconfirmed.reconciled, false, 'karar öncesi aynı sürüm kesin uzlaştırma sayılmaz');
+  assert.equal(unconfirmed.record, undefined);
+  assert.equal(unconfirmed.message, OUTCOME_UNKNOWN_UNRECONCILED_MESSAGE);
+  assert.equal(preCommit.calls.reload, 1, 'REQUEST_TIMEOUT da yeniden okuma tetikler');
+
+  // Yenileme de başarısızsa ileti durumun doğrulandığını İDDİA etmez.
   const offline = actionsHarness({
     decide: async () => ({ ok: false, code: 'NETWORK', message: 'Sunucuya ulaşılamadı.' }),
     reload: async () => ({ ok: false, error: { message: 'Bağlantı yok' } })
@@ -552,4 +576,386 @@ test('Talepler dört sekmede tablo kabuğunu tek dikey kaydırma alanı yapar ve
   assert.match(fallback || '', /var\(--app-viewport-h, 100vh\) \* \.65/);
   // Sabit piksel yükseklikleri yerine ölçekli görünüm değişkeni kullanılır.
   assert.doesNotMatch(read('src/app/styles/features.css').match(/Talepler · tam yükseklikli[\s\S]*?\n}\n}/)?.[0] || '', /100vh\s*-/);
+});
+
+/* ── Yetki iptali, eşzamanlılık ve kenar durum regresyonları ─── */
+
+test('geçici tam proje yetkisiyle geçmiş koordinasyonu okundu işaretlemek yetki iptali sonrası kalıcı erişim vermez', async () => {
+  const TEMP_MANAGER = 960010;
+  const baseSeed = seed();
+  baseSeed.people.push({
+    Sicil: TEMP_MANAGER, DisplayName: 'Geçici Yönetici', Username: 'u960010',
+    Directorate: 'Yazılım Direktörlüğü', Department: 'Gömülü Müdürlüğü', Unit: 'Doğrulama Birimi'
+  });
+  const stack = await createActualStack(baseSeed, { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    // 1) Talep oluşturulur ve yetkili birim yöneticisi tarafından onaylanır (Geçmiş kaydı).
+    const created = await requestAssignment(stack);
+    const approved = await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(created.id, {
+      decision: 'APPROVE', version: created.version
+    }));
+    assert.equal(approved.outcome, 'APPROVED');
+
+    // 2) Geçici yöneticiye projeye geçici FULL erişim verilir (ne talep eden ne de alıcıdır).
+    stack.db.corporateProjectAccess.push({ ProjectCode: 'P9600001', Sicil: TEMP_MANAGER, RoleCode: 'PROJECT_MANAGER' });
+    const beforeRevoke = await asUser(TEMP_MANAGER, () => page({ tab: 'history' }));
+    const found = beforeRevoke.items.find((item) => item.id === created.id);
+    assert.ok(found, 'geçici tam proje yetkisi varken geçmiş kayıt görünür');
+    assert.equal(found.unread, true);
+
+    // 3) Kaydı açıp okundu işaretler; okuma satırı REQUESTER rolüyle yazılır.
+    await asUser(TEMP_MANAGER, () => notificationQueries.markNotifications({
+      action: 'read',
+      notifications: [{ id: found.id, version: found.version, source: 'ASSIGNMENT_COORDINATION' }]
+    }));
+    const readRow = stack.db.assignmentCoordinationRecipients.find(
+      (row) => Number(row.Sicil) === TEMP_MANAGER
+    );
+    assert.equal(readRow?.RecipientRole, 'REQUESTER', 'okuma işareti yalnızca okuma satırı üretir');
+    const afterMark = await asUser(TEMP_MANAGER, () => page({ tab: 'history' }));
+    assert.equal(afterMark.items.find((item) => item.id === created.id)?.unread, false, 'yetki sürerken okundu durumu korunur');
+
+    // 4) Geçici proje yetkisi iptal edilir.
+    stack.db.corporateProjectAccess = stack.db.corporateProjectAccess.filter((row) => Number(row.Sicil) !== TEMP_MANAGER);
+    const afterRevokeInbox = await asUser(TEMP_MANAGER, () => page({ tab: 'history' }));
+    assert.equal(afterRevokeInbox.items.find((item) => item.id === created.id), undefined,
+      'yetki iptali sonrası okuma satırı kalıcı erişim vermemelidir');
+    const afterRevokeCoord = await asUser(TEMP_MANAGER, () => coordinationQueries.queryAssignmentCoordinations({ tab: 'all' }));
+    assert.equal(afterRevokeCoord.items.find((item) => item.id === created.id), undefined,
+      'Atama Koordinasyonu okuması da yetki iptali sonrası kaydı gizlemelidir');
+
+    // 5) Gerçek tarihsel alıcılar (talep eden, karar veren yönetici, onaylı sorumlu) erişimini korur.
+    for (const legitimate of [ORDINARY, UNIT_MANAGER, EXTERNAL]) {
+      const history = await asUser(legitimate, () => page({ tab: 'history' }));
+      assert.ok(history.items.some((item) => item.id === created.id), `meşru alıcı (${legitimate}) geçmiş erişimini korur`);
+    }
+
+    // 6) SQL kaynağı da açık alıcı rollerini (MANAGER, ASSIGNEE) zorunlu kılar.
+    const sqlSource = read('src/server/assignment/assignmentCoordinationQueries.js');
+    assert.match(sqlSource, /RecipientRole IN \('MANAGER','ASSIGNEE'\)/);
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('örtüşen okundu işaretleri sıraya girer ve son işlenen durumu korur', async () => {
+  const firstGate = deferred();
+  const order = [];
+  const { actions, calls } = actionsHarness({
+    mark: async (items) => {
+      const id = items[0].id;
+      order.push(`basla:${id}`);
+      if (id === 'n1') await firstGate.promise;
+      order.push(`bit:${id}`);
+      return {
+        ok: true,
+        value: { ok: true, inbox: { notificationSummary: { unreadCount: id === 'n1' ? 1 : 0, pendingCount: 0 } } }
+      };
+    }
+  });
+  const mark1 = actions.markNotifications([{ id: 'n1', source: 'TASK_EVENT' }]);
+  const mark2 = actions.markNotifications([{ id: 'n2', source: 'TASK_EVENT' }]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ['basla:n1'], 'ikinci işaret ilki bitmeden başlamaz');
+  firstGate.resolve();
+  await Promise.all([mark1, mark2]);
+  assert.deepEqual(order, ['basla:n1', 'bit:n1', 'basla:n2', 'bit:n2']);
+  assert.deepEqual(calls.applied.map((a) => a.inboxSequence), [1, 2]);
+  assert.equal(calls.applied[1].inbox.notificationSummary.unreadCount, 0);
+});
+
+test('okundu işareti sürerken başlayan anlık görüntü okuması işareti kalıcı olarak geri almaz', async () => {
+  const gate = deferred();
+  const { actions, calls, bumpSequence } = actionsHarness({
+    mark: async () => {
+      await gate.promise;
+      return { ok: true, value: { ok: true, inbox: { notificationSummary: { unreadCount: 0, pendingCount: 0 } } } };
+    },
+    reload: async () => ({ ok: true })
+  });
+  const pending = actions.markNotifications([{ id: 'n1', source: 'TASK_EVENT' }]);
+  await new Promise((resolve) => setImmediate(resolve));
+  // İşaret sürerken daha yüksek sıra numaralı bir anlık görüntü okuması başlar.
+  bumpSequence();
+  gate.resolve();
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(calls.reload, 1, 'üstüne binen okuma algılandığında işaret sonrası uzlaştırma okuması yapılır');
+});
+
+test('yanıtı kaybolan okundu işareti güncel durumu uzlaştırır ve hatayı gizlemez', async () => {
+  const { actions, calls } = actionsHarness({
+    mark: async () => ({ ok: false, code: 'NETWORK', message: 'Sunucuya ulaşılamadı.' }),
+    reload: async () => ({ ok: true })
+  });
+  const result = await actions.markNotifications([{ id: 'n1', source: 'TASK_EVENT' }]);
+  assert.equal(result.ok, false, 'belirsiz hata başarı gibi gösterilmez');
+  assert.equal(calls.reload, 1, 'işlenmiş olabilecek işaret için güncel durum okunur');
+});
+
+test('karar penceresi elde tutulan kopyayı daha yeni sunucu sürümüyle değiştirir ve doğrulanmamış belirsiz sonuçta düğmeleri kilitler', async (t) => {
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+  const v1 = Buffer.from([0, 0, 0, 0, 0, 0, 0, 1]).toString('base64');
+  const v2 = Buffer.from([0, 0, 0, 0, 0, 0, 0, 2]).toString('base64');
+  const v3 = Buffer.from([0, 0, 0, 0, 0, 0, 0, 3]).toString('base64');
+  const initial = { id: 'c1', status: 'PENDING', mode: 'REQUEST', version: v1, allowedDecisions: ['APPROVE', 'REJECT'], taskTitle: 'Görev', assigneeName: 'Dış', requesterName: 'Talep' };
+  const approved = { ...initial, status: 'APPROVED', version: v2, allowedDecisions: ['REQUEST_CANCELLATION'] };
+  const cancelled = { ...initial, status: 'CANCELLED', version: v3, allowedDecisions: [] };
+
+  // 1) Karar sonrası yenileme hatasında committedRecord korunur, ama daha yeni v3 geldiğinde yerini bırakır.
+  const view = mountComponent(AssignmentCoordinationDialog, {
+    record: initial, onClose() {}, onOpenTask: async () => ({ ok: true }),
+    onDecide: async () => ({ ok: true, value: { outcome: 'APPROVED', message: 'Onaylandı.', record: approved }, refreshError: { message: 'Ağ hatası' } })
+  });
+  const approve = findElement(view.output, (node) => node.type === 'button' && node.props.className?.includes('primary'));
+  await approve.props.onClick();
+  view.render({ record: initial });
+  assert.equal(findElement(view.output, (node) => node.type === 'h2').props.children, 'Atama talebi · Atandı', 'eski v1 kopyası yetkili v2 kaydını ezmez');
+  view.render({ record: cancelled });
+  assert.equal(findElement(view.output, (node) => node.type === 'h2').props.children, 'Atama talebi · İptal edildi', 'daha yeni sunucu sürümü v3 elde tutulan v2 kopyasının yerini alır');
+
+  // 2) Doğrulanmamış OUTCOME_UNKNOWN yanıtında karar düğmeleri gizlenir; aynı sürümle ikinci karar sunulamaz.
+  const unknownView = mountComponent(AssignmentCoordinationDialog, {
+    record: initial, onClose() {}, onOpenTask: async () => ({ ok: true }),
+    onDecide: async () => ({ ok: false, code: 'OUTCOME_UNKNOWN', reconciled: false, message: OUTCOME_UNKNOWN_UNRECONCILED_MESSAGE })
+  });
+  t.after(() => { view.unmount(); unknownView.unmount(); delete globalThis.document; });
+  const approve2 = findElement(unknownView.output, (node) => node.type === 'button' && node.props.className?.includes('primary'));
+  await approve2.props.onClick();
+  unknownView.render();
+  assert.equal(findElement(unknownView.output, (node) => node.type === 'button' && /Reddet/.test(JSON.stringify(node.props.children))), null,
+    'doğrulanmamış belirsiz sonuçta eski karar düğmeleri sunulmaz');
+});
+
+test('tarih talebi ayrıntı penceresi yenileme hatasında kapanmaz ve yetkili kaydı bayat listeden korur', async (t) => {
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+  let closed = false;
+  const req = { id: 'r1', status: 'PENDING', isDecisionOwner: true, taskAvailable: true, taskTitle: 'Görev', requesterName: 'A', version: 'v1' };
+  const resolved = { ...req, status: 'ACCEPTED', version: 'v2', decidedAt: '2026-10-02T10:00:00Z' };
+  const view = mountComponent(ScheduleRequestDetails, {
+    request: req, onClose: () => { closed = true; }, onOpenTask: async () => ({ ok: true }),
+    onDecide: async () => ({ ok: true, value: { outcome: 'ACCEPTED', request: resolved }, refreshError: { message: 'Sunucu geçici erişilemez' } })
+  });
+  t.after(() => { view.unmount(); delete globalThis.document; });
+  const accept = findElement(view.output, (node) => node.type === 'button' && node.props.className?.includes('primary'));
+  await accept.props.onClick();
+  view.render();
+  assert.equal(closed, false, 'yenileme hatasında pencere sessizce kapanmaz');
+  const status = findElement(view.output, (node) => node.props?.role === 'status');
+  assert.match(JSON.stringify(status.props.children), /görünüm yenilenemedi/);
+  assert.equal(selectFresherRecord(req, resolved).status, 'ACCEPTED', 'bayat PENDING satırı yetkili karar yanıtını ezmez');
+});
+
+test('prototip anahtarı taşıyan bildirim kaynağı 500 yerine 400 ile reddedilir', async () => {
+  await assert.rejects(
+    () => notificationQueries.markNotifications({
+      action: 'read',
+      notifications: [{ id: TASK_ID, source: 'constructor' }]
+    }),
+    (error) => error.status === 400 && /Bildirim kaynağı geçersiz/.test(error.message)
+  );
+});
+
+test('birleşik gelen kutusu üyelik ile ayrıntı arasında eşzamanlı değişim olursa tutarlı okumaya yakınsar', async () => {
+  let calls = 0;
+  const nid = '66666666-6666-4666-8666-000000000099';
+  const executor = {
+    request() {
+      const req = {
+        input() { return req; },
+        async query() {
+          calls += 1;
+          if (calls === 1) {
+            // İlk okumada üyelik UnreadFlag=1 iken ayrıntı okunduğunda IsUnread=0 döner (eşzamanlı okuma yarışı).
+            return {
+              recordsets: [
+                [{ IncomingCount: 1, SentCount: 0, HistoryCount: 1 }],
+                [{ CoordinationCount: 0 }],
+                [{ Total: 1, Page: 0 }],
+                [{ Ordinal: 1, Source: 'TASK_EVENT', ItemId: nid, ItemVersion: Buffer.alloc(8, 1), UnreadFlag: 1, ActionableFlag: 0 }],
+                [], [],
+                [{ NotificationId: nid, Kind: 'TASK_ASSIGNED', TaskId: TASK_ID, TaskTitleSnapshot: 'G', OccurredAt: '2026-10-01T00:00:00Z', RowVersion: Buffer.alloc(8, 2), IsUnread: 0, TaskAvailable: 1 }]
+              ]
+            };
+          }
+          // İkinci okumada tutarlı anlık görüntü döner: okunan bildirim Gelenler'den çıkmıştır.
+          return {
+            recordsets: [
+              [{ IncomingCount: 0, SentCount: 0, HistoryCount: 1 }],
+              [{ CoordinationCount: 0 }],
+              [{ Total: 0, Page: 0 }],
+              [], [], [], []
+            ]
+          };
+        }
+      };
+      return req;
+    }
+  };
+  const result = await inbox.readRequestInboxPage(executor, { sicil: ORDINARY, isSystemAdmin: false, effective: { fullProjectIds: new Set() } }, { tab: 'pending' });
+  assert.equal(calls, 2, 'anlık görüntü sapmasında sınırlı tek yineleme yapılır');
+  assert.equal(result.items.length, 0, 'okunmuş bilgilendirme Gelenler listesine sızmaz');
+  assert.equal(result.counts.pending, 0);
+});
+
+test('çok projeli toplu atama bildirimi proje süzgecinde yalnızca ilk görevin projesine bağlanmaz ve uzun tarih aralığı kabul edilir', async () => {
+  const stack = await createActualStack(seed({
+    taskNotifications: [{
+      NotificationId: '66666666-6666-4666-8666-000000000088',
+      RecipientSicil: EXTERNAL,
+      Kind: 'TASK_ASSIGNED',
+      TaskId: TASK_ID,
+      ActorSicil: ORDINARY,
+      ActorNameSnapshot: 'Olağan Kullanıcı',
+      TaskTitleSnapshot: 'Çok projeli atama',
+      ProjectIdSnapshot: null,
+      ProjectNameSnapshot: null,
+      ProjectCodeSnapshot: null,
+      TaskCount: 2,
+      EventKey: 'multi-project-1',
+      OccurredAt: '2026-10-01T10:00:00Z',
+      ReadAt: null,
+      DismissedAt: null,
+      RowVersion: Buffer.alloc(8, 5)
+    }]
+  }), { sicil: EXTERNAL, corporateWbsSource: false });
+  try {
+    const unfiltered = await asUser(EXTERNAL, () => page({ tab: 'history', from: '2020-01-01', to: '2026-12-31' }));
+    assert.equal(unfiltered.items.length, 1, '366 günden uzun tarih aralığı reddedilmez ve çok projeli kayıt süzgeçsiz görünür');
+    const filtered = await asUser(EXTERNAL, () => page({ tab: 'history', projectId: PROJECT_ID }));
+    assert.equal(filtered.items.length, 0, 'çok projeli toplu bildirim yalnızca ilk görevin projesine yanlış bağlanmaz');
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('birleşik gelen kutusu imleçli sayfalamada araya yeni kayıt girse de yinelenen veya atlanan satır üretmez', async () => {
+  const notifications = [1, 2, 3, 4].map((index) => ({
+    NotificationId: `66666666-6666-4666-8666-00000000001${index}`,
+    RecipientSicil: EXTERNAL,
+    Kind: 'TASK_ASSIGNED',
+    TaskId: TASK_ID,
+    ActorSicil: ORDINARY,
+    ActorNameSnapshot: 'Olağan Kullanıcı',
+    TaskTitleSnapshot: `Olay ${index}`,
+    ProjectIdSnapshot: PROJECT_ID,
+    TaskCount: 1,
+    EventKey: `cursor-ev-${index}`,
+    OccurredAt: `2026-10-0${index}T10:00:00Z`,
+    ReadAt: null,
+    DismissedAt: null,
+    RowVersion: Buffer.alloc(8, index)
+  }));
+  const stack = await createActualStack(seed({ taskNotifications: notifications }), { sicil: EXTERNAL, corporateWbsSource: false });
+  try {
+    const first = await asUser(EXTERNAL, () => page({ tab: 'history', page: 0, pageSize: 2 }));
+    assert.equal(first.items.length, 2);
+    assert.ok(first.nextCursor, 'sonraki sayfa için devam imleci döner');
+
+    // İlk sayfa ile ikinci sayfa arasında başa yeni bir olay eklenir.
+    stack.db.taskNotifications.push({
+      NotificationId: '66666666-6666-4666-8666-000000000019',
+      RecipientSicil: EXTERNAL,
+      Kind: 'TASK_ASSIGNED',
+      TaskId: TASK_ID,
+      ActorSicil: ORDINARY,
+      ActorNameSnapshot: 'Olağan Kullanıcı',
+      TaskTitleSnapshot: 'Yeni olay',
+      ProjectIdSnapshot: PROJECT_ID,
+      TaskCount: 1,
+      EventKey: 'cursor-ev-new',
+      OccurredAt: '2026-10-09T10:00:00Z',
+      ReadAt: null,
+      DismissedAt: null,
+      RowVersion: Buffer.alloc(8, 9)
+    });
+
+    const second = await asUser(EXTERNAL, () => page({ tab: 'history', page: 1, pageSize: 2, cursor: first.nextCursor }));
+    const combined = [...first.items.map((item) => item.id), ...second.items.map((item) => item.id)];
+    assert.equal(new Set(combined).size, 4, 'imleçli sayfalama araya yeni kayıt girse de yinelenen satır üretmez');
+    assert.deepEqual(second.items.map((item) => item.taskTitle), ['Olay 2', 'Olay 1']);
+
+    // Geçersiz imleç 400 ile reddedilir ve sorgu tam geçmişi @items tablo değişkenine yığmaz.
+    await assert.rejects(() => asUser(EXTERNAL, () => page({ tab: 'history', cursor: 'bozuk-imlec' })), (err) => err.status === 400);
+    assert.doesNotMatch(read('src/server/notifications/requestInboxQueries.js'), /DECLARE @items TABLE/);
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('bozuk başarılı gelen kutusu yanıtı INVALID_RESPONSE olarak reddedilir ve geçici hata son geçerli veriyi silmez', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { ok: true, status: 200, async json() { return { broken: true }; } };
+    }
+    return {
+      ok: true, status: 200,
+      async json() {
+        return { items: [{ id: 'n1', source: 'TASK_EVENT' }], total: 1, page: 0, pageSize: 25, counts: { pending: 1, sent: 0, history: 1, coordination: 0 } };
+      }
+    };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const malformed = await fetchRequestInbox({ tab: 'pending' });
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.code, 'INVALID_RESPONSE');
+
+  // Aynı sorgunun ikinci okuması başarısız olduğunda son geçerli liste korunur.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  globalThis[CLIENT_STATE] = { session: { dataMode: 'actual' }, scheduleRequestSummary: { unreadCount: 0, pendingCount: 0 }, notificationSummary: { unreadCount: 1, pendingCount: 0 } };
+  t.after(() => { delete globalThis[CLIENT_STATE]; });
+  let latest;
+  function Probe({ query }) {
+    latest = useRequestInboxQuery(query, true);
+    return null;
+  }
+  const query = { tab: 'pending', page: 0 };
+  const view = mountComponent(Probe, { query });
+  t.after(() => view.unmount());
+  t.mock.timers.tick(250);
+  await new Promise((resolve) => setImmediate(resolve));
+  view.render({ query });
+  assert.equal(latest.data.items.length, 1, 'ilk geçerli veri yüklenir');
+
+  // Sonraki yenileme geçici ağ hatası döndürür.
+  globalThis.fetch = async () => { throw new Error('ağ koptu'); };
+  latest.refresh();
+  view.render({ query });
+  t.mock.timers.tick(250);
+  await new Promise((resolve) => setImmediate(resolve));
+  view.render({ query });
+  assert.equal(latest.data.items.length, 1, 'geçici hata son geçerli satırları silmez');
+  assert.ok(latest.error, 'hata iletisi yine gösterilir');
+});
+
+test('okundu işareti satırı Gelenler listesinden kaldırdığında pencere kapanınca odak etkin sekmeye döner', async (t) => {
+  let focusedTarget = null;
+  const activeTabButton = { isConnected: true, focus() { focusedTarget = 'active-tab'; } };
+  const removedRowButton = { isConnected: false, focus() { focusedTarget = 'removed-row'; } };
+  const restoreFocusRef = { current: removedRowButton };
+  let rafCallback = null;
+  const originalRaf = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (fn) => { rafCallback = fn; return 1; };
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: removedRowButton, body: {} };
+  t.after(() => {
+    globalThis.requestAnimationFrame = originalRaf;
+    delete globalThis.document;
+  });
+
+  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+  function Modal({ onClose }) {
+    useModalFocusTrap({ containerRef: { current: null }, initialFocusRef: { current: { focus() {} } }, restoreFocusRef, onClose });
+    return null;
+  }
+  const view = mountComponent(Modal, { onClose() {} });
+  // Satır DOM'dan kalkınca ScheduleRequestsView.closeDetails yedek odağı etkin sekmeye çevirir.
+  restoreFocusRef.current = activeTabButton;
+  view.unmount();
+  assert.equal(typeof rafCallback, 'function');
+  rafCallback();
+  assert.equal(focusedTarget, 'active-tab', 'kaldırılan satır yerine etkin sekmeye odak verilir');
 });

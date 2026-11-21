@@ -85,7 +85,9 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       if (!shouldRestoreFocus() || focusEpochRef.current !== epoch) return;
       const focused = focusDocument.activeElement;
       if (focused?.isConnected && focused !== focusDocument.body && focused !== openedFrom && !owner?.contains?.(focused)) return;
-      const opener = openedFrom?.isConnected ? openedFrom : restoreFocus;
+      const opener = openedFrom?.isConnected
+        ? openedFrom
+        : (restoreFocus?.isConnected ? restoreFocus : restoreFocusRef?.current);
       if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
     };
     return () => { (globalThis.requestAnimationFrame || setTimeout)(restore); };

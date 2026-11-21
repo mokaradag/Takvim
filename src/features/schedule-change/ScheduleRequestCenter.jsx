@@ -19,6 +19,7 @@ import {
 } from '../notifications/notificationCenterItems.js';
 import { SCHEDULE_DATE_ROWS, requestDates, scheduleDifferenceSummary } from './scheduleChangePresentation.js';
 import { reduceScheduleRequestCenterOpen, scheduleRequestCenterViewState } from './scheduleRequestCenterState.js';
+import { selectFresherRecord } from './requestInboxPresentation.js';
 import { useModalFocusTrap } from './useModalFocusTrap.js';
 
 export const STATUS_LABELS = SCHEDULE_STATUS_LABELS;
@@ -28,10 +29,15 @@ function requestHeadline(request) {
   return `Tarih değişikliği ${STATUS_LABELS[request.status]?.toLocaleLowerCase('tr-TR') || 'sonuçlandı'}`;
 }
 
-export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restoreFocusRef }) {
+export function ScheduleRequestDetails({ request: requestProp, onClose, onDecide, onOpenTask, restoreFocusRef }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [committedState, setCommittedState] = useState(null);
+  const request = committedState && String(committedState.record.id) === String(requestProp.id)
+    ? selectFresherRecord(requestProp, committedState.record, { supersededVersion: committedState.baseVersion })
+    : requestProp;
   const decisionAvailable = request.isDecisionOwner && request.status === 'PENDING' && request.taskAvailable !== false;
   const current = requestDates(request, 'original');
   const proposed = requestDates(request, 'proposed');
@@ -48,8 +54,10 @@ export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask,
   });
 
   const decide = async (decision) => {
+    const submittedVersion = request.version ?? null;
     setBusy(true);
     setError(null);
+    setNotice(null);
     let result;
     try {
       result = await onDecide(request.id, decision, message.trim());
@@ -60,11 +68,17 @@ export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask,
       setBusy(false);
     }
     if (!result?.ok) {
-      setError(result?.error?.message || 'Talep kararı kaydedilemedi.');
+      setError(result?.error?.message || result?.message || 'Talep kararı kaydedilemedi.');
       return;
     }
+    if (result.value?.request) setCommittedState({ record: result.value.request, baseVersion: submittedVersion });
     if (result.value?.outcome === 'STALE') {
       setError(result.value.message);
+      return;
+    }
+    // Karar kaydedildi ama görünüm yenilenemedi: kullanıcıya açıkça bildirilir.
+    if (result.refreshError) {
+      setNotice(`Karar kaydedildi. Ancak görünüm yenilenemedi: ${result.refreshError.message || 'bilinmeyen hata'}. Verileri yenileyin.`);
       return;
     }
     onClose();
@@ -123,6 +137,7 @@ export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask,
           </label>
         )}
         {error && <div className="schedule-modal-error" role="alert"><Icons.Alert size={13} /> {error}</div>}
+        {notice && <div className="schedule-modal-error" role="status"><Icons.Alert size={13} /> {notice}</div>}
         <footer className="schedule-modal-actions">
           <button className="btn" type="button" disabled={busy || request.taskAvailable === false} title={request.taskAvailable === false ? 'Görev silinmiş veya proje kapatılmış.' : undefined} onClick={async () => {
             setBusy(true);

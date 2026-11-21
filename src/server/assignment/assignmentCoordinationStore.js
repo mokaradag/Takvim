@@ -240,7 +240,11 @@ async function insertRecipients(executor, coordinationId, recipients) {
     request.input('sicil', sql.Int, Number(sicil));
     request.input('role', sql.VarChar(20), role);
     await request.query(`
-      IF NOT EXISTS (
+      UPDATE dbo.MR_AssignmentCoordinationRecipients WITH (UPDLOCK, HOLDLOCK)
+      SET RecipientRole = @role, UpdatedAt = SYSUTCDATETIME()
+      WHERE CoordinationId = @coordinationId AND Sicil = @sicil
+        AND RecipientRole = 'REQUESTER' AND @role IN ('MANAGER','ASSIGNEE');
+      IF @@ROWCOUNT = 0 AND NOT EXISTS (
         SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients WITH (UPDLOCK, HOLDLOCK)
         WHERE CoordinationId = @coordinationId AND Sicil = @sicil
       )

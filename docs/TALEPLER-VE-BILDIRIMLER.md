@@ -28,7 +28,7 @@ Kenardaki **Talepler** düz bir üst düzey gezinme öğesidir. Sayfa dört sekm
 
 | Sekme | İçerik | Sayaç |
 | --- | --- | --- |
-| Gelenler | Kararınızı bekleyen kayıtlar (okunmuş olsa da) ve okunmamış, temizlenmemiş bildirimler: tarih talebi, atama talebi, bölüm dışı atama bildirimi, "Size görev atandı", "Görev sorumluluğunuz kaldırıldı". Kendi açık talebiniz gelen sayılmaz; sonuçlandığında yanıtı gelir | Süzgeçlere uyan kayıt sayısı |
+| Gelenler | Kararınızı bekleyen kayıtlar (okunmuş olsa da) ve etkin görevlere ait okunmamış, temizlenmemiş bildirimler: tarih talebi, atama talebi, bölüm dışı atama bildirimi, "Size görev atandı", "Görev sorumluluğunuz kaldırıldı". Kendi açık talebiniz gelen sayılmaz; sonuçlandığında yanıtı gelir | Süzgeçlere uyan kayıt sayısı |
 | Gönderdiklerim | Gönderdiğiniz tarih ve atama talepleri (tüm durumlar). Olay bildirimleri ve doğrudan atama bildirimleri (NOTICE) talep sayılmaz | Süzgeçlere uyan kayıt sayısı |
 | Geçmiş | Sonuçlanan talepler (kabul, ret, değiştirme, iptal, güncelliğini yitirme; görevi silinen veya projesi kapalı kayıtlar) ve okunmuş/temizlenmiş olanlar dahil **bütün** atama olayları | Süzgeçlere uyan kayıt sayısı; okunma durumundan bağımsızdır |
 | Atama Koordinasyonu | Kurum dışı atama talepleri ve bildirimleri (aşağıya bakınız) | Sekmenin kendi süzgeçlerine uyan **tüm** kayıtlar; karar bekleyen sayısı değildir |

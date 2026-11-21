@@ -144,7 +144,8 @@ function notificationDecisionAuthority(db, row, params) {
 function isParticipant(db, row, params) {
   const sicil = Number(params.sicil);
   return Number(row.RequesterSicil) === sicil
-    || recipientsOf(db, row.CoordinationId).some((entry) => Number(entry.Sicil) === sicil)
+    || recipientsOf(db, row.CoordinationId).some((entry) => Number(entry.Sicil) === sicil
+      && ['MANAGER', 'ASSIGNEE'].includes(entry.RecipientRole))
     || liveNotificationManagerOfAssignee(db, row, sicil)
     || liveFullProjectAccess(db, row, params);
 }
@@ -346,7 +347,7 @@ function requestInbox(db, params, context = {}) {
       if (Number(raw.RecipientSicil) !== sicil) continue;
       if (category && raw.Kind !== category) continue;
       const row = taskNotificationRow(db, raw);
-      const projectId = raw.ProjectIdSnapshot ?? taskOf(db, raw.TaskId)?.ProjectId ?? null;
+      const projectId = raw.ProjectIdSnapshot ?? (Number(raw.TaskCount || 1) <= 1 ? (taskOf(db, raw.TaskId)?.ProjectId ?? null) : null);
       if (params.projectId && !sameGuid(projectId, params.projectId)) continue;
       if (!inRange(raw.OccurredAt) || !requesterMatch(row.ActorName, raw.ActorSicil)) continue;
       if (!has([raw.TaskTitleSnapshot, raw.ProjectNameSnapshot, raw.ProjectCodeSnapshot, row.ActorName].join(' '), params.search)) continue;
@@ -373,10 +374,35 @@ function requestInbox(db, params, context = {}) {
   const total = filtered.length;
   const lastPage = total === 0 ? 0 : Math.floor((total - 1) / params.pageSize);
   const page = Math.min(params.page, lastPage);
-  const slice = filtered.slice(page * params.pageSize, (page + 1) * params.pageSize);
+  let slice;
+  if (params.hasCursor) {
+    const cursorActionable = Number(params.cursorActionable || 0);
+    const cursorSortAt = time(params.cursorSortAt) || 0;
+    const cursorSource = String(params.cursorSource || '');
+    const cursorId = String(params.cursorItemId || '').toUpperCase();
+    slice = filtered.filter((item) => {
+      const a = Number(item.Actionable);
+      const t = time(item.SortAt) || 0;
+      const s = String(item.Source);
+      const id = String(item.Id).toUpperCase();
+      if (a !== cursorActionable) return a < cursorActionable;
+      if (t !== cursorSortAt) return t < cursorSortAt;
+      if (s !== cursorSource) return s.localeCompare(cursorSource) > 0;
+      return id.localeCompare(cursorId) < 0;
+    }).slice(0, params.pageSize);
+  } else {
+    slice = filtered.slice(page * params.pageSize, (page + 1) * params.pageSize);
+  }
   const of = (source) => slice.filter((item) => item.Source === source).map((item) => item.row);
   return [[counts], [{ CoordinationCount: coordinationCount }], [{ Total: total, Page: page }],
-    slice.map((item, index) => ({ Ordinal: index + 1, Source: item.Source, ItemId: item.Id })),
+    slice.map((item, index) => ({
+      Ordinal: index + 1,
+      Source: item.Source,
+      ItemId: item.Id,
+      ItemVersion: item.row?.RowVersion ?? null,
+      UnreadFlag: item.row?.IsUnread ? 1 : 0,
+      ActionableFlag: item.Actionable ? 1 : 0
+    })),
     of('SCHEDULE_REQUEST'), of('ASSIGNMENT_COORDINATION'), of('TASK_EVENT')];
 }
 
@@ -533,7 +559,12 @@ function insertCoordination(db, sqlText, params) {
 function insertRecipient(db, params) {
   const existing = db.assignmentCoordinationRecipients.find((row) =>
     sameGuid(row.CoordinationId, params.coordinationId) && Number(row.Sicil) === Number(params.sicil));
-  if (!existing) {
+  if (existing) {
+    if (existing.RecipientRole === 'REQUESTER' && ['MANAGER', 'ASSIGNEE'].includes(params.role)) {
+      existing.RecipientRole = params.role;
+      existing.UpdatedAt = new Date().toISOString();
+    }
+  } else {
     db.assignmentCoordinationRecipients.push({
       CoordinationId: guid(params.coordinationId),
       Sicil: Number(params.sicil),
@@ -940,7 +971,7 @@ export function runAssignmentCoordinationQuery(db, sqlText, params, context = {}
   }
 
   if (sqlText.includes('INSERT dbo.MR_AssignmentCoordinationRecipients(')
-    && sqlText.includes('IF NOT EXISTS')) {
+    && sqlText.includes('NOT EXISTS')) {
     if (missing) throw missingObject('MR_AssignmentCoordinationRecipients');
     return insertRecipient(db, params);
   }

@@ -39,10 +39,25 @@ export function markNotificationItems(notifications, action = 'read') {
   });
 }
 
+function isValidRequestInboxResponse(value) {
+  return Boolean(
+    value && typeof value === 'object'
+    && Array.isArray(value.items)
+    && value.counts && typeof value.counts === 'object'
+    && Number.isFinite(Number(value.total))
+    && Number.isFinite(Number(value.page))
+    && Number.isFinite(Number(value.pageSize)) && Number(value.pageSize) > 0
+  );
+}
+
 /** Talepler · Gelenler / Gönderdiklerim / Geçmiş birleşik sayfası. */
-export function fetchRequestInbox(query = {}) {
+export async function fetchRequestInbox(query = {}) {
   const params = new URLSearchParams(
     Object.entries(query).filter(([, value]) => value != null && value !== '')
   );
-  return requestJson(`/api/mergen-rota/notifications?${params}`, { method: 'GET' });
+  const result = await requestJson(`/api/mergen-rota/notifications?${params}`, { method: 'GET' });
+  if (result.ok && !isValidRequestInboxResponse(result.value)) {
+    return { ok: false, code: 'INVALID_RESPONSE', message: 'Sunucu yanıtı geçersiz.' };
+  }
+  return result;
 }

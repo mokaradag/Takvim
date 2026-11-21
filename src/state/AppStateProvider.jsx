@@ -355,6 +355,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     reloadData,
     applyStateAction,
     beginInboxRead: () => ++inboxSequenceRef.current,
+    getInboxSequence: () => inboxSequenceRef.current,
     markItems: markNotificationItems,
     decideCoordination: decideAssignmentCoordinationRequest
   }), [applyStateAction, persistence, reloadData]);

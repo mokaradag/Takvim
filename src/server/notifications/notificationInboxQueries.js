@@ -110,15 +110,15 @@ export async function markNotifications(input = {}) {
   const schedule = [];
   const coordination = [];
   const taskEvents = [];
+  const sourceBuckets = new Map([
+    [NOTIFICATION_SOURCES.SCHEDULE_REQUEST, schedule],
+    [NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION, coordination],
+    [NOTIFICATION_SOURCES.TASK_EVENT, taskEvents]
+  ]);
   for (const entry of entries) {
     const id = canonicalActualId(entry?.id);
     if (!id) invalid('Bildirim kimliği geçersiz.');
-    const source = entry?.source;
-    const target = {
-      [NOTIFICATION_SOURCES.SCHEDULE_REQUEST]: schedule,
-      [NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION]: coordination,
-      [NOTIFICATION_SOURCES.TASK_EVENT]: taskEvents
-    }[source];
+    const target = sourceBuckets.get(entry?.source);
     if (!target) invalid('Bildirim kaynağı geçersiz.');
     target.push({ id, version: entry?.version });
   }

@@ -78,9 +78,20 @@ const NOTIFICATION_DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSys
  * yönetici her kaydı karara bağlayabilir ama zili sistemdeki bütün kayıtlarla
  * dolmaz (bkz. bindCoordinationScope · boş `@fullProjectIds`).
  */
+/**
+ * Açıkça bildirim/karar rolü verilmiş alıcılar (yönetici veya onaylı sorumlu).
+ *
+ * Geçici tam proje erişimi olan bir kullanıcının geçmiş kaydı açıp okundu
+ * işaretlemesi `MR_AssignmentCoordinationRecipients` tablosuna yalnız okuma
+ * durumu tutmak için `REQUESTER` rolüyle satır ekler; bu satır hiçbir zaman
+ * kalıcı katılım yetkisine dönüşmez (gerçek talep eden `c.RequesterSicil = @sicil`
+ * ile zaten kapsanır).
+ */
+const EXPLICIT_RECIPIENT = `EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
+  WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil
+    AND r.RecipientRole IN ('MANAGER','ASSIGNEE'))`;
 const PARTICIPANT = `(c.RequesterSicil = @sicil
-  OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
-    WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil)
+  OR ${EXPLICIT_RECIPIENT}
   OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS})`;
 const IS_MANAGER = `CASE WHEN ${DECISION_AUTHORITY} THEN 1 ELSE 0 END`;
 const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
@@ -296,8 +307,7 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
       suggested.DisplayName, ' ', decidedBy.DisplayName,
       CASE WHEN @searchRequesterMessage = 1 THEN CONCAT(' ', c.RequesterMessage) ELSE '' END,
       CASE WHEN @searchDecisionMessage = 1 THEN CONCAT(' ', c.DecisionMessage) ELSE '' END)`;
-  const historicalParticipant = `(c.RequesterSicil = @sicil OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients recipient
-    WHERE recipient.CoordinationId = c.CoordinationId AND recipient.Sicil = @sicil))`;
+  const historicalParticipant = `(c.RequesterSicil = @sicil OR ${EXPLICIT_RECIPIENT})`;
   const filters = `${participant}${evidenceSnapshotLimit == null ? '' : ` AND (${CURRENT_TASK_DISCLOSURE_SQL} OR (NOT ${TASK_AVAILABLE} AND ${historicalParticipant}))`}
     AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
     AND (@taskId IS NULL OR c.TaskId = @taskId)
