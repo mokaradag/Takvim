@@ -38,3 +38,11 @@ export function markNotificationItems(notifications, action = 'read') {
     })
   });
 }
+
+/** Talepler · Gelenler / Gönderdiklerim / Geçmiş birleşik sayfası. */
+export function fetchRequestInbox(query = {}) {
+  const params = new URLSearchParams(
+    Object.entries(query).filter(([, value]) => value != null && value !== '')
+  );
+  return requestJson(`/api/mergen-rota/notifications?${params}`, { method: 'GET' });
+}

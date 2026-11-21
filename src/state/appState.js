@@ -549,18 +549,78 @@ function applyCommittedChanges(state, changes = {}) {
   return { ...next, ...workspaceState(next, next) };
 }
 
+/** Zil kutusunun anlık görüntüde taşınan BÜTÜN alanları. */
+export const NOTIFICATION_INBOX_FIELDS = Object.freeze([
+  'scheduleRequests',
+  'scheduleRequestSummary',
+  'assignmentCoordinations',
+  'taskNotifications',
+  'notificationSummary'
+]);
+
+/**
+ * Zil kutusu okuması, durumdaki okumadan ESKİ mi?
+ *
+ * Her okuma (anlık görüntü ya da okundu işaretinin yanıtı) gönderilmeden önce
+ * artan bir sıra numarası alır. Daha önce gönderilmiş bir okumanın geç gelen
+ * yanıtı, daha sonra gönderilmiş okumanın uyguladığı durumu geri almaz:
+ * okundu işaretlenen bildirim, işaretten önce başlamış bir yenilemeyle yeniden
+ * "Yeni" görünmez.
+ */
+function isOlderInboxRead(state, sequence) {
+  return sequence != null && sequence < (state.notificationInboxSequence || 0);
+}
+
+function nextInboxSequence(state, sequence) {
+  return sequence == null ? (state.notificationInboxSequence || 0) : sequence;
+}
+
+/**
+ * Sunucunun döndürdüğü güncel zil kutusunu duruma uygular.
+ *
+ * Okundu/temizlendi işareti yalnızca bildirim durumunu değiştirir; görev ve
+ * proje verisi için tam anlık görüntü yeniden okunmaz.
+ */
+function applyNotificationInbox(state, inbox = {}, sequence = null) {
+  if (isOlderInboxRead(state, sequence)) return state;
+  const empty = { unreadCount: 0, pendingCount: 0 };
+  const has = (key) => Object.prototype.hasOwnProperty.call(inbox, key);
+  return {
+    ...state,
+    ...(has('scheduleRequests')
+      ? { scheduleRequests: reconcileSnapshotCollection(state.scheduleRequests, inbox.scheduleRequests) } : {}),
+    ...(has('scheduleRequestSummary') ? { scheduleRequestSummary: inbox.scheduleRequestSummary || empty } : {}),
+    ...(has('assignmentCoordinations')
+      ? { assignmentCoordinations: reconcileSnapshotCollection(state.assignmentCoordinations, inbox.assignmentCoordinations) }
+      : {}),
+    ...(has('taskNotifications')
+      ? { taskNotifications: reconcileSnapshotCollection(state.taskNotifications, inbox.taskNotifications) } : {}),
+    ...(has('notificationSummary')
+      ? { notificationSummary: reuseSnapshotValue(state.notificationSummary, inbox.notificationSummary || empty) } : {}),
+    notificationInboxSequence: nextInboxSequence(state, sequence)
+  };
+}
+
 export function appStateReducer(state, action) {
   switch (action.type) {
     case 'data/load-start':
       return { ...state, dataStatus: 'loading', loadError: null };
     case 'data/load-success': {
       const loaded = createStateFromSnapshot(action.snapshot, state);
+      // Daha yeni bir okundu işareti uygulanmışsa anlık görüntünün ESKİ zil
+      // kutusu onu ezmez; görev ve proje verisi yine uygulanır.
+      const inboxState = isOlderInboxRead(state, action.inboxSequence)
+        ? Object.fromEntries(NOTIFICATION_INBOX_FIELDS.map((key) => [key, state[key]]))
+        : { notificationInboxSequence: nextInboxSequence(state, action.inboxSequence) };
       return {
         ...loaded,
+        ...inboxState,
         saveError: action.preserveSaveError ? state.saveError : loaded.saveError,
         lastRefreshedAt: action.refreshedAt || state.lastRefreshedAt || null
       };
     }
+    case 'notifications/inbox-refreshed':
+      return applyNotificationInbox(state, action.inbox, action.inboxSequence);
     case 'data/load-error':
       return { ...state, dataStatus: 'error', loadError: action.error };
     case 'persistence/start':

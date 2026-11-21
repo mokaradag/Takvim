@@ -110,6 +110,15 @@ const FIELDS = fieldsFor(ACTIONABLE);
 const ORDER = orderFor(ACTIONABLE);
 
 /**
+ * Talepler gelen kutusunun ortak okumasında yeniden kullanılan yüklemler.
+ * Katılım, karar ve görünürlük kuralı burada TEK kez yazılır; birleşik okuma
+ * ikinci bir kural tanımlamaz (bkz. server/notifications/requestInboxQueries.js).
+ */
+export const COORDINATION_SQL = Object.freeze({
+  SOURCE, COUNT_SOURCE, PARTICIPANT, ACTIONABLE, UNREAD, VISIBLE, TASK_AVAILABLE, FIELDS
+});
+
+/**
  * Okuma yüzeyinin AKTÖR kapsamı.
  *
  * `PARTICIPANT`, `IS_MANAGER` ve `ACTIONABLE` bu üç parametreyi kullanır; hepsi
@@ -360,6 +369,8 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
     page: Number(pagination.Page || 0),
     pageSize: query.pageSize,
     counts: {
+      // Süzgeçlere uyan bütün kayıtlar (kapsamdan bağımsız): sekme sayacı.
+      all: Number(counts.Total || 0),
       pending: Number(counts.PendingCount || 0),
       sent: Number(counts.SentCount || 0),
       history: Number(counts.HistoryCount || 0)

@@ -27,7 +27,7 @@ function headline(record) {
 const PRIMARY_DECISIONS = new Set([COORDINATION_DECISIONS.APPROVE]);
 
 export function AssignmentCoordinationDialog({
-  record,
+  record: recordProp,
   onClose,
   onDecide,
   onOpenTask,
@@ -37,6 +37,12 @@ export function AssignmentCoordinationDialog({
   const [suggested, setSuggested] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  // Sunucunun kararla birlikte döndürdüğü YETKİLİ kayıt. Pencere açık kalırsa
+  // (güncelliğini yitirme, yenileme hatası) liste henüz yenilenmemiş olsa da
+  // eski durum ve eski karar düğmeleri yeniden gösterilmez.
+  const [committedRecord, setCommittedRecord] = useState(null);
+  const record = committedRecord && committedRecord.id === recordProp.id ? committedRecord : recordProp;
   const closeRef = useRef(null);
   const dialogRef = useRef(null);
   useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: closeRef, restoreFocusRef, onClose, blocked: busy });
@@ -51,6 +57,7 @@ export function AssignmentCoordinationDialog({
   const decide = async (decision) => {
     setBusy(true);
     setError(null);
+    setNotice(null);
     let result;
     try {
       result = await onDecide(record.id, {
@@ -66,11 +73,19 @@ export function AssignmentCoordinationDialog({
       setBusy(false);
     }
     if (!result?.ok) {
-      setError(result?.message || 'Karar kaydedilemedi.');
+      setError(result?.message || result?.error?.message || 'Karar kaydedilemedi.');
       return;
     }
+    if (result.value?.record) setCommittedRecord(result.value.record);
     if (result.value?.outcome === 'STALE') {
       setError(result.value.message);
+      return;
+    }
+    // Karar KAYDEDİLDİ ama görünüm uzlaştırılamadı: bu başarılı eşitleme gibi
+    // sunulmaz. Pencere sunucunun döndürdüğü kayıtla açık kalır.
+    if (result.refreshError) {
+      setNotice(`${result.value?.message || 'Karar kaydedildi.'} Ancak görünüm yenilenemedi: `
+        + `${result.refreshError.message || 'bilinmeyen hata'}. Verileri yenileyin.`);
       return;
     }
     onClose();
@@ -169,6 +184,7 @@ export function AssignmentCoordinationDialog({
         )}
 
         {error && <div className="schedule-modal-error" role="alert"><Icons.Alert size={13} /> {error}</div>}
+        {notice && <div className="schedule-modal-error" role="status"><Icons.Alert size={13} /> {notice}</div>}
 
         <footer className="schedule-modal-actions">
           <button className="btn" type="button" disabled={busy || record.taskAvailable === false}

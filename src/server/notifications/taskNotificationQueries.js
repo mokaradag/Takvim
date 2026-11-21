@@ -27,6 +27,12 @@ const FIELDS = `n.*, COALESCE(n.ActorNameSnapshot, actor.DisplayName) AS ActorNa
   CASE WHEN ${UNREAD} THEN 1 ELSE 0 END AS IsUnread,
   CASE WHEN ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS TaskAvailable`;
 
+/**
+ * Talepler gelen kutusunun ortak okumasında yeniden kullanılan yüklemler
+ * (bkz. server/notifications/requestInboxQueries.js).
+ */
+export const TASK_NOTIFICATION_SQL = Object.freeze({ SOURCE, OWNED, UNREAD, VISIBLE, TASK_AVAILABLE, FIELDS });
+
 function isoTime(value) {
   return value ? new Date(value).toISOString() : null;
 }

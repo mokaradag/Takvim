@@ -61,18 +61,27 @@ export function createDataRefreshSingleFlight() {
   }
 
   function queueAfterActive(operation, operationKind, requestKey) {
-    // Kuyrukta AYNI isteği taşıyan bir çalıştırma varsa onunla birleşilir;
-    // farklı seçenek taşıyan istek onun ARDINA eklenir.
+    // Kuyrukta AYNI isteği taşıyan bir çalıştırma varsa onunla birleşilir:
+    // kuyruktaki çalıştırma henüz başlamamıştır, okuması bu çağrıdan SONRA
+    // yapılır. Farklı seçenek taşıyan istek onun ARDINA eklenir.
     if (queued && queued.requestKey === requestKey) return queued.promise;
     const previous = queued ? queued.promise : active.promise;
     const entry = { operationKind, requestKey };
+    const settle = () => undefined;
+    // Sıra geldiğinde etkin bir çalıştırma yine de varsa (arada boşta kalan
+    // sınırda başka bir çağıran başlatmış olabilir) iki okuma eşzamanlı
+    // koşturulmaz. Aynı isteği taşıyan bu çalıştırma bu çağrıdan SONRA
+    // başlamıştır ve katılmak güvenlidir.
+    const runWhenIdle = () => {
+      if (!active) return start(operation, operationKind, requestKey);
+      if (active.requestKey === requestKey) return active.promise;
+      return active.promise.then(settle, settle).then(runWhenIdle);
+    };
     entry.promise = previous
-      .then(() => undefined, () => undefined)
+      .then(settle, settle)
       .then(() => {
         if (queued === entry) queued = null;
-        return active && active.requestKey === requestKey
-          ? active.promise
-          : start(operation, operationKind, requestKey);
+        return runWhenIdle();
       });
     queued = entry;
     return entry.promise;
@@ -88,21 +97,25 @@ export function createDataRefreshSingleFlight() {
      *   yutulduğunda, kullanıcının "yeniden yükle ve kaydedilmemiş değişiklikleri
      *   at" seçimi hiç çalışmıyor, çağıran da başka bir yenilemenin sonucunu
      *   alıyordu.
+     *
+     * Atlanmayan istek SÜREN çalıştırmaya hiçbir zaman katılmaz. Süren okuma
+     * çağıranın az önce kaydettiği değişiklikten ÖNCE başlamış olabilir: zilde
+     * açılan atama bildiriminin okundu yenilemesi sürerken verilen onay aynı
+     * anahtarla o yenilemeye katılıyor, karar öncesi anlık görüntü "güncel"
+     * diye uygulanıyordu. Rozet değişiyor, görev ise eski sorumlularla ve
+     * bekleyen kayıtla kalıyordu. İstek bu yüzden kuyruğa girer; kuyrukta aynı
+     * isteği bekleyen çalıştırmayla birleşir (o henüz başlamamıştır); art arda
+     * gelen aynı istekler tek bir bekleyen okumada toplanır.
      */
     run(operation, {
       skipIfBusy = false,
       operationKind = 'default',
-      queueIfActiveKind = null,
       requestKey = null
     } = {}) {
       if (active) {
         if (skipIfBusy) {
           return Promise.resolve({ ok: true, value: null, skipped: true, reason: 'REFRESH_IN_PROGRESS' });
         }
-        if (queueIfActiveKind && active.operationKind === queueIfActiveKind) {
-          return queueAfterActive(operation, operationKind, requestKey);
-        }
-        if (active.requestKey === requestKey) return active.promise;
         return queueAfterActive(operation, operationKind, requestKey);
       }
       return start(operation, operationKind, requestKey);

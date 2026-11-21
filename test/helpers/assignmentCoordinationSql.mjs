@@ -279,6 +279,107 @@ function taskNotificationInbox(db, params) {
     unread.length > bound ? [] : unread.map((row) => ({ TaskId: row.TaskId, CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null, CountsUnread: 1, CountsPending: 0 }))];
 }
 
+/**
+ * Talepler birleşik gelen kutusunun (`/* rota-request-inbox *\/`) ikizi.
+ *
+ * Sunucu sorgusundaki sekme bayraklarını, süzgeçleri ve belirlenimci sırayı
+ * aynen uygular. Katılım yüklemleri bu modülün ve tarih talebi ikizinin
+ * mevcut karşılıklarıdır; ayrı bir kural yazılmaz.
+ */
+function requestInbox(db, params, context = {}) {
+  const sicil = Number(params.sicil);
+  const lower = (value) => String(value ?? '').toLocaleLowerCase('tr-TR');
+  const has = (haystack, needle) => !needle || lower(haystack).includes(lower(needle));
+  const time = (value) => (value ? new Date(value).getTime() : null);
+  const inRange = (value) => {
+    const at = time(value);
+    return (params.fromUtc == null || at >= time(params.fromUtc)) && (params.toUtc == null || at < time(params.toUtc));
+  };
+  const requesterMatch = (name, actorSicil) => !params.requester || has(name, params.requester)
+    || String(actorSicil ?? '') === params.requester;
+  const category = params.category || null;
+  const items = [];
+  const push = (Source, row, flags) => items.push({ Source, row, ...flags });
+
+  if (!category || category === 'SCHEDULE_REQUEST') {
+    for (const row of context.scheduleRows ? context.scheduleRows(sicil) : []) {
+      const actionableRow = row.Status === 'PENDING' && Number(row.DecisionOwnerSicil) === sicil && row.TaskAvailable;
+      const state = (db.scheduleNotifications || []).find((entry) => sameGuid(entry.RequestId, row.RequestId) && Number(entry.Sicil) === sicil);
+      const visible = actionableRow || !(Buffer.isBuffer(state?.DismissedVersion) && state.DismissedVersion.equals(row.RowVersion));
+      const projectId = row.ProjectIdSnapshot ?? row.LiveProjectId ?? null;
+      if (params.projectId && !sameGuid(projectId, params.projectId)) continue;
+      if (params.status && row.Status !== params.status) continue;
+      if (!inRange(row.CreatedAt) || !requesterMatch(row.RequesterName, row.RequesterSicil)) continue;
+      if (!has([row.TaskTitle, row.ProjectName, row.ProjectCode, row.RequesterName, row.RequesterMessage].join(' '), params.search)) continue;
+      push('SCHEDULE_REQUEST', row, {
+        Id: row.RequestId, SortAt: row.DecidedAt || row.CreatedAt, Actionable: actionableRow,
+        IsIncoming: actionableRow || (row.IsUnread && visible && row.TaskAvailable
+          && !(Number(row.RequesterSicil) === sicil && row.Status === 'PENDING')),
+        IsSent: Number(row.RequesterSicil) === sicil,
+        IsHistory: row.Status !== 'PENDING' || !row.TaskAvailable
+      });
+    }
+  }
+  if (!category || category === 'ASSIGNMENT_REQUEST' || category === 'ASSIGNMENT_NOTICE') {
+    for (const raw of db.taskAssignmentCoordinations) {
+      if (!isParticipant(db, raw, params)) continue;
+      if (category === 'ASSIGNMENT_REQUEST' && raw.Mode !== 'REQUEST') continue;
+      if (category === 'ASSIGNMENT_NOTICE' && raw.Mode !== 'NOTICE') continue;
+      if (params.projectId && !sameGuid(recordProjectId(db, raw), params.projectId)) continue;
+      if (params.status && raw.Status !== params.status) continue;
+      const row = coordinationRow(db, raw, params);
+      if (!inRange(raw.CreatedAt) || !requesterMatch(row.RequesterName, raw.RequesterSicil)) continue;
+      if (!has([row.TaskTitle, row.ProjectName, row.ProjectCode, row.RequesterName, row.AssigneeName, raw.RequesterMessage].join(' '), params.search)) continue;
+      const actionableRow = actionable(db, raw, params);
+      const available = taskAvailable(db, raw);
+      push('ASSIGNMENT_COORDINATION', row, {
+        Id: raw.CoordinationId, SortAt: raw.DecidedAt || raw.CreatedAt, Actionable: actionableRow,
+        IsIncoming: actionableRow || (isUnread(db, raw, sicil) && isVisible(db, raw, params) && available
+          && !(Number(raw.RequesterSicil) === sicil && raw.Status === 'PENDING')),
+        IsSent: Number(raw.RequesterSicil) === sicil && raw.Mode === 'REQUEST',
+        IsHistory: !OPEN_STATUSES.includes(raw.Status) || !available
+      });
+    }
+  }
+  if (!params.status && (!category || category === 'TASK_ASSIGNED' || category === 'TASK_UNASSIGNED')) {
+    for (const raw of db.taskNotifications) {
+      if (Number(raw.RecipientSicil) !== sicil) continue;
+      if (category && raw.Kind !== category) continue;
+      const row = taskNotificationRow(db, raw);
+      const projectId = raw.ProjectIdSnapshot ?? taskOf(db, raw.TaskId)?.ProjectId ?? null;
+      if (params.projectId && !sameGuid(projectId, params.projectId)) continue;
+      if (!inRange(raw.OccurredAt) || !requesterMatch(row.ActorName, raw.ActorSicil)) continue;
+      if (!has([raw.TaskTitleSnapshot, raw.ProjectNameSnapshot, raw.ProjectCodeSnapshot, row.ActorName].join(' '), params.search)) continue;
+      push('TASK_EVENT', row, {
+        Id: raw.NotificationId, SortAt: raw.OccurredAt, Actionable: false,
+        IsIncoming: row.IsUnread === 1 && !raw.DismissedAt && row.TaskAvailable === 1,
+        IsSent: false,
+        IsHistory: true
+      });
+    }
+  }
+  const counts = {
+    IncomingCount: items.filter((item) => item.IsIncoming).length,
+    SentCount: items.filter((item) => item.IsSent).length,
+    HistoryCount: items.filter((item) => item.IsHistory).length
+  };
+  const coordinationCount = db.taskAssignmentCoordinations.filter((row) => isParticipant(db, row, params)).length;
+  const flag = { pending: 'IsIncoming', sent: 'IsSent', history: 'IsHistory' }[params.tab];
+  const filtered = items.filter((item) => item[flag]).sort((left, right) =>
+    Number(right.Actionable) - Number(left.Actionable)
+    || (time(right.SortAt) || 0) - (time(left.SortAt) || 0)
+    || String(left.Source).localeCompare(String(right.Source))
+    || String(right.Id).toUpperCase().localeCompare(String(left.Id).toUpperCase()));
+  const total = filtered.length;
+  const lastPage = total === 0 ? 0 : Math.floor((total - 1) / params.pageSize);
+  const page = Math.min(params.page, lastPage);
+  const slice = filtered.slice(page * params.pageSize, (page + 1) * params.pageSize);
+  const of = (source) => slice.filter((item) => item.Source === source).map((item) => item.row);
+  return [[counts], [{ CoordinationCount: coordinationCount }], [{ Total: total, Page: page }],
+    slice.map((item, index) => ({ Ordinal: index + 1, Source: item.Source, ItemId: item.Id })),
+    of('SCHEDULE_REQUEST'), of('ASSIGNMENT_COORDINATION'), of('TASK_EVENT')];
+}
+
 function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   const sicil = Number(params.sicil);
   const pageSize = Number(params.pageSize || 25);
@@ -675,9 +776,14 @@ function mailQueueStatus(db) {
 
 /* ── Yönlendirici ───────────────────────────────────────────── */
 
-export function runAssignmentCoordinationQuery(db, sqlText, params) {
+export function runAssignmentCoordinationQuery(db, sqlText, params, context = {}) {
   ensureCollections(db);
   const missing = db.assignmentCoordinationSchemaMissing === true;
+
+  if (sqlText.includes('/* rota-request-inbox */')) {
+    if (missing) throw missingObject('MR_TaskAssignmentCoordinations');
+    return requestInbox(db, params, context);
+  }
 
   // Kurumsal dizin araması ve yönetim zinciri çözümü mevcut görünümleri okur;
   // 0015 tabloları olmadan da çalışır.

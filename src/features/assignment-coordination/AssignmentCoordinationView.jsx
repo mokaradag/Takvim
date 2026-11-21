@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput.jsx';
 import { Icons } from '../../components/icons.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
@@ -7,7 +7,6 @@ import {
   COORDINATION_MODES,
   COORDINATION_STATUS_LABELS
 } from '../../domain/assignment/assignmentCoordination.js';
-import { decideAssignmentCoordinationRequest, markNotificationItems } from '../../data/api/assignmentCoordinationClient.js';
 import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
 import { TaskTablePagination } from '../tasks/TaskTablePagination.jsx';
 import { AssignmentCoordinationDialog } from './AssignmentCoordinationDialog.jsx';
@@ -32,14 +31,21 @@ const INITIAL = Object.freeze({
  * uygulanır. Kapsam seçimi ikinci bir sekme katmanı açmaz; olağan süzgeç
  * satırında durur.
  */
-export function AssignmentCoordinationView() {
+export function AssignmentCoordinationView({ onTotalChange } = {}) {
   const [query, setQuery] = useState(INITIAL);
   const [selected, setSelected] = useState(null);
   const [readError, setReadError] = useState(null);
   const openerRef = useRef(null);
   const projects = useAllProjects();
-  const { openTask, reloadData } = useTaskActions();
+  const { openTask, markNotifications, decideAssignmentCoordination } = useTaskActions();
   const { data, loading, error, actual, refresh } = useAssignmentCoordinationQuery(query);
+  // Sekme sayacı, süzgeçlere uyan "Tüm kayıtlar" sayısıdır. Kapsam seçimi
+  // (ör. Kararımı bekleyenler) onu sıfıra indirmez; karar bekleyen sayısı
+  // ayrı bir anlamdır.
+  const allCount = data.counts.all;
+  useEffect(() => {
+    if (!loading && typeof allCount === 'number') onTotalChange?.(allCount);
+  }, [allCount, loading, onTotalChange]);
 
   const projectOptions = useMemo(() => [
     { value: '', label: 'Tüm projeler' },
@@ -59,18 +65,17 @@ export function AssignmentCoordinationView() {
     openerRef.current = target;
     setSelected(record);
     setReadError(null);
-    const result = await markNotificationItems([record]);
-    if (!result.ok) setReadError(result.message);
-    else { refresh(); await reloadData?.({ preserveFailedTaskUpdates: true }); }
+    if (!record.unread) return;
+    // Okundu işareti yalnızca zil kutusunu yeniler; tam anlık görüntü okunmaz.
+    const result = await markNotifications?.([record]);
+    if (result && !result.ok) setReadError(result.message || 'Bildirim güncellenemedi.');
+    else if (result?.refreshError) setReadError(result.refreshError.message || 'Bildirimler yenilenemedi.');
+    refresh();
   };
 
   const decide = async (coordinationId, input) => {
-    const result = await decideAssignmentCoordinationRequest(coordinationId, input);
+    const result = await decideAssignmentCoordination(coordinationId, input);
     refresh();
-    if (result.ok) {
-      await reloadData?.({ preserveFailedTaskUpdates: true });
-      if (result.value?.record) setSelected(result.value.record);
-    }
     return result;
   };
 

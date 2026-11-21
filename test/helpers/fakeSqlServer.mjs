@@ -1293,7 +1293,9 @@ function runQuery(db, statement, params, { database }) {
 
   // Atama koordinasyonu, görev bildirimi, posta kuyruğu ve kullanıcı varlığı
   // (0015) ayrı bir modülde karşılanır.
-  const coordination = runAssignmentCoordinationQuery(db, sqlText, params);
+  const coordination = runAssignmentCoordinationQuery(db, sqlText, params, {
+    scheduleRows: (sicil) => scheduleRequestRows(db, sicil)
+  });
   if (coordination) return result(coordination);
 
   // Rota AI konuşma geçmişi (0017) ayrı bir modülde karşılanır. Rehber

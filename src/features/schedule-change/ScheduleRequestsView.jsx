@@ -1,30 +1,49 @@
 'use client';
 import { useMemo, useRef, useState } from 'react';
-import { useAllProjects, useNotificationSummary, useTaskActions } from '../../state/hooks/index.js';
+import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
 import { DateInput } from '../../components/DateInput.jsx';
 import { Icons } from '../../components/icons.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
-import { markScheduleNotifications } from '../../data/api/scheduleChangeClient.js';
+import { NOTIFICATION_SOURCES } from '../../domain/notifications/notificationInbox.js';
 import { TaskTablePagination } from '../tasks/TaskTablePagination.jsx';
+import { AssignmentCoordinationDialog } from '../assignment-coordination/AssignmentCoordinationDialog.jsx';
 import { AssignmentCoordinationView } from '../assignment-coordination/AssignmentCoordinationView.jsx';
-import { ScheduleRequestDetails, STATUS_LABELS } from './ScheduleRequestCenter.jsx';
-import { useScheduleRequestQuery } from './useScheduleRequestQuery.js';
+import { ScheduleRequestDetails } from './ScheduleRequestCenter.jsx';
+import {
+  REQUEST_CATEGORY_FILTER_OPTIONS,
+  REQUEST_STATUS_FILTER_OPTIONS,
+  requestInboxRow,
+  sameRequestInboxItem
+} from './requestInboxPresentation.js';
+import { useRequestInboxQuery } from './useRequestInboxQuery.js';
 
 const COORDINATION_TAB = 'coordination';
 const TABS = [
-  { id: 'pending', label: 'Gelenler' },
-  { id: 'sent', label: 'Gönderdiklerim' },
-  { id: 'history', label: 'Geçmiş' },
+  { id: 'pending', label: 'Gelenler', hint: 'Kararınızı bekleyen kayıtlar ve okunmamış bildirimler' },
+  { id: 'sent', label: 'Gönderdiklerim', hint: 'Gönderdiğiniz tarih ve atama talepleri' },
+  { id: 'history', label: 'Geçmiş', hint: 'Sonuçlanan talepler ve okunmuş olanlar dahil bütün atama bildirimleri' },
   // Atama koordinasyonu BİRİNCİ SINIF sekmedir: ayrı bir kenar çubuğu sayfası
   // açılmaz, var olan talep altyapısı olduğu gibi korunur.
-  { id: COORDINATION_TAB, label: 'Atama Koordinasyonu' }
+  { id: COORDINATION_TAB, label: 'Atama Koordinasyonu', hint: 'Süzgeçlerinize uyan bütün atama koordinasyonu kayıtları' }
 ];
-const INITIAL = { tab: 'pending', search: '', projectId: '', requester: '', status: '', from: '', to: '', page: 0 };
+const INITIAL = { tab: 'pending', search: '', projectId: '', requester: '', category: '', status: '', from: '', to: '', page: 0 };
 
+function dateTime(value) {
+  return value ? new Date(value).toLocaleString('tr-TR') : '—';
+}
+
+/**
+ * Talepler sayfası.
+ *
+ * Gelenler, Gönderdiklerim ve Geçmiş üç kalıcı kaynağı (tarih talebi, atama
+ * koordinasyonu, atama olayı) tek, sunucuda sayfalanan listede gösterir. Atama
+ * Koordinasyonu kendi ayrıntılı süzgeç ve karar akışıyla ayrı sekmede kalır.
+ */
 export function ScheduleRequestsView() {
   const [query, setQuery] = useState(INITIAL);
   const [activeTab, setActiveTab] = useState('pending');
   const [selected, setSelected] = useState(null);
+  const [coordinationTotal, setCoordinationTotal] = useState(null);
   const projects = useAllProjects();
   const projectOptions = useMemo(() => [
     { value: '', label: 'Tüm projeler' },
@@ -37,10 +56,9 @@ export function ScheduleRequestsView() {
       }))
       .sort((left, right) => left.label.localeCompare(right.label, 'tr'))
   ], [projects]);
-  const { decideScheduleChange, openTask, reloadData } = useTaskActions();
+  const { decideScheduleChange, openTask, markNotifications, decideAssignmentCoordination } = useTaskActions();
   const coordinationActive = activeTab === COORDINATION_TAB;
-  const { data, loading, error, actual, refresh } = useScheduleRequestQuery(query, !coordinationActive);
-  const notificationSummary = useNotificationSummary();
+  const { data, loading, error, actual, refresh } = useRequestInboxQuery(query, !coordinationActive);
   const openerRef = useRef(null);
   const tabsRef = useRef(null);
   const [readError, setReadError] = useState(null);
@@ -51,21 +69,56 @@ export function ScheduleRequestsView() {
     // Atama Koordinasyonu'na geçip geri dönen kullanıcının önüne çekmece
     // kendiliğinden yeniden açılıyordu.
     setSelected(null);
-    if (id !== COORDINATION_TAB) change('tab', id);
-  };
-  const tabCount = (id) => (id === COORDINATION_TAB ? notificationSummary.pendingCount : data.counts[id]);
-  const open = async (request, target) => {
-    openerRef.current = target;
-    setSelected(request);
     setReadError(null);
-    const result = await markScheduleNotifications([request]);
-    if (!result.ok) setReadError(result.message);
-    else { refresh(); await reloadData?.({ preserveFailedTaskUpdates: true }); }
+    if (id !== COORDINATION_TAB) change('tab', id);
+    else setCoordinationTotal(null);
   };
+  // Sayaç anlamları: Gelenler/Gönderdiklerim/Geçmiş, sekmenin süzgeçli kayıt
+  // sayısıdır (okunmamış sayısı DEĞİL). Atama Koordinasyonu, sekmenin kendi
+  // süzgeçlerine uyan "Tüm kayıtlar" sayısıdır; karar bekleyen sayısı değildir.
+  const tabCount = (id) => (id === COORDINATION_TAB
+    ? (coordinationActive && coordinationTotal != null ? coordinationTotal : data.counts.coordination ?? 0)
+    : data.counts[id] ?? 0);
+
+  const markRead = async (item) => {
+    if (!item.unread) return { ok: true };
+    const result = await markNotifications?.([item]);
+    if (result && !result.ok) setReadError(result.message || 'Bildirim güncellenemedi.');
+    else if (result?.refreshError) setReadError(result.refreshError.message || 'Bildirimler yenilenemedi.');
+    refresh();
+    return result;
+  };
+
+  const open = async (item, target) => {
+    openerRef.current = target;
+    setReadError(null);
+    if (item.source === NOTIFICATION_SOURCES.TASK_EVENT) {
+      // Atama olayı bir karar penceresi açmaz: görev olağan yetkili yolla
+      // açılır. Sorumluluğu kaldırılan kişi görevi çoğu zaman artık göremez;
+      // başarısızlık YUTULMAZ, bildirim yine de okundu işaretlenir.
+      let failure = null;
+      if (item.taskAvailable !== false && item.taskId) {
+        try {
+          const result = await openTask?.(item.taskId);
+          if (result?.ok === false) failure = result.error?.message || 'Görev açılamadı.';
+        } catch (openError) { failure = openError?.message || 'Görev açılamadı.'; }
+      } else failure = 'Görev silinmiş veya proje kapatılmış.';
+      await markRead(item);
+      if (failure) setReadError(failure);
+      return;
+    }
+    setSelected(item);
+    await markRead(item);
+  };
+
+  const selectedRecord = selected ? data.items.find((item) => sameRequestInboxItem(item, selected)) || selected : null;
+  const activeHint = TABS.find((tab) => tab.id === activeTab)?.hint;
+
   return <div className="requests-view">
     <div ref={tabsRef} className="request-tabs" role="tablist" aria-label="Talep türü">
       {TABS.map((tab, index) => <button key={tab.id} type="button" role="tab" id={`requests-${tab.id}-tab`}
         aria-controls="requests-panel" aria-selected={activeTab === tab.id} tabIndex={activeTab === tab.id ? 0 : -1}
+        title={tab.hint}
         onClick={() => selectTab(tab.id)} onKeyDown={(event) => {
           let next;
           if (event.key === 'ArrowRight') next = (index + 1) % TABS.length;
@@ -77,44 +130,63 @@ export function ScheduleRequestsView() {
           tabsRef.current?.querySelectorAll('[role="tab"]')[next]?.focus();
         }}>{tab.label}<span>{tabCount(tab.id)}</span></button>)}
     </div>
-    <section className="card requests-panel" id="requests-panel" role="tabpanel" aria-labelledby={`requests-${activeTab}-tab`} aria-busy={coordinationActive ? undefined : loading}>
-      {coordinationActive ? <AssignmentCoordinationView /> : <>
+    <section className="card requests-panel" id="requests-panel" role="tabpanel" aria-labelledby={`requests-${activeTab}-tab`}
+      aria-describedby="requests-panel-hint" aria-busy={coordinationActive ? undefined : loading}>
+      <p id="requests-panel-hint" className="sr-only">{activeHint}</p>
+      {coordinationActive ? <AssignmentCoordinationView onTotalChange={setCoordinationTotal} /> : <>
       <div className="detail-list-filters request-filters">
-        <label><span>Ara</span><input className="input" type="search" value={query.search} placeholder="Görev, proje veya talep notu…" onChange={(event) => change('search', event.target.value)} /></label>
-        <div style={{ display: 'flex', flex: '1 1 160px', flexDirection: 'column', gap: 5, minWidth: 0, fontSize: 11, color: 'var(--text-dim)' }}>
+        <label><span>Ara</span><input className="input" type="search" value={query.search} placeholder="Görev, proje, kişi veya talep notu…" onChange={(event) => change('search', event.target.value)} /></label>
+        <div className="request-project-filter">
           <span>Proje</span>
           <SearchableSelect compact style={{ width: '100%' }} ariaLabel="Proje filtresi" value={query.projectId}
             onChange={(value) => change('projectId', value)} searchPlaceholder="Proje ara" options={projectOptions} />
         </div>
-        <label><span>Talep eden</span><input className="input" value={query.requester} placeholder="Ad veya sicil" onChange={(event) => change('requester', event.target.value)} /></label>
-        <label><span>Durum</span><select className="input" value={query.status} onChange={(event) => change('status', event.target.value)}><option value="">Tüm durumlar</option>{Object.entries(STATUS_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-        <label><span>Talep tarihi · İlk</span><DateInput ariaLabel="İlk talep tarihi" value={query.from} onChange={(value) => change('from', value)} /></label>
-        <label><span>Talep tarihi · Son</span><DateInput ariaLabel="Son talep tarihi" value={query.to} onChange={(value) => change('to', value)} /></label>
+        <label><span>Tür</span><select className="input" value={query.category} onChange={(event) => change('category', event.target.value)}><option value="">Tüm türler</option>{REQUEST_CATEGORY_FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+        <label><span>Talep eden / Atayan</span><input className="input" value={query.requester} placeholder="Ad veya sicil" onChange={(event) => change('requester', event.target.value)} /></label>
+        <label><span>Durum</span><select className="input" value={query.status} onChange={(event) => change('status', event.target.value)}><option value="">Tüm durumlar</option>{REQUEST_STATUS_FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+        <label><span>Tarih · İlk</span><DateInput ariaLabel="İlk kayıt tarihi" value={query.from} onChange={(value) => change('from', value)} /></label>
+        <label><span>Tarih · Son</span><DateInput ariaLabel="Son kayıt tarihi" value={query.to} onChange={(value) => change('to', value)} /></label>
         <button type="button" className="btn ghost sm" onClick={() => setQuery({ ...INITIAL, tab: query.tab })}>Filtreleri temizle</button>
       </div>
       {(error || readError) && <p role="alert" className="schedule-modal-error">{error || readError}<button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button></p>}
-      {!actual && <p className="empty">Tarih değişikliği talepleri Gerçek Sistem kipinde kullanılabilir.</p>}
-      {loading && <p className="muted" role="status">Talepler yükleniyor…</p>}
+      {!actual && <p className="empty">Talepler ve bildirimler Gerçek Sistem kipinde kullanılabilir.</p>}
+      {loading && <p className="muted request-loading" role="status">Talepler yükleniyor…</p>}
       <div className="detail-list-scroll">
         <table className="table detail-list-table enterprise-table">
-          <caption className="sr-only">Tarih değişikliği talepleri</caption>
-          <thead><tr>{['Görev / Proje', 'Talep eden', 'Durum', 'Talep tarihi', 'Karar tarihi'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
-          <tbody>{data.items.map((request) => <tr key={request.id}>
-            <td><button type="button" className="detail-task-link" onClick={(event) => open(request, event.currentTarget)}>{request.taskTitle || 'Silinen görev'} <Icons.ChevronRight size={12} /></button><small className="muted">{request.projectCode} · {request.projectName}</small></td>
-            <td>{request.requesterName}<small className="muted">{request.requesterSicil}</small></td>
-            <td>{request.taskAvailable === false && <small className="muted">Görev silinmiş veya proje kapalı</small>}<span className={`schedule-status ${request.status.toLowerCase()}`}>{STATUS_LABELS[request.status]}</span>{request.isDecisionOwner && request.status === 'PENDING' && request.taskAvailable !== false && <small>Kararınız bekleniyor</small>}</td>
-            <td className="tabular">{request.createdAt ? new Date(request.createdAt).toLocaleString('tr-TR') : '—'}</td>
-            <td className="tabular">{request.decidedAt ? new Date(request.decidedAt).toLocaleString('tr-TR') : '—'}</td>
-          </tr>)}</tbody>
+          <caption className="sr-only">Talepler ve bildirimler</caption>
+          <thead><tr>{['Görev / Proje', 'Tür', 'Talep eden / Atayan', 'Durum', 'Tarih', 'Karar tarihi'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+          <tbody>{data.items.map((item) => {
+            const row = requestInboxRow(item);
+            return <tr key={row.key} data-unread={row.unread || undefined}>
+              <td><button type="button" className="detail-task-link" onClick={(event) => open(item, event.currentTarget)}>{row.taskTitle} <Icons.ChevronRight size={12} /></button>{row.projectLabel && <small className="muted">{row.projectLabel}</small>}{row.detail && <small className="muted">{row.detail}</small>}</td>
+              <td>{row.category}{row.unread && <span className="schedule-new-label">Yeni</span>}</td>
+              <td>{row.actorName || '—'}{row.actorSicil && <small className="muted tabular">{row.actorSicil}</small>}</td>
+              <td>{!row.taskAvailable && <small className="muted">Görev silinmiş veya proje kapalı</small>}<span className={`schedule-status ${row.statusClass}`}>{row.statusLabel}</span>{row.actionable && <small>Kararınız bekleniyor</small>}</td>
+              <td className="tabular">{dateTime(row.createdAt)}</td>
+              <td className="tabular">{dateTime(row.decidedAt)}</td>
+            </tr>;
+          })}</tbody>
         </table>
-        {actual && !loading && !error && !data.items.length && <p className="empty">Bu görünümde talep bulunamadı.</p>}
+        {actual && !loading && !error && !data.items.length && <p className="empty">Bu görünümde kayıt bulunamadı.</p>}
       </div>
       <TaskTablePagination page={data.page} pageCount={Math.max(1, Math.ceil(data.total / data.pageSize))} label="Talep sayfaları"
         setPage={(update) => setQuery((current) => ({ ...current, page: typeof update === 'function' ? update(data.page) : update }))} />
       </>}
     </section>
-    {!coordinationActive && selected && <ScheduleRequestDetails request={data.items.find((item) => item.id === selected.id) || selected}
+    {!coordinationActive && selectedRecord?.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST && <ScheduleRequestDetails request={selectedRecord}
       restoreFocusRef={openerRef} onClose={() => setSelected(null)} onOpenTask={openTask}
-      onDecide={async (...args) => { const result = await decideScheduleChange(...args); refresh(); if (result?.value?.request) setSelected(result.value.request); return result; }} />}
+      onDecide={async (...args) => {
+        const result = await decideScheduleChange(...args);
+        refresh();
+        if (result?.value?.request) setSelected({ ...result.value.request, source: NOTIFICATION_SOURCES.SCHEDULE_REQUEST });
+        return result;
+      }} />}
+    {!coordinationActive && selectedRecord?.source === NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION && <AssignmentCoordinationDialog
+      record={selectedRecord} restoreFocusRef={openerRef} onClose={() => setSelected(null)} onOpenTask={openTask}
+      onDecide={async (...args) => {
+        const result = await decideAssignmentCoordination(...args);
+        refresh();
+        return result;
+      }} />}
   </div>;
 }

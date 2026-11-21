@@ -5,7 +5,7 @@ import { useNotificationSummary, useSessionContext } from '../../state/hooks/ind
 
 const EMPTY = Object.freeze({
   items: [], total: 0, page: 0, pageSize: 25,
-  counts: { pending: 0, sent: 0, history: 0 }
+  counts: { all: 0, pending: 0, sent: 0, history: 0 }
 });
 
 /**

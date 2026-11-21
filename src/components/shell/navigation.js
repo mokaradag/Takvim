@@ -50,7 +50,7 @@ export function simpleCalendarTabForIntent(intent = null) {
 export const PAGE_META = {
   ozet: { title: 'Özet', sub: 'Genel görünüm ve metrikler' },
   veri: { title: 'Görevler', sub: 'Görevleri listele ve düzenle' },
-  talepler: { title: 'Talepler', sub: 'Tarih değişikliği talepleri ve karar geçmişi' },
+  talepler: { title: 'Talepler', sub: 'Talepler, atama bildirimleri ve karar geçmişi' },
   wbs: { title: 'Proje Yapısı', sub: 'Proje tanımları, etiketler ve iş dağılım ağacı' },
   takvim: { title: 'Takvim', sub: 'Aylık görünüm' },
   gantt: { title: 'Gantt', sub: 'Zaman çizelgesi ve bağımlılıklar' },

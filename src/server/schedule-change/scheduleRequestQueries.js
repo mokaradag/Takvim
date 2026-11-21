@@ -36,6 +36,13 @@ const FIELDS = `r.*, COALESCE(r.TaskTitleSnapshot, t.Title) AS TaskTitle,
 const ORDER = `CASE WHEN ${ACTIONABLE} THEN 0 ELSE 1 END,
   COALESCE(r.DecidedAt, r.CreatedAt) DESC, r.RequestId DESC`;
 
+/**
+ * Talepler gelen kutusunun ortak okumasında yeniden kullanılan yüklemler.
+ * Katılım ve görünürlük kuralı burada TEK kez yazılır; birleşik okuma ikinci
+ * bir kural tanımlamaz (bkz. server/notifications/requestInboxQueries.js).
+ */
+export const SCHEDULE_REQUEST_SQL = Object.freeze({ SOURCE, PARTICIPANT, ACTIONABLE, UNREAD, VISIBLE, FIELDS });
+
 export async function readScheduleInbox(executor, actor, { evidenceSnapshotLimit = null } = {}) {
   const request = executor.request();
   request.input('sicil', sql.Int, actor.sicil);
@@ -194,6 +201,38 @@ export async function queryScheduleChanges(input) {
   return withSqlTransaction(async (executor) => readSchedulePage(executor, await loadAuthorizationContext(executor), input));
 }
 
+/**
+ * Tarih talebi bildirim işaretlerini yazar.
+ *
+ * Sürüm taşınır: gecikmiş bir eski sürüm işlemi yeni kararı temizleyemez. Hem
+ * eski `PATCH /schedule-changes` ucu hem birleşik `PATCH /notifications` ucu
+ * bu tek yolu kullanır.
+ */
+export async function writeScheduleNotificationMarks(executor, actor, notifications = [], action = 'read') {
+  for (const item of notifications) {
+    const version = Buffer.isBuffer(item.version) ? item.version : decodeVersion(item.version);
+    const request = executor.request();
+    request.input('sicil', sql.Int, actor.sicil);
+    request.input('requestId', sql.UniqueIdentifier, item.id);
+    request.input('eventVersion', sql.Binary(8), version);
+    request.input('dismiss', sql.Bit, action === 'dismiss');
+    await request.query(`
+      IF EXISTS (SELECT 1 FROM dbo.MR_TaskScheduleChangeRequests r WITH (UPDLOCK, HOLDLOCK)
+        WHERE r.RequestId = @requestId AND ${PARTICIPANT} AND r.RowVersion = @eventVersion)
+      BEGIN
+        UPDATE dbo.MR_ScheduleRequestNotifications WITH (UPDLOCK, HOLDLOCK)
+        SET ReadVersion = @eventVersion,
+          DismissedVersion = CASE WHEN @dismiss = 1 THEN @eventVersion ELSE DismissedVersion END,
+          UpdatedAt = SYSUTCDATETIME()
+        WHERE RequestId = @requestId AND Sicil = @sicil;
+        IF @@ROWCOUNT = 0
+          INSERT dbo.MR_ScheduleRequestNotifications(RequestId, Sicil, ReadVersion, DismissedVersion)
+          VALUES(@requestId, @sicil, @eventVersion, CASE WHEN @dismiss = 1 THEN @eventVersion ELSE NULL END);
+      END;
+    `);
+  }
+}
+
 export async function updateScheduleNotifications(input = {}) {
   if (!['read', 'dismiss'].includes(input.action) || !Array.isArray(input.notifications)
     || !input.notifications.length || input.notifications.length > 100) invalid('Bildirim işlemi geçersiz.');
@@ -204,27 +243,7 @@ export async function updateScheduleNotifications(input = {}) {
   });
   return withSqlTransaction(async (executor) => {
     const actor = await loadAuthorizationContext(executor);
-    for (const item of notifications) {
-      const request = executor.request();
-      request.input('sicil', sql.Int, actor.sicil);
-      request.input('requestId', sql.UniqueIdentifier, item.id);
-      request.input('eventVersion', sql.Binary(8), item.version);
-      request.input('dismiss', sql.Bit, input.action === 'dismiss');
-      await request.query(`
-        IF EXISTS (SELECT 1 FROM dbo.MR_TaskScheduleChangeRequests r WITH (UPDLOCK, HOLDLOCK)
-          WHERE r.RequestId = @requestId AND ${PARTICIPANT} AND r.RowVersion = @eventVersion)
-        BEGIN
-          UPDATE dbo.MR_ScheduleRequestNotifications WITH (UPDLOCK, HOLDLOCK)
-          SET ReadVersion = @eventVersion,
-            DismissedVersion = CASE WHEN @dismiss = 1 THEN @eventVersion ELSE DismissedVersion END,
-            UpdatedAt = SYSUTCDATETIME()
-          WHERE RequestId = @requestId AND Sicil = @sicil;
-          IF @@ROWCOUNT = 0
-            INSERT dbo.MR_ScheduleRequestNotifications(RequestId, Sicil, ReadVersion, DismissedVersion)
-            VALUES(@requestId, @sicil, @eventVersion, CASE WHEN @dismiss = 1 THEN @eventVersion ELSE NULL END);
-        END;
-      `);
-    }
+    await writeScheduleNotificationMarks(executor, actor, notifications, input.action);
     return { ok: true };
   }, { deadlockRetries: 2 });
 }

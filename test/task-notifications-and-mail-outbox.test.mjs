@@ -256,10 +256,12 @@ test('bildirim okundu/temizlendi işareti kişiye özeldir ve etkisizdir', async
   } finally { await stack.dispose(); }
 });
 
-test('bildirim işaretleme bilinmeyen veya yanlış uç kaynağını reddeder', async () => {
+test('bildirim işaretleme bilinmeyen kaynağı reddeder', async () => {
   const { markNotifications } = await import('../src/server/notifications/notificationInboxQueries.js');
   const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-  for (const source of [undefined, 'BILINMEYEN', 'SCHEDULE_REQUEST']) {
+  // Tarih talebi kaynağı artık birleşik uçta kendi sürüm kuralıyla işlenir
+  // (bkz. request-inbox-and-decision-convergence.test.mjs).
+  for (const source of [undefined, 'BILINMEYEN', 'schedule_request']) {
     await assert.rejects(
       markNotifications({ action: 'read', notifications: [{ id, source }] }),
       (error) => error.code === 'MUTATION_FAILED' && error.status === 400
