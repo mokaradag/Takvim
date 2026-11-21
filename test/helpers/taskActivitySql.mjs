@@ -5,7 +5,16 @@ const json = (text) => { try { return JSON.parse(text || '{}') || {}; } catch { 
 export function taskActivityRecordsets(db, params) {
   const projects = new Set(params.visibleProjects.split(',').map(key));
   const tasks = new Set(params.partialTasks.split(',').map(key));
-  const inTeam = (id) => Number(id) === params.sicil || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id));
+  // Dönem özeti türevi (`@teamLevel` yalnızca orada bağlanır): düzeyli ekip kapsamı, yeniden açma ve günlük sayılar.
+  const aggregate = params.teamLevel !== undefined;
+  const level = aggregate ? String(params.teamLevel || '') : '';
+  if (aggregate && params.scope === 'team' && level && !db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil !== params.sicil && scope.ScopeType === level)) {
+    const error = new Error('AI_TOOL_SCOPE_UNAVAILABLE'); error.number = 51002; throw error;
+  }
+  // Dönem özeti türevinde ekip yöneticinin kendi hareketlerini içermez (rapor SQL'inin düzeysiz ekip kuralı ise içerir).
+  const inTeam = (id) => (!aggregate && Number(id) === params.sicil) || (Number(id) !== params.sicil && db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id)
+    && (!level || scope.ScopeType === level)));
+  const historicallyVisible = (id) => Number(id) === params.sicil || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === Number(id));
   const deletions = new Map();
   for (const event of db.auditLog) {
     if (event.EntityType !== 'TASK' || event.ActionCode !== 'DELETE') continue;
@@ -15,7 +24,7 @@ export function taskActivityRecordsets(db, params) {
   let rows = db.auditLog.filter((row) => row.EntityType === 'TASK' && ['CREATE', 'UPDATE', 'DELETE'].includes(row.ActionCode))
     .filter((row) => new Date(row.OccurredAt) >= params.startUtc && new Date(row.OccurredAt) < params.endUtc)
     .filter((row) => (!params.projectId || key(row.ProjectId) === key(params.projectId)) && (!params.taskIdText || key(row.EntityId) === key(params.taskIdText)))
-    .filter((row) => params.scope === 'visible' || (params.scope === 'mine' ? row.ActorSicil === params.sicil : params.isAdmin || inTeam(row.ActorSicil)))
+    .filter((row) => params.scope === 'visible' || (params.scope === 'mine' ? row.ActorSicil === params.sicil : (!aggregate && params.isAdmin && !level) || inTeam(row.ActorSicil)))
     .flatMap((row) => {
       const task = db.tasks.find((task) => key(task.TaskId) === key(row.EntityId));
       const project = db.projects.find((project) => key(project.ProjectId) === key(row.ProjectId));
@@ -24,17 +33,19 @@ export function taskActivityRecordsets(db, params) {
       const visible = params.isAdmin || (project?.IsActive && (
         (projects.has(key(row.ProjectId)) && (!task || projects.has(key(task.ProjectId)) || tasks.has(key(task.TaskId))))
         || (task && key(task.ProjectId) === key(row.ProjectId) && tasks.has(key(task.TaskId)))
-        || (!task && (Number(historic.CreatedBySicil) === params.sicil || (historic.assigneeIds || []).some(inTeam)))
+        || (!task && (Number(historic.CreatedBySicil) === params.sicil || (historic.assigneeIds || []).some(historicallyVisible)))
       ));
       if (!visible) return [];
       const person = db.people.find((person) => person.Sicil === row.ActorSicil);
       const before = json(row.BeforeJson), after = json(row.AfterJson);
       const completed = ['done', 'completed', 'cancelled'].includes(after.Status || after.status) && !['done', 'completed', 'cancelled'].includes(before.Status || before.status);
+      const reopened = ['done', 'completed', 'cancelled'].includes(before.Status || before.status) && (after.Status || after.status) != null
+        && !['done', 'completed', 'cancelled'].includes(after.Status || after.status);
       return [{ ...row, ActionGroup: row.CorrelationId || `audit:${row.AuditId}`, CurrentTaskId: task?.TaskId,
         ...(params.evidenceSnapshotLimit != null ? { CurrentProjectId: task?.ProjectId ?? null } : {}),
         CurrentTitle: task?.Title, ProjectName: project?.ProjectName, ProjectCode: project?.ProjectCode,
         CurrentActorName: person?.DisplayName, Directorate: person?.Directorate, Department: person?.Department, Unit: person?.Unit,
-        Kind: row.ActionCode === 'DELETE' ? 'deleted' : row.ActionCode === 'CREATE' ? 'created' : completed ? 'completed' : 'updated', Completed: completed }];
+        Kind: row.ActionCode === 'DELETE' ? 'deleted' : row.ActionCode === 'CREATE' ? 'created' : completed ? 'completed' : 'updated', Completed: completed, Reopened: reopened }];
     });
   if (params.activityProbeRows) {
     const groupKinds = new Map();
@@ -59,19 +70,52 @@ export function taskActivityRecordsets(db, params) {
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(row);
   }
+  // Zaman karşılaştırması sayısal anlıktır (Date ya da ISO metni): grubun anı üretimdeki gibi MAX(OccurredAt), kimliği en büyük AuditId'dir.
+  const instant = (value) => new Date(value).getTime();
+  const earliest = (values) => values.reduce((first, value) => (instant(value) < instant(first) ? value : first));
   const grouped = [...groups.values()].map((events) => {
     events.sort((a, b) => a.AuditId - b.AuditId);
     const last = events.at(-1);
+    const latest = events.map((row) => row.OccurredAt).reduce((max, value) => (instant(value) > instant(max) ? value : max));
     const Completed = events.some((row) => row.Completed), Deleted = events.some((row) => row.Kind === 'deleted'), Created = events.some((row) => row.Kind === 'created');
-    return { events, GroupId: last.AuditId, GroupOccurredAt: last.OccurredAt, Completed, Deleted, Created, EventCount: events.length,
+    return { events, GroupId: last.AuditId, GroupOccurredAt: latest, Completed, Deleted, Created, Reopened: events.some((row) => row.Reopened), EventCount: events.length,
       kind: Deleted ? 'deleted' : Created ? 'created' : Completed ? 'completed' : 'updated' };
   }).filter((group) => !params.kind || group.kind === params.kind)
-    .sort((a, b) => String(b.GroupOccurredAt).localeCompare(String(a.GroupOccurredAt)) || b.GroupId - a.GroupId);
+    // SQL zaman damgasını sayısal sıralar: karışık ISO metni ve Date değerleri metin olarak karşılaştırılmaz.
+    .sort((a, b) => instant(b.GroupOccurredAt) - instant(a.GroupOccurredAt) || b.GroupId - a.GroupId);
   if (params.evidenceSnapshotLimit != null && grouped.length > params.evidenceSnapshotLimit) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   const Page = Math.min(params.page, Math.max(0, Math.ceil(grouped.length / params.pageSize) - 1));
   const summary = { Total: grouped.length, Page, TaskCount: new Set(grouped.map((g) => g.events[0].EntityId)).size,
     ActorCount: new Set(grouped.map((g) => g.events[0].ActorSicil)).size,
     CompletedCount: new Set(grouped.filter((g) => g.Completed).map((g) => g.events[0].EntityId)).size };
+  if (aggregate) {
+    const tasksOf = (test) => new Set(grouped.filter(test).map((g) => g.events[0].EntityId));
+    const touched = new Map();
+    for (const g of grouped) {
+      const id = g.events[0].EntityId;
+      const flags = touched.get(id) || { Created: false, Deleted: false, Completed: false, Reopened: false };
+      touched.set(id, { Created: flags.Created || g.Created, Deleted: flags.Deleted || g.Deleted, Completed: flags.Completed || g.Completed, Reopened: flags.Reopened || g.Reopened });
+    }
+    const istanbul = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' });
+    const days = new Map();
+    for (const g of grouped) {
+      const add = (instant, metric) => {
+        const day = istanbul.format(new Date(instant));
+        const row = days.get(day) || { ActivityDay: day, Events: 0, CompletionEvents: 0, CreationEvents: 0 };
+        row[metric] += 1; days.set(day, row);
+      };
+      add(g.GroupOccurredAt, 'Events');
+      // Üretimdeki MIN(OccurredAt): ilk tamamlama/oluşturma anı sayısal olarak seçilir (metin sıralaması gün adını karşılaştırırdı).
+      if (g.Completed) add(earliest(g.events.filter((row) => row.Completed).map((row) => row.OccurredAt)), 'CompletionEvents');
+      if (g.Created) add(earliest(g.events.filter((row) => row.Kind === 'created').map((row) => row.OccurredAt)), 'CreationEvents');
+    }
+    const population = [...new Set(grouped.map((g) => key(g.events[0].EntityId)))].map((id) => db.tasks.find((task) => key(task.TaskId) === id))
+      .filter(Boolean).map((task) => ({ TaskId: task.TaskId, CurrentProjectId: task.ProjectId }));
+    return [actors, projectOptions, [{ ...summary, CreatedCount: tasksOf((g) => g.Created).size, DeletedCount: tasksOf((g) => g.Deleted).size,
+      ReopenedCount: tasksOf((g) => g.Reopened).size, UpdatedOnlyCount: [...touched.values()].filter((flags) => !flags.Created && !flags.Deleted && !flags.Completed && !flags.Reopened).length,
+      FirstRecordedAt: null }], [],
+      [...days.values()].sort((a, b) => a.ActivityDay.localeCompare(b.ActivityDay)), population];
+  }
   return [actors, projectOptions, [summary], grouped.slice(Page * params.pageSize, (Page + 1) * params.pageSize)
     .flatMap(({ events, ...group }) => (params.activityDetailLimit ? (events.length > 2 ? [events[0], events.at(-1)] : events) : events.slice(0, 100)).map((row) => ({ ...row, ...group, ...(params.activityDetailLimit ? {
       BeforeJson: row.BeforeJson?.slice(0, 8192), AfterJson: row.AfterJson?.slice(0, 8192),

@@ -161,15 +161,18 @@ export function isPartialScope(scopeDescriptor) {
 export const ID_PROPERTY = (description) => ({ type: 'string', format: 'uuid', description });
 export const DATE_PROPERTY = (description) => ({ type: 'string', format: 'date', description });
 const limitDefaults = new WeakMap();
-export const effectivePageSize = (property, args) => args.limit ?? limitDefaults.get(property) ?? null;
-export const LIMIT_PROPERTY = (maximum, fallback) => {
+export const effectivePageSize = (property, args) => {
+  const fallback = limitDefaults.get(property);
+  return args.limit ?? (typeof fallback === 'function' ? fallback(args) : fallback) ?? null;
+};
+export const LIMIT_PROPERTY = (maximum, fallback, groupDefaults = null) => {
   const property = {
     type: 'integer',
     minimum: 1,
     maximum,
-    description: `Döndürülecek en fazla öğe (1–${maximum}, varsayılan ${fallback}).`
+    description: `Döndürülecek en fazla öğe (1–${maximum}, varsayılan ${fallback}${groupDefaults ? `; ${Object.keys(groupDefaults).join('/')} için ${maximum}` : ''}).`
   };
-  limitDefaults.set(property, fallback);
+  limitDefaults.set(property, groupDefaults ? (args) => groupDefaults[args.groupBy] ?? fallback : fallback);
   return property;
 };
 export const CURSOR_PROPERTY = {

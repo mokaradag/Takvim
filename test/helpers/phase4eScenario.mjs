@@ -49,7 +49,8 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
   const stack = createAiStack(t, { provider, sicil, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', ...(composition ? { MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' } : {}), ...env } });
   const state = { id: null, turns: 0 };
   // `mode`: asistan kipi (varsayılan standart; derin kipte Derin devri yoktur ve planlama onarım hakları o kipte kullanılır).
-  async function ask(turn, { detail = null, mode = 'standard' } = {}) {
+  // `includeText`: kullanıcının bu iletide "Notlar ve iletiler" anahtarını açması (korunan serbest metin rızası).
+  async function ask(turn, { detail = null, mode = 'standard', includeText = false } = {}) {
     current = turn;
     const before = (stack.db.aiToolLog || []).length;
     const evidenceBefore = (stack.db.aiMessageEvidence || []).length;
@@ -57,7 +58,7 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
     const viewBefore = compositionViews.length;
     if (!external && !planner && turn.plan) stack.provider.enqueue(planCall(turn.plan));
     if (external && turn.scripted && turn.plan) stack.provider.enqueue(planCall(turn.plan));
-    const response = await sendTurn({ turnId: randomUUID(), message: turn.text, mode, ...(detail ? { detail } : {}),
+    const response = await sendTurn({ turnId: randomUUID(), message: turn.text, mode, ...(detail ? { detail } : {}), ...(includeText ? { includeText: true } : {}),
       ...(state.id ? { conversationId: state.id, expectedSequence: state.turns * 2 } : {}) });
     const done = response.events.find((event) => event.event === 'done')?.data;
     assert.ok(done, `done olayı yok: ${response.text}`);

@@ -4,6 +4,13 @@ import { PERSISTED_TASK_STATUSES, PRIORITIES, LEGACY_PRIORITY_ALIASES, DEFAULT_P
 const STATUS_SQL = `CASE t.Status COLLATE Latin1_General_100_BIN2 ${Object.entries(PERSISTED_TASK_STATUSES).map(([alias, status]) => `WHEN '${alias}' THEN '${status}'`).join(' ')} ELSE 'todo' END`;
 const PRIORITY_SQL = `CASE LOWER(LTRIM(RTRIM(COALESCE(t.Priority, ''))) COLLATE Latin1_General_100_CI_AS) ${Object.entries({ ...Object.fromEntries(Object.keys(PRIORITIES).map((key) => [key, key])), ...LEGACY_PRIORITY_ALIASES }).map(([alias, priority]) => `WHEN '${alias}' THEN '${priority}'`).join(' ')} ELSE '${DEFAULT_PRIORITY_ID}' END`;
 
+// JavaScript trim() ile aynı boşluk kümesi; sabit ikili desen sekme, satır sonu ve Unicode boşluklarını da dışlar.
+// Açıklamanın boşluk olmayan ilk karakterinin konumu (yoksa 0): varlık süzgeci ve alıntının başlangıcı AYNI boşluk kümesini kullanır.
+const DESCRIPTION_TEXT_START_SQL = `PATINDEX(N'%[^' + ${[9, 10, 11, 12, 13, 32, 160, 5760,
+  8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279]
+  .map((code) => `NCHAR(${code})`).join(' + ')} + N']%', COALESCE(t.Description, N'') COLLATE Latin1_General_100_BIN2)`;
+const DESCRIPTION_PRESENT_SQL = `${DESCRIPTION_TEXT_START_SQL} > 0`;
+
 /**
  * Rota AI alan araçlarının SABİT SQL metinleri.
  *
@@ -316,6 +323,7 @@ const taskFactColumns = (teamTask) => `
     t.Progress, t.PlannedHours, t.ActualHours, CONVERT(varchar(40), t.Budget) AS Budget, CONVERT(varchar(40), t.Spent) AS Spent,
     t.RecurrenceRule, t.RecurrenceParentTaskId, t.RecurrenceOccurrenceDate,
     t.CreatedAt, t.UpdatedAt, visible.AccessLevel, visible.IdentityBase,
+    CAST(CASE WHEN NOT (${DESCRIPTION_PRESENT_SQL}) THEN 0 ELSE 1 END AS bit) AS HasDescription,
     CAST(CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END AS bit) AS IsCreator,
     CAST(COALESCE(assignment.IsOwnAssignee, 0) AS bit) AS IsOwnAssignee,
     COALESCE(assignment.DisclosedAssigneeCount, 0) AS DisclosedAssigneeCount,
@@ -357,28 +365,33 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
       OR (@deadline = 'due_next_7_days' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 6, @today))
       OR (@deadline = 'due_next_30_days' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish BETWEEN @today AND DATEADD(day, 29, @today))
       OR (@deadline = 'no_target_finish' AND ${STATUS_SQL} <> 'done' AND t.TargetFinish IS NULL))
-    AND (@dateField IS NULL OR (
-      (@dateFrom IS NULL OR CASE @dateField
+    AND (@dateField IS NULL OR (@includeUndated = 1 AND t.ActualFinish IS NULL AND ${STATUS_SQL} = 'done') OR (
+      (@dateField <> 'actualFinish' OR t.ActualFinish <= @today)
+      AND (@dateFrom IS NULL OR CASE @dateField
         WHEN 'targetFinish' THEN t.TargetFinish
         WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
         WHEN 'plannedStart' THEN t.PlannedStart
         WHEN 'plannedFinish' THEN t.PlannedFinish
         WHEN 'actualStart' THEN t.ActualStart
-        WHEN 'actualFinish' THEN t.ActualFinish END >= @dateFrom)
+        WHEN 'actualFinish' THEN t.ActualFinish
+        WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END >= @dateFrom)
       AND (@dateTo IS NULL OR CASE @dateField
         WHEN 'targetFinish' THEN t.TargetFinish
         WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
         WHEN 'plannedStart' THEN t.PlannedStart
         WHEN 'plannedFinish' THEN t.PlannedFinish
         WHEN 'actualStart' THEN t.ActualStart
-        WHEN 'actualFinish' THEN t.ActualFinish END <= @dateTo)
+        WHEN 'actualFinish' THEN t.ActualFinish
+        WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END <= @dateTo)
       AND CASE @dateField
         WHEN 'targetFinish' THEN t.TargetFinish
         WHEN 'calendarDate' THEN COALESCE(t.TargetFinish, t.PlannedFinish)
         WHEN 'plannedStart' THEN t.PlannedStart
         WHEN 'plannedFinish' THEN t.PlannedFinish
         WHEN 'actualStart' THEN t.ActualStart
-        WHEN 'actualFinish' THEN t.ActualFinish END IS NOT NULL))
+        WHEN 'actualFinish' THEN t.ActualFinish
+        WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END IS NOT NULL))
+    AND (@hasDescription = 0 OR ${DESCRIPTION_PRESENT_SQL})
     AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil))
@@ -438,6 +451,20 @@ export const AI_TOOL_TASK_VISIBILITY_SQL = `/* rota-ai-tool:task-visibility */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
   SELECT visible.TaskId, visible.ProjectId, visible.AccessLevel, visible.IdentityBase FROM #AiTasks visible;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+
+/**
+ * Aşama H — görev açıklamaları (yalnızca kullanıcının bu turda serbest metni açtığı ve aracın `description` alanını seçtiği
+ * okumada): verilen görevlerden GÖRÜNÜR olanların açıklaması, sabit uzunlukla kesilmiş (bir fazla karakter kesikliği gösterir).
+ * Görünürlük anlık görüntüyle aynı kuraldır; görünmeyen ya da açıklaması boş görev satır döndürmez. Okuma sayfa boyuyla sınırlıdır.
+ */
+export const AI_TOOL_TASK_NOTES_SQL = `/* rota-ai-tool:task-notes */
+${SCOPE_PROJECTS}
+${visibleTasks()}
+  -- Alıntı ilk boşluk olmayan karakterden başlar: baştaki boşluklar 400 kod noktalık alıntıyı tüketmez (önceki karakterler BMP boşluklarıdır).
+  SELECT visible.TaskId, SUBSTRING(t.Description COLLATE Latin1_General_100_CI_AS_SC, ${DESCRIPTION_TEXT_START_SQL}, 401) AS Description
+  FROM #AiTasks visible JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
+  WHERE ${DESCRIPTION_PRESENT_SQL};
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**

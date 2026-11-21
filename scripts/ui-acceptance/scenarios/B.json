@@ -356,6 +356,222 @@
      ]
     }
    ]
+  },
+  {
+   "name": "H1-gecen-hafta",
+   "detail": "balanced",
+   "turns": [
+    "Geçen hafta tamamlanan işleri özetle."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "periodKind": "last_week",
+     "requires": [
+      "Geçen hafta"
+     ],
+     "matches": [
+      "(?:[\\d.]+ görev tamamlandı \\(gerçekleşen bitiş tarihine göre\\)|şu anda tamamlandı durumundaki görevlerin hiçbirinde gerçekleşen bitiş kaydı yok)"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H2-donem-kiyasi",
+   "detail": "balanced",
+   "turns": [
+    "Bu ay ile geçen ayı karşılaştır."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "periodKind": "this_month_vs_last_month",
+     "matches": [
+      "(?:Geçen ay[^\\n;]*[\\d.]+ görev tamamlanmıştı; bu ay[^\\n;]*[\\d.]+ görev tamamlandı|İki dönemde de \\([^)]+ ve [^)]+\\)[^\\n.]*(?:görev tamamlandı|tamamlanan görev yok)|Tamamlanan iş sayıları(?: \\([^)]+\\))? karşılaştırılamıyor: (?:iki dönemin de (?:\\([^)]+\\) )?görev sayısı bilinmiyor|[^\\n]*için görev sayısı bilinmiyor; sıfır sayılmadı; (?:öteki dönemde (?:\\([^)]+\\) )?|[^.;\\n]+ için )[\\d.]+ görev var))"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H2-kiyas-grafigi",
+   "detail": "balanced",
+   "turns": [
+    "Bu hafta ile geçen haftayı tamamlanan iş açısından çubuk grafikle karşılaştır."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "görev tamamlan"
+     ],
+     "chartTitle": "Tamamlanan görev",
+     "chartItems": [
+      "Geçen hafta",
+      "Bu hafta"
+     ]
+    }
+   ],
+   "expectedCharts": [
+    "bar"
+   ]
+  },
+  {
+   "name": "H3-egilim-cizgisi",
+   "detail": "balanced",
+   "turns": [
+    "Son 90 gündeki görev tamamlanma eğilimini çizgi grafikle göster."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Tamamlanmış"
+     ],
+     "periodDays": 90,
+     "chartTitle": "Haftalara göre tamamlanan görev",
+     "chartMinItems": 12
+    }
+   ],
+   "expectedCharts": [
+    "line"
+   ]
+  },
+  {
+   "name": "H3-kayit-oncesi-bilinmiyor",
+   "detail": "balanced",
+   "turns": [
+    "Son üç ayda tamamlanma ve kaydedilen hareket düzeyi nasıl değişti?"
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "periodDays": 90,
+     "requires": [
+      "görev tamamlandı"
+     ],
+     "matches": [
+      "(?:hareket[^\\n.]{0,120}(?:bilinmiyor|kayıt bulunmuyor|doğrulanamadı)|bazı kovalar için hareket kaydı yok|hareket kaydı[^\\n.]{0,120}(?:bilinmiyor|doğrulanamadı|yansımıyor))"
+     ],
+     "rejects": [
+      "\\b0\\s+hareket\\b"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H4-teslim-ufuklari",
+   "detail": "balanced",
+   "turns": [
+    "Önümüzdeki 7, 14 ve 30 günlük teslimat yoğunluğunu grafikle karşılaştır."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "7 gün içinde"
+     ],
+     "chartItems": [
+      "Önümüzdeki 7 gün",
+      "8–14. gün",
+      "15–30. gün"
+     ]
+    }
+   ],
+   "expectedCharts": [
+    "bar"
+   ]
+  },
+  {
+   "name": "H5-notlar-rizayla",
+   "detail": "balanced",
+   "turns": [
+    "Hangi görevlerde engeller bildirilmiş?"
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "doğrulanmış değildir",
+      "Notlar kayıtlardaki hâliyle",
+      "Tedarikçi onayı bekleniyor"
+     ]
+    }
+   ],
+   "includeText": [
+    0
+   ]
+  },
+  {
+   "name": "H6-ic-ice-kapsam",
+   "detail": "balanced",
+   "turns": [
+    "Bu hafta kendi hareketlerimle ekibimin hareketlerini karşılaştır."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "periodKind": "this_week",
+     "requires": [
+      "toplanmaz"
+     ],
+     "matches": [
+      "siz .*hareket kaydettiniz|sizin kaydettiğiniz hareketlerde kayıt bulunmuyor",
+      "ekibiniz .*hareket kaydetti|ekibinizin kaydettiği hareketlerde kayıt bulunmuyor"
+     ],
+     "rejects": [
+      "(?:birleşik|ortak|iki kapsamın|siz ve ekibinizin)\\s+(?:toplam(?:ı|da)?\\s*)?(?:hareket(?:\\s+sayısı)?\\s*)?[:=]?\\s*[\\d.]+(?:\\s+hareket)?|(?:iki kapsam|siz ve ekibiniz)[^.;\\n]{0,24}toplamda?\\s+[\\d.]+\\s+hareket"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H7-ingilizce",
+   "detail": "balanced",
+   "turns": [
+    "Compare this month with last month."
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "periodKind": "this_month_vs_last_month",
+     "language": "en",
+     "matches": [
+      "(?:Last month[^\\n;]*completed tasks totalled [\\d,]+; this month[^\\n;]*, [\\d,]+|In both periods \\([^)]+ and [^)]+\\)[^\\n.]*(?:completed tasks totalled [\\d,]+|no task was completed)|Counts of completed tasks(?: \\([^)]+\\))? cannot be compared: (?:both periods (?:\\([^)]+\\) )?are unknown|the count for [^\\n]* is unknown, not zero; (?:the other period has [\\d,]+ tasks|for [^.;\\n]+, the count is [\\d,]+ tasks)))"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "H2-gecmis-durum-siniri",
+   "detail": "balanced",
+   "turns": [
+    "Geçen haftaya göre gecikmelerim azaldı mı?"
+   ],
+   "seed": "temporal",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "yeniden kurulamıyor",
+      "sayılar bugünü gösterir"
+     ],
+     "matches": [
+      "(?:\\d+\\s+(?:gecikmiş (?:görev|iş)|(?:görev|iş)\\s+gecikmiş)(?!\\s+(?:vardı|bulunuyordu))|gecikmiş (?:görev|iş)(?:iniz)?\\s+(?:yok|bulunmuyor)(?!du))"
+     ],
+     "rejects": [
+      "(?:(?:gecikme\\p{L}*|gecikmiş (?:görev|iş)\\p{L}*|geciken (?:görev|iş)\\p{L}*)[^.;\\n]{0,60}\\b(?:azaldı|arttı|düştü|yükseldi|iyileşti|kötüleşti)(?!\\p{L})(?!\\s+(?:denemez|söylenemez|diyemeyiz|belirlenemez))|\\bdaha (?:az|fazla)\\s+gecikmiş\\s+(?:görev|iş)|(?:^|[^\\p{L}])(?:geçen|önceki)\\s+(?:hafta\\p{L}*|ay\\p{L}*|dönem\\p{L}*)[^.;\\n]{0,60}(?:\\b\\d+\\s+(?:gecikmiş\\s+)?(?:görev\\p{L}*|iş\\p{L}*)\\s+(?:gecikmiş\\p{L}*|vardı|bulunuyordu)|\\b\\d+\\s+gecikmiş\\s+(?:görev|iş)|gecikmiş\\s+(?:görev|iş)\\s+sayısı\\s*:?\\s*\\d+)|\\b\\d+\\s+(?:gecikmiş\\s+(?:görev|iş)|(?:görev|iş)\\s+gecikmiş)\\s+(?:vardı|bulunuyordu)\\b)"
+     ]
+    }
+   ]
   }
  ]
 }

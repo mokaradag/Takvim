@@ -90,8 +90,12 @@ export function defaultPeople() {
  * Ortamı hazırlar; `env` içindeki `null` değerler değişkeni SİLER.
  * Test bitince ortam, sürücü ve bütün yapay zekâ durumları geri alınır.
  */
+/** Sınamanın İLK yığınından önceki ortam: aynı sınamada birden çok yığın kurulsa da geri yükleme hep özgün ortama döner. */
+const ORIGINAL_ENV = new WeakMap();
+
 export function createAiStack(t, { env = {}, sicil = SICIL_A, seed = {}, provider = null } = {}) {
-  const previousEnv = { ...process.env };
+  if (!ORIGINAL_ENV.has(t)) ORIGINAL_ENV.set(t, { ...process.env });
+  const previousEnv = ORIGINAL_ENV.get(t);
   for (const [key, value] of Object.entries({ ...BASE_ENV, MERGEN_ROTA_DEV_SICIL: String(sicil), ...env })) {
     if (value == null) delete process.env[key];
     else process.env[key] = String(value);

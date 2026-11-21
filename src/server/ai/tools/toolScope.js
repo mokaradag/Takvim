@@ -117,7 +117,7 @@ function contains(root, args, { textTrusted }) {
   }
   for (const [key, value] of Object.entries(root)) {
     if (PRESENTATION_KEYS.has(key) || key === 'text') continue;
-    if (value == null || (Array.isArray(value) && !value.length) || (key === 'createdByMe' && value === false)) continue;
+    if (value == null || (Array.isArray(value) && !value.length) || (['createdByMe', 'hasDescription'].includes(key) && value === false)) continue;
     const next = args[key];
     if (key === 'dateFrom' || key === 'targetFrom') { if (!next || next < value) return false; }
     else if (key === 'dateTo' || key === 'targetTo') { if (!next || next > value) return false; }

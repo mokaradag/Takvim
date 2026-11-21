@@ -136,7 +136,8 @@ export function renderChartUnavailable({ locale = 'tr', substituted = null, type
 const CHART_TYPE_NEEDS = Object.freeze({
   bar: ['karşılaştırılabilir en az iki değer', 'at least two comparable values'],
   donut: ['birbirini dışlayan tam bir dağılım', 'a complete, mutually exclusive distribution'],
-  line: ['ardışık aylara göre bir zaman dizisi', 'a time series over consecutive months'],
+  // Çizgi en az üç ardışık kova ister (bkz. groundedComposition dizi adayı): iki kovalı dizi "dizi yok" diye anlatılmaz.
+  line: ['en az üç ardışık hafta ya da aydan oluşan bir zaman dizisi', 'a time series of at least three consecutive weeks or months'],
   stacked: ['satır başına tam bir durum kırılımı', 'a complete status breakdown per row'],
   kpi: ['en az üç başlık göstergesi', 'at least three headline figures'],
   timeline: ['tarihli görev satırları', 'dated task rows']
@@ -148,8 +149,13 @@ const CHART_TYPE_NAMES = Object.freeze({ bar: ['çubuk grafik', 'bar chart'], do
  * İstenen grafik TÜRÜ doğrulanmış kanıttan çizilemediğinde türün gerektirdiği veriyi söyleyen kısa not; başka uygun bir
  * grafik çizildiyse bunu da söyler (yanlış grafik sessizce istenenin yerine geçmez).
  */
-export function renderChartTypeUnavailable({ type, substituted = null, locale = 'tr' } = {}) {
+export function renderChartTypeUnavailable({ type, substituted = null, locale = 'tr', reason = null, observedCounts = true } = {}) {
   const en = locale === 'en';
+  if (type === 'line' && reason === 'coverage') {
+    return en
+      ? `_A line chart could not be drawn because recording coverage for the activity series could not be verified; ${observedCounts ? 'the observed counts are shown in the results' : 'the results show no-record entries for the buckets'}._`
+      : `_Hareket dizisinin kayıt kapsamı doğrulanamadığı için çizgi grafik çizilemedi; ${observedCounts ? 'gözlenen sayılar sonuçlarda gösterildi' : 'sonuçlarda kovalar için kayıt yok bilgisi gösterildi'}._`;
+  }
   const need = CHART_TYPE_NEEDS[type];
   const name = CHART_TYPE_NAMES[type];
   if (!need || !name) return renderChartUnavailable({ locale });

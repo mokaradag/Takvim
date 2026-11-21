@@ -9,7 +9,7 @@
  *   - yüksek tamamlanmaya rağmen gecikmesi olan, gecikmesi bir kişide toplanan ve yakın teslimatı yoğun projeler.
  * Tarihler çağrı anındaki Türkiye gününe göredir (sınamalar saati sabitledikten sonra çağırır).
  */
-import { P, PROJ, uiSeed } from '../../scripts/ui-acceptance/uiSeed.mjs';
+import { P, PROJ, uiSeed, uiRunDay } from '../../scripts/ui-acceptance/uiSeed.mjs';
 
 export const BENCH_PEOPLE = Object.freeze({ KARAAGACLI: 920051, SURMELIOGLU: 920052 });
 export const BENCH_PROJECTS = Object.freeze({ BGS: '11000000-0000-4000-8000-000000000011', KAP: '11000000-0000-4000-8000-000000000012' });
@@ -18,9 +18,7 @@ export const BENCH_PROFILES = Object.freeze({ A: P.A, B: P.B, C: P.C, D: P.D, E:
 const CAL = '41000000-0000-4000-8000-000000000001';
 const tid = (n) => `22000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-function todayIso() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-}
+
 
 /** [proje, sorumlular, durum (t yapılacak, p devam ediyor, d tamamlandı), öncelik, termin ofseti (gün), başlık] */
 const SPEC = Object.freeze([
@@ -47,9 +45,8 @@ const SPEC = Object.freeze([
 
 const STATUS = Object.freeze({ t: 'planned', p: 'in-progress', d: 'done' });
 
-export function analysisBenchmarkSeed() {
-  const seed = uiSeed();
-  const today = todayIso();
+export function analysisBenchmarkSeed(today = uiRunDay()) {
+  const seed = uiSeed(today);
   const d = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
   const person = (Sicil, DisplayName, Username, Unit = 'BT', Department = 'Teknoloji', Directorate = 'Bilgi Sistemleri') => ({ Sicil, DisplayName, Username, Unit, Department, Directorate });
   seed.people.push(person(BENCH_PEOPLE.KARAAGACLI, 'Deniz Ufuk KARAAĞAÇLI', 'dukaraagacli'), person(BENCH_PEOPLE.SURMELIOGLU, 'Nehir SÜRMELİOĞLU', 'nsurmelioglu'));

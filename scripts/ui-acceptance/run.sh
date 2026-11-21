@@ -49,13 +49,17 @@ probe_port() {
   node --input-type=module -e 'import net from "node:net"; const s=net.createServer(); s.on("error",()=>process.exit(1)); s.listen(Number(process.argv[1]),"127.0.0.1",()=>s.close());' "$1"
 }
 export BRIDGE_PORT=${BRIDGE_PORT:-18731}
+# Koşunun tek Türkiye günü: tohum (UI_RUN_DAY) ve betikli uç (BRIDGE_TODAY) aynı günü kullanır; koşu sırasında gün değişirse uç 409 döner
+# ve koşu başarısız olur (bir gün kaymış sonuç sessizce raporlanmaz).
+export UI_RUN_DAY
+UI_RUN_DAY=$(TZ=Europe/Istanbul date +%F)
 probe_port "$BRIDGE_PORT"
 if [ "$SCRIPTED" = 1 ]; then
   # Tek profilli koşuda altın planlar o profille eşlenir (aynı soru metni farklı profillerde farklı plan taşıyabilir).
   SCRIPTED_PROFILE=''
   set -- $PROFILES
   if [ "$#" = 1 ]; then SCRIPTED_PROFILE=$1; fi
-  BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" UI_PROFILE=$SCRIPTED_PROFILE node "$HERE/scriptedBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
+  BRIDGE_TODAY=$UI_RUN_DAY BRIDGE_ENFORCE_DAY=1 BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" UI_PROFILE=$SCRIPTED_PROFILE node "$HERE/scriptedBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
 else
   BRIDGE_LEDGER="$UI_ACCEPTANCE_DIR/ledger.jsonl" BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" BRIDGE_MAX_CALLS=$BRIDGE_MAX_CALLS BRIDGE_MAX_UNCACHED=${BRIDGE_MAX_UNCACHED:-$DEFAULT_MAX_UNCACHED} \
     node "$HERE/modelBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
@@ -76,22 +80,35 @@ for P in $PROFILES; do
     D) SICIL=920004; PORT=8104;; E) SICIL=920005; PORT=8105;; F) SICIL=920006; PORT=8106;;
     G) SICIL=920007; PORT=8107;; *) printf 'Geçersiz profil: %s\n' "$P" >&2; exit 1;;
   esac
-  probe_port "$PORT"
-  LOG="$UI_ACCEPTANCE_DIR/app-$P.log"
-  NEXT_TELEMETRY_DISABLED=1 MERGEN_ROTA_DB_SERVER=sql.ui.internal MERGEN_ROTA_DB_DATABASE=MERGEN_Rota MERGEN_ROTA_AUTH_MODE=development \
-    MERGEN_ROTA_DEV_IDENTITY_ENABLED=true MERGEN_ROTA_DEV_SICIL=$SICIL MERGEN_ROTA_AI_ENABLED=true MERGEN_ROTA_AI_TOOLS_ENABLED=true \
-    MERGEN_ROTA_AI_BASE_URL="http://127.0.0.1:$BRIDGE_PORT/v1" MERGEN_ROTA_AI_DEFAULT_API_KEY=ui-acceptance-key MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY=$MASTER \
-    MERGEN_ROTA_AI_MODEL_REGISTRY_PATH="$HERE/registry.json" MERGEN_ROTA_AI_ANSWER_COMPOSITION=true MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS=200000 \
-    MERGEN_ROTA_LOG_FORMAT=json NODE_OPTIONS="${NODE_OPTIONS:-} --import=$LOADER" \
-    node node_modules/next/dist/bin/next start -H 127.0.0.1 -p "$PORT" > "$LOG" 2>&1 &
-  APP=$!
-  ready=0
-  for _ in $(seq 1 60); do
-    kill -0 "$APP" 2>/dev/null || exit 1
-    if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then ready=1; break; fi
-    sleep 1
+  # Profil birden çok veri tohumu (ör. B: executive ve temporal) içeriyorsa ve UI_SEED sabitlenmediyse her veri kümesi kendi uygulama
+  # örneğinde aynı koşu altında yürütülür; açık UI_SEED verildiğinde tek tohum ve sürücünün uyuşmazlık denetimi korunur.
+  if [ -n "${UI_SEED:-}" ]; then
+    SEEDS="$UI_SEED"
+    SEED_GROUPS=0
+  else
+    SEEDS=$(UI_ONLY="${UI_ONLY:-}" node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const only=process.env.UI_ONLY?new Set(process.env.UI_ONLY.split(",").map(v=>v.trim()).filter(Boolean)):null; const convs=only?s.conversations.filter(c=>only.has(c.name)):s.conversations; const pool=convs.length?convs:s.conversations.slice(0,1); const set=[...new Set(pool.map(c=>c.seed||"base"))]; console.log(set.join(" "))' "$HERE/scenarios/$P.json")
+    SEED_GROUPS=1
+  fi
+  for SEED in $SEEDS; do
+    test "$(TZ=Europe/Istanbul date +%F)" = "$UI_RUN_DAY" || { printf 'Kabul koşusunda Türkiye günü değişti.\n' >&2; exit 1; }
+    probe_port "$PORT"
+    LOG="$UI_ACCEPTANCE_DIR/app-$P-$SEED.log"
+    UI_SEED=$SEED NEXT_TELEMETRY_DISABLED=1 MERGEN_ROTA_DB_SERVER=sql.ui.internal MERGEN_ROTA_DB_DATABASE=MERGEN_Rota MERGEN_ROTA_AUTH_MODE=development \
+      MERGEN_ROTA_DEV_IDENTITY_ENABLED=true MERGEN_ROTA_DEV_SICIL=$SICIL MERGEN_ROTA_AI_ENABLED=true MERGEN_ROTA_AI_TOOLS_ENABLED=true \
+      MERGEN_ROTA_AI_BASE_URL="http://127.0.0.1:$BRIDGE_PORT/v1" MERGEN_ROTA_AI_DEFAULT_API_KEY=ui-acceptance-key MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY=$MASTER \
+      MERGEN_ROTA_AI_MODEL_REGISTRY_PATH="$HERE/registry.json" MERGEN_ROTA_AI_ANSWER_COMPOSITION=true MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS=200000 \
+      MERGEN_ROTA_LOG_FORMAT=json NODE_OPTIONS="${NODE_OPTIONS:-} --import=$LOADER" \
+      node node_modules/next/dist/bin/next start -H 127.0.0.1 -p "$PORT" > "$LOG" 2>&1 &
+    APP=$!
+    ready=0
+    for _ in $(seq 1 60); do
+      kill -0 "$APP" 2>/dev/null || exit 1
+      if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then ready=1; break; fi
+      sleep 1
+    done
+    [ "$ready" = 1 ]
+    UI_SEED=$SEED UI_SEED_GROUPS=$SEED_GROUPS UI_APP_LOG="$LOG" node "$HERE/drive.cjs" "$HERE/scenarios/$P.json" "$UI_ACCEPTANCE_DIR/out" | tee -a "$UI_ACCEPTANCE_DIR/run.log"
+    test "$(TZ=Europe/Istanbul date +%F)" = "$UI_RUN_DAY" || { printf 'Kabul koşusunda Türkiye günü değişti.\n' >&2; exit 1; }
+    kill "$APP"; wait "$APP" 2>/dev/null || true; APP=''
   done
-  [ "$ready" = 1 ]
-  node "$HERE/drive.cjs" "$HERE/scenarios/$P.json" "$UI_ACCEPTANCE_DIR/out" | tee -a "$UI_ACCEPTANCE_DIR/run.log"
-  kill "$APP"; wait "$APP" 2>/dev/null || true; APP=''
 done

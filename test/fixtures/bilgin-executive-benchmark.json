@@ -1800,10 +1800,7 @@
    "profile": "B",
    "text": "Geçen çeyreğe göre bölümüm iyileşti mi?",
    "handling": "limitation",
-   "expect": {
-    "intent": "abstain",
-    "reason": "outside_data"
-   }
+   "expect": {"intent": "rota", "temporal": true, "scope": "team", "level": "department", "temporalWindow": ["2026-07-01", "2026-09-30"], "temporalCompare": ["2026-04-01", "2026-06-30"], "historyLimit": true}
   },
   {
    "id": "x13",

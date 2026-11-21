@@ -6,6 +6,7 @@ import { METRICS } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { effectivePageSize } from './rota/rotaToolSupport.js';
 import { addDays, normalizeTaskFilters, searchText } from './rota/taskFacts.js';
+import { seriesBuckets } from '../../../domain/ai/temporalWindow.js';
 import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool, TASK_RESULT_SCOPE_TOOLS, toolCatalogForModel } from './toolRegistry.js';
 import { containmentText, populationArguments } from './toolScope.js';
@@ -25,13 +26,13 @@ import { containmentText, populationArguments } from './toolScope.js';
  */
 
 const FAMILY_KEYS = Object.freeze({
-  task: ['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'teamLevel', 'createdByMe', 'milestone', 'text'],
+  task: ['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'teamLevel', 'createdByMe', 'milestone', 'text', 'hasDescription'],
   workload: ['assignee', 'teamLevel'],
   projectSearch: ['text'],
   personSearch: ['text'],
   workflow: ['tab', 'workflowStatus', 'dateFrom', 'dateTo', 'period', 'text'],
   portfolio: ['source', 'includeEmpty'],
-  activity: ['dateFrom', 'dateTo', 'period', 'activityScope', 'activityKind'],
+  activity: ['dateFrom', 'dateTo', 'period', 'activityScope', 'activityKind', 'activityView', 'teamLevel'],
   calendar: ['dateFrom', 'dateTo', 'period']
 });
 const FAMILIES = Object.freeze({
@@ -43,7 +44,7 @@ const FAMILIES = Object.freeze({
 const WORKFLOW_TOOLS = new Set(['rota_schedule_requests', 'rota_assignment_requests']);
 const TASK_SORT_RANKS = Object.freeze({
   overdue_days_desc: ['task.overdueDays', 'desc'], target_finish_asc: ['task.targetFinish', 'asc'], target_finish_desc: ['task.targetFinish', 'desc'],
-  planned_start_asc: ['task.plannedStart', 'asc'], updated_desc: ['task.updatedAt', 'desc']
+  planned_start_asc: ['task.plannedStart', 'asc'], updated_desc: ['task.updatedAt', 'desc'], actual_finish_desc: ['task.actualFinish', 'desc']
 });
 const PORTFOLIO_SORT_RANKS = Object.freeze({ overdue_desc: ['tasks.overdue', 'desc'], open_desc: ['tasks.open', 'desc'], due_soon_desc: ['tasks.dueNext7Days', 'desc'] });
 const PERIODS = Object.freeze(['today', 'yesterday', 'last_7_days']);
@@ -61,7 +62,8 @@ export function toolFamily(tool) {
 }
 
 export function familyKeys(tool) {
-  return FAMILY_KEYS[FAMILIES[tool]] || [];
+  const keys = FAMILY_KEYS[FAMILIES[tool]] || [];
+  return tool === 'rota_task_analytics' ? keys.filter((key) => key !== 'hasDescription') : keys;
 }
 
 const compact = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item != null && !(Array.isArray(item) && !item.length)));
@@ -81,7 +83,7 @@ export function canonicalFacets(family, values, today) {
       return compact({ status: sorted(filters.statuses), priority: sorted(filters.priorities), deadline: filters.deadline,
         dateField: filters.dateField, dateFrom: filters.dateFrom, dateTo: filters.dateTo,
         assignee: ['me', 'unassigned', 'team'].includes(filters.assignee) ? filters.assignee : null,
-        teamLevel: filters.assignee === 'team' ? filters.teamLevel || null : null, createdByMe: filters.createdByMe || null,
+        teamLevel: filters.assignee === 'team' ? filters.teamLevel || null : null, createdByMe: filters.createdByMe || null, hasDescription: filters.hasDescription || null,
         milestone: filters.milestone, text: searchText(filters.text) });
     }
     case 'projectSearch':
@@ -101,9 +103,10 @@ export function canonicalFacets(family, values, today) {
     case 'activity': {
       const window = populationArguments('rota_activity_search', { ...values, ...periodWindow(values.period, today),
         period: values.period || values.dateFrom ? 'custom' : undefined }, today);
-      const fallback = window.dateFrom === today && window.dateTo === today;
-      return compact({ dateFrom: fallback ? null : window.dateFrom, dateTo: fallback ? null : window.dateTo,
-        activityScope: window.scope && window.scope !== 'visible' ? window.scope : null, activityKind: values.kind || null });
+      return compact({ dateFrom: window.dateFrom, dateTo: window.dateTo,
+        activityScope: window.scope && window.scope !== 'visible' ? window.scope : null, activityKind: values.kind || null,
+        // Aşama H: dönem özeti görünümü ve ekip düzeyi nüfusun parçasıdır (satır okumasıyla özet birbirinin yerine geçmez).
+        activityView: values.view || null, teamLevel: window.scope === 'team' ? values.teamLevel || null : values.teamLevel ?? null });
     }
     case 'calendar': {
       const window = populationArguments('rota_calendar_inspect', { ...values, ...periodWindow(values.period, today) }, today);
@@ -118,7 +121,8 @@ export function canonicalFacets(family, values, today) {
 /** İstenen koşulların aracın bağımsız değişken adlarına çevirisi. */
 export function declaredValues(family, filters) {
   if (family === 'workflow') return { tab: filters.tab, status: filters.workflowStatus, dateFrom: filters.dateFrom, dateTo: filters.dateTo, period: filters.period, text: filters.text };
-  if (family === 'activity') return { dateFrom: filters.dateFrom, dateTo: filters.dateTo, period: filters.period, scope: filters.activityScope, kind: filters.activityKind };
+  if (family === 'activity') return { dateFrom: filters.dateFrom, dateTo: filters.dateTo, period: filters.period, scope: filters.activityScope, kind: filters.activityKind,
+    view: filters.activityView, teamLevel: filters.teamLevel };
   return filters;
 }
 
@@ -251,7 +255,7 @@ function propertyCarrier(request, metric, selected = null) {
 
 /** İsteğin veri okunmadan açtığı korumalı metin alanları: nüfusunki ve varlık özelliği okumalarınınki. */
 export function requestTextFields(request) {
-  const fields = [...(request.population?.textFields || []), ...request.metrics.flatMap((metric) =>
+  const fields = [...(request.population?.textFields || []), ...(request.filters?.hasDescription ? ['description'] : []), ...request.metrics.flatMap((metric) =>
     [...new Set(request.fields.filter((field) => field.metric === metric).map((field) => field.tool)), null]
       .flatMap((tool) => propertyCarrier(request, metric, tool)?.textFields || []))];
   return [...new Set(fields)].sort();
@@ -311,7 +315,10 @@ const SELECTED_SHAPES = Object.freeze({
   rota_recurrence_inspect: { type: 'task', single: ['series.next'], plural: ['series', 'series.*.next'], counterparts: { 'series.*.next': 'series.next', 'series.next': 'series.*.next' } }
 });
 
-function shapeCollections(tool, entities) {
+function shapeCollections(tool, entities, filters = null) {
+  // Hareket aramasının satır koleksiyonu etkin görünümden gelir: olağan liste hareket satırları, haftalık/aylık görünüm kova dizisi;
+  // dönem özeti satır döndürmez. Görünümle uyuşmayan koleksiyon kabul edilmez, örtük koleksiyon da görünümden çıkarılır.
+  if (tool === 'rota_activity_search') return !filters?.activityView ? ['items'] : ['week', 'month'].includes(filters.activityView) ? ['series'] : [];
   const shape = SELECTED_SHAPES[tool];
   if (!shape) return rowCollections(tool);
   return entities.some((entity) => entity.type === shape.type) ? shape.single : shape.plural;
@@ -330,6 +337,8 @@ function resolvesDeclared(type, text, entities) {
 }
 
 export function completeRequest(request, calls, { today, allowedTextFields = [] }) {
+  // Modelin özgün bildirimi: çağrının alanları birleştirilmeden önceki dönem sınırları (yalnızca bitişli hareket dönemi reddi için).
+  const declaredFilters = request.filters || {};
   const problems = [];
   const hints = [];
   // Onarım yolu normalleştirilmiş sıraya değil, modelin özgün alan yuvasına aittir.
@@ -387,7 +396,7 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   const definition = getRotaTool(tool);
   const collections = rowCollections(tool);
   // Bildirilen satır ölçülerini taşıyan tek koleksiyon bildirilmiş sayılır; birden çok kardeş koleksiyon listede hepsidir.
-  const shaped = shapeCollections(tool, entities);
+  const shaped = shapeCollections(tool, entities, filters);
   const counterpart = SELECTED_SHAPES[tool]?.counterparts[population.collection];
   if (population.collection && !shaped.includes(population.collection) && shaped.includes(counterpart)) population.collection = counterpart;
   if (operation !== 'value' && !population.collection) {
@@ -401,6 +410,10 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   const family = FAMILIES[tool] || null;
   if (own.length) {
     const declared = canonicalFacets(family, declaredValues(family, filters), today);
+    if (family === 'activity' && !declaredFilters.period && !declaredFilters.dateFrom) {
+      delete declared.dateFrom;
+      delete declared.dateTo;
+    }
     const executed = own.map((call) => canonicalFacets(family, call.args, today));
     for (const key of new Set(executed.flatMap((facets) => Object.keys(facets)).concat(Object.keys(declared)))) {
       const values = executed.map((facets) => facets[key]);
@@ -503,7 +516,7 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
     .filter(({ path }) => typeof path === 'string' && path.endsWith('.name'));
   const bound = defaulted.length ? Object.freeze({ ...completed, fields: Object.freeze([...completed.fields,
     ...defaulted.map(({ metric, path }) => Object.freeze({ metric, tool, path }))]) }) : completed;
-  const capability = requestCapabilityProblems(bound, { allowedTextFields });
+  const capability = requestCapabilityProblems(bound, { allowedTextFields, declaredFilters });
   return { request: bound, problems: [...problems, ...capability.problems], hints: [...hints, ...capability.hints] };
 }
 
@@ -511,7 +524,7 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
  * Nüfus aracının ifade edemediği ya da kanıtın hiçbir zaman karşılayamayacağı
  * istek veri okunmadan reddedilir; ipuçları yalnızca kayıt defterinden türetilir.
  */
-export function requestCapabilityProblems(request, { allowedTextFields = [] } = {}) {
+export function requestCapabilityProblems(request, { allowedTextFields = [], declaredFilters = request.filters || {} } = {}) {
   const problems = [];
   const hints = [];
   const carrierHint = (name, metric) => {
@@ -541,7 +554,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   }
   const collections = rowCollections(tool.name);
   const sorts = parameters.sort?.enum || [];
-  const shaped = shapeCollections(tool.name, request.entities);
+  const shaped = shapeCollections(tool.name, request.entities, request.filters);
   if (population.collection && !collections.includes(population.collection)) problems.push('$.population.collection:unknown');
   else if (population.collection && !shaped.includes(population.collection)) problems.push('$.population.collection:shape');
   const lists = request.operation === 'list' && !population.collection ? listCollections(tool.name, request.metrics, shaped) : [];
@@ -567,6 +580,48 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     problems.push('$.population.depth:unsupported');
     hints.push('population.depth yalnızca rota_wbs_inspect nüfusundadır (collection nodes)');
   }
+  // Notun varlığını süzen nüfus da o iletinin açıklama rızasını açıkça taşır.
+  if (request.filters.hasDescription && !population.textFields?.includes('description')) {
+    problems.push('$.population.textFields:required');
+    hints.push('hasDescription için population.textFields: ["description"] zorunludur; yalnızca o iletinin rızasıyla okunur');
+  }
+  if (tool.name === 'rota_activity_search' && request.filters.teamLevel && !request.filters.activityView) {
+    problems.push('$.filters.activityView:required');
+    hints.push('Düzeyli hareket özeti için analysis kapsamı team, level ve activity yönünü kullanın');
+  }
+  // Düzey yalnızca ekip kapsamıyla geçerlidir (aracın `$.teamLevel:scope` reddi): çağrıdan devralınan kapsam da yürütmeden önce denetlenir.
+  if (tool.name === 'rota_activity_search' && request.filters.teamLevel && request.filters.activityScope !== 'team') {
+    problems.push('$.filters.teamLevel:scope');
+    hints.push('Hareket özetinde teamLevel yalnızca activityScope team ile verilir');
+  }
+  if (tool.name === 'rota_activity_search' && request.filters.activityView && request.filters.activityKind) {
+    problems.push('$.filters.activityView:conflict');
+    hints.push('Toplu hareket görünümünde activityKind verilmez; tür süzgeci için activityView kaldırılır');
+  }
+  // Aracın toplu görünümde reddettiği seçici ve metin alanları yürütmeden önce reddedilir (onarım ipucuyla).
+  if (tool.name === 'rota_activity_search' && request.filters.activityView && (request.entities || []).some((entity) => entity?.type === 'task')) {
+    problems.push('$.entities:view');
+    hints.push('Toplu hareket görünümünde görev seçicisi verilmez; tek görevin hareketleri için activityView kaldırılır');
+  }
+  if (tool.name === 'rota_activity_search' && request.filters.activityView && population.textFields?.length) {
+    problems.push('$.population.textFields:view');
+    hints.push('Toplu hareket görünümü değişiklik metni döndürmez: population.textFields verilmez; metin için activityView kaldırılır');
+  }
+  // Hareket dönemi başlangıçla tanımlanır: yalnızca bitiş günü araçta bugüne düşer ve reddedilir.
+  // Özgün bildirim yalnızca bitiş verdiyse çağrının başlangıcı onun yerine geçmez (kullanıcının bitişi sessizce değişirdi).
+  if (tool.name === 'rota_activity_search' && ((request.filters.dateTo && !request.filters.dateFrom) || (declaredFilters.dateTo && !declaredFilters.dateFrom))) {
+    problems.push('$.filters.dateFrom:required');
+    hints.push('Hareket dönemi için filters.dateFrom zorunludur (dateTo verilmezse tek gün okunur)');
+  }
+  // Toplu hareket görünümünün 366 gün sınırı ve haftalık/aylık dizinin 24 kova sınırı yürütmeden önce denetlenir.
+  if (tool.name === 'rota_activity_search' && ['period', 'week', 'month'].includes(request.filters.activityView) && request.filters.dateFrom) {
+    const to = request.filters.dateTo || request.filters.dateFrom;
+    const overYear = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${request.filters.dateFrom}T00:00:00Z`) > 365 * 86400000;
+    if (overYear || (['week', 'month'].includes(request.filters.activityView) && !seriesBuckets({ dateFrom: request.filters.dateFrom, dateTo: to }, request.filters.activityView))) {
+      problems.push('$.filters.activityView:range');
+      hints.push('Hareket özeti en çok 366 gün, hareket dizisi ayrıca en çok 24 kovadır: aralığı kısaltın ya da aylık görünüm (month) isteyin');
+    }
+  }
   if (requestTextFields(request).some((field) => !allowedTextFields.includes(field))) {
     problems.push('$.population.textFields:not-authorized');
     hints.push('population.textFields: kullanıcı bu turda serbest metni açmadı; bu alan okunamaz (sunucu kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister)');
@@ -578,6 +633,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   }
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const fieldTools = (metric) => [...new Set((request.fields || []).filter((field) => field.metric === metric).map((field) => field.tool))];
+  const AGGREGATE_ACTIVITY_METRICS = new Set(['activity.createdTasks', 'activity.deletedTasks', 'activity.updatedTasks', 'activity.reopenedTasks']);
   request.metrics.forEach((metric, index) => {
     const bound = fieldTools(metric);
     const property = entityProperty(request, metric);
@@ -587,8 +643,37 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
       // Varlığın kendi özelliği o varlığı seçen araçtan okunur; sunucu adı kendisi çözer.
       const type = propertyType(metric);
       const selecting = type && RESOLVERS[type] ? carriers(metric).filter((name) => Object.hasOwn(getRotaTool(name).parameters.properties, SELECTOR_PARAMS[type])) : [];
+      // Aşama H: adı verilmemiş BİRDEN ÇOK görevin açıklaması (notlar) tek görev ayrıntısıyla değil, özetin not yönüyle okunur.
+      // Başlığıyla tek görevi adlandıran istek (`filters.text`) adı verilmemiş görevler değildir: bütün açık görevlerin not ipucu verilmez.
+      if (metric === 'task.description' && tool.name === 'rota_task_search' && !request.entities.some((entity) => entity.type === 'task') && !request.filters.text) {
+        hints.push('Birden çok görevin notu/açıklaması: request yazma; rota_plan analysis {"scope":…,"focus":["notes"]} yaz (sunucu açık görevlerin notlarını okur)');
+      }
       if (selecting.length) hints.push(`${metric}: ${type} özelliği; population.tool ${selecting[0]} ve request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] bildir (ölçüyü SİLME; kimliği sunucu bulur)`);
       return;
+    }
+    // Toplu hareket sayaçları yalnızca toplu görünümde (`period`/`week`/`month`) döner; olağan satır okuması bu alanları üretmez.
+    if (tool.name === 'rota_activity_search' && !request.filters.activityView && AGGREGATE_ACTIVITY_METRICS.has(metric)) {
+      problems.push(`$.metrics[${index}]:view`);
+      hints.push(`${metric}: yalnızca toplu hareket görünümünde döner; filters.activityView "period" bildir`);
+      return;
+    }
+    // Açık alanların her biri seçilen hareket görünümünde bulunmalıdır. Kendiliğinden seçilen taşıyıcılar ayrı değerlendirilir.
+    if (tool.name === 'rota_activity_search') {
+      const view = request.filters.activityView;
+      const series = view === 'week' || view === 'month';
+      const list = request.operation !== 'value';
+      const invalid = (request.fields || []).flatMap((field, at) => {
+        if (field.metric !== metric || field.tool !== tool.name) return [];
+        const path = field.path;
+        const available = list && series ? path.startsWith('data.series.')
+          : path.startsWith('data.summary.') || !view && (path === 'totalCount' || path.startsWith('data.items.'));
+        return available ? [] : [at];
+      });
+      if (invalid.length) {
+        for (const at of invalid) problems.push('$.fields[' + at + '].path:view');
+        hints.push(metric + ': seçilen hareket görünümünde bulunan bir ölçü yoluna bağlanır');
+        return;
+      }
     }
     // Toplam, sayım ve satır alanı nüfus koşullarının tamamını ifade edebilen araçtan gelmelidir;
     // değer isteğinde bildirilen varlığın kendi özelliği koşullardan bağımsızdır.
@@ -602,6 +687,17 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     }
     // Satır ölçüsünün tek koleksiyonu olması, tek değeri olduğu anlamına gelmez.
     const rowHomes = collections.filter((collection) => rowMetricFields(tool.name, collection, metric).length);
+    // Ölçü yalnızca seçilen görünümde bulunmayan satır koleksiyonunda taşınıyorsa (ör. dönem özeti görünümünde `items` satırları,
+    // türlü `task.title` dahil) istek yürütülmeden reddedilir: yanıt ölçüsüz sessizce dönmez.
+    // Seçiciyle tek nesneye dönüşen araçlarda (ör. görevli `rota_recurrence_inspect` için `data.series.*`) özellik alanı nesnede vardır.
+    const metricHomes = bound.length ? request.fields.filter((field) => field.metric === metric).map((field) => field.path) : metricPaths(tool.name, metric);
+    if (request.operation === 'value' && (!type || tool.name === 'rota_activity_search') && rowHomes.length > 0 && metricHomes.length
+      && metricHomes.every((path) => rowHomes.some((collection) => path.startsWith(`data.${collection}.`)))
+      && !metricHomes.some((path) => shaped.some((collection) => path.startsWith(`data.${collection}.`)))) {
+      problems.push(`$.metrics[${index}]:view`);
+      hints.push(`${metric}: yalnızca ${rowHomes.join('|')} satırlarında; seçilen görünümde bu satırlar yoktur (görünümü kaldırıp operation list kullan)`);
+      return;
+    }
     if (request.operation === 'value' && !type && rowHomes.length > 0
       && (bound.length ? request.fields.filter((field) => field.metric === metric).map((field) => field.path) : metricPaths(tool.name, metric))
         .every((path) => shaped.some((collection) => path.startsWith(`data.${collection}.`)))) {
@@ -753,11 +849,12 @@ const stableArgs = (value) => JSON.stringify(value, (key, item) => (item && type
 export function readKey(name, args, today) {
   const selectors = selectorsOf(args).map(({ type, id }) => `${type}:${String(id).toLowerCase()}`).sort();
   const represented = new Set([...familyKeys(name), ...(FAMILIES[name] === 'workflow' ? ['status'] : []),
-    ...(FAMILIES[name] === 'activity' ? ['scope', 'kind'] : []), ...Object.values(SELECTOR_PARAMS), 'sort', 'groupBy', 'depth', 'textFields', 'cursor', 'limit']);
+    ...(FAMILIES[name] === 'activity' ? ['scope', 'kind', 'view'] : []), ...Object.values(SELECTOR_PARAMS), 'sort', 'groupBy', 'depth', 'textFields', 'cursor', 'limit']);
   const extra = Object.fromEntries(Object.entries(args).filter(([key]) => !represented.has(key)));
   return `${name}:${stableArgs({ today, facets: canonicalFacets(FAMILIES[name] || null, args, today), selectors,
     dimensions: canonicalDimensions(name, args), extra, cursor: args.cursor ?? null,
-    limit: effectivePageSize(getRotaTool(name)?.parameters?.properties?.limit, args) })}`;
+    // Hareket dönem özeti (`view`) satır döndürmez: satır sınırı aynı SQL'i ve aynı kovaları değiştirmez, okuma kimliğine girmez.
+    limit: FAMILIES[name] === 'activity' && args.view ? null : effectivePageSize(getRotaTool(name)?.parameters?.properties?.limit, args) })}`;
 }
 
 /** Sıralama isteğinin aracın sırası: sıralama ölçüsü ve yönü aracın sıra kayıtlarından biriyle eşleşmelidir. */
@@ -783,7 +880,7 @@ export function effectiveCollection(request) {
   const tool = population?.tool;
   if (population?.collection != null || request.operation === 'value' || typeof tool !== 'string' || !getRotaTool(tool)) return population?.collection ?? null;
   if (population.groupBy && tool === 'rota_task_analytics') return 'groups';
-  const shaped = shapeCollections(tool, Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : []);
+  const shaped = shapeCollections(tool, Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : [], request.filters && typeof request.filters === 'object' ? request.filters : null);
   const fitting = Array.isArray(request.metrics) ? listCollections(tool, request.metrics, shaped) : [];
   return fitting.length === 1 ? fitting[0] : !fitting.length && shaped.length === 1 ? shaped[0] : null;
 }

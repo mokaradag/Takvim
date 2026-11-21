@@ -5,9 +5,9 @@ import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
-import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
+import { invalidArguments, TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, projectAccess } from './rotaScope.js';
-import { readTaskDetail, readTaskFacts, readWbsSelector, TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
+import { readTaskDetail, readTaskFacts, readTaskNotes, readWbsSelector, TASK_NOTE_CHARS, TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
 import {
   accessExplanation,
   CURSOR_PROPERTY,
@@ -15,6 +15,7 @@ import {
   dataText,
   ID_PROPERTY,
   LIMIT_PROPERTY,
+  effectivePageSize,
   notFound,
   PERSON_SICIL_PROPERTY,
   projectIndex,
@@ -23,16 +24,20 @@ import {
   searchedScope,
   taskItem
 } from './rotaToolSupport.js';
+import { bucketKey, bucketLabel, seriesBuckets } from '../../../../domain/ai/temporalWindow.js';
 import {
+  addDays,
   assignmentState,
   assigneeView,
   coarseTargetRange,
   DATE_FIELDS,
+  dateFieldValue,
   DEADLINE_FILTERS,
   DUE_MONTH_DAYS,
   DUE_SOON_DAYS,
   filtersOpenOnly,
   foldText,
+  HISTORY_DATE_FIELDS,
   hoursCoverage,
   isDueWithin,
   isOverdue,
@@ -73,7 +78,7 @@ const FILTER_PROPERTIES = Object.freeze({
   },
   dateField: {
     type: 'string', enum: [...DATE_FIELDS],
-    description: 'dateFrom/dateTo aralığının uygulanacağı alan: targetFinish = termin, calendarDate = takvim günü (termin, yoksa planlanan bitiş), plannedStart, plannedFinish, actualStart, actualFinish. Varsayılan targetFinish.'
+    description: 'dateFrom/dateTo aralığının uygulanacağı alan: targetFinish = termin, calendarDate = takvim günü (termin, yoksa planlanan bitiş), plannedStart, plannedFinish, actualStart, actualFinish (tamamlanma), createdAt (oluşturulma). Varsayılan targetFinish.'
   },
   dateFrom: DATE_PROPERTY('Aralık başlangıcı (YYYY-MM-DD, dahil).'),
   dateTo: DATE_PROPERTY('Aralık bitişi (YYYY-MM-DD, dahil).'),
@@ -87,7 +92,8 @@ const FILTER_PROPERTIES = Object.freeze({
   },
   personSicil: PERSON_SICIL_PROPERTY,
   createdByMe: { type: 'boolean', description: 'Yalnızca kullanıcının oluşturduğu görevler.' },
-  milestone: { type: 'boolean', description: 'true = yalnızca kilometre taşları, false = kilometre taşı olmayanlar.' }
+  milestone: { type: 'boolean', description: 'true = yalnızca kilometre taşları, false = kilometre taşı olmayanlar.' },
+  hasDescription: { type: 'boolean', description: 'true = yalnızca açıklaması olan görevler (yalnızca textFields description ile).' }
 });
 
 function sqlAssigneeMode(filters) {
@@ -109,7 +115,11 @@ export async function requireTeamScope(call, filters) {
   if (!auth?.isExecutive) throw denied();
 }
 
-async function loadFilteredFacts(call, scope, filters, { withAssignees = false, rosterRows = 0 } = {}) {
+/**
+ * `historyBasis`: tarih süzgeci SQL'de kalır; yalnızca aynı nüfusun tarihi bulunmayan tamamlanmış görevleri de
+ * tamlık ve son yetki denetimi için alınır. Eski tarihli ilgisiz görevler okuma sınırını tüketmez.
+ */
+async function loadFilteredFacts(call, scope, filters, { withAssignees = false, rosterRows = 0, historyBasis = false } = {}) {
   await requireTeamScope(call, filters);
   if (filters.wbsId) {
     const node = await call.sql((executor) => readWbsSelector(executor, scope, { projectId: filters.projectId, wbsId: filters.wbsId }));
@@ -123,7 +133,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
     call.noteProjects?.([filters.projectId]);
   }
   const range = coarseTargetRange(filters, call.today);
-  const result = await call.sql((executor) => readTaskFacts(executor, scope, {
+  const readFacts = (includeUndated) => call.sql((executor) => readTaskFacts(executor, scope, {
     projectId: filters.projectId,
     taskIds: call.taskIds || [],
     wbsId: filters.wbsId,
@@ -138,6 +148,8 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
     dateField: filters.dateField,
     dateFrom: filters.dateFrom,
     dateTo: filters.dateTo,
+    includeUndated,
+    hasDescription: filters.hasDescription,
     today: call.today,
     createdByMe: filters.createdByMe,
     assigneeMode: sqlAssigneeMode(filters),
@@ -147,13 +159,26 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
     maxRows: TOOL_LIMITS.maxAnalyzedTasks,
     rosterRows
   }));
+  // Tarihi kayıtlı olmayan tamamlanmış görevler dar dönem okumasının satır sınırını tüketirse (SQL hazırlama sınırı ya da
+  // kesiklik) dönem sonucu yine kullanılabilir: okuma onlarsız, AYNI sınırla bir kez yinelenir ve sayıları sıfır değil
+  // BİLİNMİYOR (`null`) bildirilir. Dönemin kendisi sınırı aşıyorsa yineleme de aşar ve sonuç eskisi gibi "çok büyük" döner.
+  const tooLarge = (error) => error instanceof ToolError && error.code === TOOL_ERROR_CODES.RESULT_TOO_LARGE;
+  let undatedKnown = historyBasis;
+  let result = await readFacts(historyBasis).catch((error) => { if (historyBasis && tooLarge(error)) return null; throw error; });
+  if (historyBasis && (!result || result.truncated)) {
+    result = await readFacts(false);
+    undatedKnown = false;
+  }
   if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
   const facts = result.facts.filter((fact) => matchesTaskFilters(fact, filters, {
     today: call.today, assignees: result.assignees, sicil: call.sicil
   }));
+  // Aynı nüfusun (tarih aralığı dışındaki bütün koşullar) tarihi kayıtlı olmayan tamamlanmış görevleri.
+  const undated = undatedKnown ? result.facts.filter((fact) => fact.status === 'done' && !dateFieldValue(fact, filters.dateField)
+    && matchesTaskFilters(fact, { ...filters, dateField: null, dateFrom: null, dateTo: null }, { today: call.today, assignees: result.assignees, sicil: call.sicil })) : [];
   // Toplamlar sonuçta listelenmeyen görevlere de dayanır: sayılan nüfus son yetki
   // denetiminde yeniden doğrulanmak üzere (modele gitmeden) kaydedilir.
-  call.notePopulation?.(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId, identityBase: fact.identityBase,
+  call.notePopulation?.([...facts, ...undated].map((fact) => ({ taskId: fact.id, projectId: fact.projectId, identityBase: fact.identityBase,
     identitySicils: (result.assignees.get(fact.id) || []).filter(person => person.identityVisible && person.sicil != null).map(person => person.sicil) })));
   const projects = projectIndex(result.projects);
   if (filters.projectId) filters.project = projects.get(filters.projectId)?.name || filters.project || 'Seçilen proje';
@@ -163,7 +188,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
       .items.find((person) => person.sicil === filters.personSicil)?.name;
     filters.person = resolved && resolved !== String(filters.personSicil) ? dataText(resolved, 120) : 'Seçilen kişi';
   }
-  return { facts, projects, assignees: result.assignees, roster: result.roster || null };
+  return { facts, projects, assignees: result.assignees, roster: result.roster || null, ...(historyBasis ? { undatedDone: undatedKnown ? undated.length : null } : {}) };
 }
 
 function filterHighlights(filters) {
@@ -184,7 +209,7 @@ function filterHighlights(filters) {
   if (filters.createdByMe) highlights.push('Oluşturduğunuz');
   if (filters.text) highlights.push(`Metin: ${dataText(filters.text, 40)}`);
   const dateLabels = { targetFinish: 'Termin', calendarDate: 'Takvim günü', plannedStart: 'Planlanan başlangıç',
-    plannedFinish: 'Planlanan bitiş', actualStart: 'Gerçekleşen başlangıç', actualFinish: 'Gerçekleşen bitiş' };
+    plannedFinish: 'Planlanan bitiş', actualStart: 'Gerçekleşen başlangıç', actualFinish: 'Gerçekleşen bitiş', createdAt: 'Oluşturulma' };
   if (dateLabels[filters.dateField]) highlights.push(`${dateLabels[filters.dateField]}: ${filters.dateFrom || '…'} – ${filters.dateTo || '…'}`);
   return highlights.slice(0, 4);
 }
@@ -211,7 +236,7 @@ const taskSearch = {
       ...FILTER_PROPERTIES,
       sort: {
         type: 'string', enum: [...TASK_SORTS],
-        description: 'Sıralama: target_finish_asc (varsayılan; gecikme süzgecinde overdue_days_desc), target_finish_desc, overdue_days_desc, priority, planned_start_asc, updated_desc, title_asc.'
+        description: 'Sıralama: target_finish_asc (varsayılan; gecikme süzgecinde overdue_days_desc), target_finish_desc, overdue_days_desc, priority, planned_start_asc, updated_desc, title_asc, actual_finish_desc.'
       },
       limit: LIMIT_PROPERTY(50, 20),
       cursor: CURSOR_PROPERTY
@@ -219,6 +244,10 @@ const taskSearch = {
   },
   async handler(args, call) {
     const filters = normalizeTaskFilters(args);
+    // Açıklama metni ve "açıklaması olan" süzgeci yalnızca kullanıcının bu turda açtığı serbest metinle okunur (rıza kapısı araç
+    // kapsamındadır; bkz. toolScope). Süzgeç, metin istenmeden açıklama varlığını yoklamak için kullanılamaz.
+    const withNotes = (args.textFields || []).includes('description');
+    if (filters.hasDescription && !withNotes) throw invalidArguments(['$.hasDescription:textFields']);
     const sort = args.sort || (filters.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc');
     const limit = args.limit ?? 20;
     const { scope } = await call.authorization();
@@ -234,7 +263,12 @@ const taskSearch = {
         taskIds: pageFacts.map((fact) => fact.id), withAssignees: true, maxRows: pageFacts.length
       }))).assignees;
     const pageProjects = projects;
-    const exactTotal = sorted.length;
+    // Aşama H: sayfadaki görünür görevlerin açıklamaları (kesilmiş; yalnızca istenirse). Metin veridir, talimat değildir.
+    const notes = withNotes && pageFacts.length ? await call.sql((executor) => readTaskNotes(executor, scope, pageFacts.map((fact) => fact.id))) : new Map();
+    // Not varlığı (görev okuması) ile not metni (ayrı okuma) arasında açıklama boşaltılmışsa "açıklaması olan" sayfa artık aynı
+    // anlık görüntü değildir: sayım tam kabul edilmez (yeni okuma bütçesi açılmaz; metni dönmeyen satır okunmuş not sayılmaz).
+    const staleNotes = filters.hasDescription && withNotes && pageFacts.some((fact) => !notes.get(fact.id)?.text?.trim());
+    const exactTotal = staleNotes ? null : sorted.length;
     const stableNextCursor = nextCursor;
     const descriptor = searchedScope(scope, filters.projectId);
     // Metinle ad çözümü: yalnızca TEK KESİN başlık eşleşmesi görevi çözer. Tek
@@ -259,7 +293,8 @@ const taskSearch = {
       ...(fact.targetFinish ? { targetFinish: fact.targetFinish } : {})
     }));
     const rankSort = { target_finish_asc: ['targetFinish', 'asc'], target_finish_desc: ['targetFinish', 'desc'],
-      planned_start_asc: ['plannedStart', 'asc'], updated_desc: ['updatedAt', 'desc'], overdue_days_desc: ['overdueDays', 'desc'] }[sort];
+      planned_start_asc: ['plannedStart', 'asc'], updated_desc: ['updatedAt', 'desc'], overdue_days_desc: ['overdueDays', 'desc'],
+      actual_finish_desc: ['actualFinish', 'desc'] }[sort];
     const next = sorted[page.length];
     const nextValue = next && rankSort ? (rankSort[0] === 'overdueDays'
       ? (isOverdue(next, call.today) ? overdueDays(next, call.today) : null) : next[rankSort[0]] ?? null) : null;
@@ -271,6 +306,8 @@ const taskSearch = {
         ...(filters.projectId ? { project: projectRef(projects.get(filters.projectId), filters.projectId) } : {}),
         tasks: pageFacts.map((fact) => ({
           ...taskItem(fact, { projects: pageProjects, assignees: pageAssignees, today: call.today }),
+          // Depoda kod noktası sınırı uygulanır; temizleme, çift birimli Unicode karakterlerini yeniden kesmez.
+          ...(withNotes ? { description: notes.has(fact.id) ? dataText(notes.get(fact.id).text, TASK_NOTE_CHARS * 2) : null, ...(notes.get(fact.id)?.clipped ? { descriptionClipped: true } : {}) } : {}),
           ...(needle ? { exactTitleMatch: foldText(fact.title).trim() === needle } : {})
         })),
         ...(titleResolution ? {
@@ -285,7 +322,8 @@ const taskSearch = {
         filters
       },
       scope: descriptor,
-      complete: offset + page.length >= sorted.length,
+      // Koleksiyon tamlığı sayfalamadan gelir: kesilen not metni satırda `descriptionClipped` ile bildirilir, görev listesini eksik yapmaz.
+      complete: offset + page.length >= sorted.length && !staleNotes,
       truncated: !stableNextCursor && offset + page.length < sorted.length,
       returnedCount: pageFacts.length,
       totalCount: exactTotal,
@@ -414,7 +452,18 @@ const taskDetail = {
 
 /* ── rota_task_analytics ──────────────────────────────────── */
 
-const GROUP_BY = Object.freeze(['status', 'priority', 'project', 'assignee', 'deadline', 'target_month', 'department', 'unit']);
+const GROUP_BY = Object.freeze(['status', 'priority', 'project', 'assignee', 'deadline', 'target_month', 'department', 'unit', 'date_week', 'date_month', 'due_horizon']);
+/**
+ * Aşama H — teslim ufku bantları: bugünden başlayan 30 günün açık terminleri birbirini dışlayan üç bantta (bugün dâhil 7 gün, sonraki
+ * 7 gün, sonraki 16 gün). Bantlar sabit sıradadır ve boş bant sıfır sayımla döner; birikimli 7/14/30 günlük sayılar bantların toplamıdır.
+ */
+const HORIZON_BANDS = Object.freeze([['days_0_6', 'Önümüzdeki 7 gün', 0, 6], ['days_7_13', '8–14. gün', 7, 13], ['days_14_29', '15–30. gün', 14, 29]]);
+/**
+ * Aşama H: tarih dizisi gruplaması. Görevler süzgecin tarih alanına (`dateField`; ör. gerçekleşen bitiş) göre takvim haftalarına
+ * (pazartesi–pazar) ya da aylarına ayrılır. Dizi SÜREKLİDİR: aralıktaki her kova, görevi olmasa da sıfır sayımla döner (sayım aynı
+ * okumanın bütün nüfusundan geldiği için boş kova bilinmeyen değil sıfırdır) ve kronolojik sıradadır. Aralık iki ucuyla verilmelidir.
+ */
+const SERIES_GROUP_BY = Object.freeze({ date_week: 'week', date_month: 'month' });
 /** Aşama G: sorumlunun dizindeki örgütsel birimine göre gruplama (bir görev farklı birimlerdeki sorumlularında ayrı sayılır). */
 const ORGANIZATION_GROUP_BY = Object.freeze(['department', 'unit']);
 /** Görünür kişiye bağlanamayan görevlerin grupları; gizli ve olmayan atama aynı gruptadır. */
@@ -486,6 +535,8 @@ function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false
   }
 }
 
+const { hasDescription: _hasDescription, ...ANALYTICS_FILTER_PROPERTIES } = FILTER_PROPERTIES;
+
 const taskAnalytics = {
   name: 'rota_task_analytics',
   version: 1,
@@ -497,27 +548,65 @@ const taskAnalytics = {
     type: 'object',
     additionalProperties: false,
     properties: {
-      ...FILTER_PROPERTIES,
+      // Not varlığı süzgeci yalnızca rızalı görev aramasındadır; toplamlar aracı onu desteklemez ve şemada da sunmaz.
+      ...ANALYTICS_FILTER_PROPERTIES,
       groupBy: {
         type: 'string', enum: [...GROUP_BY],
-        description: 'Gruplama boyutu: status, priority, project, assignee (bir görev birden çok sorumluda sayılabilir), deadline (termin kovası), target_month (termin ayı), department/unit (sorumlunun bölümü/birimi; bir görev birden çok birimde sayılabilir).'
+        description: 'Gruplama boyutu: status, priority, project, assignee (bir görev birden çok sorumluda sayılabilir), deadline (termin kovası), target_month (termin ayı), department/unit (sorumlunun bölümü/birimi; bir görev birden çok birimde sayılabilir), date_week/date_month (dateField\'e göre haftalık/aylık dizi; dateFrom+dateTo zorunlu), due_horizon (7/14/30 günlük teslim bantları).'
       },
-      limit: LIMIT_PROPERTY(25, 10)
+      limit: LIMIT_PROPERTY(25, 10, { date_week: 25, date_month: 25 })
     }
   },
   async handler(args, call) {
     const filters = normalizeTaskFilters(args);
+    if (filters.hasDescription) throw invalidArguments(['$.hasDescription:unsupported']);
     const groupBy = args.groupBy || null;
-    const limit = args.limit ?? 10;
+    const seriesBucket = SERIES_GROUP_BY[groupBy] || null;
+    const limit = effectivePageSize(taskAnalytics.parameters.properties.limit, args);
+    // Tarih dizisi iki ucu belli bir aralık ister; kova sayısı satır sınırını aşamaz (sessizce kesilmiş dizi eğilim göstermez).
+    const buckets = seriesBucket && filters.dateField && filters.dateFrom && filters.dateTo
+      ? seriesBuckets({ dateFrom: filters.dateFrom, dateTo: filters.dateTo }, seriesBucket, HISTORY_DATE_FIELDS.includes(filters.dateField) ? call.today : null) : null;
+    if (seriesBucket && !(filters.dateField && filters.dateFrom && filters.dateTo)) throw invalidArguments(['$.groupBy:range']);
+    if (seriesBucket && (!buckets || buckets.length > limit)) throw invalidArguments(['$.groupBy:buckets']);
+    // Üç teslim bandı birlikte bir sonuçtur: üçten küçük açık sınır istenen satır sayısını aşan sonuç döndürürdü; reddedilir.
+    if (groupBy === 'due_horizon' && args.limit != null && args.limit < 3) throw invalidArguments(['$.limit:horizon']);
+    if (groupBy === 'due_horizon' && !(filters.statuses?.length && filters.statuses.every((status) => status !== 'done') && filters.dateField === 'targetFinish' && filters.dateFrom === call.today && filters.dateTo === addDays(call.today, 29))) throw invalidArguments(['$.groupBy:population']);
     const { scope } = await call.authorization();
     const teamOrganization = filters.assignee === 'team' && ORGANIZATION_GROUP_BY.includes(groupBy);
-    const { facts, projects, assignees, roster } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy),
-      rosterRows: teamOrganization ? TEAM_ROSTER_LIMIT : 0 });
+    // Gerçekleşen bitişe göre dönem okuması: tarihi kayıtlı olmayan tamamlanmış görevler aynı okumada sayılır (tamlık ölçüsü).
+    const historyBasis = filters.dateField === 'actualFinish' && Boolean(filters.dateFrom || filters.dateTo);
+    const { facts, projects, assignees, roster, undatedDone = null } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy),
+      rosterRows: teamOrganization ? TEAM_ROSTER_LIMIT : 0, historyBasis });
     // Ekip kapsamında sorumlu gruplaması yalnızca yönetim kapsamındaki kişilerdir (görevin kapsam dışı eş sorumlusu sayılmaz).
     const context = { projects, assignees, today: call.today, teamOnly: filters.assignee === 'team' };
     let groups = null;
     let groupCount = 0;
-    if (groupBy) {
+    if (groupBy === 'due_horizon') {
+      const rows = HORIZON_BANDS.map(([key, label, from, to]) => ({ key, label, count: 0, open: 0, overdue: 0, done: 0, from, to }));
+      for (const fact of facts) {
+        if (fact.status === 'done' || !fact.targetFinish) continue;
+        const ahead = Math.round((Date.parse(`${fact.targetFinish}T00:00:00Z`) - Date.parse(`${call.today}T00:00:00Z`)) / 86400000);
+        const row = rows.find((band) => ahead >= band.from && ahead <= band.to);
+        if (!row) continue;
+        row.count += 1; row.open += 1;
+      }
+      groups = rows.map(({ from: _from, to: _to, ...row }) => row);
+      groupCount = groups.length;
+    } else if (buckets) {
+      const byKey = new Map(buckets.map((bucket) => [bucket.key, { key: bucket.key, label: bucketLabel(bucket, seriesBucket, 'tr'), count: 0, open: 0, overdue: 0, done: 0,
+        dateFrom: bucket.dateFrom, dateTo: bucket.dateTo, ...(bucket.partial ? { partial: true } : {}) }]));
+      for (const fact of facts) {
+        const group = byKey.get(bucketKey(dateFieldValue(fact, filters.dateField), seriesBucket));
+        // Süzgeç aralığın dışındaki tarihi zaten eler; kovası olmayan olgu sayılmaz (savunma, sessiz yeni kova açılmaz).
+        if (!group) continue;
+        group.count += 1;
+        if (fact.status === 'done') group.done += 1;
+        else group.open += 1;
+        if (isOverdue(fact, call.today)) group.overdue += 1;
+      }
+      groups = [...byKey.values()];
+      groupCount = groups.length;
+    } else if (groupBy) {
       const byKey = new Map();
       const parents = new Map();
       for (const fact of facts) {
@@ -578,7 +667,7 @@ const taskAnalytics = {
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
       }
     }
-    const groupsTruncated = Boolean(groupBy && groupCount > limit || teamOrganization && roster?.truncated);
+    const groupsTruncated = Boolean(groupBy && groupBy !== 'due_horizon' && groupCount > limit || teamOrganization && roster?.truncated);
     const totals = statusTotals(facts, call.today);
     const descriptor = searchedScope(scope, filters.projectId);
     return {
@@ -588,11 +677,16 @@ const taskAnalytics = {
         overdueAging: overdueAging(facts, call.today),
         hours: hoursCoverage(facts),
         ...(groups ? { groupBy, groups, groupCount } : {}),
+        ...(buckets ? { series: { bucket: seriesBucket, dateField: filters.dateField, dateFrom: filters.dateFrom, dateTo: filters.dateTo } } : {}),
+        // Geçmiş dönem okumasının tamlığı: tarihi kayıtlı olmayan tamamlanmış görevler hiçbir döneme yerleştirilemez.
+        ...(historyBasis ? { history: { basis: 'actualFinish', undatedDone } } : {}),
         definitions: {
           ...METRIC_DEFINITIONS.taskTotals,
           today: call.today,
           ...(groupBy === 'assignee' ? { assignee: METRIC_DEFINITIONS.assigneeGrouping } : {}),
-          ...(ORGANIZATION_GROUP_BY.includes(groupBy) ? { organization: METRIC_DEFINITIONS.organizationGrouping } : {})
+          ...(ORGANIZATION_GROUP_BY.includes(groupBy) ? { organization: METRIC_DEFINITIONS.organizationGrouping } : {}),
+          ...(HISTORY_DATE_FIELDS.includes(filters.dateField) ? { history: filters.dateField === 'actualFinish' && !(filters.statuses?.length === 1 && filters.statuses[0] === 'done')
+            ? METRIC_DEFINITIONS.historyBasis.actualFinishAnyStatus : METRIC_DEFINITIONS.historyBasis[filters.dateField] } : {})
         }
       },
       scope: descriptor,

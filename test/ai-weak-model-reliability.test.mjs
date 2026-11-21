@@ -319,24 +319,33 @@ test('planlayıcının örnek planlarının her biri sunucunun plan doğrulamas�
   assert.deepEqual(windows.map((item) => [item.scope, item.dateFrom, item.dateTo]), [['self', '2026-09-30', '2026-10-27'], ['all', '2026-09-30', '2026-10-20']]);
 });
 
-test('dönem tek kavramdır: geçmiş dönem değeri tarih çiftine çevrilir; sözlük dışı pencerenin onarımı eşdeğer tarih çiftine geçebilir', async (t) => {
-  // Geçmiş dönem değerleri istek süzgecinin sözlüğündendir; özette aynı günleri gösteren tarih çiftidir.
-  const last = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], relativeWindow: 'last_7_days' } }).plan.analysis;
-  assert.deepEqual([last.relativeWindow ?? null, last.dateFrom, last.dateTo], [null, '2026-09-24', TODAY]);
-  const yesterday = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], relativeWindow: 'yesterday' } }).plan.analysis;
-  assert.deepEqual([yesterday.dateFrom, yesterday.dateTo], ['2026-09-29', '2026-09-29']);
-  // Sözlük dışı pencere (ör. "bu_hafta") reddedilir; onarım aynı dönemi tarih çiftiyle yazabilir (repairScope değildir).
-  const queue = [call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], relativeWindow: 'this_week' } }),
-    call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], dateFrom: '2026-09-28', dateTo: '2026-10-04' } })];
+test('dönem tek kavramdır: adlı dönem aynı günlerin okumasına açılır; sözlük dışı pencerenin onarımı eşdeğer tarih çiftine geçebilir', async (t) => {
+  // Aşama H: adlı dönemler (geçmiş, içinde bulunulan, gelecek) özetin türlü değeridir; ad korunur, okumalar aynı günleri taşır.
+  const window = (relativeWindow) => { const unpacked = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], relativeWindow } }).plan;
+    return [unpacked.analysis.relativeWindow, unpacked.request.filters.dateFrom, unpacked.request.filters.dateTo]; };
+  assert.deepEqual(window('last_7_days'), ['last_7_days', '2026-09-24', TODAY]);
+  assert.deepEqual(window('yesterday'), ['yesterday', '2026-09-29', '2026-09-29']);
+  // Takvim haftası pazartesi–pazardır; kayan yedi günle aynı şey değildir.
+  assert.deepEqual(window('this_week'), ['this_week', '2026-09-28', '2026-10-04']);
+  // Sözlük dışı pencere (ör. "this_quarter") reddedilir; onarım aynı dönemi tarih çiftiyle yazabilir (repairScope değildir).
+  const queue = [call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], relativeWindow: 'this_quarter' } }),
+    call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], dateFrom: '2026-07-01', dateTo: '2026-09-30' } })];
   const { ask } = phase4eConversation(t, { planner: () => queue.shift() });
-  const result = await ask({ text: 'Bu hafta işlerimin durum dağılımı nasıl?' });
+  const result = await ask({ text: 'Bu çeyrekte işlerimin durum dağılımı nasıl?' });
   assert.deepEqual(toolNotes(result.inputs[1]).at(-1).error.details, ['$.analysis.relativeWindow:enum']);
   assert.equal(result.inputs.length, 2, 'eşdeğer tarih çiftine geçen onarım kabul edilir');
   assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  // Onarılan çeyrek gerçekten okumaya taşınır: durum okuması iki sınırı da taşır (sınırsız okuma geçmez).
+  const day = (value) => new Date(value).toISOString().slice(0, 10);
+  const reads = result.log.filter((row) => row.query === 'task-facts' && row.ok === true && !row.params.taskIds);
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every((row) => row.params.dateFrom && row.params.dateTo && day(row.params.dateFrom) === '2026-07-01' && day(row.params.dateTo) === '2026-09-30'), JSON.stringify(reads.map((row) => row.params)));
+  // Aynı sınırlarla başka tarih alanı (ör. oluşturulma) başka nüfustur: durum okuması termin alanındadır ve kişisel kapsamı korur.
+  assert.ok(reads.every((row) => row.params.dateField === 'targetFinish' && row.params.assigneeMode === 'me'), JSON.stringify(reads.map((row) => ({ dateField: row.params.dateField, assigneeMode: row.params.assigneeMode }))));
 });
 
 test('dönem onarımı kapsamı değiştiremez: pencere açılsa da kapsam ve yönler sabittir', async (t) => {
-  const queue = [call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], relativeWindow: 'this_week' } }),
+  const queue = [call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'], relativeWindow: 'this_quarter' } }),
     call({ intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['status'], dateFrom: '2026-09-28', dateTo: '2026-10-04' } }),
     call({ intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } })];
   const { ask } = phase4eConversation(t, { planner: () => queue.shift() });

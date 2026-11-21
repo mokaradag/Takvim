@@ -7,23 +7,49 @@
  *
  *   BRIDGE_PORT=18741 BRIDGE_CALLS=calls.jsonl UI_PROFILE=B UI_BENCHMARK=test/fixtures/bilgin-executive-benchmark.json node scripts/ui-acceptance/scriptedBridge.mjs
  */
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
+import { isIsoDay } from '../../src/domain/ai/isoDay.js';
 import { compositionView, coveringBlocks, isCompositionCall } from '../../test/helpers/compositionScenario.mjs';
 
 const PORT = Number(process.env.BRIDGE_PORT ?? 18741);
 const CALLS = process.env.BRIDGE_CALLS || null;
-const benchmark = JSON.parse(readFileSync(process.env.UI_BENCHMARK || new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
+const rawBenchmark = process.env.UI_BENCHMARK || '';
+// Virgül içeren tekil dosya yolu mevcutsa bölünmeden tek kaynak olarak okunur.
+const benchmarks = (rawBenchmark
+  ? (existsSync(rawBenchmark) ? [rawBenchmark] : rawBenchmark.split(',').filter(Boolean))
+  : [
+    new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url),
+    new URL('../../test/fixtures/bilgin-temporal-benchmark.json', import.meta.url)
+  ]).map((source) => JSON.parse(readFileSync(source, 'utf8')));
 // Göreli termin belirteçleri ("T+N") çalıştırma gününe (Türkiye günü) göre çözülür; sentetik veri de aynı güne göre kurulur.
-const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const istanbulDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+// `BRIDGE_TODAY`: yalnızca sınamada sabit gün (köprü ile sınama kahini aynı saati kullanır); geçersiz takvim günü açılışta reddedilir.
+const rawBridgeToday = process.env.BRIDGE_TODAY;
+if (rawBridgeToday != null && rawBridgeToday !== '' && !isIsoDay(rawBridgeToday)) {
+  process.stderr.write(`geçersiz BRIDGE_TODAY takvim günü: ${rawBridgeToday}\n`);
+  process.exit(1);
+}
+const FIXED_DAY = rawBridgeToday && isIsoDay(rawBridgeToday) ? rawBridgeToday : null;
+const today = FIXED_DAY || istanbulDay();
 const shift = (offset) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
-const resolved = (plan) => JSON.parse(JSON.stringify(plan).replace(/"T\+(-?\d+)"/g, (_, offset) => `"${shift(Number(offset))}"`));
+// Aşama H kıyas kümesi "T", "T-N" ve "T+N" biçimlerini kullanır; hepsi aynı güne göre çözülür.
+// Yalnızca tarih alanları çözülür: "T" adlı bir proje ya da metin değeri tarihe çevrilmez.
+const DATE_KEYS = new Set(['dateFrom', 'dateTo', 'compareFrom', 'compareTo']);
+const relativeDay = (value) => { const match = /^T(?:\+(-?\d+)|(-\d+))?$/.exec(value); return match ? shift(Number(match[1] ?? match[2] ?? 0)) : value; };
+const resolved = (plan) => JSON.parse(JSON.stringify(plan), (key, value) => (DATE_KEYS.has(key) && typeof value === 'string' ? relativeDay(value) : value));
 // Aynı soru metni farklı profillerde farklı altın planla geçebilir (ör. g08/g09): UI_PROFILE verilirse yalnızca o profilin vakaları
 // eşlenir. Aynı metne iki farklı plan kalırsa biri sessizce seçilmez: metin çakışma olarak işaretlenir ve yanıt açıklama kararıdır.
 const PROFILE = process.env.UI_PROFILE || null;
 const plans = new Map();
 const collisions = new Set();
-for (const item of [...(benchmark.scenarios || []), ...(benchmark.original || [])]) {
+const items = benchmarks.flatMap((benchmark) => [
+  ...(benchmark.scenarios || []),
+  ...(benchmark.original || []),
+  ...(benchmark.targeted || []),
+  ...(benchmark.adversarial || [])
+]);
+for (const item of items) {
   if (PROFILE && item.profile && item.profile !== PROFILE) continue;
   for (const turn of item.turns || [{ text: item.text, plan: item.plan }]) {
     if (!turn.plan) continue;
@@ -66,6 +92,15 @@ http.createServer((request, response) => {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Array.isArray(input.messages)
       || input.messages.some((message) => !message || typeof message !== 'object')) { response.writeHead(400).end(); return; }
     // Düzen iletisi bozuk JSON ya da çizilemeyen görünüm taşıyabilir: hata ucu sonlandırmaz, istemci hatası (400) olarak döner.
+    // Göreli altın planlar başlangıç gününe çözüldü: Türkiye gün sınırını aşan yeniden oynatma bayat dönem okurdu. Yanıt verilmez;
+    // koşu yeniden başlatılmalıdır (uygulama ve sentetik veri de yeni güne göre kurulur).
+    // Gün değişimi denetimi sabit günde yalnızca açıkça istenirse (`BRIDGE_ENFORCE_DAY=1`, devir sınaması) uygulanır.
+    if ((!FIXED_DAY || process.env.BRIDGE_ENFORCE_DAY === '1') && istanbulDay() !== today) {
+      process.stderr.write(`betikli uç ${today} gününe göre çözüldü; Türkiye günü değişti, koşuyu yeniden başlatın\n`);
+      try { if (CALLS) appendFileSync(CALLS, `${JSON.stringify({ at: new Date().toISOString(), purpose: 'rollover', ok: false, scripted: true, status: 409, error: 'day_rollover' })}\n`); } catch { /* günlük yazılamasa da 409 döner */ }
+      response.writeHead(409).end();
+      return;
+    }
     let replied;
     try { replied = reply(input); } catch { response.writeHead(400).end(); return; }
     const { purpose, message, unscripted } = replied;

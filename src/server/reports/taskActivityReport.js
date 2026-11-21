@@ -120,7 +120,73 @@ export const TASK_ACTIVITY_SQL = `
   DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;
 `;
 
-export async function readTaskActivityReport(executor, actor, input = {}, now, { includeStructuredChanges = false, evidenceSnapshotLimit = null, analyzedActivityLimit = null, includeChangeText = true, maxEvidencePeople = null } = {}) {
+/**
+ * Aşama H — DÖNEM ÖZETİ kipi (`aggregate`): aynı sorgunun, aynı yetki ve nüfus koşullarıyla, satır okumadan dönem sayılarını veren
+ * türevi. Rapor SQL'i değişmez; türev yalnızca şu ekleri yapar:
+ *   - yeniden açma olayı (tamamlanmış durumdan çıkış) ve türlere göre AYRIK görev sayıları (oluşturulan, silinen, yalnızca
+ *     güncellenen, yeniden açılan): aynı görevin bir dönemdeki yinelenen geçişleri tek sayılır;
+ *   - Türkiye gününe göre günlük hareket sayıları (çağıran haftalık/aylık kovalara toplar);
+ *   - denetim kaydının başlangıcı (`FirstRecordedAt`) doğrulanmış bir kapsam kaynağı olmadığından bilinmez; küresel kayıt tarihi okunmaz;
+ *   - ekip kapsamının kurumsal düzeyi (`@teamLevel`): görev olgularındaki düzey kuralının aynısı; düzeyde yönetilen çalışan yoksa
+ *     nüfus yoktur ve okuma kapalı reddedilir ("0 hareket" yanıltıcı olurdu).
+ * Okuma sınırı aynıdır: `analyzedActivityLimit` + 1 yoklaması (20 000 + 1) aşılırsa "sonuç çok büyük".
+ */
+const REOPEN_EVENT_SQL = `CASE WHEN COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_STATUSES_SQL})
+      AND COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_STATUSES_SQL}) THEN 1 ELSE 0 END AS ReopenEvent`;
+const ACTIVITY_DAY_SQL = `CONVERT(date, OccurredAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time')`;
+const TEAM_SCOPE_SQL = `(@scope = 'team' AND (@isAdmin = 1 OR a.ActorSicil = @sicil OR EXISTS (
+        SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil)))`;
+// Dönem özetinde ekip, görev olgularındaki ekip kuralı gibi yöneticinin KENDİ hareketlerini içermez (düzeyli ya da düzeysiz):
+// "ekibinizin kaydettiği hareket" sayısı ile ekip görev sayıları aynı nüfusu anlatır.
+const LEVELED_TEAM_SCOPE_SQL = `(@scope = 'team' AND a.ActorSicil <> @sicil AND ((LEN(@teamLevel) = 0 AND EXISTS (
+        SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil))
+      OR (LEN(@teamLevel) > 0 AND EXISTS (
+        SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.ActorSicil AND es.ScopeType = @teamLevel))))`;
+
+/** Türev deyim: her ek, rapor SQL'inde TAM bir kez bulunan bir çapaya bağlanır; çapa kaybolursa okuma kapalı hata verir. */
+function aggregateActivitySql(statement) {
+  const edits = [
+    ['DROP TABLE IF EXISTS #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;', `IF @scope = 'team' AND LEN(@teamLevel) > 0 AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+    WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND es.ScopeType = @teamLevel)
+    THROW 51002, 'AI_TOOL_SCOPE_UNAVAILABLE', 1;
+  DROP TABLE IF EXISTS #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;`],
+    ['THEN 1 ELSE 0 END AS CompletionEvent\n  INTO #TaskActivityScope', `THEN 1 ELSE 0 END AS CompletionEvent,\n    ${REOPEN_EVENT_SQL}\n  INTO #TaskActivityScope`],
+    [TEAM_SCOPE_SQL, LEVELED_TEAM_SCOPE_SQL],
+    // Sayaçlar durum geçişlerinden SQL'de hesaplanır; toplu okumada not taşıyan ayrıntı JSON'u sunucuya çıkmaz.
+    [`SELECT * INTO #TaskActivityPage FROM #TaskActivityGroups ORDER BY OccurredAt DESC, LastAuditId DESC
+    OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+  SELECT g.LastAuditId AS GroupId, g.OccurredAt AS GroupOccurredAt, g.Completed, g.Deleted, g.Created, g.EventCount, e.*
+  FROM #TaskActivityPage g
+  ${ACTIVITY_DETAIL_APPLY}
+  ORDER BY g.OccurredAt DESC, g.LastAuditId DESC, e.AuditId;`, 'SELECT TOP (0) AuditId FROM #TaskActivityScope;'],
+
+    ['MAX(CompletionEvent) AS Completed,', `MAX(CompletionEvent) AS Completed, MAX(ReopenEvent) AS Reopened, MIN(CASE WHEN CompletionEvent = 1 THEN OccurredAt END) AS CompletedAt, MIN(CASE WHEN Kind = 'created' THEN OccurredAt END) AS CreatedAt,`],
+    ['COUNT(DISTINCT ActorSicil) AS ActorCount, COUNT(DISTINCT CASE WHEN Completed = 1 THEN EntityId END) AS CompletedCount', `COUNT(DISTINCT ActorSicil) AS ActorCount, COUNT(DISTINCT CASE WHEN Completed = 1 THEN EntityId END) AS CompletedCount,
+    COUNT(DISTINCT CASE WHEN Created = 1 THEN EntityId END) AS CreatedCount, COUNT(DISTINCT CASE WHEN Deleted = 1 THEN EntityId END) AS DeletedCount,
+    COUNT(DISTINCT CASE WHEN Reopened = 1 THEN EntityId END) AS ReopenedCount,
+    (SELECT COUNT(*) FROM (SELECT EntityId FROM #TaskActivityGroups GROUP BY EntityId
+      HAVING MAX(Created) = 0 AND MAX(Deleted) = 0 AND MAX(Completed) = 0 AND MAX(Reopened) = 0) updatedOnly) AS UpdatedOnlyCount,
+    CAST(NULL AS datetime2) AS FirstRecordedAt`],
+    ['  DROP TABLE #TaskActivityPage, #TaskActivityGroups, #TaskActivityScope;', `  SELECT CONVERT(char(10), ${ACTIVITY_DAY_SQL}, 23) AS ActivityDay, SUM(Events) AS Events,
+    SUM(CompletionEvents) AS CompletionEvents, SUM(CreationEvents) AS CreationEvents
+  FROM (
+    SELECT OccurredAt, 1 AS Events, 0 AS CompletionEvents, 0 AS CreationEvents FROM #TaskActivityGroups
+    UNION ALL SELECT CompletedAt, 0, 1, 0 FROM #TaskActivityGroups WHERE CompletedAt IS NOT NULL
+    UNION ALL SELECT CreatedAt, 0, 0, 1 FROM #TaskActivityGroups WHERE CreatedAt IS NOT NULL
+  ) eventDays GROUP BY ${ACTIVITY_DAY_SQL} ORDER BY ActivityDay;
+  SELECT DISTINCT t.TaskId, t.ProjectId AS CurrentProjectId
+  FROM #TaskActivityGroups g JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, g.EntityId);
+  DROP TABLE #TaskActivityGroups, #TaskActivityScope;`]
+  ];
+  let out = statement;
+  for (const [anchor, replacement] of edits) {
+    if (out.split(anchor).length !== 2) throw new ServerPersistenceError('MUTATION_FAILED', 'Hareket özeti sorgusu kurulamadı.');
+    out = out.replace(anchor, () => replacement);
+  }
+  return out;
+}
+
+export async function readTaskActivityReport(executor, actor, input = {}, now, { includeStructuredChanges = false, evidenceSnapshotLimit = null, analyzedActivityLimit = null, includeChangeText = true, maxEvidencePeople = null, aggregate = false, teamLevel = null } = {}) {
   const query = normalizeActivityQuery(input, actor, now);
   const request = executor.request();
   request.input('sicil', sql.Int, actor.sicil);
@@ -162,6 +228,10 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   END
   SELECT DISTINCT ActorSicil`);
   }
+  if (aggregate) {
+    request.input('teamLevel', sql.VarChar(20), teamLevel || '');
+    statement = aggregateActivitySql(statement);
+  }
   if (evidenceSnapshotLimit != null) {
     request.input('evidenceSnapshotLimit', sql.Int, evidenceSnapshotLimit);
     request.input('activityDetailLimit', sql.Int, 2);
@@ -178,7 +248,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   DECLARE @lastPage int`);
   }
   const result = await request.query(statement);
-  const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];
+  const [actorRows = [], projectRows = [], counts = [], events = [], dayRows = [], populationRows = []] = result.recordsets || [];
   const peopleByTask = new Map();
   const candidateByIdentity = new Map();
   if (includeChangeText) for (const event of events) {
@@ -251,6 +321,15 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   const summary = counts[0] || {};
   return { items, total: Number(summary.Total || 0), page: Number(summary.Page || 0), pageSize: query.pageSize,
     summary: { tasks: Number(summary.TaskCount || 0), people: Number(summary.ActorCount || 0), completed: Number(summary.CompletedCount || 0) },
+    ...(aggregate ? { aggregate: {
+      created: Number(summary.CreatedCount || 0), deleted: Number(summary.DeletedCount || 0), reopened: Number(summary.ReopenedCount || 0),
+      updatedOnly: Number(summary.UpdatedOnlyCount || 0),
+      firstRecordedAt: summary.FirstRecordedAt ? new Date(summary.FirstRecordedAt).toISOString() : null,
+      days: dayRows.map((row) => ({ day: String(row.ActivityDay).slice(0, 10), events: Number(row.Events || 0), completionEvents: Number(row.CompletionEvents || 0),
+        creationEvents: Number(row.CreationEvents || 0) })),
+      // Sayımın dayandığı güncel görevler (son yetki denetimi için; silinmiş görevin güncel kaydı yoktur).
+      population: populationRows.map((row) => ({ taskId: canonicalActualId(row.TaskId), projectId: canonicalActualId(row.CurrentProjectId) })).filter((row) => row.taskId && row.projectId)
+    } } : {}),
     range: { from: query.from, to: query.to, timeZone: query.timeZone }, scope: query.scope,
     canViewTeam: actor.isExecutive || actor.isSystemAdmin,
     filters: { people: actorRows.map((row) => ({ id: String(row.ActorSicil), name: row.DisplayName,

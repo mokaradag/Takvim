@@ -19,6 +19,10 @@
  *   G  Aşama G yönetici ve proje zekâsı kıyas kümesi (`test/fixtures/bilgin-executive-benchmark.json`, sentetik): hedefli vakalar
  *      uçtan uca (planlayıcı + düzen model; yönetici sentetik verisi ve vakanın profili; çok turlu vakalar sırayla), bağımsız ayrık
  *      küme (PHASE4E_SET=holdout) yalnızca planlayıcı. Çok kapsamlı vakada her kapsamın kendi nüfusu okunmalıdır.
+ *   H  Aşama H dönemsel, tarihsel ve not farkındalıklı zekâ kıyas kümesi (`test/fixtures/bilgin-temporal-benchmark.json`, sentetik):
+ *      hedefli ve olumsuz vakalar uçtan uca (planlayıcı + düzen model; dönem sentetik verisi ve vakanın profili; metin rızası vakanın
+ *      bildirdiği kadardır), bağımsız ayrık küme (PHASE4E_SET=holdout) yalnızca planlayıcı. Puan nesneldir: okunan dönem ve
+ *      karşılaştırma dönemi, kapsam, bulgu türü, tamlık çekincesi, grafik türü ve izin verilen bitiş (akıcı ama yanlış yanıt geçmez).
  * Derin modele giden her çağrı modele GİTMEZ; sayılır ve başarısızlıktır (zayıf model kabulü güçlü modelle gizlenmez).
  * PHASE4E_CASES=id,… yalnızca o vakaları (başarısızların yeniden koşusu) çalıştırır. Rapor içerik taşımaz.
  * PLANNER_CLAUDE_FORCED_RETRY=1: CLI zorunlu aracı kısıtlı çözümle uygulayamadığı için model zorunlu turda başka bir araç
@@ -36,6 +40,8 @@ import { analysisBenchmarkSeed, BENCH_PROFILES } from '../test/helpers/analysisB
 import { executiveBenchmarkSeed, EXEC_PROFILES } from '../test/helpers/executiveBenchmarkSeed.mjs';
 import { answerQuality } from '../test/helpers/answerQuality.mjs';
 import { phase4eConversation, turnViolations, renderedCharts } from '../test/helpers/phase4eScenario.mjs';
+import { temporalBenchmarkSeed, TEMPORAL_PROFILES } from '../test/helpers/temporalBenchmarkSeed.mjs';
+import { expectedCompare, expectedRange, temporalFixture as temporal, temporalViolations, temporalRequestMatches, temporalPopulationViolations } from '../test/helpers/temporalScenario.mjs';
 import { planCase } from './planner-evaluation.mjs';
 import { completeModelRound } from './planner-followup-qualification.mjs';
 import { qualificationProvider } from './answer-composition-qualification.mjs';
@@ -53,7 +59,7 @@ export const BENCHMARK_TODAY = new Date(NOW.getTime() + 3 * 3600000).toISOString
 const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed: [], firstPass: 0, repairs: 0, escalations: 0, turns: 0, results: [] };
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
-const { analysisSuggestion, resolveAnalysisBrief } = await import('../src/server/ai/tools/analysisPlan.js');
+const { analysisSuggestion, resolveAnalysisBrief, analysisWindows } = await import('../src/server/ai/tools/analysisPlan.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
 // Her çağrı kendi satırlarına sahiptir; önceki ve eşzamanlı koşular yalnızca eklenen defteri paylaşabilir.
 const RUN_ID = randomUUID();
@@ -65,8 +71,8 @@ const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistr
 const scopeOf = (requests) => {
   if (!requests.length) return null;
   const one = (request) => {
-    if (request.filters?.assignee === 'me') return 'self';
-    if (request.filters?.assignee === 'team') return 'team';
+    if (request.filters?.assignee === 'me' || request.filters?.activityScope === 'mine') return 'self';
+    if (request.filters?.assignee === 'team' || request.filters?.activityScope === 'team') return 'team';
     if (request.entities.some((entity) => entity.type === 'person')) return 'person';
     if (request.entities.some((entity) => entity.type === 'project')) return 'project';
     if (request.population?.tool === 'rota_portfolio_summary') return 'projects';
@@ -85,6 +91,18 @@ const requestFocus = (request) => {
   return text ? JSON.parse(/\{.*\}/.exec(text)[0]).analysis.focus : [];
 };
 const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
+
+/** Dönem dışındaki bütün etkin süzgeçler ve varlık seçicileri aynı nüfusu tanımlar. */
+function periodPopulationKey(request) {
+  const filters = Object.entries(request.filters || {}).filter(([key, value]) => !['dateFrom', 'dateTo'].includes(key) && value != null && !(Array.isArray(value) && !value.length))
+    .sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value]);
+  const entities = (request.entities || []).map((entity) => JSON.stringify([entity.type, entity.id ?? entity.query ?? entity.text])).sort();
+  return JSON.stringify([request.population?.tool, filters, entities]);
+}
+
+function periodReadKey(request) {
+  return JSON.stringify([periodPopulationKey(request), request.operation, request.population?.groupBy, request.population?.collection, [...(request.metrics || [])].sort()]);
+}
 
 function liveTurn(rounds, completeRound) {
   return (options) => runGroundedTurn(Object.freeze({
@@ -147,12 +165,12 @@ export function plannerScore(result, expect, today = corpus.today) {
       && (request.population?.tool === 'rota_portfolio_summary' || Boolean((layer.dateFrom || layer.dateTo || analysis?.dateFrom || analysis?.dateTo || expect.window)
         && request.population?.tool === 'rota_task_analytics' && request.population.groupBy === 'project'
         && !request.entities?.length && !request.filters?.assignee && (request.filters?.dateFrom || request.filters?.dateTo)));
-    const readsLayer = (layer, request) => (layer.scope === 'self' ? request.filters?.assignee === 'me' && !request.entities?.length
-      : layer.scope === 'team' ? request.filters?.assignee === 'team' && !request.entities?.length && (request.filters?.teamLevel || '') === (layer.level || '')
+    const readsLayer = (layer, request) => (layer.scope === 'self' ? scopeOf([request]) === 'self' && !request.entities?.length
+      : layer.scope === 'team' ? scopeOf([request]) === 'team' && !request.entities?.length && (request.filters?.teamLevel || '') === (layer.level || '')
         : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope && sameName(layer, entity)) && !request.filters?.assignee
           && request.entities.every((entity) => entity.type === layer.scope && expect.layers.some((expected) => expected.scope === entity.type && sameName(expected, entity)))
           : layer.scope === 'projects' ? portfolioRead(layer, request)
-            : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary');
+            : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary' && scopeOf([request]) === 'all');
     // Çok adlı katmanın her öznesi ayrı nüfus ve yön kanıtı gerektirir.
     const subjects = expect.layers.flatMap((layer) => layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]);
     const reads = (layer) => requests.some((request) => readsLayer(layer, request));
@@ -191,7 +209,7 @@ export function plannerScore(result, expect, today = corpus.today) {
       && requests.every((request) => ['person', 'self'].includes(scopeOf([request])));
     if (expect.withSelf === true && !pairedSelf) failures.push('kendiyle karşılaştırma eksik');
     if (expect.scope !== undefined && scope !== expect.scope && !pairedSelf) failures.push(`kapsam ${scope} ≠ ${expect.scope}`);
-    const teamRequests = requests.filter((request) => request.filters?.assignee === 'team');
+    const teamRequests = requests.filter((request) => scopeOf([request]) === 'team');
     if (expect.level && (!teamRequests.length || !teamRequests.every((request) => request.filters?.teamLevel === expect.level))) failures.push(`düzey ${expect.level} her ekip isteğinde değil`);
     const names = (values) => JSON.stringify([...new Set(values.map((value) => containmentText(String(value))))].sort());
     if (expect.names && names(requests.flatMap((request) => (request.entities || []).map((entity) => entity.query).filter((query) => query != null))) !== names(expect.names)) failures.push('ad kümesi beklenenle aynı değil');
@@ -209,6 +227,57 @@ export function plannerScore(result, expect, today = corpus.today) {
     // yoksa kabul edilen ayrıntılı isteklerin eşdeğer yönleri. Bildirilen ama okunmayan yön sayılmaz.
     const focus = result.plan?.analysis ? [...result.plan.analysis.focus] : requests.flatMap(requestFocus);
     for (const required of expect.focusAll || []) if (!focus.includes(required)) failures.push(`yön eksik: ${required}`);
+    // Aşama H: geçmiş görünüm isteyen soru (önceki aşamalarda sınırlılık vakası) sıradan güncel durum planıyla karşılanmaz: plan bir
+    // geçmiş dönem yönü okur ya da karşılaştırılamayan geçmiş durumu açıkça bildirir.
+    if (expect.temporalWindow || expect.temporalCompare) {
+      const window = expectedRange(expect.temporalWindow, today);
+      const compare = expectedCompare(expect.temporalCompare, expect.temporalWindow, today);
+      let unresolved = false;
+      if (!expect.temporalPairRequired && result.plan?.analysis?.historyUnsupported?.length) {
+        try {
+          const windows = analysisWindows(result.plan.analysis, today);
+          unresolved = matchesPeriod(windows.range, window) && matchesPeriod(windows.compare, compare);
+        } catch { unresolved = false; }
+      }
+      const readsAt = (range) => requests.filter(({ filters, metrics, population }) => {
+        if (filters?.dateFrom !== range[0] || filters?.dateTo !== range[1]) return false;
+        if (!expect.temporalPairRequired) return Boolean(filters.activityView || ['actualFinish', 'createdAt'].includes(filters.dateField));
+        if (population?.tool === 'rota_activity_search') return filters.activityView === 'period' && metrics?.includes('activity.events');
+        return population?.tool === 'rota_task_analytics' && metrics?.includes('tasks.total')
+          && (filters.dateField === 'createdAt' || filters.dateField === 'actualFinish' && filters.status?.length === 1 && filters.status[0] === 'done');
+      });
+      for (const range of [window, compare].filter(Boolean)) if (!unresolved && !readsAt(range).length) failures.push('istenen tarihsel dönem okunmadı');
+      // Karşılaştırmada iki dönem aynı ölçüyü aynı nüfus ve sonuç biçimiyle okur.
+      if (window && compare && !unresolved) {
+        const priorKeys = new Set(readsAt(compare).map(periodReadKey));
+        if (!readsAt(window).some((request) => priorKeys.has(periodReadKey(request)))) failures.push('iki dönem aynı ölçüyle okunmuyor');
+      }
+    }
+    if (expect.temporal && !focus.some((item) => ['completed', 'created', 'activity', 'trend'].includes(item)) && !result.plan?.analysis?.historyUnsupported?.length) failures.push('geçmiş dönem okunmadı');
+    // "Durum iyileşti mi" sorusu geçmiş DURUMU sorar: dönemlerin tamamlanma sayıları bunu kanıtlamaz; görev durumu yönünün geçmiş sınırı
+    // (`historyUnsupported`) bildirilmelidir (yalnızca öncelik/not gibi başka bir yönün sınırı bu beklentiyi karşılamaz).
+    const STATE_LIMIT_ASPECTS = ['overview', 'status', 'overdue', 'deadlines'];
+    if (expect.historyLimit && !(result.plan?.analysis?.historyUnsupported || []).some((aspect) => STATE_LIMIT_ASPECTS.includes(aspect))) failures.push('geçmiş durum sınırı bildirilmedi');
+    // Dönemdeki gelişmeleri bugünkü durumdan ayırmayı isteyen soru (`currentState`): dönemde gözlenen olay okuması ile ayrı, dönemsiz
+    // bugünkü durum okuması birlikte gerekir; geçmiş durum sınırı bildirimi olay okumasının yerine geçmez.
+    if (expect.currentState) {
+      const window = expectedRange(expect.temporalWindow, today);
+      if (!requests.some((request) => window && request.filters?.dateFrom === window[0] && request.filters?.dateTo === window[1]
+        && (request.filters?.activityView || ['actualFinish', 'createdAt'].includes(request.filters?.dateField)))) failures.push('dönemdeki gelişmeler okunmadı');
+      // Bugünkü durum okuması görev durumunu okuyan araçtan ve gerçek bir durum ölçüsünden gelir (yalnızca başlık ya da done sayımı yetmez).
+      const hasCurrentStateMeasure = (request) => {
+        const metrics = request.metrics || [];
+        const filters = request.filters || {};
+        const doneOnly = Array.isArray(filters.status) && filters.status.length === 1 && filters.status[0] === 'done';
+        if (doneOnly) return false;
+        if (request.population?.tool === 'rota_workload_summary') return true;
+        const openFilter = Array.isArray(filters.status) && filters.status.some((status) => ['todo', 'in_progress'].includes(status));
+        return request.population?.groupBy === 'status' || Boolean(filters.deadline) || openFilter
+          || metrics.some((metric) => ['task.status', 'tasks.open', 'tasks.todo', 'tasks.inProgress', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'].includes(metric));
+      };
+      if (!requests.some((request) => ['rota_task_analytics', 'rota_task_search', 'rota_workload_summary'].includes(request.population?.tool)
+        && !request.filters?.dateFrom && !request.filters?.dateTo && !request.filters?.dateField && !request.filters?.period && hasCurrentStateMeasure(request))) failures.push('güncel durum ayrı okunmadı');
+    }
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
     const bounded = requests.filter((request) => request.filters?.dateFrom || request.filters?.dateTo);
@@ -240,6 +309,162 @@ export async function plannerCase(item, { completeRound = completeModelRound, to
     infrastructure: rounds.find((round) => round.infrastructure)?.infrastructure || null, failures };
 }
 
+/**
+ * Aşama H ayrık küme puanı: karar, kabul edilen özetin kapsamı (düzey, adlar, fazlası kabul edilmez) ve yönleri ile kabul edilen
+ * planın OKUDUĞU dönem, karşılaştırma dönemi, dizi kovası ve yeniden kurulamayan geçmiş durum bildirimi.
+ */
+export function temporalPlannerScore(result, expect, today = temporal.today) {
+  const failures = [];
+  const decision = result.decisions.at(-1) || null;
+  const intent = result.outcome === 'planned' ? 'rota' : decision?.intent || result.outcome;
+  if (result.outcome === 'error') failures.push(`hata ${result.error}`);
+  // Metin rızası plan aşamasında verilmemiştir: not sorusunda doğru sonuç ya kabul edilen not planı ya da rıza isteğidir (veri okunmaz).
+  const accepted = expect.intentAny || (expect.needsText ? [expect.intent, 'text_fields'] : [expect.intent]);
+  if (!accepted.includes(intent)) failures.push(`karar ${intent} ≠ ${accepted.join('|')}`);
+  if (expect.reason && decision?.reason !== expect.reason) failures.push(`neden ${decision?.reason} ≠ ${expect.reason}`);
+  if (result.outcome !== 'planned') return failures;
+  // Kapsam, düzey, adlar ve yönler sunucunun KABUL ETTİĞİ özetten okunur (açılım belirlenimcidir ve ayrıca sınanır).
+  const analysis = result.plan?.analysis;
+  if (!analysis) return [...failures, 'özet (analysis) yok'];
+  const declared = analysis.layers || [analysis, ...(analysis.also || [])];
+  const key = (names) => JSON.stringify([...(names || [])].map((name) => containmentText(String(name))).sort());
+  // Kapsamı belirtilmeyen beklenti (ör. geçmiş durum sınırı vakası) kapsamla puanlanmaz.
+  // Beklenen proje daraltması (`within`) katmanın parçasıdır: daraltılmış okuma kabul edilir, daraltmasız okuma reddedilir.
+  const wanted = expect.layers || (expect.scope || expect.scopeAny ? [{ scope: expect.scope, scopeAny: expect.scopeAny, level: expect.level, names: expect.names, ...(expect.within ? { within: expect.within } : {}) }] : null);
+  // Adlar özetin katmanında yoksa kabul edilen isteklerin varlık sorgularıdır (ad kümesi eşit olmalıdır; fazlası kabul edilmez).
+  const entityNames = [...new Set((result.plan?.requests || []).flatMap((request) => (request.entities || []).map((entity) => entity.query).filter((query) => query != null)).map(String))];
+  const matches = (layer, other) => (layer.scopeAny || [layer.scope]).includes(other.scope) && (layer.level || '') === (other.level || '')
+    && (!layer.names?.length || key(layer.names) === key(other.names?.length ? other.names : entityNames));
+  if (wanted) for (const layer of wanted) if (!declared.some((other) => matches(layer, other))) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} bildirilmedi`);
+  if (wanted) for (const other of declared) if (!wanted.some((layer) => matches(layer, other))) failures.push(`beklenmeyen kapsam ${other.scope}${other.level ? `/${other.level}` : ''} bildirildi`);
+  const focus = [...new Set(declared.flatMap((layer) => layer.focus || analysis.focus || []))];
+  for (const required of expect.focusAll || []) if (!focus.includes(required)) failures.push(`yön eksik: ${required}`);
+  if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
+  if (expect.visual && result.plan?.visual !== true) failures.push('görselleştirme bayrağı yok');
+  // Yanıt dili planın türlü kararıdır: İngilizce soruya Türkçe plan (ya da tersi) geçmez.
+  if (expect.language && result.plan?.language !== expect.language) failures.push(`dil ${result.plan?.language} ≠ ${expect.language}`);
+  // Dönem, sunucunun çözdüğü somut günlerle karşılaştırılır (adlı dönem ya da eşdeğer tarih çifti aynı günleri verir).
+  const requests = result.plan?.requests || [];
+  const atoms = (wanted || []).flatMap((layer) => layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]);
+  if (atoms.length) for (const request of requests) if (!atoms.some((layer) => temporalRequestMatches(request, layer))) failures.push('beklenmeyen nüfus okundu');
+  const measures = (expect.focusAll || []).filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus));
+  if (!measures.length && expect.focusAny) measures.push(...focus.filter((item) => expect.focusAny.includes(item) && ['completed', 'created', 'activity', 'trend'].includes(item)));
+  const carries = (request, measure) => {
+    const filters = request.filters || {};
+    if (request.entities?.some((entity) => !['person', 'project'].includes(entity.type))) return false;
+    if (measure === 'activity') return request.population?.tool === 'rota_activity_search' && filters.activityView && !filters.activityKind && request.metrics?.includes('activity.events');
+    if (['priority', 'deadline', 'text', 'milestone'].some((key) => filters[key] != null && !(Array.isArray(filters[key]) && !filters[key].length)) || filters.createdByMe || filters.hasDescription) return false;
+    return request.population?.tool === 'rota_task_analytics' && filters.assignee !== 'unassigned' && filters.dateField === (measure === 'created' ? 'createdAt' : 'actualFinish')
+      && request.metrics?.includes('tasks.total') && (measure === 'created' ? !filters.status?.length : filters.status?.length === 1 && filters.status[0] === 'done')
+      && (measure === 'trend' ? ['date_week', 'date_month'].includes(request.population.groupBy) : !request.population.groupBy);
+  };
+  // Katmanın kendi yönleri varsa (ve üst düzey yön beklentisi yoksa) ölçüleri yalnızca o katmanın okumalarında aranır: yer değiştirmiş
+  // ölçüler (kendi için hareket, ekip için tamamlanan) geçmez.
+  const ownMeasures = (layer, fallback, compared) => (layer?.focus && !expect.focusAll && !expect.focusAny
+    ? layer.focus.filter((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus) && !(compared && focus === 'trend')) : fallback);
+  const requiredFocus = expect.focusAll || (expect.focusAny || []).filter((item) => focus.includes(item));
+  const layers = (atoms.length ? atoms : [{}]).map((layer) => ({ ...layer, focus: layer.focus || requiredFocus }));
+  const inRange = (request, range) => !range || request.filters?.dateFrom === range[0] && request.filters?.dateTo === range[1];
+  const candidates = (layer, measure, range, primary = true, bucketed = true) => requests.filter((request) => inRange(request, range)
+    && (!primary || !expect.windowFrom || request.filters?.dateFrom && Math.abs(day(request.filters.dateFrom) - day(expect.windowFrom)) <= 1)
+    && (!layer?.scope && !layer?.scopeAny || temporalRequestMatches(request, layer)) && (!measure || carries(request, measure))
+    && (!bucketed || !primary || !expect.bucket || measure !== 'trend' && measure !== 'activity' || (measure === 'activity' ? request.filters?.activityView === expect.bucket : request.population?.groupBy === `date_${expect.bucket}`)));
+  const stateOnlyLayer = (layer) => Boolean(layer?.focus?.length && !layer.focus.some((focus) => ['completed', 'created', 'activity', 'trend'].includes(focus)));
+  const WINDOWED_STATE_FOCUS = new Set(['status', 'upcoming', 'critical', 'schedule']);
+  const HISTORY_GROUP_SET = new Set(['projects', 'workload', 'org']);
+  const carriesStateFocus = (request, layer, stateFocus, range = null) => {
+    const f = request.filters || {};
+    const m = request.metrics || [];
+    const g = request.population?.groupBy;
+    const tool = request.population?.tool;
+    if (stateFocus === 'horizons') return tool === 'rota_task_analytics' && g === 'due_horizon';
+    if (stateFocus === 'notes') return tool === 'rota_task_search' && f.hasDescription === true;
+    const hasDates = Boolean(f.dateFrom || f.dateTo || f.dateField || f.period);
+    const layerHasHistory = Boolean(layer?.focus?.some((focus) => ['completed', 'created', 'trend'].includes(focus)));
+    if (range && WINDOWED_STATE_FOCUS.has(stateFocus)) {
+      if (f.period || f.dateField && f.dateField !== 'targetFinish') return false;
+      const expectedFrom = stateFocus === 'upcoming' && range[0] < today ? today : range[0];
+      if (f.dateFrom !== expectedFrom || f.dateTo !== range[1]) return false;
+    } else if (hasDates) {
+      if (!range || !layerHasHistory || !HISTORY_GROUP_SET.has(stateFocus) || !['actualFinish', 'createdAt'].includes(f.dateField)) return false;
+      if (f.dateFrom !== range[0] || f.dateTo !== range[1]) return false;
+    }
+    if (stateFocus === 'overdue') return f.deadline === 'overdue' || m.includes('tasks.overdue');
+    if (stateFocus === 'upcoming') return f.deadline === 'due_next_7_days' || m.includes('tasks.dueNext7Days') || Boolean(range && hasDates && tool === 'rota_task_search');
+    if (stateFocus === 'critical') return Array.isArray(f.priority) && f.priority.includes('critical');
+    if (stateFocus === 'milestones') return f.milestone === true || m.includes('tasks.openMilestones');
+    if (stateFocus === 'workload') return tool === 'rota_workload_summary' || g === 'assignee' || (['self', 'person'].includes(layer?.scope) && g === 'project');
+    if (stateFocus === 'projects') return tool === 'rota_portfolio_summary' || g === 'project';
+    if (stateFocus === 'org') return ['department', 'unit', 'assignee'].includes(g) || tool === 'rota_workload_summary';
+    if (stateFocus === 'priority') return g === 'priority';
+    if (stateFocus === 'deadlines') return g === 'deadline';
+    if (stateFocus === 'schedule') return g === 'target_month';
+    if (stateFocus === 'status') {
+      const allStatuses = !f.status?.length || ['todo', 'in_progress', 'done'].every((status) => f.status.includes(status));
+      const unrestricted = allStatuses && !f.priority?.length && !f.deadline && !f.text && f.milestone == null && !f.createdByMe && !f.hasDescription
+        && f.assignee !== 'unassigned' && !request.previousResult && !request.entities?.some((entity) => !['person', 'project'].includes(entity.type));
+      return unrestricted && tool === 'rota_task_analytics' && (g === 'status'
+        || !g && ['tasks.todo', 'tasks.inProgress', 'tasks.done'].every((metric) => m.includes(metric)));
+    }
+    return g === 'status' || ['tasks.open', 'tasks.todo', 'tasks.inProgress', 'tasks.overdue', 'tasks.completionRatePercent'].some((metric) => m.includes(metric));
+  };
+  const reads = (range) => layers.every((layer) => {
+    const own = ownMeasures(layer, measures, false);
+    const stateFocuses = (layer?.focus || []).filter((focus) => !['completed', 'created', 'activity', 'trend'].includes(focus));
+    const statesOk = !stateFocuses.length || stateFocuses.every((stateFocus) => requests.some((request) => (!layer.scope && !layer.scopeAny || temporalRequestMatches(request, layer)) && carriesStateFocus(request, layer, stateFocus, range)));
+    if (!own.length && stateOnlyLayer(layer)) return statesOk;
+    return statesOk && (own.length ? own : [null]).every((measure) => candidates(layer, measure, range).length);
+  });
+  const range = expectedRange(expect.window, today);
+  if (range && !expect.stateComparison && !reads(range)) failures.push(`dönem ${range.join('..')} okunmuyor`);
+  if (!range && !expect.stateComparison && layers.some((layer) => layer.focus?.some((item) => !['completed', 'created', 'activity', 'trend'].includes(item))) && !reads(null)) failures.push('durum katmanı yönü okunmuyor');
+  const prior = expectedCompare(expect.compare, expect.window, today);
+  if (prior && !expect.stateComparison && !requests.some((request) => inRange(request, prior))) failures.push(`karşılaştırma dönemi ${prior.join('..')} okunmuyor`);
+  if (prior && !expect.stateComparison && !layers.every((layer) => {
+    const own = ownMeasures(layer, measures.filter((measure) => measure !== 'trend'), true);
+    const paired = (measure) => {
+      const priorKeys = new Set(candidates(layer, measure, prior, false, false).map(periodReadKey));
+      return candidates(layer, measure, range, true, false).some((request) => priorKeys.has(periodReadKey(request)));
+    };
+    // Yalnızca eğilim ya da yalnızca durum yönü isteyen katman ikinci dönem tarihsel okuması gerektirmez (durum katmanı geçmiş sınırı taşır).
+    if (!own.length && (layer?.focus || measures).includes('trend')) return true;
+    if (!own.length && stateOnlyLayer(layer)) return Boolean(analysis.historyUnsupported?.length);
+    return own.length ? own.every(paired) : ['completed', 'created', 'activity'].some(paired);
+  })) failures.push('iki dönem aynı ölçüyle okunmuyor');
+  if (expect.windowFrom && !reads(range)) failures.push(`dönem başlangıcı ${expect.windowFrom} okunmuyor`);
+  if (expect.bucket && !reads(range)) failures.push(`dizi kovası ${expect.bucket} okunmuyor`);
+  // Her eğilimin tamlık okuması kendi katmanı, nüfusu ve dönemiyle eşleşir.
+  for (const layer of layers.filter((item) => ownMeasures(item, measures, false).includes('trend'))) {
+    const totals = candidates(layer, 'completed', range).filter((request) => request.metrics?.includes('tasks.undatedDone'));
+    if (!candidates(layer, 'trend', range).some((series) => totals.some((total) => inRange(total, [series.filters?.dateFrom, series.filters?.dateTo])
+      && periodPopulationKey(series) === periodPopulationKey(total)))) failures.push('eğilimin tamlık okuması yok');
+  }
+  if (expect.stateComparison) {
+    const supportedFocus = expect.focusAll || expect.focusAny;
+    if (!analysis.historyUnsupported?.some((aspect) => !supportedFocus || supportedFocus.includes(aspect) && focus.includes(aspect))) {
+      failures.push('geçmiş durum sınırı bildirilmedi');
+    }
+    let matches = false;
+    try {
+      const windows = analysisWindows(analysis, today);
+      matches = matchesPeriod(windows.range, range) && matchesPeriod(windows.compare, prior);
+    } catch { matches = false; }
+    if (!matches) failures.push('istenen geçmiş durum dönemleri bildirilmedi');
+  }
+  return failures;
+}
+
+const matchesPeriod = (actual, expected) => !expected || actual?.dateFrom === expected[0] && actual?.dateTo === expected[1];
+
+export async function temporalPlannerCase(item, { completeRound = completeModelRound, today = temporal.today } = {}) {
+  const rounds = [];
+  const result = await planCase({ testCase: { id: 'q', text: item.text }, runTurn: liveTurn(rounds, completeRound), adviceFor: async () => ({ state: 'unavailable', candidates: [] }),
+    now: new Date(`${today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
+  const failures = temporalPlannerScore(result, item.expect, today);
+  return { id: item.id, rounds: rounds.length, firstPass: rounds.length === 1 && !failures.length, analysis: Boolean(result.plan?.analysis),
+    infrastructure: rounds.find((round) => round.infrastructure)?.infrastructure || null, failures };
+}
+
 /* ── Tier C/D/E: konuşma ──────────────────────────────────────────── */
 
 const plannerRouting = (planner, dry) => ({ planner, dry, escalations: 0 });
@@ -255,7 +480,7 @@ export async function conversationCase(t, turns, { plannerModel, composeModel, s
     const before = rounds.length;
     const escalationsBefore = routing.escalations;
     let result;
-    try { result = await ask({ ...turn, scripted: !plannerModel }, { detail: turn.expect?.detail || null }); }
+    try { result = await ask({ ...turn, scripted: !plannerModel }, { detail: turn.detail || turn.expect?.detail || null, ...(turn.includeText ? { includeText: true } : {}) }); }
     catch (error) {
       const infrastructure = rounds.slice(before).find((round) => round.infrastructure)?.infrastructure;
       if (!infrastructure) throw error;
@@ -265,7 +490,8 @@ export async function conversationCase(t, turns, { plannerModel, composeModel, s
     }
     const line = logs.map((row) => (row.includes('"operation":"ai.grounded.turn"') ? JSON.parse(row.slice(row.indexOf('{'))) : null)).filter(Boolean).at(-1);
     const presentation = line?.context?.presentation || null;
-    const failures = turnViolations(result, turn.expect || {}, { live: Boolean(plannerModel) });
+    // Aşama H vakası kendi nesnel denetimini taşır (dönem, bulgu, çekince, grafik); diğer katmanlar kapsam denetimini kullanır.
+    const failures = turn.violations ? turn.violations(result) : turnViolations(result, turn.expect || {}, { live: Boolean(plannerModel) });
     if (routing.escalations > escalationsBefore) failures.push('DEEP_ESCALATION');
     const measured = rounds.slice(before);
     if (measured.some((round) => round.infrastructure)) failures.push(`altyapı ${measured.find((round) => round.infrastructure).infrastructure}`);
@@ -374,7 +600,7 @@ function explicitExpectations(plan, resolveDay, seed) {
 export function benchmarkExpectation(item) {
   const analysis = item.plan?.analysis;
   const scope = analysis?.scope;
-  const seed = analysisBenchmarkSeed();
+  const seed = analysisBenchmarkSeed(BENCHMARK_TODAY);
   const names = analysis?.names || item.expect?.names || [];
   const resolveDay = (value) => {
     const token = /^T\+(-?\d+)$/.exec(value || '');
@@ -412,7 +638,7 @@ export function executiveExpectation(item) {
     : finalAnalysis(turns);
   const scope = analysis?.scope;
   const denied = (layer) => (item.expect?.deniedLayers || []).some((entry) => entry.scope === layer.scope && (entry.level || null) === (layer.level || null));
-  const seed = executiveBenchmarkSeed();
+  const seed = executiveBenchmarkSeed(BENCHMARK_TODAY);
   const layers = expectationLayers(analysis, seed)?.map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) || null;
   const finish = item.expect?.finish || { denied: 'unavailable', clarify: 'clarification', limitation: 'unsupported' }[item.handling] || 'stop';
   const names = analysis?.names || [];
@@ -560,7 +786,7 @@ if (direct) {
   } else if (TIER === 'F') {
     await runQualificationCases(pick(benchmark.original), async (t, item) => {
       t.mock.timers.enable({ apis: ['Date'], now: NOW });
-      const seed = analysisBenchmarkSeed();
+      const seed = analysisBenchmarkSeed(BENCHMARK_TODAY);
       t.mock.timers.reset();
       const turn = { text: item.text, requireComposed: item.handling === 'full', expect: benchmarkExpectation(item) };
       const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: BENCH_PROFILES[item.profile] });
@@ -579,7 +805,7 @@ if (direct) {
   } else if (TIER === 'G') {
     await runQualificationCases(pick(executive.scenarios), async (t, item) => {
       t.mock.timers.enable({ apis: ['Date'], now: NOW });
-      const seed = executiveBenchmarkSeed();
+      const seed = executiveBenchmarkSeed(BENCHMARK_TODAY);
       t.mock.timers.reset();
       // Çok turlu vakada önceki turlar yalnızca doğrulanmış yanıtla biter; puan son turun beklentisidir.
       // Ara turlar da kendi altın planlarının kapsamıyla puanlanır: son turdaki doğru ret, ara turda yanlış kapsamı örtmez.
@@ -590,6 +816,30 @@ if (direct) {
       if (item.handling === 'partial' && results.at(-1)?.finish !== 'stop' && !item.expect?.finish) failures.push(`kısmi vaka bitişi ${results.at(-1)?.finish}`);
       return { id: item.id, persona: item.persona, handling: item.handling, turns: results, failures };
     });
+  } else if (TIER === 'H' && process.env.PHASE4E_SET === 'holdout') {
+    await runQualificationCases(pick(temporal.holdout), async (_t, item) => {
+      const entry = await temporalPlannerCase(item);
+      if (entry.firstPass) summary.firstPass += 1;
+      summary.repairs += Math.max(0, entry.rounds - 1);
+      summary.turns += 1;
+      return { ...entry, id: item.id };
+    });
+  } else if (TIER === 'H') {
+    // Hedefli ve (soru metniyle koşulabilen) olumsuz vakalar: plan modeldendir, altın plan kullanılmaz. Son açıklama öncesi yetki iptali
+    // Erişim iptali (`revoke`, `revokeFinal`) canlı koşuda kurulmaz: yalnızca belirlenimci sınamadır ve canlı puana katılmaz (kurulmayan iptal geçmiş sayılmaz).
+    const cases = [...temporal.targeted, ...temporal.adversarial.filter((entry) => entry.plan && !entry.expect.finishNot && !['revoke', 'revokeFinal'].includes(entry.expect.test))];
+    await runQualificationCases(pick(cases), async (t, item) => {
+      t.mock.timers.enable({ apis: ['Date'], now: NOW });
+      const seed = temporalBenchmarkSeed(temporal.today);
+      t.mock.timers.reset();
+      const { test: _named, ...expect } = item.expect;
+      const turn = { text: item.text, detail: item.detail || null, includeText: item.includeText === true, requireComposed: item.handling === 'full' && !expect.finish,
+        violations: (result) => [...temporalViolations(result, expect, { locale: item.plan?.language || 'tr', includeText: item.includeText === true }), ...temporalPopulationViolations(result, item.plan?.analysis, seed, expect)] };
+      const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: TEMPORAL_PROFILES[item.profile] });
+      // Sunucunun tek olası düzeni (seçim yok) modelin düzen hatası değildir; diğer sunucu düzenleri (geçersiz düzen, sağlayıcı) başarısızlıktır.
+      const failures = result.failures.filter((failure) => !/^düzen [a-z]+(?:\/sunucu)?\/NO_CHOICE\//.test(failure));
+      return { id: item.id, capability: item.capability || 'olumsuz', handling: item.handling || null, turns: [result], failures };
+    });
   } else if (TIER === 'E') {
     for (const [id, turns] of pick(E2E_CASES)) {
       test(`senaryo: ${id}`, async (t) => {
@@ -597,5 +847,5 @@ if (direct) {
         record({ id, turns: results, failures: results.flatMap((row, index) => row.failures.map((failure) => `#${index + 1} ${failure}`)) });
       });
     }
-  } else throw new Error('PHASE4E_TIER: B | C | D | E | F | G');
+  } else throw new Error('PHASE4E_TIER: B | C | D | E | F | G | H');
 }

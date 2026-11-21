@@ -1,5 +1,6 @@
 import { factSentence, formatCount, formatFactDay, formatPercent, locativeCountSuffix, possessiveCount, sharePercent, strongFact } from './groundedPropositions.js';
 import { turkishPossessiveSuffix } from './evidenceNarrative.js';
+import { TEMPORAL_FINDING_KINDS, temporalFindings, temporalSentences } from './temporalFindings.js';
 
 /**
  * Aşama F — BÖLÜMLER ARASI ANALİTİK BULGULAR ve yanıtın GİRİŞ / SONUÇ anlatımı (saf, belirlenimci).
@@ -128,7 +129,9 @@ function taskLists(groups) {
     // taşları" olarak anlatılmaz (devam eden gecikmiş kilometre taşı dışarıda kalırdı).
     // Metin, iş dağılımı düğümü, öncelik ya da oluşturan koşuluyla daraltılmış liste de kapsamın açık kilometre taşı nüfusu değildir.
     const milestone = filters.milestone === true && statuses.length === OPEN_STATUSES.size && [...OPEN_STATUSES].every((status) => statuses.includes(status))
-      && !filters.deadline && !filters.dateFrom && !filters.dateTo && ['text', 'wbsId', 'priorities', 'createdByMe'].every((key) => neutral(filters[key], key));
+      && !filters.deadline && !filters.dateFrom && !filters.dateTo && ['text', 'wbsId', 'priorities', 'createdByMe', 'hasDescription'].every((key) => neutral(filters[key], key));
+    // Not süzgeci gecikmeli görevlerin ya da yaklaşan teslimlerin tamamını kapsamaz.
+    if (filters.hasDescription === true) continue;
     const kind = milestone ? 'milestone' : filters.deadline === 'overdue' ? 'overdue'
       : statuses.length && statuses.every((status) => OPEN_STATUSES.has(status)) && upcoming ? 'upcoming' : null;
     if (!kind) continue;
@@ -582,8 +585,10 @@ function levelFindings(groups) {
 }
 
 /** Turun doğrulanmış bölümlerinden yapılandırılmış bulgular (sıra: karşılaştırma, tablo, dönem baskısı, liste bulguları). */
-export function analyticalFindings(parts) {
+export function analyticalFindings(parts, context = null) {
   const groups = byEvidence(Array.isArray(parts) ? parts : []);
+  // Aşama H: dönem okumalarının bulguları (dönem özeti, karşılaştırma, eğilim, ufuk, geçmiş durum sınırı).
+  const temporal = temporalFindings(groups, context?.temporal || null);
   const tables = entityTables(groups);
   const lists = taskLists(groups);
   const leveled = levelFindings(groups);
@@ -612,8 +617,8 @@ export function analyticalFindings(parts) {
     seenG.add(key);
     return true;
   });
-  return Object.freeze(unique.filter((item) => !(item.kind === 'overdueProjectShare' && tablePlaces.some((place) => place.entity.key === item.entity.key
-    && place.today === item.today && population(place.filters) === population(item.filters)))).map((item) => Object.freeze(item)));
+  return Object.freeze([...temporal, ...unique.filter((item) => !(item.kind === 'overdueProjectShare' && tablePlaces.some((place) => place.entity.key === item.entity.key
+    && place.today === item.today && population(place.filters) === population(item.filters)))).map((item) => Object.freeze(item))]);
 }
 
 /* ── Anlatım ───────────────────────────────────────────────────────── */
@@ -802,6 +807,13 @@ function introOrder(findings, locale, focus = []) {
     }
   }
   out = leadFirst(out, findings, focus);
+  // Aşama H: dönem bulguları soruyu açar (dönem sorusunun yanıtı dönemin kendisidir); kendi kapsam ve dönem yazımlarını taşırlar.
+  const temporal = temporalSentences(findings, locale);
+  if (temporal.length) {
+    const others = findings.filter((item) => !TEMPORAL_FINDING_KINDS.includes(item.kind));
+    const rest = others.length ? withScopeLead(introOrder(others, locale, focus), others, locale).map((item) => ({ ...item, group: item.group ?? '\u0000state' })) : [];
+    return [...temporal, ...rest];
+  }
   // Aşama G: bütün bulgular tek kapsamı paylaşıyorsa kapsam bir kez, ilk cümlenin doğal girişiyle söylenir ("Ekibinizin işlerine
   // bakıldığında, …"); her cümlenin başına aynı "**X**:" etiketi yazılmaz. Karışık kapsamda her cümle kendi kapsamını taşır.
   if (sharedScopeLead(findings, locale)) return out;
@@ -1243,8 +1255,21 @@ export function synthesisNarrative(findings, { locale = 'tr', detail = 'balanced
   // paragrafıdır. Kısa yanıtta yalnızca girişin ilk cümlesi kalır; analiz paragrafı yazılmaz.
   const leadFinding = sentences[0]?.finding;
   // Kısa yanıtta da açan bulgunun ayrılmaz çekincesi (ör. görev adedi ≠ kapasite, kritik yol) bulguyla birlikte kalır.
-  const lead = short ? sentences.filter((item, index) => index === 0 || item.finding === leadFinding && item.caveat) : sentences.filter((item) => item.finding === leadFinding);
-  const rest = short ? [] : sentences.filter((item) => !lead.includes(item));
+  // Aşama H: dönem bulgusunun olgu cümleleri (tamamlanan, oluşturulan, hareket) yanıtın kendisidir; kısa yanıtta da birlikte kalır
+  // (yoksa söylenmeyen okumalar gövdede ölçütlü ayrıntı satırı olarak belirir).
+  const whole = TEMPORAL_FINDING_KINDS.includes(leadFinding?.kind);
+  // Ayrıntılı ve dengeli yanıtta dönem bulgusunun çekinceleri (kayıt kapsamı, tarihi eksik görev, yeniden açılma) olgu paragrafından
+  // ayrı, hemen ardından gelen paragraftır: açılış paragrafı olguları okunur uzunlukta taşır.
+  // Çok kapsamlı dönem yanıtında her istenen kapsamın aynı türdeki sayımı kısa yanıtta da kalır; çekince yalnızca sayımı söylenen
+  // bulgunun çekincesidir (söylenmeyen bir sayıyı niteleyen çekince yazılmaz).
+  const kept = new Set([leadFinding, ...(whole ? sentences.map((item) => item.finding).filter((finding) => finding?.multi && finding.kind === leadFinding.kind) : [])]);
+  // Not okumasının çekincesi (not tarihinin dönemi karşılamaması, not içeriğinin doğrulanmış olgu olmaması) not metni gövdede
+  // gösterildikçe kısa yanıtta da kalır: kısa yanıt uzun yanıtla çelişmez.
+  const lead = short ? sentences.filter((item, index) => index === 0 || item.finding?.kind === 'historyLimit' || (['noteDigest', 'completionTrend'].includes(item.finding?.kind) && item.caveat) || item.requiredInShort || item.basis === 'created' || item.finding?.kind === 'periodSummary'
+    || kept.has(item.finding) && (item.caveat || whole))
+    : sentences.filter((item, index) => item.finding === leadFinding && !(whole && item.caveat && index > 0));
+  const leadCaveats = short ? [] : sentences.filter((item) => item.finding === leadFinding && !lead.includes(item));
+  const rest = short ? [] : [...leadCaveats.map((item) => ({ ...item, group: ' caveats' })), ...sentences.filter((item) => !lead.includes(item) && !leadCaveats.includes(item))];
   const block = (items) => (items.length ? Object.freeze({ markdown: items.map((item) => item.markdown).join(' '), plain: items.map((item) => item.plain).join(' '),
     evidenceIds: Object.freeze(evidenceOf(items)), states: Object.freeze(items.flatMap((item) => item.states || [])) }) : null);
   const leadBlock = block(lead);
@@ -1290,7 +1315,9 @@ const ASPECTS = Object.freeze({
   overview: ['genel durum', 'overall status'], status: ['durum dağılımı', 'status breakdown'], priority: ['öncelikler', 'priorities'],
   deadlines: ['termin dağılımı', 'deadline spread'], overdue: ['gecikmeler', 'overdue work'], upcoming: ['yaklaşan teslimatlar', 'upcoming deliveries'],
   workload: ['iş yükü', 'workload'], projects: ['proje dağılımı', 'project spread'], schedule: ['aylara göre terminler', 'deadlines by month'], critical: ['kritik işler', 'critical work'],
-  org: ['alt birimlere göre dağılım', 'breakdown by sub-unit'], milestones: ['kilometre taşları', 'milestones']
+  org: ['alt birimlere göre dağılım', 'breakdown by sub-unit'], milestones: ['kilometre taşları', 'milestones'],
+  completed: ['tamamlanan işler', 'completed work'], created: ['oluşturulan işler', 'created work'], activity: ['kaydedilen hareketler', 'recorded activity'],
+  trend: ['tamamlanma eğilimi', 'completion trend'], horizons: ['teslim ufukları', 'delivery horizons'], notes: ['notlar ve değişiklik metinleri', 'notes and change text']
 });
 /** Analitik yönün sunucu adı, başlıkta kullanılmak üzere büyük harfle ("Kilometre taşları"); bilinmeyen yönde `null`. */
 export function aspectTitle(focus, locale = 'tr') {
@@ -1332,7 +1359,12 @@ const NEXT_STEPS = Object.freeze({
   deadlines: ['Gecikmiş ya da yaklaşan görevleri tek tek görmek isterseniz listeleyebilirim.', 'I can list the overdue or upcoming tasks one by one if you want.'],
   priority: ['Yüksek öncelikli görevleri tek tek görmek isterseniz listeleyebilirim.', 'I can list the high-priority tasks one by one if you want.'],
   critical: ['Kritik açık işleri tek tek görmek isterseniz listeleyebilirim.', 'I can list the critical open tasks one by one if you want.'],
-  schedule: ['Belirli bir ayın teslimatlarını görmek isterseniz ayı yazmanız yeterli.', "If you want one month's deliveries, just name the month."]
+  schedule: ['Belirli bir ayın teslimatlarını görmek isterseniz ayı yazmanız yeterli.', "If you want one month's deliveries, just name the month."],
+  completed: ['Tamamlanan işleri proje ya da kişi bazında görmek isterseniz söylemeniz yeterli.', 'I can break the completed work down by project or person if you want.'],
+  created: ['Bu dönemde oluşturulan görevleri tek tek görmek isterseniz listeleyebilirim.', 'I can list the tasks created in this period if you want.'],
+  activity: ['Belirli bir projenin ya da kişinin hareketlerini ayrıntılı görmek isterseniz adını yazmanız yeterli.', "If you want one project's or person's activity in detail, just name it."],
+  trend: ['Aynı eğilimi tek bir proje ya da ekip için görmek isterseniz söylemeniz yeterli.', 'I can show the same trend for a single project or team if you want.'],
+  horizons: ['Bu ufuklardaki görevleri tek tek görmek isterseniz listeleyebilirim.', 'I can list the tasks in these horizons one by one if you want.']
 });
 
 /**
@@ -1347,8 +1379,8 @@ export function nextStepSentence(focus = [], locale = 'tr') {
 }
 
 /** Tek giriş noktası: bulgular ve anlatımları. */
-export function analyticalSynthesis(parts, { locale = 'tr', detail = 'balanced', focus = [] } = {}) {
-  const findings = analyticalFindings(parts);
+export function analyticalSynthesis(parts, { locale = 'tr', detail = 'balanced', focus = [], temporal = null } = {}) {
+  const findings = analyticalFindings(parts, { temporal });
   return Object.freeze({ findings, ...synthesisNarrative(findings, { locale, detail, focus }) });
 }
 

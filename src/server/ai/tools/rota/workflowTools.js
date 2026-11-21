@@ -26,7 +26,8 @@ import {
   visibleTaskReference
 } from './rotaToolSupport.js';
 import { isCompleteTaskView, projectAccess } from './rotaScope.js';
-import { decodeCursor, encodeCursor } from './taskFacts.js';
+import { decodeCursor, encodeCursor, TEAM_LEVELS } from './taskFacts.js';
+import { bucketKey, bucketLabel, SERIES_BUCKETS, seriesBuckets, shiftDay } from '../../../../domain/ai/temporalWindow.js';
 
 const COORDINATION_SCOPE_NOTE = 'Etkin görevi olan atama kayıtları görev görüntüleme kapsamınıza uymalıdır; etkin görevi olmayan atama kayıtları yalnızca geçmiş katılımınız varsa gösterilir.';
 
@@ -67,6 +68,8 @@ function clippedLines(lines, max = 6, { hideAssigneeNames = false } = {}) {
 
 const ACTIVITY_KIND_LABELS = Object.freeze({ created: 'Oluşturuldu', updated: 'Güncellendi', completed: 'Tamamlandı', deleted: 'Silindi' });
 const ACTIVITY_PERIODS = Object.freeze({ today: 'today', yesterday: 'yesterday', last_7_days: 'week', custom: 'custom' });
+/** Aşama H: satırsız dönem özeti görünümleri (`period`: yalnızca sayılar; `week`/`month`: ayrıca kronolojik hareket dizisi). */
+const ACTIVITY_VIEWS = Object.freeze(['period', ...SERIES_BUCKETS]);
 
 const activitySearch = {
   name: 'rota_activity_search',
@@ -87,7 +90,10 @@ const activitySearch = {
       taskId: ID_PROPERTY('Yalnızca bu görev.'),
       personSicil: PERSON_SICIL_PROPERTY,
       kind: { type: 'string', enum: Object.keys(ACTIVITY_KIND_LABELS), description: 'Hareket türü.' },
-      limit: LIMIT_PROPERTY(20, 10),
+      teamLevel: { type: 'string', enum: Object.keys(TEAM_LEVELS), description: 'Yalnızca scope team ile: ekibin kurumsal düzeyi (unit, department, directorate).' },
+      view: { type: 'string', enum: [...ACTIVITY_VIEWS], description: 'Dönem özeti (satır döndürmez): period = kaydedilen hareketlerin sayıları (oluşturulan, tamamlanan, silinen, yeniden açılan görev) ve kayıt kapsamı; week/month = ayrıca haftalık/aylık hareket dizisi.' },
+      // Sınır yalnızca hareket satırlarınındır: dönem özeti görünümü (view) satır döndürmez, dizi aralığın bütün kovalarıyla döner.
+      limit: Object.assign(LIMIT_PROPERTY(20, 10), { description: 'Döndürülecek en fazla hareket satırı (1–20, varsayılan 10); view ile uygulanmaz.' }),
       cursor: CURSOR_PROPERTY
     }
   },
@@ -96,9 +102,17 @@ const activitySearch = {
     if (period === 'custom' && !args.dateFrom) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.dateFrom:required'] });
     if (period !== 'custom' && (args.dateFrom || args.dateTo)) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.period:custom'] });
     if (args.dateFrom && args.dateTo && args.dateFrom > args.dateTo) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.dateFrom:reversed'] });
+    // Raporun 366 günlük sınırı (satır ve dönem özeti görünümü için) proje ya da veri okunmadan uygulanır: hata önceliği tarihtir.
+    if (args.dateFrom && args.dateTo && (Date.parse(`${args.dateTo}T00:00:00Z`) - Date.parse(`${args.dateFrom}T00:00:00Z`)) / 86400000 > 365) {
+      throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.dateFrom:range'] });
+    }
     const pageSize = args.limit ?? 10;
     const key = { period, dateFrom: args.dateFrom || null, dateTo: args.dateTo || null, scope: args.scope || 'visible', projectId: args.projectId || null,
       taskId: args.taskId || null, personSicil: args.personSicil ?? null, kind: args.kind || null, pageSize };
+    if (args.teamLevel && key.scope !== 'team') throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.teamLevel:scope'] });
+    if (args.view) return activityAggregate(args, call, key);
+    // Düzey yalnızca dönem özetinde uygulanır: satır okuması düzeyi sessizce yok saymaz.
+    if (args.teamLevel) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.teamLevel:view'] });
     const page = pageOf('rota_activity_search', key, args.cursor, pageSize);
     const { auth, scope } = await call.authorization();
     if (key.scope === 'team' && !auth.isExecutive && !auth.isSystemAdmin) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
@@ -174,6 +188,90 @@ const activitySearch = {
     };
   }
 };
+
+/**
+ * Aşama H — hareket DÖNEM ÖZETİ (satırsız). Aynı raporun aynı yetki ve nüfus kuralıyla sayılarını verir; satır okunmadığı için
+ * kanıt anlık görüntüsü sınırı (1000 hareket) uygulanmaz, hareket okuma sınırı (20 000 + 1) aynen geçerlidir.
+ *
+ * Tarihsel doğruluk sözleşmesi:
+ *   - Sayılar KAYDEDİLEN hareketlerdir (denetim kaydı); dönemin bütün faaliyeti olduğu iddia edilmez.
+ *   - `coverage`: bu kapsamın kayıt başlangıcı ve tamlığı kanıtlanamaz; gözlem varsa `partial`, yoksa `none` ve sayılar `null`dır.
+ *     Kanıtsız kovalar sıfırla doldurulmaz; başka kapsamdaki kayıtlar bu karara veya görünür üstveriye katılmaz.
+ *   - Tamamlanan/oluşturulan/silinen/yeniden açılan sayıları AYRIK görevdir: aynı görevin yinelenen geçişi tek sayılır. Dönemde
+ *     tamamlanıp yeniden açılan görev `reopenedTasks` içinde de görünür; görevin bugünkü durumu bu sayılardan çıkarılamaz.
+ */
+async function activityAggregate(args, call, key) {
+  if (args.cursor != null || args.kind || args.taskId) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.view:selector'] });
+  if (args.textFields?.length) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.view:textFields'] });
+  const bucket = args.view === 'period' ? null : args.view;
+  const requestedRange = { dateFrom: key.dateFrom || (key.period === 'yesterday' ? shiftDay(call.today, -1) : key.period === 'last_7_days' ? shiftDay(call.today, -6) : call.today), dateTo: key.dateTo || key.dateFrom || (key.period === 'yesterday' ? shiftDay(call.today, -1) : call.today) };
+  const buckets = bucket ? seriesBuckets(requestedRange, bucket, call.today) : null;
+  if (bucket && !buckets) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.view:range'] });
+  const { auth, scope } = await call.authorization();
+  if (key.scope === 'team' && !auth.isExecutive && !auth.isSystemAdmin) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
+    message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.'
+  });
+  // Düzeyli ekip kapsamı yönetim ilişkisinden gelir (sistem yöneticiliği düzey yetkisi değildir).
+  if (args.teamLevel && !auth.isExecutive) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
+    message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.', details: ['$.scope:team']
+  });
+  if (key.projectId) await requireVisibleProject(scope, key.projectId, call);
+  let report;
+  try {
+    report = await call.sql((executor) => readTaskActivityReport(executor, auth, {
+      period: ACTIVITY_PERIODS[key.period], from: key.dateFrom, to: key.dateTo || key.dateFrom, scope: key.scope, projectId: key.projectId,
+      person: key.personSicil, kind: '', page: 0, pageSize: 1
+    }, call.now, { includeChangeText: false, analyzedActivityLimit: TOOL_LIMITS.maxAnalyzedActivities, aggregate: true,
+      teamLevel: args.teamLevel ? TEAM_LEVELS[args.teamLevel] : null }));
+  } catch (error) {
+    const number = error?.number ?? error?.originalError?.info?.number;
+    if (number === 51002) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, { message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.', details: ['$.scope:team'] });
+    throw error;
+  }
+  call.notePopulation?.(report.aggregate.population);
+  const range = { dateFrom: report.range.from, dateTo: report.range.to };
+  const known = report.total > 0;
+  const status = known ? 'partial' : 'none';
+  let series = null;
+  if (buckets) {
+    const byKey = new Map(buckets.map((item) => [item.key, { key: item.key, label: bucketLabel(item, bucket, 'tr'), dateFrom: item.dateFrom, dateTo: item.dateTo,
+      // Başlangıcı kanıtlanmayan kayıtta her kova kısmi, gözlenmeyen kova bilinmeyendir.
+      partial: true, events: null, completionEvents: null, creationEvents: null, recorded: false }]));
+    for (const day of report.aggregate.days) {
+      const row = byKey.get(bucketKey(day.day, bucket));
+      if (!row) continue;
+      if (row.events == null) Object.assign(row, { events: 0, completionEvents: 0, creationEvents: 0, recorded: true });
+      row.events += day.events; row.completionEvents += day.completionEvents; row.creationEvents += day.creationEvents;
+    }
+    series = [...byKey.values()];
+  }
+  const selector = await workflowSelector(call, scope, key);
+  return {
+    data: {
+      filters: { dateFrom: range.dateFrom, dateTo: range.dateTo, activityScope: key.scope, activityView: args.view, ...(args.teamLevel ? { teamLevel: args.teamLevel } : {}), ...selector },
+      range: report.range,
+      scope: report.scope,
+      aggregate: true,
+      summary: known ? { events: report.total, tasks: report.summary.tasks, people: report.summary.people, completedTasks: report.summary.completed,
+        createdTasks: report.aggregate.created, deletedTasks: report.aggregate.deleted, updatedTasks: report.aggregate.updatedOnly, reopenedTasks: report.aggregate.reopened }
+        : { events: null, tasks: null, people: null, completedTasks: null, createdTasks: null, deletedTasks: null, updatedTasks: null, reopenedTasks: null },
+      coverage: { status, firstRecordedDay: null },
+      ...(series ? { bucket, series } : {}),
+      definitions: { recorded: 'Sayılar görev hareket kaydına (oluşturma, güncelleme, tamamlama, silme) dayanır; kaydedilmemiş faaliyeti kapsamaz. Aynı görev bir dönemde her türde bir kez sayılır.' }
+    },
+    scope: searchedScope(scope, key.projectId),
+    complete: true,
+    truncated: false,
+    returnedCount: series ? series.length : 0,
+    totalCount: known ? report.total : null,
+    nextCursor: null,
+    evidence: {
+      label: known ? `Hareket özeti · ${report.total} hareket` : 'Hareket özeti · kayıt yok',
+      entity: key.projectId ? { type: 'project', id: key.projectId, name: selector.project || null } : null,
+      highlights: [`${range.dateFrom} – ${range.dateTo}`, ...(known ? [`Görev: ${report.summary.tasks}`, `Tamamlanan: ${report.summary.completed}`] : [])]
+    }
+  };
+}
 
 /**
  * İleti metni yalnızca kullanıcının bu turda açtığı ve modelin veri okunmadan

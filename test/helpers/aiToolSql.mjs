@@ -188,6 +188,7 @@ function factRow(db, scope, entry, params = {}) {
     RecurrenceOccurrenceDate: task.RecurrenceOccurrenceDate,
     CreatedAt: task.CreatedAt ?? null,
     UpdatedAt: task.UpdatedAt ?? null,
+    HasDescription: String(task.Description ?? '').trim() ? 1 : 0,
     AccessLevel: entry.AccessLevel,
     IdentityBase: entry.IdentityBase,
     IsCreator: Number(task.CreatedBySicil) === scope.sicil ? 1 : 0,
@@ -241,6 +242,8 @@ function taskFacts(db, params) {
       case 'plannedFinish': return day(task.PlannedFinish);
       case 'actualStart': return day(task.ActualStart);
       case 'actualFinish': return day(task.ActualFinish);
+      // SQL: kayıt anının Türkiye günü (UTC → Turkey Standard Time).
+      case 'createdAt': return task.CreatedAt ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(task.CreatedAt)) : null;
       default: return null;
     }
   };
@@ -269,7 +272,9 @@ function taskFacts(db, params) {
       if (params.deadline === 'due_next_30_days' && !(open && target && target >= today && target <= add(29))) return false;
       if (params.deadline === 'no_target_finish' && !(open && !target)) return false;
     }
-    if (params.dateField) {
+    if (params.hasDescription && !String(task.Description || '').trim()) return false;
+    if (params.dateField && !(params.includeUndated && !day(task.ActualFinish) && status === 'done')) {
+      if (params.dateField === 'actualFinish' && (!params.today || day(task.ActualFinish) > day(params.today))) return false;
       const value = dateValue(task);
       if (!value) return false;
       if (params.dateFrom && value < day(params.dateFrom)) return false;
@@ -559,6 +564,9 @@ function outlook(db, params) {
 const HANDLERS = Object.freeze({
   'task-facts': taskFacts,
   'task-visibility': taskVisibility,
+  // Görünür görevlerin kesilmiş açıklamaları (SQL: SC sıralamasıyla 401 kod noktası; boş açıklama satır döndürmez).
+  'task-notes': (db, params) => [[...scopeOf(db, params).visible.values()].filter(({ task }) => String(task.Description ?? '').trim())
+    .map(({ task }) => ({ TaskId: upper(task.TaskId), Description: Array.from(String(task.Description).replace(/^\s+/u, '')).slice(0, 401).join('') }))],
   'task-detail': taskDetail,
   'project-search': projectSearch,
   portfolio,

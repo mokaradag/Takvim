@@ -284,7 +284,10 @@ const EMPTY_RESULT_DATA = Object.freeze({
   rota_task_search: (data) => Array.isArray(data.tasks) && data.tasks.length === 0,
   rota_workload_summary: (data) => Array.isArray(data.people) && data.people.length === 0 && data.openTaskCount === 0
     && data.unassignedOpenTasks === 0 && data.unrepresentedOpenTasks === 0,
-  rota_task_analytics: (data) => data.totals?.total === 0 && (data.groups == null || (Array.isArray(data.groups) && data.groups.length === 0)),
+  // Aşama H: tarih dizisi ve teslim ufku kovaları sunucunun ürettiği sabit kovalardır (varlık değil) ve boş nüfusta sıfırla doldurulur;
+  // bütün sayıları sıfırsa sonuç boştur. Başka gruplamada (kişi, proje …) satır varsa boş sayılmaz.
+  rota_task_analytics: (data) => data.totals?.total === 0 && (data.groups == null || (Array.isArray(data.groups) && (data.groups.length === 0
+    || (['date_week', 'date_month', 'due_horizon'].includes(data.groupBy) && data.groups.every((group) => group && [group.count, group.open, group.overdue, group.done].every((value) => value === 0)))))),
   rota_recurrence_inspect: (data) => Array.isArray(data.series) && data.series.length === 0 && data.visibleEntryCount === 0,
   rota_data_quality: (data) => data.openTaskCount === 0 && data.cleanOpenTaskCount === 0
     && validQualityChecks(data) && data.checks.every(row => Array.isArray(row.examples) && row.examples.length === 0)
@@ -493,8 +496,13 @@ export function savedEvidenceRequirements(entry, auth, { exact = false } = {}) {
     ? { projectIds, fullProjects: true, identities: true } : null;
   if (data.filters?.assignee === 'team' && !exact) return null;
   if (!entry.taskReferences.length && !exact) return null;
-  if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters
-    || data.totals.total !== entry.taskReferences.length || payload.totalCount !== entry.taskReferences.length)) return null;
+  // Aşama H: gerçekleşen bitişe göre dönem okuması, sayılan görevlerin yanında AYNI nüfusun tarihi kayıtlı olmayan tamamlanmış
+  // görevlerini de sayar (`history.undatedDone`); nüfus bu ikisinin toplamıdır ve eşitlik aynı kesinlikle aranır.
+  // Sayısı bilinmeyen (`null`, okuma sınırı nedeniyle doğrulanmamış) tarihsiz görevler nüfusa kaydedilmez; toplamlar açık tam sayı olmalıdır.
+  const undated = entry.tool === 'rota_task_analytics' && data.history ? (data.history.undatedDone === null ? 0 : data.history.undatedDone) : 0;
+  const exactCount = (value) => Number.isSafeInteger(value) && value >= 0;
+  if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters || !exactCount(undated) || !exactCount(data.totals.total) || !exactCount(payload.totalCount)
+    || data.totals.total + undated !== entry.taskReferences.length || payload.totalCount + undated !== entry.taskReferences.length)) return null;
   if (entry.tool === 'rota_workload_summary' && (!Array.isArray(data.people) || data.openTaskCount !== entry.taskReferences.length)) return null;
   if (entry.tool === 'rota_task_search' && (!Array.isArray(data.tasks) || payload.totalCount !== entry.taskReferences.length)) return null;
   if (entry.tool === 'rota_task_detail' && !data.task) return null;

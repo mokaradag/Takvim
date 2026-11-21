@@ -102,6 +102,7 @@ const dayFact = (value) => (typeof value === 'string' && DAY.test(value) ? { fie
 /** Olgunun Markdown'a güvenli gösterim değeri. Sunucunun biçimlediği sayı ve tarihler kaçış gerektirmez. */
 export function narrativeValue(fact, locale = 'tr') {
   const raw = fact.value;
+  if (fact.semantic?.group?.notStarted && typeof raw === 'number') return locale === 'en' ? 'Not started' : 'Başlamadı';
   if (fact.semantic?.valueType === 'date' && typeof raw === 'string' && DAY.test(raw) && fact.semantic?.displayValue == null) return formatDay(raw, locale);
   if (fact.semantic?.valueType === 'instant' && typeof raw === 'string' && INSTANT.test(raw)) return formatInstant(raw, locale);
   const { value } = factPresentation(fact, locale);
@@ -114,8 +115,23 @@ function joinList(parts, locale) {
   return `${parts.slice(0, -1).join(', ')} ${locale === 'en' ? 'and' : 've'} ${parts.at(-1)}`;
 }
 
+/** Aşama H: tarih dizisi ve teslim ufku tablolarının satır başlığı (kova türü); başka koleksiyonda `null`. */
+const SERIES_HEADS = Object.freeze({ date_week: ['Hafta', 'Week'], date_month: ['Ay', 'Month'], due_horizon: ['Teslim ufku', 'Delivery horizon'], week: ['Hafta', 'Week'], month: ['Ay', 'Month'] });
+function seriesHead(rows, locale) {
+  const semantic = rows[0]?.entries[0]?.fact.semantic;
+  const key = semantic?.series ? semantic.bucket : semantic?.groupBy;
+  return SERIES_HEADS[key]?.[language(locale)] || null;
+}
+
 function labelOf(fact, locale) {
   const parts = fact.field.split('.');
+  // Aşama H: dönem dizisinin sayı sütunu neyi saydığını söyler ("Kayıt sayısı" değil "Tamamlanan görev").
+  if (parts.at(-1) === 'count' && parts.at(-3) === 'groups' && SERIES_HEADS[fact.semantic?.groupBy]) {
+    const basis = fact.semantic.groupBy === 'due_horizon' ? ['Açık görev', 'Open tasks'] : fact.semantic.filters?.dateField === 'createdAt' ? ['Oluşturulan görev', 'Created tasks']
+      // Gerçekleşen bitiş tarihi tek başına tamamlanmış nüfus değildir (yeniden açılan görev tarihini korur): ad yalnızca done süzgeciyle.
+      : fact.semantic.filters?.dateField === 'actualFinish' && fact.semantic.filters.statuses?.length === 1 && fact.semantic.filters.statuses[0] === 'done' ? ['Tamamlanan görev', 'Completed tasks'] : null;
+    if (basis) return basis[language(locale)];
+  }
   if (parts.at(-3) === 'proposedChanges' && ['from', 'to'].includes(parts.at(-1))) {
     const prefix = parts.at(-1) === 'from' ? ['Önceki', 'Original'] : ['Önerilen', 'Proposed'];
     return `${prefix[language(locale)]} ${factLabel(parts.at(-2), locale).toLocaleLowerCase(locale === 'en' ? 'en-US' : 'tr-TR')}`;
@@ -232,11 +248,19 @@ function organizationGroup(record) {
   return ['department', 'unit'].includes(groupBy) ? groupBy : null;
 }
 
+/** Dönem kovası (ay/hafta) grup satırının gruplaması; değilse `null`. */
+function temporalGroup(record) {
+  if (record.kind !== 'group') return null;
+  const groupBy = record.entries.find(({ fact }) => fact.semantic?.groupBy)?.fact.semantic.groupBy;
+  return ['target_month', 'date_week', 'date_month'].includes(groupBy) ? groupBy : null;
+}
+
 /** Atama durumunu gösteren grup anahtarları (atamasız, açıklanamayan, birimi belirsiz): örgütsel birim değildir. */
 const NON_ENTITY_GROUPS = new Set(['other', 'unassigned', 'unresolved', 'undisclosed', 'none', 'no_unit']);
 
 function scopePhrase(record, locale, { named = false, projects = null } = {}) {
-  const name = strong(escapedFactText(record.subject));
+  const subject = temporalGroup(record) ? canonicalGroupLabel(record.entries[0]?.fact, record.subject, locale) : record.subject;
+  const name = strong(escapedFactText(subject));
   if (record.tool === 'rota_portfolio_summary') {
     if (projects) return locale === 'en' ? `your ${strong(narrativeValue(projects, locale))} visible projects` : `görebildiğiniz ${strong(narrativeValue(projects, locale))} projede`;
     return locale === 'en' ? 'your visible projects' : 'görebildiğiniz projelerde';
@@ -250,6 +274,8 @@ function scopePhrase(record, locale, { named = false, projects = null } = {}) {
     return organization === 'department' ? (locale === 'en' ? `the ${name} department` : `${name} bölümündeki sorumlularda`)
       : (locale === 'en' ? `the ${name} unit` : `${name} birimindeki sorumlularda`);
   }
+  // Aşama H: proje süzgeçli dönem kovası bir zaman aralığıdır; adı proje adı sayılmaz (seçilen proje ölçütte kalır).
+  if (temporalGroup(record)) return locale === 'en' ? `in ${name}` : `${name} döneminde`;
   if (record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId)) {
     if (named) return locale === 'en' ? 'the project' : 'projede';
     return locale === 'en' ? `the ${name} project` : `${name} projesinde`;
@@ -294,7 +320,8 @@ function recordSentences(record, locale, { rowsCovered = false } = {}) {
   // Grup satırının etiketi grubun adıdır (öznede söylenir); ayrıca "Etiket metni:" olarak yinelenmez.
   const nameEntry = take((rel) => ['title', 'name'].includes(rel) || (record.kind === 'group' && rel === 'label'))[0];
   const codeEntry = take((rel) => rel === 'code')[0];
-  const subjectText = record.row ? escapedFactText(record.subject) : nameEntry ? narrativeValue(nameEntry.fact, locale) : escapedFactText(record.subject);
+  const rawSubject = record.row && record.entries[0]?.fact ? canonicalGroupLabel(record.entries[0].fact, record.subject, locale) : record.subject;
+  const subjectText = record.row ? escapedFactText(rawSubject) : nameEntry ? narrativeValue(nameEntry.fact, locale) : escapedFactText(record.subject);
   const subject = `${strong(subjectText)}${codeEntry ? ` (${narrativeValue(codeEntry.fact, locale)})` : ''}`;
   const qualifiers = qualifierText(record.entries, locale);
   // Proje adı zaten özne olarak yazıldığında ölçütte yinelenmez.
@@ -352,13 +379,14 @@ function recordSentences(record, locale, { rowsCovered = false } = {}) {
   }).map(({ rel, fact }) => ({ key: rel.split('.').at(-1), fact }));
   const projectCount = totals.length ? take((rel, fact) => rel === 'totals.projects' && isCount(fact))[0] : null;
   if (totals.length) {
-    // Örgütsel grup satırında proje özne değildir: seçilen proje ölçütte ayrı niteleyici olarak kalır.
-    const projectNamed = !organizationGroup(record) && (record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId));
+    // Örgütsel ya da dönem kovası grup satırında proje özne değildir: seçilen proje ölçütte ayrı niteleyici olarak kalır.
+    const nonProjectGroup = Boolean(organizationGroup(record) || temporalGroup(record));
+    const projectNamed = !nonProjectGroup && (record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId));
     const scope = scopePhrase(record, locale, { named: sentences.length > 0, projects: projectCount?.fact });
     const assigneeFilters = record.entries.find(({ fact }) => fact.semantic?.filters?.assignee)?.fact.semantic.filters;
     const personScoped = Boolean(resolvedPerson(assigneeFilters)) && record.tool !== 'rota_portfolio_summary' && !projectNamed;
-    // Örgütsel grup satırının öznesi bölüm/birimdir; sorumlu kapsamı (ör. biriminiz) özneyle söylenmediğinden ölçütte kalır.
-    const assigneeScoped = (['me', 'team'].includes(assigneeFilters?.assignee) || personScoped) && !organizationGroup(record)
+    // Örgütsel ya da dönem kovası grup satırında sorumlu kapsamı özneyle söylenmediğinden ölçütte kalır.
+    const assigneeScoped = (['me', 'team'].includes(assigneeFilters?.assignee) || personScoped) && !nonProjectGroup
       && record.tool !== 'rota_portfolio_summary' && !(record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId));
     const scopedQualifiers = assigneeScoped && !qualified
       ? (qualified = true, qualifierText(record.entries, locale, { omit: ['assignee', 'teamLevel', 'person', 'personSicil', ...(projectNamed ? ['project'] : [])] })) : null;
@@ -562,7 +590,7 @@ export function describeRowCollection(group, collection, locale = 'tr') {
   const rows = [...(group.collections.get(collection)?.values() || [])];
   const { titleKey, columns, valuesOf, columnLabel, numericColumns } = rowColumns(rows, locale);
   return {
-    head: ROW_NOUNS[collection.split('.').at(-1)]?.[language(locale)] || (locale === 'en' ? 'Record' : 'Kayıt'),
+    head: seriesHead(rows, locale) || ROW_NOUNS[collection.split('.').at(-1)]?.[language(locale)] || (locale === 'en' ? 'Record' : 'Kayıt'),
     rows: rows.map((row) => ({ title: rowTitleText(row, titleKey, valuesOf, locale), titleFacts: titleKey ? valuesOf(row, titleKey) : [], context: rowContext(row), entries: row.entries,
       cells: columns.map((key) => valuesOf(row, key)) })),
     columns: columns.map((key) => ({ key, label: columnLabel(key), numeric: numericColumns.includes(key) }))
@@ -572,6 +600,7 @@ export function describeRowCollection(group, collection, locale = 'tr') {
 /** Olgunun kaçışsız gösterim değeri (model girdisi ve grafik etiketi); Markdown'a doğrudan yazılmaz. */
 export function narrativePlainValue(fact, locale = 'tr') {
   const raw = fact.value;
+  if (fact.semantic?.group?.notStarted && typeof raw === 'number') return locale === 'en' ? 'Not started' : 'Başlamadı';
   if (fact.semantic?.valueType === 'date' && typeof raw === 'string' && DAY.test(raw) && fact.semantic?.displayValue == null) return formatDay(raw, locale);
   if (fact.semantic?.valueType === 'instant' && typeof raw === 'string' && INSTANT.test(raw)) return formatInstant(raw, locale);
   const { value } = factPresentation(fact, locale);
@@ -612,7 +641,7 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
   // Açıkça istenen tablo yalnızca ad sütunundan da oluşabilir.
   const table = layout === 'table' || (columns.length >= 1 && layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2));
   if (table) {
-    const head = ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
+    const head = seriesHead(rows, locale) || ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
     const headers = [head, ...columns.map((key) => columnLabel(key).replace(/\|/g, '/'))];
     // Sayı sütunları sağa yaslanır: değerler basamak hizasında okunur.
     const lines = [`| ${headers.join(' | ')} |`, `| ${['---', ...columns.map((key) => (numericColumns.includes(key) ? '---:' : '---'))].join(' | ')} |`];
@@ -622,7 +651,9 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
   // Aşama F: tek sayı sütunu görev grubunun kayıt sayısıysa liste satırı "Kayıt sayısı: **9**" değil "**9** görev" diye okunur.
   const countOnly = columns.length === 1 && /(^|\.)count$/.test(columns[0]) && rows.every((row) => valuesOf(row, columns[0]).every((fact) => /(^|\.)groups\./.test(fact.field)));
   return { body: rows.map((row) => {
-    const pairs = countOnly ? [`${cell(valuesOf(row, columns[0]), false)} ${locale === 'en' ? englishTasks(valuesOf(row, columns[0])[0]) : 'görev'}`]
+    const count = countOnly ? valuesOf(row, columns[0])[0] : null;
+    const pairs = countOnly ? [count?.semantic?.group?.notStarted ? narrativeValue(count, locale)
+      : `${cell(valuesOf(row, columns[0]), false)} ${locale === 'en' ? englishTasks(count) : 'görev'}`]
       : columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? `${columnLabel(key)}: ${cell(facts, false)}` : null; }).filter(Boolean);
     return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([evidenceId])}`;
   }).join('\n'), criteria: criteria || '' };
@@ -759,6 +790,19 @@ export function narrativeGroups(items) {
 /** Tek satırlık koleksiyon bir kayıttır: satırın olguları kayıt cümlesi olarak yazılır. */
 function singleRowSentences(group, collection, row, locale) {
   const role = ROW_ROLES[collection.split('.').at(-1)];
+  // Aşama H: dönem (gerçekleşen bitiş / oluşturulma) dağılımının tek grubu "Kayıt sayısı: **1**" değil "**1** görev" diye okunur.
+  const numbers = row.entries.filter(({ fact }) => typeof fact.value === 'number');
+  const unstarted = numbers.find(({ fact }) => fact.semantic?.group?.notStarted)?.fact;
+  if (unstarted) {
+    const title = canonicalGroupLabel(unstarted, row.subject, locale);
+    return [`${strong(escapedFactText(title))}: ${narrativeValue(unstarted, locale)}${qualifierText(row.entries, locale)}.`];
+  }
+  if (group.tool === 'rota_task_analytics' && numbers.length === 1 && /(^|\.)groups\.\d+\.count$/.test(numbers[0].fact.field)
+    && !numbers[0].fact.semantic?.group?.partial && !numbers[0].fact.semantic?.series?.partial
+    && ['actualFinish', 'createdAt'].includes(numbers[0].fact.semantic?.filters?.dateField)) {
+    const count = numbers[0].fact;
+    return [`${strong(escapedFactText(canonicalGroupLabel(count, row.subject, locale)))}: ${strong(narrativeValue(count, locale))} ${locale === 'en' ? englishTasks(count) : 'görev'}${qualifierText(row.entries, locale)}.`];
+  }
   const record = recordSentences({ tool: group.tool, kind: rowKind(collection, group.tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale);
   return role && record.length ? [`${role[0][language(locale)]}: ${record[0]}`, ...record.slice(1)] : record;
 }
@@ -858,13 +902,13 @@ export function narrativeRowCollections(group, layout = 'auto') {
  * Kanıt grubunun kayıt cümleleri (kanıt atfıyla); yazılacak olgu yoksa boş metin. Düzen anlatımdakiyle
  * aynıdır: açıkça istenen tabloda tek satırlı koleksiyon tablodadır, cümlelerde yinelenmez.
  */
-export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 'auto', cite = true, omitMetrics = null, lead = null } = {}) {
+export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 'auto', cite = true, omitMetrics = null, lead = null, criteriaStated = Boolean(lead) } = {}) {
   // Aynı kanıttan söylenmiş önermelerin ölçüleri (ör. analist cümlesindeki açık ve gecikmiş sayı) ayrıntıda yinelenmez.
   const shown = omitMetrics?.size ? { ...group, main: { ...group.main, entries: group.main.entries.filter(({ fact }) => !omitMetrics.has(fact.semantic?.metric)) } } : group;
   const sentences = groupSentences(shown, { locale, layout, empty, lead });
   if (!sentences.length) return '';
   // Doğal sayım cümlesi nüfusun bütün süzgeçlerini söyler (yalnızca bunu yapabildiğinde kurulur): satırın ölçütü yinelenmez.
-  const { text, criteria } = lead ? { text: withoutCriteria(sentences.join(' '), locale, lead, group), criteria: null } : sharedCriteria(sentences.join(' '), locale);
+  const { text, criteria } = criteriaStated ? { text: withoutCriteria(sentences.join(' '), locale, lead, group), criteria: null } : sharedCriteria(sentences.join(' '), locale);
   // Ortak ölçüt satırı da süzgeçleri doğal söylenebiliyorsa doğal biçimdedir.
   const natural = criteria ? naturalCaption([{ entries: group.main.entries }, ...[...group.collections.values()].flatMap((rows) => [...rows.values()])], locale) : null;
   return `${text}${cite ? ` ${citation([group.evidenceId])}` : ''}${criteria ? `\n\n_${natural || criteria}_` : ''}`;

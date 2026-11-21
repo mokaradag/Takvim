@@ -29,9 +29,15 @@ export const TASK_PRIORITIES = Object.freeze(['critical', 'high', 'medium', 'low
 export const DEADLINE_FILTERS = Object.freeze(['overdue', 'due_today', 'due_next_7_days', 'due_next_30_days', 'no_target_finish']);
 /** Ekip kapsamının kurumsal düzeyleri: birim, müdürlük, direktörlük (MR_V_ExecutiveScope.ScopeType). */
 export const TEAM_LEVELS = Object.freeze({ unit: 'UNIT', department: 'DEPARTMENT', directorate: 'DIRECTORATE' });
-export const DATE_FIELDS = Object.freeze(['targetFinish', 'calendarDate', 'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish']);
+/**
+ * Aşama H: `createdAt` görevin OLUŞTURULDUĞU Türkiye günüdür (kayıt anının `Europe/Istanbul` takvim günü). Tarih aralığı bu
+ * alanla "o dönemde oluşturulmuş ve bugün kayıtlı olan görevler"i seçer; silinmiş görev olgu değildir (hareket geçmişinde kalır).
+ */
+export const DATE_FIELDS = Object.freeze(['targetFinish', 'calendarDate', 'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'createdAt']);
+/** Geçmişe dönük dönem okumasının dayandığı tarih alanları (bir dönemde gözlenen olay: tamamlanma ya da oluşturulma). */
+export const HISTORY_DATE_FIELDS = Object.freeze(['actualFinish', 'createdAt']);
 export const TASK_SORTS = Object.freeze([
-  'target_finish_asc', 'target_finish_desc', 'overdue_days_desc', 'priority', 'planned_start_asc', 'updated_desc', 'title_asc'
+  'target_finish_asc', 'target_finish_desc', 'overdue_days_desc', 'priority', 'planned_start_asc', 'updated_desc', 'title_asc', 'actual_finish_desc'
 ]);
 /** "Önümüzdeki 7/30 gün" bugün DAHİL 7/30 takvim günüdür. */
 export const DUE_SOON_DAYS = 7;
@@ -60,6 +66,15 @@ export function sqlDay(value) {
   if (Number.isNaN(date.getTime())) return null;
   const pad = (number) => String(number).padStart(2, '0');
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+const ISTANBUL_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' });
+
+/** Anın Türkiye takvim günü (`YYYY-MM-DD`); geçersiz ya da boş değerde `null`. */
+export function istanbulDay(value) {
+  if (value == null || value === '') return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : ISTANBUL_DAY.format(date);
 }
 
 export function sqlInstant(value) {
@@ -111,7 +126,11 @@ export function factFromRow(row) {
     recurrenceParentId: row.RecurrenceParentTaskId ? canonicalActualId(row.RecurrenceParentTaskId) : null,
     recurrenceOccurrenceDate: sqlDay(row.RecurrenceOccurrenceDate),
     createdAt: sqlInstant(row.CreatedAt),
+    // Oluşturulma gününün süzgeç ve dizi karşılığı (Türkiye günü); olgu alanı olarak modele gitmez.
+    createdDay: istanbulDay(row.CreatedAt),
     updatedAt: sqlInstant(row.UpdatedAt),
+    // Açıklaması var mı (yalnızca varlık; metin olgu değildir ve ayrı, rızaya bağlı okumayla gelir).
+    hasDescription: Boolean(row.HasDescription),
     accessLevel: row.AccessLevel === 'FULL' ? 'FULL' : 'PARTIAL',
     identityBase: Boolean(row.IdentityBase),
     isCreator: Boolean(row.IsCreator),
@@ -206,7 +225,9 @@ export function normalizeTaskFilters(args = {}) {
     teamLevel: args.teamLevel || null,
     personSicil: args.personSicil ?? null,
     createdByMe: args.createdByMe === true,
-    milestone: typeof args.milestone === 'boolean' ? args.milestone : null
+    milestone: typeof args.milestone === 'boolean' ? args.milestone : null,
+    // Aşama H: yalnızca açıklaması olan görevler (açıklama metni rızayla okunur; bkz. rota_task_search).
+    hasDescription: args.hasDescription === true
   };
   const problems = [];
   if (filters.personSicil != null && filters.assignee !== 'any') problems.push('$.personSicil:conflict');
@@ -264,6 +285,11 @@ export function assignmentState(fact) {
   return fact.identityBase ? 'unassigned' : 'undisclosed';
 }
 
+/** Süzgecin tarih alanının olgudaki günü (`createdAt` kayıt anının Türkiye günüdür). */
+export function dateFieldValue(fact, dateField) {
+  return dateField === 'createdAt' ? fact.createdDay : fact[dateField];
+}
+
 export function matchesTaskFilters(fact, filters, { today, assignees = new Map(), sicil = null }) {
   if (filters.projectId && fact.projectId !== filters.projectId) return false;
   if (filters.wbsId && fact.wbsId !== filters.wbsId) return false;
@@ -271,10 +297,12 @@ export function matchesTaskFilters(fact, filters, { today, assignees = new Map()
   if (filters.priorities.length && !filters.priorities.includes(fact.priority)) return false;
   if (filters.milestone != null && fact.milestone !== filters.milestone) return false;
   if (filters.createdByMe && !fact.isCreator) return false;
+  if (filters.hasDescription && !fact.hasDescription) return false;
   if (filters.deadline && !deadlineMatches(fact, filters.deadline, today)) return false;
   if (filters.dateField) {
-    const value = fact[filters.dateField];
+    const value = dateFieldValue(fact, filters.dateField);
     if (!value) return false;
+    if (filters.dateField === 'actualFinish' && (!today || value > today)) return false;
     if (filters.dateFrom && value < filters.dateFrom) return false;
     if (filters.dateTo && value > filters.dateTo) return false;
   }
@@ -308,6 +336,7 @@ export function sortFacts(facts, sort, today) {
       || compareNullableDay(left.targetFinish, right.targetFinish, 1),
     planned_start_asc: (left, right) => compareNullableDay(left.plannedStart, right.plannedStart, 1),
     updated_desc: (left, right) => compareNullableDay(left.updatedAt, right.updatedAt, -1),
+    actual_finish_desc: (left, right) => compareNullableDay(left.actualFinish, right.actualFinish, -1),
     title_asc: () => 0
   };
   const compare = comparators[sort] || comparators.target_finish_asc;

@@ -10,7 +10,7 @@ oturumu sohbet geçmişine dayanmadan bu belgeden devam edebilmelidir.
 | 19 salt okunur alan aracı, kanıt, atıf, yetki (Aşama 3) | [AI Alan Araçları](YAPAY-ZEKA-ALAN-ARACLARI.md) |
 | Anlamsal katman, planlayıcı, 4A–4E, nitelendirme kapıları | [AI Anlamsal Katmanı](YAPAY-ZEKA-ANLAMSAL-KATMAN.md) |
 | Yetki modeli | [Yetkilendirme Modeli](YETKILENDIRME-MODELI.md) |
-| Bu girişimin 40 soruluk kabul matrisi, Aşama G kıyas kümesi ve nitelendirme kayıtları | [Bilgin Analiz Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) |
+| Bu girişimin 40 soruluk kabul matrisi, Aşama G ve H kıyas kümeleri ve nitelendirme kayıtları | [Bilgin Analiz Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) |
 
 Bu belge yukarıdaki belgelerin sözleşmelerini yinelemez; onlara bağlanır. Çelişki varsa güvenlik ve yetki
 sözleşmesi o belgelerdedir; bu belge kapsam, sıra, kabul kapıları ve ilerleme kaydının sahibidir.
@@ -437,7 +437,9 @@ var olan aracın yeni gruplamasıdır (`department`, `unit`).
 
 ## 7. AŞAMA H — Dönemsel, tarihsel ve not farkındalıklı zekâ
 
-**Durum: PLANLANDI.**
+**Durum: SÜRÜYOR** (uygulandı; belirlenimci kabul ve betikli görsel kabul geçti; Haiku 4.5 vekil nitelendirmesi kaydedildi;
+Windows VM yeniden oynatması bekliyor; Aşama G'nin canlı model ve VM kapıları da hâlâ doğrulanmadı). Kanıt ve sayılar:
+[Kabul Matrisi §9](BILGIN-ANALIZ-KABUL-MATRISI.md). Aşağıdaki plan maddeleri tarihsel kapsamdır; uygulanan biçim §7.A'dadır.
 
 1. **Amaç:** Bu hafta/geçen hafta ve seçilen tarih etkinliği; haftalık ve aylık karşılaştırmalar; tamamlanan
    işler ve önemli değişiklikler; gerçekten yeniden kurulabilen tarihsel eğilimler (ör. gerçekleşen bitiş
@@ -468,7 +470,38 @@ var olan aracın yeni gruplamasıdır (`department`, `unit`).
 14. **Bağımlılık:** F (bulgu motoru), G (kapsamlar).
 15. **Riskler/geri alma:** sahte tarihsel kesinlik en büyük risk → tamlık ölçüsü zorunlu; PR geri alma.
 16. **Çıktılar:** dönem/eğilim işleçleri, not temaları, tamlık ölçüleri, belgeler, sınamalar.
-17. **Durum:** PLANLANDI. 18. **Kaynaklar:** —
+17. **Durum:** SÜRÜYOR (ayrıntı §13). 18. **Kaynaklar:** bu oturumun PR'ı §13'te kaydedilir.
+
+### 7.A Uygulanan biçim
+
+- **Türlü dönem** (`src/domain/ai/temporalWindow.js`, saf): bugün, dün, bu/geçen hafta (pazartesi başlar), bu/geçen ay, son ve
+  önümüzdeki 7/14/30 gün, özel aralık; Türkiye günü; bir önceki eşdeğer dönem; hafta/ay kovaları (en çok 24 kova, 366 gün).
+  Model dönemi adıyla ya da tarih çiftiyle bildirir; tarihleri sunucu çözer. Takvim haftası ile kayan 7 gün birbirine çevrilmez.
+- **Özetin yeni yönleri:** `completed`, `created`, `activity`, `trend`, `horizons`, `notes`; ikinci dönem `compare` /
+  `compareFrom`–`compareTo`; dizi kovası `bucket`. İki dönem aynı nüfus tanımıyla, ayrı okumalarla okunur. Geçersiz dönem
+  bildirimleri veri okunmadan reddedilir. Yeni uç, tablo, işçi ya da arka plan işi yoktur.
+- **Araç genişlemeleri (salt okunur, sabit parametreli SQL):** `rota_task_analytics` (`createdAt` tarih alanı, `date_week`/
+  `date_month` sürekli dizi, `due_horizon`, `history.undatedDone`), `rota_task_search` (`actual_finish_desc`, rızalı
+  `description` ve `hasDescription`), `rota_activity_search` (`view: period|week|month` toplu dönem özeti; Görev Hareketleri
+  sorgusunun çapa tabanlı türevi; kayıt kapsamı sözlüğü `none|partial|complete`; ekip düzeyi `teamLevel`). Kapsama ait kayıt
+  başlangıcı ve tamlığı kanıtlanamadığından üretimde `firstRecordedDay: null`, gözlem varsa `partial`, yoksa `none` döner.
+- **Tarihsel doğruluk sözleşmesi** (sunucu): bilinmeyen değer `null`dır ve sıfır yazılmaz; kanıtsız hareket dönemi/kova bilinmez,
+  kısmi kayıtta fark yorumlanmaz; gerçekleşen bitişi kayıtlı olmayan tamamlanmış görevler sayılır ve
+  söylenir; yeniden açılan görev ayrıca sayılır; aynı ilişki kimliği, görev, işlem yapan ve projeyi taşıyan kayıtlar tek harekettir; yüzde değişim yalnızca eşit
+  uzunlukta, bitmiş, örtüşmeyen dönemlerde ve önceki değer ≥ 4 iken; eğilim yalnızca ≥ 6 tam kovayla (son 3 ↔ önceki 3);
+  geçmiş DURUM (ör. geçen haftaki gecikme) yeniden kurulamaz ve bu adıyla söylenir.
+- **Bulgular ve anlatım:** `src/domain/ai/temporalFindings.js` (dönem özeti, karşılaştırma, tamamlanma eğilimi, hareket dizisi,
+  teslim ufukları, geçmiş durum sınırı, not özeti); açılış paragrafı olgulardır, çekinceler ayrı paragraftır; dönem adı ve
+  aralığı her yanıtta yazılır. Grafik: tarih dizisi çizgi (en az 3 nokta; bu alt sınır yalnızca başka açıdan uygun dizilere uygulanır:
+  tamamlanma dizisi çizilir, üretimdeki hareket dizisinin kovaları kayıt kapsamı doğrulanmadığı için kısmidir ve tabloda kalır), dönem karşılaştırması çubuk; değerler kanıttandır.
+- **Notlar:** yalnızca kullanıcının BU iletide "Notlar ve iletiler" anahtarını açtığı turda, görünür AÇIK görevlerin açıklaması
+  (en son güncellenen 10 görev, 400 karakter); not metni bildirimdir, doğrulanmış neden değildir; içindeki yönerge veridir.
+
+**Plandan ayrılan noktalar / bilinen sınırlar:** model ile not TEMA etiketlemesi yapılmadı (notlar kayıtlı hâliyle alıntılanır;
+tema seçimi kanıtlanamaz sınıflandırma olurdu). Değişiklik metni (hareket kaydındaki serbest metin) not özetine katılmadı; tek görev
+ya da proje için mevcut hareket isteğiyle okunur. "Son hareketler" satır listesi dönem özetine eklenmedi (dönem özeti sayımdır;
+satırlar mevcut `rota_activity_search` isteğindedir). Tarihsel kurumsal üyelik tutulmaz: ekip dönemi bugünkü yönetim kapsamıyla
+okunur (yanıt kapsamı adlandırır). Haiku 4.5 yalnızca vekildir; gerçek Qwen/Gemma kabulü §11 (H eki) ile VM'de yapılır.
 
 ---
 
@@ -562,6 +595,25 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 5. Her yanıtı kabul matrisindeki dört sınıftan birine koyun; mekanik/doğal düzyazıyı ayrı puanlayın.
 6. Sonuçları bu belgenin §13 bölümüne ve kabul matrisine tarihli kayıt olarak ekleyin. VM kabul durumu gerçek yeniden oynatma sonucuna göre güncellenir; koşulmadıysa **bekliyor** kalır. Haiku sonucu VM kabulünün yerine geçmez.
 
+**Aşama H eki (dönem soruları):** aynı yordam, şu farklarla uygulanır.
+
+1. Soru listesi: [Kabul Matrisi §9.2](BILGIN-ANALIZ-KABUL-MATRISI.md) hedef sorularının (t01–t62) özel ortamdaki proje/kişi
+   adlarıyla yazımı; ayrık küme (y01–y30) bu turda sorulmaz, ayrı bir turda yalnızca bir kez sorulur.
+2. Not soruları (H5) yalnızca sohbet kutusunda "Notlar ve iletiler" anahtarı **o iletide** açıkken sorulur; anahtar kapalıyken
+   aynı soru bir kez daha sorulup rıza isteği (veri okunmadan) doğrulanır.
+3. Dönem beklenen her yanıtta çözülen tam tarih aralığı (özel aralıklar ve karşılaştırmanın her iki dönemi dâhil), takvim dönemi adı olan dönemlerde ise ayrıca dönem adı zorunludur. Aralıkları yeniden oynatma gününe göre çözün ve karşılaştırmada
+   her iki aralığı da birebir doğrulayın. Eksik aralık kabulü başarısız kılar. Beklenen sonuç veri okumadan rıza istemekse dönem
+   denetimi uygulanmaz. Hareket kaydının başlangıcı veya tamlığı doğrulanamadığında sınır açıklanır ve kanıtsız dönem bilinmiyor
+   olarak gösterilir. Bitiş tarihi kayıtlı olmayan tamamlanmış görevler varsa çekince belirtilir. Yüzde değişim yalnızca bitmiş,
+   eşit uzunluklu ve örtüşmeyen dönemlerde, önceki dönemin sayısı en az 4 ise verilir.
+4. JSON günlükte `ai.grounded.turn` kaydının `context.parts`, `context.presentation` ve `sqlQueries` değerleri tabloya yazılır.
+   Hareket dönemi için Görev Hareketleri raporu aynı tarih aralığı, işlem yapan kapsamı, kişi ve proje süzgeciyle açılır. Yöneticinin
+   kendi hareketleri soruluyorsa "kendi" kapsamı açıkça seçilir. Düzeysiz ekipte rapordaki yöneticinin kendi hareketleri karşılaştırma
+   öncesi düşülür. Eşlenen nüfusta gözlem kalmazsa yanıtın sayıyı bilinmiyor olarak belirttiği doğrulanır. Gözlem varsa sayılar
+   karşılaştırılır. Bilgin düzeyli ekip üyeliğini `MR_V_ExecutiveScope.ScopeType` ile seçer. Olağan rapor düzeyi dizin özniteliğiyle
+   süzdüğünden bu vakalar "raporla doğrulanamaz" diye kaydedilir.
+5. Sonuç §13 ve Kabul Matrisi §9'a tarihli kayıt olarak eklenir; koşulmadıysa H VM kabulü **bekliyor** kalır.
+
 ---
 
 ## 12. Karar günlüğü
@@ -592,6 +644,12 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 | 2026-11-14 | Düzyazı düzeninde ayrıntı sınırı fazlası ve `D#` yuvası yumuşak; kimlik düzeni katı | Düzyazı yalnızca sunucu yuvalarıdır; tek seçim hatası doğrulanmış yanıtı Derin'e devrettirmez |
 | 2026-11-14 | Düzen modelinin serbest metni sunucu tamamlamasıyla "model düzeni" sayılmaz | Model yeteneğini olduğundan yüksek gösterirdi (g28) |
 | 2026-11-14 | Ağ geçidi ileti sınırı (32 KiB) yükseltilmez; yönerge sınır altında tutulur | Kaynak bütçeleri yalnızca zayıf model için büyütülmez |
+| 2026-11-16 | Dönem türlüdür ve sunucuda çözülür (Türkiye günü, pazartesi haftası); takvim dönemi kayan pencereye çevrilmez | Model tarih hesaplamaz; "geçen hafta" ile "son 7 gün" farklı sorulardır |
+| 2026-11-16 | Bilinmeyen tarihsel değer `null`dır, sıfır yazılmaz; kayıt öncesi dönemle karşılaştırma kurulmaz | Sahte tarihsel kesinlik en büyük risktir |
+| 2026-11-16 | Hareket dönem özeti Görev Hareketleri sorgusunun çapa tabanlı türevidir; rapor sorgusu değişmez | Tek gizlilik sınırı; yeni uç ya da tablo yok |
+| 2026-11-16 | Notlar yalnızca o iletinin rızasıyla ve alıntı olarak; model tema etiketlemez | Tema seçimi kanıtlanamaz sınıflandırma olurdu; not metni bildirimdir |
+| 2026-11-16 | Anlatılacak önerme kalmadıysa düzen sunucunundur (model çağrısı yok) | Zayıf model önermesiz sayfada düzen yerine açıklama yazıyordu; çağrı da tasarruf edilir |
+| 2026-11-16 | F `h05/h08/h22` ve G `x12` beklentisi "Rota dışı" yerine geçmiş dönem okuyan plan | Aşama H bu soruları yanıtlanabilir yaptı; güncel durum planı yine geçmez |
 
 ---
 
@@ -690,3 +748,22 @@ Eşdeğer olmayan kaba özet önerisi kaldırıldı; kullanıcı adları sistem 
 Önbellek uygunluğu karakter eşiğinden çıkarılmaz; tam istem oluşturması ile farklı sorular arasında doğrulanan önek okuması ayrı raporlanır. Önek doğrulanmadan ikinci önbelleksiz çağrı nitelendirme başarısı sayılmaz.
 Kabul Matrisi §8.3'te C6/C7'nin iki hedefli kümesi aynı yöntemle birleştirildi. Bu kod için yeni canlı model ölçümü yapılmadı;
 önceki ölçümler yeni düzeltmelerin deneysel doğrulaması değildir.
+
+
+### 2026-11-16 — Aşama H dönemsel, tarihsel ve not farkındalıklı zekâ
+
+Uygulandı (§7.A): türlü dönem, dönem karşılaştırması, tamamlanma/hareket dizileri, teslim ufukları, geçmiş durum sınırı ve rızalı
+not özeti; tarihsel doğruluk sözleşmesi sunucudadır. 124 soruluk sentetik kıyas kümesi; belirlenimci kabul 157/157; betikli
+arayüz kabulü 40/40 tur (4 görünüm); Haiku 4.5 vekil son doğrulaması hedefli+olumsuz 55/79, ayrık küme planlayıcı 14/30 (ayrıntı ve
+sınıflar Kabul Matrisi §9). Durum **SÜRÜYOR**; TAMAMLANDI işaretlenmedi.
+- **Sonraki giriş noktası:** (1) Windows VM yeniden oynatması (§11, H eki) ve Aşama G'nin bekleyen canlı/VM kapıları; (2) iyeliksiz
+  dönem sorusunda `scope: self` sınıfı (ayrık kümede baskın) ve istek yolunda kişiyi düşüren plan için sunucu tarafı içerme denetimi
+  tasarımı; (3) karşılaştırmada `overview` eklenince 6 okuma sınırının aşılması (bütçe açıklaması yerine durum yönünün tek okumayla
+  paylaşılması değerlendirilebilir); (4) tek tarihteki geçmiş durum sorusunun "Rota dışı" yerine geçmiş durum sınırıyla yanıtlanması.
+
+
+### 2026-11-17 — kök neden yakınsaması
+
+Başlangıç commit'i `0d38c07b862b159db7595bf3b724473cf50c3aba` üzerine tek düzeltme: toplu hareket sorgusunun geçici tablo temizliği, geleceğe yazılmış bitişlerin dışlanması, sürümlü bağlam ve dönem onarımı, kapsamı koruyan anlatım, bağımsız kabul kanıtı ve doğru dönem/kova beklentileri. Dört diff dışı bulgunun üçü ortak düzeltmelerle giderildi; tarihsel çok kapsamlı kırılımın mevcut düzeltmesi regresyonla doğrulandı.
+
+Koşu kanıtı [Kabul Matrisi §9.7](BILGIN-ANALIZ-KABUL-MATRISI.md): tam paket **6494/6494**, ardından son H puanlayıcı denetimiyle dönemsel paket **264/264**; lint uyarısız ve üretim derlemesi başarılı. İlk ACL ortam hatası başarılı sayılmadı; geçici dizin değişkenleri düzeltilerek tam paket yeniden koşuldu. Eski **6386** ve **6474** toplamları bu koşunun sonucu değildir. Windows/SQL VM, canlı Haiku ve bu commit'in tarayıcı kabulü **bekliyor**; durum **SÜRÜYOR**.

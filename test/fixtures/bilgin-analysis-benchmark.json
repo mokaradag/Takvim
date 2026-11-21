@@ -1307,10 +1307,7 @@
    "id": "h05",
    "text": "Bu hafta hangi somut gelişmeler oldu ve hangileri sadece mevcut durum bilgisidir?",
    "profile": "B",
-   "expect": {
-    "intent": "abstain",
-    "reason": "outside_data"
-   },
+   "expect": {"intent": "rota", "temporal": true, "temporalWindow": "this_week", "currentState": true},
    "handling": "limitation",
    "textEntities": []
   },
@@ -1342,10 +1339,7 @@
    "id": "h08",
    "text": "Geçen ay ile bu ayı karşılaştır; geçmiş verinin yetersiz olduğu noktaları belirt.",
    "profile": "B",
-   "expect": {
-    "intent": "abstain",
-    "reason": "outside_data"
-   },
+   "expect": {"intent": "rota", "temporal": true, "temporalWindow": "this_month", "temporalCompare": "last_month", "temporalPairRequired": true},
    "handling": "limitation",
    "textEntities": []
   },
@@ -1530,10 +1524,7 @@
    "id": "h22",
    "text": "Geçen haftaya göre durum daha iyi mi?",
    "profile": "B",
-   "expect": {
-    "intent": "abstain",
-    "reason": "outside_data"
-   },
+   "expect": {"intent": "rota", "temporal": true, "temporalWindow": "this_week", "temporalCompare": "last_week", "historyLimit": true},
    "handling": "limitation",
    "textEntities": []
   },

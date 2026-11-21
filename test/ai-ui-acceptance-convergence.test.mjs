@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
 import { createServer } from 'node:http';
 const root = resolve('.');
+const bridgeFetch = (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(5000) });
 const directory = (t) => { const dir = mkdtempSync(join(tmpdir(), 'rota-kabul-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const run = (file, args, env = {}) => spawnSync(process.execPath, [resolve(file), ...args], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
 
@@ -68,9 +69,9 @@ test('boş JSON köprüyü çökertmez; geçersiz istekten sonra model listesi �
     child.stdout.on('data', (chunk) => { const match = /bridge listening (\d+)/u.exec(String(chunk)); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
     child.once('error', reject);
   });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: 'null' });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: 'null' });
   assert.equal(response.status, 400);
-  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
+  assert.equal((await bridgeFetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
 });
 
 /** Süreç sınırını taklit eder; ağ dinleyicisi açmadan gerçek kabuk koşucusu ve rapor çalışır. */
@@ -148,9 +149,9 @@ test('köprü büyük girdiyi okumadan kapanan bağdaştırıcıyı başarısız
     child.stdout.on('data', (chunk) => { const match = /bridge listening (\d+)/u.exec(String(chunk)); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
     child.once('error', reject);
   });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', messages: [{ role: 'system', content: 'x'.repeat(2_000_000) }] }) });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', messages: [{ role: 'system', content: 'x'.repeat(2_000_000) }] }) });
   assert.equal(response.status, 503);
-  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
+  assert.equal((await bridgeFetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
   assert.equal(JSON.parse(readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim()).ok, false);
 });
 
@@ -436,7 +437,7 @@ test('betikli kabul yalnızca bütün turlarının altın planı olan konuşmala
     });
     child.once('error', reject);
   });
-  const { questions } = await (await fetch(`http://127.0.0.1:${port}/v1/scripted-plans`)).json();
+  const { questions } = await (await bridgeFetch(`http://127.0.0.1:${port}/v1/scripted-plans`)).json();
   const scenarios = JSON.parse(readFileSync('scripts/ui-acceptance/scenarios/B.json', 'utf8')).conversations;
   const seeded = scenarios.filter((item) => item.seed === 'executive');
   assert.ok(seeded.length >= 5);
@@ -444,13 +445,13 @@ test('betikli kabul yalnızca bütün turlarının altın planı olan konuşmala
   for (const item of seeded) assert.ok(item.turns.every((text) => questions.includes(text)), item.name);
   assert.ok(scenarios.some((item) => !item.turns.every((text) => questions.includes(text))));
   // Plansız soru: uç açıklama kararı döndürür ve çağrıyı `unscripted` olarak işaretler.
-  const ask = (content) => fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content }] }) }).then((response) => response.json());
+  const ask = (content) => bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content }] }) }).then((response) => response.json());
   assert.match((await ask('altın planı olmayan soru')).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
   assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
   const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(calls.map((call) => call.unscripted === true), [true, false]);
   // Geçerli HTTP gövdesindeki bozuk düzen iletisi (geçersiz JSON görünüm) istemci hatasıdır: uç çökmez, sonraki istek yanıtlanır.
-  const malformed = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'OLGU SAYFASI (yalnızca veri):\n{bozuk' }] }) });
+  const malformed = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'OLGU SAYFASI (yalnızca veri):\n{bozuk' }] }) });
   assert.equal(malformed.status, 400);
   assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u, 'uç ayakta kalır');
   // Sürücü plansız konuşmayı eksik kapsam satırıyla korur; kısmi koşu tam kabul sayılmaz.
@@ -509,7 +510,242 @@ test('betikli köprü yazılamayan çağrı kaydından sonra ayakta kalır', asy
     child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
     child.once('error', reject);
   });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: 'Türkçe soru' }] }) });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: 'Türkçe soru' }] }) });
   assert.equal(response.status, 500);
-  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
+  assert.equal((await bridgeFetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
 });
+
+test('not rızası anahtarı gizliyken sürücü veri önkoşulunu bildirir ve soru göndermez', (t) => {
+  const dir = directory(t); mkdirSync(join(dir, 'node_modules', 'playwright'), { recursive: true });
+  writeFileSync(join(dir, 'node_modules', 'playwright', 'index.js'), `
+const fs=require('fs');
+const locator={first(){return this},getByRole(){return this},isVisible:async()=>false,click:async()=>{},getAttribute:async()=> 'true',waitFor:async()=>{},count:async()=>0,fill:async()=>{fs.writeFileSync(process.env.UI_ACCEPTANCE_DIR+'/gonderim','soru');throw Error('soru gönderildi')},screenshot:async()=>{}};
+const page={goto:async()=>{},getByRole:()=>locator,locator:()=>locator,waitForTimeout:async()=>{}};
+exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}),close:async()=>{}})};`);
+  for (const file of ['drive.cjs', 'expectations.cjs']) copyFileSync(resolve(`scripts/ui-acceptance/${file}`), join(dir, file));
+  const scenario = { profile: 'B', port: 8102, appLog: 'app.log', conversations: [{ name: 'rıza', detail: 'balanced', turns: ['Notları oku'], includeText: [0] }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  // Üst kabuğun görünüm değişkeni (ör. UI_VIEWPORT=mobile) sınamayı etkilemez.
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_APP_LOG: join(dir, 'app.log'),
+    UI_THEME: '', UI_VIEWPORT: '', UI_SCRIPTED: '', UI_ONLY: '', UI_SEED_GROUPS: '', UI_SEED: '' });
+  assert.equal(result.status, 1, result.stderr);
+  const row = JSON.parse(readFileSync(join(dir, 'out', 'B.json')))[0];
+  assert.equal(row.rendered.status, 'driver-error');
+  assert.match(row.rendered.error, /Rota verisi kapalı/);
+  assert.ok(!readdirSync(dir).includes('gonderim'));
+});
+
+// Köprü sınamaya verilen SABİT günle çalışır (gece yarısı yarışı yok); gün devri ayrı sınamada 409 olarak denetlenir.
+async function scriptedBridge(t, benchmark, env = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'rota-kopru-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, 'benchmark.json'), JSON.stringify(benchmark));
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: '', BRIDGE_ENFORCE_DAY: '', UI_PROFILE: 'B', UI_BENCHMARK: join(dir, 'benchmark.json'), ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  return new Promise((done, fail) => {
+    let settled = false;
+    const settle = (fn, val) => { if (!settled) { settled = true; clearTimeout(timer); fn(val); } };
+    const timer = setTimeout(() => settle(fail, new Error('betikli uç açılmadı')), 5000); let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) settle(done, Number(match[1])); });
+    child.once('error', (err) => settle(fail, err));
+  });
+}
+
+const bridgeBenchmark = { targeted: [{ id: 'k1', profile: 'B', text: 'T projesinde dün ve bugün neler tamamlandı?',
+  plan: { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['T'], focus: ['completed'], dateFrom: 'T-1', dateTo: 'T' } } }] };
+
+test('betikli uç göreli günü yalnızca tarih alanlarında çözer; "T" adlı proje adı değişmez', async (t) => {
+  const port = await scriptedBridge(t, bridgeBenchmark, { BRIDGE_TODAY: '2026-09-30' });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
+  const plan = JSON.parse((await response.json()).choices[0].message.tool_calls[0].function.arguments);
+  assert.deepEqual(plan.analysis.names, ['T']);
+  assert.equal(plan.analysis.dateTo, '2026-09-30');
+  // Başlangıç da çözülür: bir önceki İstanbul günü (çözülmeden geçen "T-1" kabul edilmez).
+  assert.equal(plan.analysis.dateFrom, '2026-09-29');
+});
+
+test('betikli uç gün devrinde boş 409 döndürür (eski güne göre çözülmüş plan verilmez)', async (t) => {
+  const port = await scriptedBridge(t, bridgeBenchmark, { BRIDGE_TODAY: '2000-01-01', BRIDGE_ENFORCE_DAY: '1' });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
+  assert.equal(response.status, 409);
+  assert.equal(await response.text(), '');
+  // Koşu tohumu ve betikli ucu tek günle başlatır: uç gün değişimini denetler, tohumlar dışa aktarılan aynı günü okur.
+  const runner = readFileSync(join(root, 'scripts/ui-acceptance/run.sh'), 'utf8');
+  assert.match(runner, /\bexport UI_RUN_DAY\b/);
+  assert.match(runner, /UI_RUN_DAY=\$\(TZ=Europe\/Istanbul date \+%F\)/);
+  assert.match(runner, /BRIDGE_TODAY=\$UI_RUN_DAY BRIDGE_ENFORCE_DAY=1 /);
+  assert.match(readFileSync(join(root, 'scripts/ui-acceptance/uiSeed.mjs'), 'utf8'), /process\.env\.UI_RUN_DAY/);
+});
+
+test('görsel kabulün dönem denetimi sunucunun aralık yazımını bekler ve daha kısa dönemi geçirmez', async () => {
+  const { periodLabel, semanticFailures } = await import('../scripts/ui-acceptance/expectations.cjs');
+  const now = new Date(Date.UTC(2026, 8, 30, 9));
+  assert.equal(periodLabel(90, now), '3 Temmuz – 30 Eylül 2026');
+  const trace = { outcome: 'grounded' };
+  assert.deepEqual(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(90, now)} döneminde` }, trace, now), []);
+  assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler ${periodLabel(30, now)} döneminde` }, trace, now).length);
+  // Aynı soneki taşıyan daha kısa dönem (80 gün) de geçmez.
+  assert.ok(semanticFailures({ periodDays: 90 }, { text: `Tamamlanmış görevler 1${periodLabel(90, now)} döneminde` }, trace, now).length);
+  // this_week ve this_month_vs_last_month yalnızca genel dönem kelimesiyle geçemez; çözümlenmiş takvim tarihleri zorunludur.
+  assert.deepEqual(semanticFailures({ periodKind: 'this_week' }, { text: 'Bu hafta (28 Eylül – 4 Ekim 2026) projelerinizde 3 hareket kaydedildi.' }, trace, now), []);
+  assert.ok(semanticFailures({ periodKind: 'this_week' }, { text: 'Bu hafta (24–30 Eylül 2026) projelerinizde 3 hareket kaydedildi.' }, trace, now).includes('istenen hafta dönemi görünmüyor: this_week'));
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay 4 görev, bu ay 6 görev tamamlandı.' }, trace, now).includes('istenen ay karşılaştırma dönemleri görünmüyor'));
+  // Grafik türü ve içeriği AYNI görünür grafikte doğrulanır: ayrı bir çubuk grafik 12 noktalı çizgi grafik beklentisini karşılayamaz.
+  const splitCharts = [{ type: 'line', visible: true, title: 'Kısa çizgi', items: ['a', 'b', 'c', 'd'] },
+    { type: 'bar', visible: true, title: 'Tamamlanan görev', items: Array.from({ length: 12 }, (_, i) => `H${i + 1}`) }];
+  assert.ok(semanticFailures({ chartMinItems: 12 }, { text: 'ok', charts: splitCharts }, trace, now, 'line').length);
+  assert.deepEqual(semanticFailures({ chartMinItems: 12 }, { text: 'ok', charts: [{ ...splitCharts[1], type: 'line' }] }, trace, now, 'line'), []);
+});
+
+test('arayüz kabulü iki dönemin ölçüsünü, yanıt dilini ve geçmiş durum sınırını birlikte denetler', async () => {
+  const { semanticFailures } = await import('../scripts/ui-acceptance/expectations.cjs');
+  const now = new Date(Date.UTC(2026, 8, 30, 9));
+  const scenarios = JSON.parse(readFileSync(join(root, 'scripts/ui-acceptance/scenarios/B.json'))).conversations;
+  const score = (name, text, charts = []) => semanticFailures(scenarios.find((item) => item.name === name).expectedTurns[0], { text, charts }, { outcome: 'grounded' }, now, scenarios.find((item) => item.name === name).expectedCharts?.[0]);
+  const turkish = 'Geçen ay (Ağustos 2026) görebildiğiniz işlerde 5 görev tamamlanmıştı; bu ay (Eylül 2026) şu ana kadar 8 görev tamamlandı.';
+  assert.deepEqual(score('H2-donem-kiyasi', turkish), []);
+  assert.deepEqual(score('H2-donem-kiyasi', 'Tamamlanan iş sayıları karşılaştırılamıyor: Ağustos 2026 için görev sayısı bilinmiyor; sıfır sayılmadı; öteki dönemde (Eylül 2026) 8 görev var.'), []);
+  assert.ok(score('H2-donem-kiyasi', 'İki dönemde de (Dün ve bugün) 4 görev tamamlandı.').length);
+  assert.ok(score('H2-donem-kiyasi', 'Geçen ay için karşılaştırma yapılmadı; bu ay 8 görev tamamlandı.').length);
+  assert.deepEqual(score('H7-ingilizce', 'Last month (August 2026), across the tasks you can see, completed tasks totalled 5; this month (September 2026) so far, 8.'), []);
+  assert.ok(score('H7-ingilizce', 'Last month 5 görev tamamlandı; this month 8 görev tamamlandı.').length);
+  const limited = 'Geçen haftanın durumu yeniden kurulamıyor ve karşılaştırma yapılmadı; aşağıdaki sayılar bugünü gösterir. Şu anda 3 gecikmiş görev var.';
+  assert.deepEqual(score('H2-gecmis-durum-siniri', limited), []);
+  assert.deepEqual(score('H2-gecmis-durum-siniri', limited + ' Gecikmeleriniz azaldı denemez.'), []);
+  assert.ok(score('H2-gecmis-durum-siniri', limited + ' Ancak gecikmeleriniz azaldı.').length);
+  assert.ok(score('H2-gecmis-durum-siniri', limited + ' Geçen haftaya göre daha az gecikmiş işiniz var.').length);
+  assert.ok(score('H2-gecmis-durum-siniri', limited + ' Geçen hafta 3 gecikmiş görev vardı.').length);
+  assert.ok(score('H2-gecmis-durum-siniri', limited + ' Geçen haftaki gecikmiş görev sayısı: 8.').length);
+  const week = 'Geçen hafta (21–27 Eylül 2026) için ';
+  assert.ok(score('H1-gecen-hafta', week + 'gerçekleşen bitiş tarihine göre bir sonuç sunamıyorum.').length);
+  assert.deepEqual(score('H1-gecen-hafta', week + '4 görev tamamlandı (gerçekleşen bitiş tarihine göre).'), []);
+  const activity = 'Bu hafta (28 Eylül – 4 Ekim 2026) siz 3 hareket kaydettiniz; ekibiniz 8 hareket kaydetti. Sayılar toplanmaz.';
+  assert.deepEqual(score('H6-ic-ice-kapsam', activity), []);
+  assert.ok(score('H6-ic-ice-kapsam', activity + ' Birleşik hareket sayısı: 11.').length);
+  assert.deepEqual(score('H2-donem-kiyasi', turkish + ' Ayrıca 5 Eylül 2026 tarihli iş açık.'), []);
+  assert.ok(score('H2-gecmis-durum-siniri', 'Geçen haftanın durumu yeniden kurulamıyor.').length);
+  // H3-egilim-cizgisi hareket çizgi grafiğini tamamlanma eğilimi olarak kabul etmez.
+  const trendText = 'Tamamlanmış görevler 3 Temmuz – 30 Eylül 2026 döneminde haftalık tamamlanma hızı en yüksek 14–20 Eylül 2026 haftasındaydı.';
+  const items12 = Array.from({ length: 12 }, (_, i) => `H${i + 1}`);
+  assert.ok(score('H3-egilim-cizgisi', trendText, [{ type: 'line', visible: true, title: 'Haftalara göre hareket', items: items12 }]).length);
+  assert.deepEqual(score('H3-egilim-cizgisi', trendText, [{ type: 'line', visible: true, title: 'Haftalara göre tamamlanan görev', items: items12 }]), []);
+});
+
+test('kabul tohumları tek Türkiye gününü paylaşır ve geçersiz takvim gününü reddeder', async (t) => {
+  const { temporalBenchmarkSeed } = await import('./helpers/temporalBenchmarkSeed.mjs');
+  const { uiRunDay } = await import('../scripts/ui-acceptance/uiSeed.mjs');
+  const previous = process.env.UI_RUN_DAY;
+  t.after(() => { if (previous == null) delete process.env.UI_RUN_DAY; else process.env.UI_RUN_DAY = previous; });
+  for (const value of ['2026-13-01', '2026-02-29']) {
+    process.env.UI_RUN_DAY = value;
+    assert.throws(uiRunDay, /UI_RUN_DAY/);
+  }
+  process.env.UI_RUN_DAY = '2026-11-18';
+  assert.deepEqual(temporalBenchmarkSeed(), temporalBenchmarkSeed('2026-11-18'));
+  const base = temporalBenchmarkSeed('2026-11-18');
+  const next = temporalBenchmarkSeed('2026-11-19');
+  for (let index = 0; index < base.tasks.length; index += 1) {
+    if (base.tasks[index].TargetFinish) assert.equal(Date.parse(next.tasks[index].TargetFinish) - Date.parse(base.tasks[index].TargetFinish), 86400000);
+    else assert.equal(next.tasks[index].TargetFinish, base.tasks[index].TargetFinish);
+  }
+});
+
+test('çoklu tohum koşusu boşluklu seçimi işler, ayrı günlüklerin sonuçlarını korur ve G/H planlarını sunar', async (t) => {
+  const dir = fakeDriverDir(t);
+  const playwright = join(dir, 'node_modules', 'playwright', 'index.js');
+  writeFileSync(playwright, readFileSync(playwright, 'utf8')
+    .replace("path.join(process.env.UI_ACCEPTANCE_DIR,'app-B.log')", "(process.env.UI_APP_LOG||path.join(process.env.UI_ACCEPTANCE_DIR,'app-B.log'))")
+    .replace("evidence:1", "evidence:process.env.UI_SEED==='base'?1:2")
+    .replace("return {status:'complete'",
+      "fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,toolCalls:['rota_plan'],models:['claude-haiku-4-5-20251001'],thinking:'off',thinkingTokens:0})+'\\n');\n return {status:'complete'"));
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify({
+    profile: 'B', port: 8102, appLog: 'app-B.log',
+    conversations: [
+      { name: 'g-tohumsuz', detail: 'balanced', turns: ['Bölümümün durumu nedir?'] },
+      { name: 'h-tohumlu', seed: 'temporal', detail: 'balanced', turns: ['Bu hafta neler değişti?'] }
+    ]
+  }));
+  const firstPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SCRIPTED: '', UI_SEED: 'base', UI_SEED_GROUPS: '1',
+    UI_ONLY: 'g-tohumsuz, h-tohumlu ', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-base.log')
+  });
+  assert.equal(firstPass.status, 0, firstPass.stderr);
+  const rows = () => JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  const firstRow = rows().find(({ conversation }) => conversation === 'g-tohumsuz');
+  assert.equal(firstRow?.server?.evidence, 1);
+  const secondPass = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], {
+    UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'coklu', UI_SCRIPTED: '', UI_SEED: 'temporal', UI_SEED_GROUPS: '1',
+    UI_ONLY: 'g-tohumsuz, h-tohumlu ', UI_THEME: '', UI_APP_LOG: join(dir, 'app-B-temporal.log')
+  });
+  assert.equal(secondPass.status, 0, secondPass.stderr);
+  const combined = rows();
+  assert.deepEqual(combined.map((row) => [row.conversation, row.failures.length]), [['g-tohumsuz', 0], ['h-tohumlu', 0]]);
+  assert.deepEqual(combined[0], firstRow);
+  assert.equal(combined[1].server?.evidence, 2);
+
+  // Betikli köprü UI_BENCHMARK verilmediğinde hem G (executive) hem H (temporal) sorularının gerçek altın planlarını döndürür.
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], {
+    cwd: root,
+    env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: '', BRIDGE_ENFORCE_DAY: '', UI_PROFILE: 'B', UI_BENCHMARK: '', BRIDGE_TODAY: '2026-09-30' },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+  const port = await new Promise((done, fail) => {
+    let settled = false;
+    const settle = (fn, val) => { if (!settled) { settled = true; clearTimeout(timer); fn(val); } };
+    const timer = setTimeout(() => settle(fail, new Error('betikli uç açılmadı')), 5000); let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) settle(done, Number(match[1])); });
+    child.once('error', (err) => settle(fail, err));
+  });
+  for (const [fixture, collection, question] of [
+    ['executive', 'scenarios', 'Direktörlüğümde bugün yönetimin öncelikle ilgilenmesi gereken üç konu nedir? Neden?'],
+    ['temporal', 'targeted', 'Bu hafta projelerimde hangi önemli gelişmeler oldu?']
+  ]) {
+    const benchmark = JSON.parse(readFileSync(join(root, `test/fixtures/bilgin-${fixture}-benchmark.json`), 'utf8'));
+    const expected = benchmark[collection].find(({ text }) => text === question)?.plan;
+    assert.ok(expected, `altın plan bulunamadı: ${question}`);
+    const res = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: question }] })
+    });
+    const body = await res.json();
+    const call = body.choices?.[0]?.message?.tool_calls?.[0];
+    assert.ok(call, `köprü soruyu bulamadı: ${question}`);
+    assert.deepEqual(JSON.parse(call.function.arguments), expected, question);
+  }
+});
+
+test('dönem ve geçmiş durum beklentileri kısmi ay aralığını, yer değiştirmiş ayları, kayan 7 günü ve geçmiş gecikme iddialarını reddeder', async () => {
+  const { semanticFailures } = await import('../scripts/ui-acceptance/expectations.cjs');
+  const nov20 = new Date('2026-11-20T09:00:00Z');
+  const sep30 = new Date('2026-09-30T09:00:00Z');
+  const okTrace = { outcome: 'grounded', evidence: 2 };
+  // Kısmi ay aralıkları ("1–10 Ekim 2026 / 1–10 Kasım 2026") ve yalın ay adıyla karıştırılmış kısmi aralık reddedilir.
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1–10 Ekim 2026 ve 1–10 Kasım 2026 tamamlandı.' }, okTrace, nov20).length > 0);
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Ekim 2026 özeti: 1–10 Ekim 2026 / 1–10 Kasım 2026.' }, okTrace, nov20).length > 0);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Ekim 2026) 4 görev tamamlanmıştı; bu ay (1–30 Kasım 2026) 6 görev tamamlandı.' }, okTrace, nov20), []);
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1 Ekim 2026; 2 Ekim 2026; 1 Kasım 2026; 2 Kasım 2026' }, okTrace, nov20).length > 0);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1–31 Ekim 2026 ile 1–30 Kasım 2026 karşılaştırıldı. Bir işin tarihi 5 Kasım 2026.' }, okTrace, nov20), []);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Ekim 2026\n4\nKasım 2026\n5' }, okTrace, nov20), []);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Ekim 2026 ile Kasım 2026 karşılaştırıldı.\n16–22 Kasım 2026\n5' }, okTrace, nov20), []);
+  // Yer değiştirmiş aylar ("Geçen ay (Eylül 2026) ... bu ay (Ağustos 2026)") reddedilir.
+  assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Eylül 2026) 5 görev tamamlanmıştı; bu ay (Ağustos 2026) 8 görev tamamlandı.' }, okTrace, sep30).length > 0);
+  for (const [language, text] of [
+    ['tr', 'Geçen ay Eylül 2026, bu ay Ağustos 2026 (Ağustos 2026 – Eylül 2026).'],
+    ['en', 'Last month September 2026, this month August 2026 (August 2026 – September 2026).']
+  ]) assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month', language }, { text }, okTrace, sep30).length > 0, language);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month', language: 'en' },
+    { text: 'Last month (August 2026), this month 1–30 September 2026.' }, okTrace, sep30), []);
+  // Geçen hafta (21–27 Eylül 2026) beklentisi kayan 7 günü (24–30 Eylül 2026) reddeder.
+  assert.ok(semanticFailures({ periodKind: 'last_week' }, { text: 'Geçen hafta (24–30 Eylül 2026) 4 görev tamamlandı.' }, okTrace, sep30).length > 0);
+  assert.deepEqual(semanticFailures({ periodKind: 'last_week' }, { text: 'Geçen hafta (21–27 Eylül 2026) 4 görev tamamlandı.' }, okTrace, sep30), []);
+  // H2-gecmis-durum-siniri yeni yasak kalıpları: iyelikli geçmiş gecikme, ölçü sonrası sayı ve "düştü" iddiası reddedilir; açık belirsizlik geçer.
+  const bScenario = JSON.parse(readFileSync(join(root, 'scripts/ui-acceptance/scenarios/B.json'), 'utf8'));
+  const historyLimit = bScenario.conversations.find((c) => c.name === 'H2-gecmis-durum-siniri').expectedTurns[0];
+  const validBase = 'Geçmişteki durum yeniden kurulamıyor; aşağıdaki sayılar bugünü gösterir. Bugün 2 gecikmiş görev var. Gecikmeleriniz azaldı denemez.';
+  assert.deepEqual(semanticFailures(historyLimit, { text: validBase }, okTrace, sep30), []);
+  assert.ok(semanticFailures(historyLimit, { text: `${validBase} Geçen hafta 3 göreviniz gecikmişti.` }, okTrace, sep30).length > 0);
+  assert.ok(semanticFailures(historyLimit, { text: `${validBase} Önceki haftanın gecikmiş görev sayısı 8'di.` }, okTrace, sep30).length > 0);
+  assert.ok(semanticFailures(historyLimit, { text: `${validBase} Geciken görev sayısı geçen haftaya göre düştü.` }, okTrace, sep30).length > 0);
+});
+

@@ -99,7 +99,10 @@ export function carrierAvailable(source, field, row = null) {
  */
 const COLLECTION_COMPLETENESS = Object.freeze({
   rota_activity_search: {
-    items: (envelope) => envelope.totalCount === envelope.data?.items?.length && envelope.returnedCount === envelope.data.items.length
+    items: (envelope) => envelope.totalCount === envelope.data?.items?.length && envelope.returnedCount === envelope.data.items.length,
+    // Dönem özetinin dizisi aralığın bütün kovalarını taşır; kural yalnızca bütün kova SATIRLARININ döndüğünü doğrular, her sayının
+    // bilindiğini değil: kayıt başlangıcından önceki kova `events: null`, `recorded: false` taşır ve sıfır değildir. Kapsam denetimi değildir.
+    series: (envelope) => envelope.data?.aggregate === true && Array.isArray(envelope.data.series) && envelope.returnedCount === envelope.data.series.length
   },
   rota_data_quality: {
     checks: (envelope) => Array.isArray(envelope.data?.checks),

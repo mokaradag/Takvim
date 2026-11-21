@@ -1,5 +1,6 @@
 // Senaryonun açık beklentileri görülmüş metin ve bu turun sunucu sonucu üzerinde denetlenir; dil yorumu yapılmaz.
-function semanticFailures(expected, rendered, trace) {
+// `now`: turun gönderildiği an; dönem etiketi ekran görüntüsü sonrasındaki saatle değil, sunucunun dönemi çözdüğü günle beklenir.
+function semanticFailures(expected, rendered, trace, now = new Date(), expectedChart = null) {
   // Bu paket Rota senaryolarıdır; farklı bir sonuç açıkça belirtilmedikçe kanıtlı yanıt gerekir.
   expected = { outcome: 'grounded', ...expected };
   const failures = [];
@@ -12,7 +13,81 @@ function semanticFailures(expected, rendered, trace) {
   if (expected.maxEvidence != null && (!Number.isSafeInteger(trace?.evidence) || trace.evidence > expected.maxEvidence)) failures.push('beklenen kanıt sınırı aşıldı');
   for (const text of expected.requires || []) if (!String(rendered.text || '').includes(text)) failures.push(`zorunlu görünür metin yok: ${text}`);
   for (const text of expected.forbids || []) if (String(rendered.text || '').includes(text)) failures.push(`yasak görünür metin var: ${text}`);
+  // Seçenekli zorunlu metin (`matches`: düzenli ifade kaynakları): ör. kapsamın hareket sayısı YA DA açık kayıt sınırı.
+  for (const source of expected.matches || []) if (!new RegExp(source, 'u').test(String(rendered.text || ''))) failures.push(`zorunlu görünür ifade yok: ${source}`);
+  for (const source of expected.rejects || []) if (new RegExp(source, 'iu').test(String(rendered.text || ''))) failures.push('yasak görünür ifade var: ' + source);
+  // Bugün dâhil son N günün aralığı (Türkiye günü) yanıtta görünmelidir: daha kısa bir dönemin grafiği dönem denetimini geçmez.
+  // Dönem etiketi bütün olarak aranır: "13 Temmuz – 30 Eylül" metni "3 Temmuz – 30 Eylül" beklentisini sonek eşleşmesiyle geçmez.
+  if (Number.isSafeInteger(expected.periodDays) && !new RegExp(`(^|[^0-9])${periodLabel(expected.periodDays, now, expected.language === 'en').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(String(rendered.text || ''))) failures.push(`istenen dönem görünmüyor: ${periodLabel(expected.periodDays, now, expected.language === 'en')}`);
+  // İstenen takvim dönemi (ör. bu hafta ya da bu ay/geçen ay) çözülen takvim aralığıyla doğrulanır; göreli etiket tek başına yetmez.
+  if (expected.periodKind) {
+    const text = String(rendered.text || '');
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+    const [y, m] = [Number(today.slice(0, 4)), Number(today.slice(5, 7))];
+    const prevY = m === 1 ? y - 1 : y;
+    const prevM = m === 1 ? 12 : m - 1;
+    const en = expected.language === 'en';
+    if (expected.periodKind === 'this_week' || expected.periodKind === 'last_week') {
+      const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
+      const offset = expected.periodKind === 'last_week' ? dow + 7 : dow;
+      const mon = new Date(Date.parse(`${today}T00:00:00Z`) - offset * 86400000).toISOString().slice(0, 10);
+      const sun = new Date(Date.parse(`${mon}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10);
+      const weekLabel = formatRangeLabel(mon, sun, en);
+      if (!new RegExp(`(^|[^0-9])${weekLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text)) failures.push(`istenen hafta dönemi görünmüyor: ${expected.periodKind}`);
+    } else if (expected.periodKind === 'this_month_vs_last_month') {
+      const months = en ? EN_MONTHS : MONTHS;
+      // Tekil gün ya da kısmi aralık, ait olduğu tam ayın etiketi sayılmaz.
+      const monthReferences = (value) => [...value.matchAll(new RegExp(
+        String.raw`(?<!\d)(?:(\d{1,2})[^\S\r\n]*[–-][^\S\r\n]*(\d{1,2})|(\d{1,2}))?[^\S\r\n]*(${months.join("|")})[^\S\r\n]+(\d{4})(?!\d)`, 'giu'))];
+      const isMonth = (ref, year, month) => ref && Number(ref[5]) === year
+        && ref[4].toLocaleLowerCase(en ? 'en' : 'tr') === months[month - 1].toLocaleLowerCase(en ? 'en' : 'tr');
+      const isFull = ([, start, end, single], year, month) => !single && (!start || Number(start) === 1 && Number(end) === new Date(Date.UTC(year, month, 0)).getUTCDate());
+      const labels = [...text.matchAll(en ? /last month|this month/giu : /geçen ay|bu ay/giu)];
+      const previous = labels.findIndex(([label]) => /^(last|geçen)/iu.test(label));
+      const current = labels.findIndex(([label]) => /^(this|bu)/iu.test(label));
+      const references = monthReferences(text);
+      const validMonth = (year, month, index) => {
+        if (previous >= 0 && current >= 0) {
+          // Her göreli ay ifadesi, bir sonraki ifadeye ya da cümleye geçmeden karşılaştığı ilk tarihi tanımlar.
+          const label = labels[index];
+          const clause = text.slice(label.index + label[0].length, labels[index + 1]?.index).split(/[;\n.]/u, 1)[0];
+          const [first] = monthReferences(clause);
+          return isMonth(first, year, month) && isFull(first, year, month);
+        }
+        return references.some((ref) => isMonth(ref, year, month) && isFull(ref, year, month));
+      };
+      if (!validMonth(prevY, prevM, previous) || !validMonth(y, m, current)) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
+    }
+  }
+  // Grafik türü ve içerik beklentileri AYNI görünür grafikte aranır: başlıktaki ölçü (`chartTitle`), bütün etiketler (`chartItems`),
+  // en az nokta sayısı (`chartMinItems`) ve istenen grafik türü (`expectedChart` / `chartType`).
+  const chartType = expectedChart || expected.chartType || null;
+  const chartExpected = chartType || expected.chartTitle || Array.isArray(expected.chartItems) || Number.isSafeInteger(expected.chartMinItems);
+  if (chartExpected && !(rendered.charts || []).some((chart) => chart.visible
+    && (!chartType || chartType === 'any' || chart.type === chartType)
+    && (!expected.chartTitle || String(chart.title || '').includes(expected.chartTitle))
+    && (!Array.isArray(expected.chartItems) || expected.chartItems.every((label) => (chart.items || []).some((item) => String(item).includes(label))))
+    && (!Number.isSafeInteger(expected.chartMinItems) || (chart.items || []).length >= expected.chartMinItems))) {
+    failures.push(`istenen grafik içeriği görünmüyor: ${[chartType, expected.chartTitle, ...(expected.chartItems || []), expected.chartMinItems].filter((item) => item != null).join(' | ')}`);
+  }
   return failures;
+}
+const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+const EN_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** Sunucunun aralık yazımıyla aynı biçim (`rangeLabel`): aynı ayda "16–22 Kasım 2026", ay sınırında "2 Temmuz – 30 Eylül 2026", yıl sınırında iki yıl. */
+function formatRangeLabel(from, to, en = false) {
+  const months = en ? EN_MONTHS : MONTHS;
+  const part = (day) => `${Number(day.slice(8, 10))} ${months[Number(day.slice(5, 7)) - 1]}`;
+  if (from === to) return `${part(to)} ${to.slice(0, 4)}`;
+  const lastDay = new Date(Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)), 0)).getUTCDate();
+  if (from.slice(0, 7) === to.slice(0, 7) && from.endsWith('-01') && Number(to.slice(8, 10)) === lastDay) return `${months[Number(to.slice(5, 7)) - 1]} ${to.slice(0, 4)}`;
+  if (from.slice(0, 7) === to.slice(0, 7)) return `${Number(from.slice(8, 10))}–${part(to)} ${to.slice(0, 4)}`;
+  return from.slice(0, 4) === to.slice(0, 4) ? `${part(from)} – ${part(to)} ${to.slice(0, 4)}` : `${part(from)} ${from.slice(0, 4)} – ${part(to)} ${to.slice(0, 4)}`;
+}
+function periodLabel(days, now = new Date(), en = false) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const from = new Date(Date.parse(`${today}T00:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);
+  return formatRangeLabel(from, today, en);
 }
 // Tamamlanmamış ürün yanıtı, senaryonun anlamsal beklentisi olmasa da kabul kanıtı değildir.
 function completionFailures(rendered, trace) {
@@ -32,9 +107,10 @@ function compositionFailures(trace, calls) {
   return trace?.presentation?.mode === 'composed' && !trace.presentation.server && !calls.some((call) => call.ok && call.purpose === 'compose')
     ? ['model düzeni çağrı kanıtı yok'] : [];
 }
-// Betikli kip: yalnızca canlı model kimliği ve düşünme gereksinimleri atlanır; yeniden yürütme ve düzen çağrısı kanıtı denetlenir.
+// Betikli kip: yalnızca canlı model kimliği ve düşünme gereksinimleri atlanır; yeniden yürütme, düzen ve gün devri denetlenir.
 function scriptedFailures(expected, trace, calls) {
-  return [...replayFailures(expected, trace, calls), ...compositionFailures(trace, calls)];
+  const rollover = calls.some((call) => call.error === 'day_rollover' || call.status === 409) ? ['betikli uç gün devri nedeniyle 409 döndürdü'] : [];
+  return [...rollover, ...replayFailures(expected, trace, calls), ...compositionFailures(trace, calls)];
 }
 // Model yolunda gerçek plan çağrısı zorunludur; aday seçiminin sunucu yeniden yürütmesi açıkça belirtilir.
 function modelFailures(expected, trace, calls) {
@@ -46,4 +122,4 @@ function modelFailures(expected, trace, calls) {
   if (calls.some((call) => !call.ok || call.thinking !== 'off' || call.thinkingTokens !== 0 || !call.models?.length || call.models.some((model) => model !== 'claude-haiku-4-5-20251001'))) failures.push('model çağrısı kabul sözleşmesini sağlamadı');
   return failures;
 }
-module.exports = { semanticFailures, completionFailures, modelFailures, replayFailures, scriptedFailures };
+module.exports = { periodLabel, semanticFailures, completionFailures, modelFailures, replayFailures, scriptedFailures };
