@@ -114,7 +114,8 @@ yetkili kanıtlar ve anlatı için gerekli kapsam/tamlık açıklamaları aktar�
              "karsilastirma_donemi": { "baslangic": "2026-10-26", "bitis": "2026-11-01" } },
   "veri_ani": "2026-11-09T08:30:00+03:00",
   "kanitlar": [
-    { "id": "E1", "tur": "olcu",    "kaynak": "rota_task_analytics", "olcu": "tamamlanan", "deger": 18, "kapsam": ["…"], "tamlik": "complete" },
+    { "id": "E1", "tur": "olcu",    "kaynak": "rota_task_analytics", "olcu": "tamamlanan", "deger": 18, "kapsam": ["…"],
+      "donem": { "baslangic": "2026-11-02", "bitis": "2026-11-08" }, "tamlik": "complete" },
     { "id": "E2", "tur": "gorev",   "kaynak": "rota_task_search", "gorev": "…", "proje": "…", "durum": "…", "hedef_bitis": "…", "gerceklesen_bitis": null },
     { "id": "E3", "tur": "not",     "kaynak": "MR_AuditLog", "gorev": "…", "kayit_zamani": "2026-11-06T16:40:00+03:00", "metin": "…", "kirpildi": false },
     { "id": "E4", "tur": "hareket", "kaynak": "rota_activity_search", "donem_ozeti": { "…": "…" }, "kayit_kapsami": "partial" },
@@ -131,6 +132,9 @@ Kurallar:
 
 - **Kararlı kimlikler.** Her kanıt `E#`, her sunucu türetimi `F#` kimliği taşır; onarım turlarında değişmez.
 - **Köken.** Her kanıt kaynak aracı ya da tabloyu, görev/proje kimliğini ve zaman bilgisini taşır.
+  Dönem temelli toplu ölçüler (`tamamlanan`, `hareket` vb.) uygulanan `donem` (`baslangic`, `bitis`) aralığını,
+  anlık durum ölçüleri (`acik`, `geciken` vb.) ise `veri_ani` (veya geçerli anlık kesit zamanını) kanıt üzerinde
+  açıkça taşır; karşılaştırma ve dönem cümlesi doğrulaması bu zaman kökenine dayanır.
   Not kanıtında **kayıt zamanı** (`kayit_zamani`) ile metnin andığı **olay tarihi** ayrıdır; olay tarihi
   çıkarılmaz, metinde kalır ve yazara "notun kayıt gününe göre" yorumlanması söylenir.
 - **Tamlık ve sınır.** Kesilen koleksiyon, kırpılan metin, kısmi kayıt kapsamı ve tarihsiz tamamlanan görev açıkça

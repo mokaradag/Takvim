@@ -243,7 +243,12 @@ test('şablon: A4 dikey sayfa, kenar boşlukları, üst/alt bilgi uzaklığı ve
 });
 
 function checkStyles(styles) {
-  const byId = new Map(all(styles, 'w:style').map((element) => [attr(element, 'w:styleId'), element]));
+  const byId = new Map();
+  for (const element of all(styles, 'w:style')) {
+    const styleId = attr(element, 'w:styleId');
+    assert.ok(styleId && !byId.has(styleId), 'yinelenen veya boş Word stil kimliği: ' + styleId);
+    byId.set(styleId, element);
+  }
   const JC = { iki_yana: 'both', orta: 'center', sag: 'right' };
   for (const [id, entry] of Object.entries(spec.stiller)) {
     const element = byId.get(id);
@@ -841,11 +846,18 @@ test('şablon: bölüm, sayfalama, ayar, renk, yazı boyutu, tablo, kapak, numar
   oddEvenSettings.documentElement.appendChild(oddEvenSettings.createElementNS(wNs, 'w:evenAndOddHeaders'));
   assert.throws(() => checkDocumentSettings(oddEvenSettings), /çift sayfa üst\/alt bilgi kipi kapalı olmalıdır/);
 
-  // Satır aralığı kuralı exact yapıldığında reddedilir
+  // Satır aralığı kuralı exact yapıldığında ve yinelenen w:styleId eklendiğinde reddedilir
   const wrongLineRule = parseDocxXml(docx.text('word/styles.xml'), 'word/styles.xml');
   const govdeStyle = all(wrongLineRule, 'w:style').find((node) => attr(node, 'w:styleId') === 'BilginGovde');
   child(child(govdeStyle, 'w:pPr'), 'w:spacing').setAttributeNS(wNs, 'w:lineRule', 'exact');
   assert.throws(() => checkStyles(wrongLineRule), /satır aralığı kuralı auto olmalıdır/);
+
+  const dupStyle = parseDocxXml(docx.text('word/styles.xml'), 'word/styles.xml');
+  const headingStyle = all(dupStyle, 'w:style').find((node) => attr(node, 'w:styleId') === 'Heading1');
+  const fakeHeading = headingStyle.cloneNode(true);
+  child(child(fakeHeading, 'w:rPr'), 'w:sz').setAttributeNS(wNs, 'w:val', '2');
+  headingStyle.parentNode.insertBefore(fakeHeading, headingStyle);
+  assert.throws(() => checkStyles(dupStyle), /yinelenen veya boş Word stil kimliği/);
 
   // Gövde run'ına doğrudan <w:sz w:val="2"/> eklendiğinde reddedilir
   const wrongSize = body();

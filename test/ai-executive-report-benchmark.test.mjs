@@ -116,6 +116,21 @@ function checkRepresentativeCase(item, scenario, roster) {
     for (const project of entry.kapsam || []) assert.ok(Object.hasOwn(projeler, project), `${item.id}/${entry.id}`);
     if (entry.sorumlu) assert.ok(kisiler.includes(entry.sorumlu), `${item.id}/${entry.id}: kadro dışı kişi`);
     if (entry.kayit_zamani) assert.ok(!Number.isNaN(Date.parse(entry.kayit_zamani)), `${item.id}/${entry.id}`);
+    if (entry.tur === 'olcu') {
+      const hasPeriod = Boolean(entry.donem);
+      const hasSnapshot = Boolean(entry.veri_ani);
+      assert.ok(hasPeriod || hasSnapshot, `${item.id}/${entry.id}: ölçü kanıtı dönem veya veri anı kökeni taşımalıdır`);
+      if (hasPeriod) {
+        assert.ok(calendarDate(entry.donem.baslangic) <= calendarDate(entry.donem.bitis),
+          `${item.id}/${entry.id}: ölçü dönemi geçersiz`);
+      }
+      if (hasSnapshot) {
+        assert.ok(!Number.isNaN(Date.parse(entry.veri_ani)), `${item.id}/${entry.id}: ölçü veri_ani geçersiz`);
+      }
+      if (['tamamlanan', 'hareket'].includes(entry.olcu)) {
+        assert.deepEqual(entry.donem, item.istek.donem, `${item.id}/${entry.id}: dönem ölçüsü istek dönemiyle eşleşmelidir`);
+      }
+    }
   }
   const { baslangic, bitis } = item.istek.donem;
   assert.ok(calendarDate(baslangic) <= calendarDate(bitis), `${item.id}: dönem tarih sırası geçersiz`);
@@ -173,6 +188,11 @@ test('kıyas: temsili vakalar senaryolarla bire bir eşleşir; kanıt göndergel
   badDate.istek.donem.baslangic = '2026-02-30';
   assert.throws(() => checkRepresentativeCase(badDate, scenarios.get(badDate.senaryo), benchmark.sentetik_kadro),
     /geçersiz takvim tarihi/);
+  // Dönem kökeni olmayan tamamlanan ölçüsü reddedilmelidir.
+  const r2NoPeriod = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R2'));
+  delete r2NoPeriod.kanitlar.find((entry) => entry.id === 'E1').donem;
+  assert.throws(() => checkRepresentativeCase(r2NoPeriod, scenarios.get(r2NoPeriod.senaryo), benchmark.sentetik_kadro),
+    /ölçü kanıtı dönem veya veri anı kökeni taşımalıdır/);
   // Kapalı varlık (Atlas) desteklenen ifadelere yetkili kanıt kimliğiyle bile eklenemez.
   const r8 = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R8'));
   r8.beklenen.desteklenen_ifadeler.push({

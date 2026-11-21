@@ -1143,7 +1143,11 @@
       "PRJ-PUSULA"
      ],
      "olcu": "tamamlanan",
-     "deger": 18
+     "deger": 18,
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     }
     },
     {
      "id": "E2",
@@ -1153,7 +1157,11 @@
       "PRJ-UFUK"
      ],
      "olcu": "tamamlanan",
-     "deger": 6
+     "deger": 6,
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     }
     },
     {
      "id": "E3",
@@ -1182,7 +1190,11 @@
       "PRJ-PUSULA"
      ],
      "olcu": "tamamlanan",
-     "deger": 5
+     "deger": 5,
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     }
     }
    ],
    "taslak": [
@@ -1446,7 +1458,8 @@
      "tur": "olcu",
      "kaynak": "rota_task_analytics",
      "olcu": "history.undatedDone",
-     "deger": 1
+     "deger": 1,
+     "veri_ani": "2026-11-08T23:59:59+03:00"
     }
    ],
    "beklenen": {
@@ -1584,14 +1597,19 @@
      "kaynak": "rota_activity_search",
      "olcu": "hareket",
      "deger": 0,
-     "kayit_kapsami": "complete"
+     "kayit_kapsami": "complete",
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     }
     },
     {
      "id": "E2",
      "tur": "olcu",
      "kaynak": "rota_task_analytics",
      "olcu": "acik",
-     "deger": 4
+     "deger": 4,
+     "veri_ani": "2026-11-08T23:59:59+03:00"
     }
    ],
    "beklenen": {
@@ -1644,7 +1662,11 @@
      "gorev_kanitlari": [
       "E3",
       "E4"
-     ]
+     ],
+     "donem": {
+      "baslangic": "2026-11-02",
+      "bitis": "2026-11-08"
+     }
     },
     {
      "id": "E2",
