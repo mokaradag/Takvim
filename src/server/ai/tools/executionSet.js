@@ -293,7 +293,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // Aşama F: özetin yanına yalnızca ad çözümü çağrıları (kişi/proje arama) yazılmışsa bunlar gereksizdir: adları sunucu
     // özetten kendisi çözer. Çağrılar YÜRÜTÜLMEDEN atılır (yapısal normalleştirme; düzeltme turu açılmaz). Başka araç çağrısı ya da
     // istek ile birlikte özet eskisi gibi reddedilir.
-    const { windowRolling, historicalDateTo, ...replayInput } = replayed ? plan.analysis : {};
+    const { windowDefaulted, windowRolling, historicalDateTo, ...replayInput } = replayed ? plan.analysis : {};
     const analysisInput = replayed ? replayInput : plan.analysis;
     const parsed = parseAnalysis(analysisInput);
     // Ek kapsamların adları da özetin adlarıdır: onların ad araması da sunucunun kendi çözümüyle aynıdır.
@@ -343,7 +343,8 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     if (explicit.length && (['previous', 'row'].includes(parsed.scope) || explicit.length > PLANNER_LIMITS.maxRequests)) throw invalidArguments(['$.analysis:request']);
     // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
     const resolved = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
-    const analysis = replayed ? Object.freeze({ ...resolved, ...(windowRolling === true ? { windowRolling } : {}), ...(historicalDateTo ? { historicalDateTo } : {}) }) : resolved;
+    const analysis = replayed ? Object.freeze({ ...resolved, ...(windowDefaulted === true ? { windowDefaulted } : {}),
+      ...(windowRolling === true ? { windowRolling } : {}), ...(historicalDateTo ? { historicalDateTo } : {}) }) : resolved;
     const follow = ['previous', 'row'].includes(parsed.scope) && previousAnalysis;
     const visual = !declined && (base.visual === true || parsed.visual === true || Boolean(follow && previousAnalysis.visual));
     const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;

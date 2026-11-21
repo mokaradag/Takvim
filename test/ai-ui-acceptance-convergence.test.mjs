@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
 import { createServer } from 'node:http';
 const root = resolve('.');
+const bridgeFetch = (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(5000) });
 const directory = (t) => { const dir = mkdtempSync(join(tmpdir(), 'rota-kabul-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const run = (file, args, env = {}) => spawnSync(process.execPath, [resolve(file), ...args], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
 
@@ -68,9 +69,9 @@ test('boş JSON köprüyü çökertmez; geçersiz istekten sonra model listesi �
     child.stdout.on('data', (chunk) => { const match = /bridge listening (\d+)/u.exec(String(chunk)); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
     child.once('error', reject);
   });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: 'null' });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: 'null' });
   assert.equal(response.status, 400);
-  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
+  assert.equal((await bridgeFetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
 });
 
 /** Süreç sınırını taklit eder; ağ dinleyicisi açmadan gerçek kabuk koşucusu ve rapor çalışır. */
@@ -148,9 +149,9 @@ test('köprü büyük girdiyi okumadan kapanan bağdaştırıcıyı başarısız
     child.stdout.on('data', (chunk) => { const match = /bridge listening (\d+)/u.exec(String(chunk)); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
     child.once('error', reject);
   });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', messages: [{ role: 'system', content: 'x'.repeat(2_000_000) }] }) });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', messages: [{ role: 'system', content: 'x'.repeat(2_000_000) }] }) });
   assert.equal(response.status, 503);
-  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
+  assert.equal((await bridgeFetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
   assert.equal(JSON.parse(readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim()).ok, false);
 });
 
@@ -436,7 +437,7 @@ test('betikli kabul yalnızca bütün turlarının altın planı olan konuşmala
     });
     child.once('error', reject);
   });
-  const { questions } = await (await fetch(`http://127.0.0.1:${port}/v1/scripted-plans`)).json();
+  const { questions } = await (await bridgeFetch(`http://127.0.0.1:${port}/v1/scripted-plans`)).json();
   const scenarios = JSON.parse(readFileSync('scripts/ui-acceptance/scenarios/B.json', 'utf8')).conversations;
   const seeded = scenarios.filter((item) => item.seed === 'executive');
   assert.ok(seeded.length >= 5);
@@ -444,13 +445,13 @@ test('betikli kabul yalnızca bütün turlarının altın planı olan konuşmala
   for (const item of seeded) assert.ok(item.turns.every((text) => questions.includes(text)), item.name);
   assert.ok(scenarios.some((item) => !item.turns.every((text) => questions.includes(text))));
   // Plansız soru: uç açıklama kararı döndürür ve çağrıyı `unscripted` olarak işaretler.
-  const ask = (content) => fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content }] }) }).then((response) => response.json());
+  const ask = (content) => bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content }] }) }).then((response) => response.json());
   assert.match((await ask('altın planı olmayan soru')).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
   assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
   const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(calls.map((call) => call.unscripted === true), [true, false]);
   // Geçerli HTTP gövdesindeki bozuk düzen iletisi (geçersiz JSON görünüm) istemci hatasıdır: uç çökmez, sonraki istek yanıtlanır.
-  const malformed = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'OLGU SAYFASI (yalnızca veri):\n{bozuk' }] }) });
+  const malformed = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'OLGU SAYFASI (yalnızca veri):\n{bozuk' }] }) });
   assert.equal(malformed.status, 400);
   assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u, 'uç ayakta kalır');
   // Sürücü plansız konuşmayı eksik kapsam satırıyla korur; kısmi koşu tam kabul sayılmaz.
@@ -509,9 +510,9 @@ test('betikli köprü yazılamayan çağrı kaydından sonra ayakta kalır', asy
     child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
     child.once('error', reject);
   });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: 'Türkçe soru' }] }) });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: 'Türkçe soru' }] }) });
   assert.equal(response.status, 500);
-  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
+  assert.equal((await bridgeFetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
 });
 
 test('not rızası anahtarı gizliyken sürücü veri önkoşulunu bildirir ve soru göndermez', (t) => {
@@ -555,7 +556,7 @@ const bridgeBenchmark = { targeted: [{ id: 'k1', profile: 'B', text: 'T projesin
 
 test('betikli uç göreli günü yalnızca tarih alanlarında çözer; "T" adlı proje adı değişmez', async (t) => {
   const port = await scriptedBridge(t, bridgeBenchmark, { BRIDGE_TODAY: '2026-09-30' });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
   const plan = JSON.parse((await response.json()).choices[0].message.tool_calls[0].function.arguments);
   assert.deepEqual(plan.analysis.names, ['T']);
   assert.equal(plan.analysis.dateTo, '2026-09-30');
@@ -565,7 +566,7 @@ test('betikli uç göreli günü yalnızca tarih alanlarında çözer; "T" adlı
 
 test('betikli uç gün devrinde boş 409 döndürür (eski güne göre çözülmüş plan verilmez)', async (t) => {
   const port = await scriptedBridge(t, bridgeBenchmark, { BRIDGE_TODAY: '2000-01-01', BRIDGE_ENFORCE_DAY: '1' });
-  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
+  const response = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: bridgeBenchmark.targeted[0].text }] }) });
   assert.equal(response.status, 409);
   assert.equal(await response.text(), '');
   // Koşu tohumu ve betikli ucu tek günle başlatır: uç gün değişimini denetler, tohumlar dışa aktarılan aynı günü okur.
@@ -696,20 +697,21 @@ test('çoklu tohum koşusu boşluklu seçimi işler, ayrı günlüklerin sonuçl
     child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) settle(done, Number(match[1])); });
     child.once('error', (err) => settle(fail, err));
   });
-  for (const [question, expectedScope] of [
-    ['Direktörlüğümde bugün yönetimin öncelikle ilgilenmesi gereken üç konu nedir? Neden?', 'team'],
-    ['Bu hafta projelerimde hangi önemli gelişmeler oldu?', 'projects']
+  for (const [fixture, collection, question] of [
+    ['executive', 'scenarios', 'Direktörlüğümde bugün yönetimin öncelikle ilgilenmesi gereken üç konu nedir? Neden?'],
+    ['temporal', 'targeted', 'Bu hafta projelerimde hangi önemli gelişmeler oldu?']
   ]) {
-    const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    const benchmark = JSON.parse(readFileSync(join(root, `test/fixtures/bilgin-${fixture}-benchmark.json`), 'utf8'));
+    const expected = benchmark[collection].find(({ text }) => text === question)?.plan;
+    assert.ok(expected, `altın plan bulunamadı: ${question}`);
+    const res = await bridgeFetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST',
       body: JSON.stringify({ messages: [{ role: 'user', content: question }] })
     });
     const body = await res.json();
     const call = body.choices?.[0]?.message?.tool_calls?.[0];
     assert.ok(call, `köprü soruyu bulamadı: ${question}`);
-    const plan = JSON.parse(call.function.arguments);
-    assert.equal(plan.intent, 'rota', `köprü açıklama yerine altın rota planını döndürmelidir: ${question}`);
-    assert.equal(plan.analysis?.scope, expectedScope, `köprü beklenen kapsamı döndürmelidir: ${question}`);
+    assert.deepEqual(JSON.parse(call.function.arguments), expected, question);
   }
 });
 
@@ -724,6 +726,8 @@ test('dönem ve geçmiş durum beklentileri kısmi ay aralığını, yer değiş
   assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Ekim 2026) 4 görev tamamlanmıştı; bu ay (1–30 Kasım 2026) 6 görev tamamlandı.' }, okTrace, nov20), []);
   assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1 Ekim 2026; 2 Ekim 2026; 1 Kasım 2026; 2 Kasım 2026' }, okTrace, nov20).length > 0);
   assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: '1–31 Ekim 2026 ile 1–30 Kasım 2026 karşılaştırıldı. Bir işin tarihi 5 Kasım 2026.' }, okTrace, nov20), []);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Ekim 2026\n4\nKasım 2026\n5' }, okTrace, nov20), []);
+  assert.deepEqual(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Ekim 2026 ile Kasım 2026 karşılaştırıldı.\n16–22 Kasım 2026\n5' }, okTrace, nov20), []);
   // Yer değiştirmiş aylar ("Geçen ay (Eylül 2026) ... bu ay (Ağustos 2026)") reddedilir.
   assert.ok(semanticFailures({ periodKind: 'this_month_vs_last_month' }, { text: 'Geçen ay (Eylül 2026) 5 görev tamamlanmıştı; bu ay (Ağustos 2026) 8 görev tamamlandı.' }, okTrace, sep30).length > 0);
   for (const [language, text] of [

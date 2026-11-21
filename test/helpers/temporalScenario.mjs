@@ -25,7 +25,7 @@ export const H_FINDING_TEXT = Object.freeze({
   tr: {
     periodSummary: /görev tamamlandı \(gerçekleşen bitiş tarihine göre\)|yeni görev oluşturul(du|madı)|oluşturulmuş ve bugün kayıtlı yeni görev yok|hareket kayde(dildi|tti|ttiniz)|gerçekleşen bitiş kaydı yok|hareket kayd(edilmedi|etmedi|etmediniz)|hareket kaydı bulunmuyor/,
     periodComparison: /İki dönem karşılaştırıldığında|karşılaştırma şimdilik geçici|İki dönem örtüştüğü|karşılaştırılamıyor|İki dönemde de|bu fark yorumlanmadı|toplam değişim yorumlanmadı/,
-    completionTrend: /En yoğun (hafta|ay)|tamamlanma hızı|eğilim söylenemez|eğilim çıkarılmadı|eğilim söylemek için kısa|gerçekleşen bitiş kaydı yok/,
+    completionTrend: /En yoğun (hafta|ay)|Bitiş tarihi kayıtlı tamamlanma sayısı en yüksek|tamamlanma hızı|eğilim söylenemez|eğilim çıkarılmadı|eğilim söylemek için kısa|gerçekleşen bitiş kaydı yok/,
     activityTrend: /Kaydedilen hareketler en çok|için hareket kaydı yok; bu kovalar bilinmiyor/,
     horizonSpread: /7 gün içinde \*\*\d+\*\*, 14 gün içinde \*\*\d+\*\*, 30 gün içinde \*\*\d+\*\*|önümüzdeki 30 gün içinde .*termini olan açık görev yok/i,
     historyLimit: /yeniden kurulamıyor/,
@@ -35,7 +35,7 @@ export const H_FINDING_TEXT = Object.freeze({
   en: {
     periodSummary: /(tasks? (was|were) completed|new tasks? (was|were) created|no task created in this period is (?:currently on record|still present today)|(?:you|the selected person|your (?:team|unit|department|directorate)|.{2,80}) recorded (?:\*\*)?\d+(?:\*\*)? (?:task )?activity events?|(?:\*\*)?\d+(?:\*\*)? activity events?(?: (?:across|on) (?:\*\*)?\d+(?:\*\*)? tasks?)? (?:was|were) recorded|no task currently marked done has a recorded completion date|no new task was created|no activity record)/i,
     periodComparison: /Comparing the two periods|comparison is provisional|two periods overlap|cannot be compared|In both periods|difference is not interpreted|no overall change is interpreted/,
-    completionTrend: /busiest (week|month)|pace of completion|not enough to state a trend|too short a series|no trend is drawn|no task currently marked done has a recorded completion date/,
+    completionTrend: /busiest (week|month)|highest count of dated completions|pace of completion|not enough to state a trend|too short a series|no trend is drawn|no task currently marked done has a recorded completion date/,
     activityTrend: /Recorded activity peaked|no activity record; those are unknown/,
     horizonSpread: /within 7 days, \*\*\d+\*\* within 14 days|In the next 30 days, no open task is due/,
     historyLimit: /cannot be reconstructed/,
@@ -156,7 +156,8 @@ export function temporalPopulationViolations(result, analysis, seed, expect = {}
         const evidence = (result.evidence || []).filter((item) => {
           const filters = item.data?.filters || {};
           // Kesik (tam olmayan) analiz kanıtı diziyi karşılamaz.
-          return item.ok === true && item.complete === true && item.tool === 'rota_task_analytics' && matches({ query: 'task-facts', params: { ...filters, assigneeMode: filters.assignee } }, layer)
+          return item.ok === true && item.complete === true && item.tool === 'rota_task_analytics' && !narrowsTasks(filters)
+            && matches({ query: 'task-facts', params: { ...filters, assigneeMode: filters.assignee } }, layer)
             && filters.dateField === 'actualFinish' && filters.statuses?.join() === 'done' && filters.dateFrom === period[0] && filters.dateTo === period[1];
         });
         const bucket = layer.bucket || analysis.bucket;
@@ -200,7 +201,7 @@ export function temporalPopulationViolations(result, analysis, seed, expect = {}
         const p = read.params;
         const statuses = (p.statusCsv || '').split(',').filter(Boolean);
         const fullOpenPopulation = !statuses.length || ['todo', 'in_progress'].every((status) => statuses.includes(status));
-        if (!fullOpenPopulation || p.dateField && p.dateField !== 'targetFinish') return false;
+        if (!fullOpenPopulation || narrowsTasks({ ...p, deadline: null }) || p.dateField && p.dateField !== 'targetFinish') return false;
         if (p.deadline === 'overdue') {
           const beforeToday = shift(-1);
           const from = day(p.dateFrom);
@@ -234,6 +235,25 @@ export function temporalViolations(result, expect = {}, { locale = result.locale
     return problems;
   }
   if (!/【R\d+】/.test(content)) problems.push('yanıt kanıtlı değil');
+  const prose = content.replace(/\*\*/g, '');
+  if (expect.noCombinedTotal) {
+    // İki ayrı kapsam etiketiyle verilen sayılar geçerlidir; örtüşen kapsamlara tek bir sayı atfedilemez.
+    const lines = prose.split(/[.!?;\n]/u);
+    const combined = /(?:birim\p{L}*\s+(?:ve|ile)\s+bölüm\p{L}*|bölüm\p{L}*\s+(?:ve|ile)\s+birim\p{L}*|\b(?:iki kapsam\p{L}*|birlikte|birleşik toplam)\b)/iu;
+    const taskCount = /\d[\d.,]*\s+(?:görev|iş)\b|(?:görev|iş)\s+sayısı\s*:?\s*\d|toplam\p{L}*\s*:?\s+\d/iu;
+    const standaloneTotal = /^\s*toplam\s+\d[\d.,]*(?:\s+(?:görev|iş)\b|\s*$)/iu;
+    if (lines.some((line) => combined.test(line) && taskCount.test(line) || standaloneTotal.test(line))) {
+      problems.push('örtüşen kapsamlar için birleşik toplam verildi');
+    }
+  }
+  for (const project of expect.citedActivityProjects || []) {
+    const ids = (result.evidence || []).filter((item) => item.ok === true && item.tool === 'rota_activity_search'
+      && item.data?.filters?.project === project).map((item) => item.evidenceId);
+    const statement = prose.split(/\n\s*\n/u).some((block) => block.includes(project)
+      && ids.some((id) => block.includes(`【${id}】`))
+      && /\d[\d.,]*\s+hareket|hareket (?:kaydı (?:yok|bulunmuyor)|sayısı bilinmiyor)|no (?:activity|recorded activity)|activity (?:count|is unknown)|\d[\d.,]*\s+(?:recorded )?(?:activity )?events?/iu.test(block));
+    if (!statement) problems.push(`projeye ait kaynaklı hareket sonucu yok: ${project}`);
+  }
   const log = result.log || [];
   const windowSeen = (range) => {
     if (!range) return true;

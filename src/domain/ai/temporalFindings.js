@@ -264,9 +264,11 @@ export function temporalFindings(groups, context = null) {
         names: periodNames([activitySeries.range], context) });
     }
     const notes = entry.reads.find((read) => read.kind === 'notes');
-    // Özet bir dönem bildirdiyse ama not okuması dönemsizse (açıklamanın yazıldığı gün kayıtlı değildir) dönemin uygulanamadığı söylenir.
+    // Özetin açık dönemi özete ait dönemsiz not okumasına uygulanamaz; varsayılan geçmiş aralığı ise not isteğinin dönemi değildir.
+    const notePeriod = !context?.defaulted && !(Number.isInteger(context?.analysisParts) && notes?.part > context.analysisParts)
+      ? context?.window || context?.requested : null;
     if (notes) findings.push({ kind: 'noteDigest', interpretation: 'distribution', scope: entry.scope, filters: notes.filters, range: notes.range, today, shown: notes.shown, total: notes.total, clipped: notes.clipped,
-      ...((context?.window || context?.requested) && !notes.range ? { requestedRange: context.window || context.requested } : {}),
+      ...(notePeriod && !notes.range ? { requestedRange: notePeriod } : {}),
       evidenceIds: [notes.evidenceId], completeness: notes.total != null && notes.shown >= notes.total && !notes.clipped ? 'complete' : 'sample' });
     const horizons = entry.reads.find((read) => read.kind === 'horizons');
     if (horizons?.collectionComplete) {
@@ -717,8 +719,12 @@ function trendSentences(finding, locale) {
     const peaks = full.filter((row) => row.value === max);
     if (full.length >= 2 && peaks.length === 1) {
       const restricted = full.length !== series.rows.length;
-      out.push({ ...factSentence(lang ? [`The busiest ${unit}${restricted ? ` among fully observed ${unit}s` : ''} was `, label(peaks[0]), ' with ', n(max, locale), max === 1 ? ' task.' : ' tasks.']
-        : [`En yoğun ${unit} `, label(peaks[0]), ' oldu (', n(max, locale), ' görev)', ...(restricted ? [`; yalnızca tam gözlenen ${week ? 'haftalar' : 'aylar'} arasında değerlendirildi`] : []), '.']), states: seriesStates });
+      const datedOnly = undated > 0 || undatedUnknown;
+      out.push({ ...factSentence(lang
+        ? [datedOnly ? `The highest count of dated completions${restricted ? ` among full ${unit}s` : ''} was in `
+          : `The busiest ${unit}${restricted ? ` among fully observed ${unit}s` : ''} was `, label(peaks[0]), ' with ', n(max, locale), max === 1 ? ' task.' : ' tasks.']
+        : [datedOnly ? 'Bitiş tarihi kayıtlı tamamlanma sayısı en yüksek olan ' + unit + ' ' : `En yoğun ${unit} `,
+          label(peaks[0]), ' oldu (', n(max, locale), ' görev)', ...(restricted ? [`; yalnızca tam gözlenen ${week ? 'haftalar' : 'aylar'} arasında değerlendirildi`] : []), '.']), states: seriesStates });
     }
     // Yön: son üç TAM kovanın toplamı ile ondan önceki üç tam kovanın toplamı (şeffaf ölçüt; kısmi uç kovalar kullanılmaz).
     const span = TEMPORAL_LIMITS.trendSpan;
@@ -844,9 +850,14 @@ function horizonSentences(finding, locale) {
 /** Geçmiş durumu yeniden kurulamayan yönlerin sınır cümlesi (zorunlu çekince). */
 function historyLimitSentences(finding, locale) {
   const lang = en(locale) ? 1 : 0;
+  const out = [];
+  if (finding.aspects.includes('trend')) out.push({ ...factSentence(lang
+    ? ['The completion trend was not compared because no completion series was read for the second period.']
+    : ['Tamamlanma eğilimi karşılaştırılmadı çünkü ikinci dönem için tamamlanma dizisi okunmadı.']), caveat: true, states: [] });
   const aspects = finding.aspects.map((aspect) => ASPECT_NAMES[aspect]?.[lang]).filter(Boolean).map((name) => [name]);
+  if (!aspects.length) return out;
   const compared = finding.ranges[0] ? periodAdverb(finding.ranges[0], finding.today, locale, finding.names?.[0] || null) : null;
-  return [{ ...factSentence(lang
+  return [...out, { ...factSentence(lang
     ? ['Rota keeps the current state of tasks and the recorded activity, not a snapshot of earlier days. The past values of ', ...joinList(aspects, locale),
       compared ? ` (${compared})` : '', ' therefore cannot be reconstructed and no comparison is made for them; the figures below show today. Between periods, only completed work, created work and recorded activity can be compared.']
     : ['Rota görevlerin bugünkü durumunu ve kaydedilen hareketleri tutar; geçmiş günlerin anlık görüntüsünü saklamaz. Bu nedenle ', ...joinList(aspects, locale),

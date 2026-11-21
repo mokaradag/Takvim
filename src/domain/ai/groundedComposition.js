@@ -538,7 +538,8 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         const nearest = part.ranking?.metric === 'task.targetFinish' && part.ranking.order === 'asc'
           || part.ranking?.metric === 'task.overdueDays' && part.ranking.order === 'desc'
           && presentation.facts.some(({ evidenceId, fact }) => evidenceId === group.evidenceId && fact.semantic?.filters?.deadline === 'overdue');
-        for (const candidate of tableCharts({ group, described, collection, complete, labels, locale, table: id, nearest })) {
+        for (const candidate of tableCharts({ group, described: { ...described, rows: observed.map((index) => described.rows[index]) },
+          collection, complete, labels: labels && observed.map((index) => labels[index]), locale, table: id, nearest })) {
           // Gelecek dönem grafiği dönem dışı bugünkü gecikme listesinden çizilmez.
           const filters = described.rows[0]?.cells.flat().find((fact) => fact.semantic?.filters)?.semantic.filters;
           if (candidate.types.includes('timeline') && outline?.dateFrom && today && outline.dateFrom >= today

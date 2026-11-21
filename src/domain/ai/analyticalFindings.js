@@ -130,8 +130,8 @@ function taskLists(groups) {
     // Metin, iş dağılımı düğümü, öncelik ya da oluşturan koşuluyla daraltılmış liste de kapsamın açık kilometre taşı nüfusu değildir.
     const milestone = filters.milestone === true && statuses.length === OPEN_STATUSES.size && [...OPEN_STATUSES].every((status) => statuses.includes(status))
       && !filters.deadline && !filters.dateFrom && !filters.dateTo && ['text', 'wbsId', 'priorities', 'createdByMe', 'hasDescription'].every((key) => neutral(filters[key], key));
-    // Not süzgeci gecikmeli görevlerin tamamını kapsamaz.
-    if (filters.deadline === 'overdue' && filters.hasDescription === true) continue;
+    // Not süzgeci gecikmeli görevlerin ya da yaklaşan teslimlerin tamamını kapsamaz.
+    if (filters.hasDescription === true) continue;
     const kind = milestone ? 'milestone' : filters.deadline === 'overdue' ? 'overdue'
       : statuses.length && statuses.every((status) => OPEN_STATUSES.has(status)) && upcoming ? 'upcoming' : null;
     if (!kind) continue;

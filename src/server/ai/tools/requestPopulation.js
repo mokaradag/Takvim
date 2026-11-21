@@ -666,7 +666,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [], dec
         if (field.metric !== metric || field.tool !== tool.name) return [];
         const path = field.path;
         const available = list && series ? path.startsWith('data.series.')
-          : path.startsWith('data.summary.') || !view && path.startsWith('data.items.');
+          : path.startsWith('data.summary.') || !view && (path === 'totalCount' || path.startsWith('data.items.'));
         return available ? [] : [at];
       });
       if (invalid.length) {

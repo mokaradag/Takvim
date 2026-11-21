@@ -234,7 +234,10 @@ export function plannerScore(result, expect, today = corpus.today) {
       const compare = expectedCompare(expect.temporalCompare, expect.temporalWindow, today);
       let unresolved = false;
       if (!expect.temporalPairRequired && result.plan?.analysis?.historyUnsupported?.length) {
-        try { const windows = analysisWindows(result.plan.analysis, today); unresolved = [window, compare].filter(Boolean).every((wanted) => [windows.range, windows.compare].some((candidate) => candidate?.dateFrom === wanted[0] && candidate?.dateTo === wanted[1])); } catch { unresolved = false; }
+        try {
+          const windows = analysisWindows(result.plan.analysis, today);
+          unresolved = matchesPeriod(windows.range, window) && matchesPeriod(windows.compare, compare);
+        } catch { unresolved = false; }
       }
       const readsAt = (range) => requests.filter(({ filters, metrics, population }) => {
         if (filters?.dateFrom !== range[0] || filters?.dateTo !== range[1]) return false;
@@ -396,8 +399,13 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
     if (stateFocus === 'priority') return g === 'priority';
     if (stateFocus === 'deadlines') return g === 'deadline';
     if (stateFocus === 'schedule') return g === 'target_month';
-    if (stateFocus === 'status') return tool === 'rota_task_analytics' && (g === 'status'
-      || !g && ['tasks.todo', 'tasks.inProgress', 'tasks.done'].every((metric) => m.includes(metric)));
+    if (stateFocus === 'status') {
+      const allStatuses = !f.status?.length || ['todo', 'in_progress', 'done'].every((status) => f.status.includes(status));
+      const unrestricted = allStatuses && !f.priority?.length && !f.deadline && !f.text && f.milestone == null && !f.createdByMe && !f.hasDescription
+        && f.assignee !== 'unassigned' && !request.previousResult && !request.entities?.some((entity) => !['person', 'project'].includes(entity.type));
+      return unrestricted && tool === 'rota_task_analytics' && (g === 'status'
+        || !g && ['tasks.todo', 'tasks.inProgress', 'tasks.done'].every((metric) => m.includes(metric)));
+    }
     return g === 'status' || ['tasks.open', 'tasks.todo', 'tasks.inProgress', 'tasks.overdue', 'tasks.completionRatePercent'].some((metric) => m.includes(metric));
   };
   const reads = (range) => layers.every((layer) => {
@@ -431,18 +439,22 @@ export function temporalPlannerScore(result, expect, today = temporal.today) {
     if (!candidates(layer, 'trend', range).some((series) => totals.some((total) => inRange(total, [series.filters?.dateFrom, series.filters?.dateTo])
       && periodPopulationKey(series) === periodPopulationKey(total)))) failures.push('eğilimin tamlık okuması yok');
   }
-  if (expect.stateComparison && !analysis.historyUnsupported?.length) failures.push('geçmiş durum sınırı bildirilmedi');
-  if (expect.stateComparison && analysis.historyUnsupported?.length) {
+  if (expect.stateComparison) {
+    const supportedFocus = expect.focusAll || expect.focusAny;
+    if (!analysis.historyUnsupported?.some((aspect) => !supportedFocus || supportedFocus.includes(aspect) && focus.includes(aspect))) {
+      failures.push('geçmiş durum sınırı bildirilmedi');
+    }
     let matches = false;
     try {
       const windows = analysisWindows(analysis, today);
-      matches = [range, prior].every((wanted, index) => !wanted || [windows.range, windows.compare][index]?.dateFrom === wanted[0]
-        && [windows.range, windows.compare][index]?.dateTo === wanted[1]);
+      matches = matchesPeriod(windows.range, range) && matchesPeriod(windows.compare, prior);
     } catch { matches = false; }
     if (!matches) failures.push('istenen geçmiş durum dönemleri bildirilmedi');
   }
   return failures;
 }
+
+const matchesPeriod = (actual, expected) => !expected || actual?.dateFrom === expected[0] && actual?.dateTo === expected[1];
 
 export async function temporalPlannerCase(item, { completeRound = completeModelRound, today = temporal.today } = {}) {
   const rounds = [];

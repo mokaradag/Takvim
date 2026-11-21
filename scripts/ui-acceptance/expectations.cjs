@@ -38,7 +38,7 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
       const months = en ? EN_MONTHS : MONTHS;
       // Tekil gün ya da kısmi aralık, ait olduğu tam ayın etiketi sayılmaz.
       const monthReferences = (value) => [...value.matchAll(new RegExp(
-        String.raw`(?<!\d)(?:(\d{1,2})\s*[–-]\s*(\d{1,2})|(\d{1,2}))?\s*(${months.join("|")})\s+(\d{4})(?!\d)`, 'giu'))];
+        String.raw`(?<!\d)(?:(\d{1,2})[^\S\r\n]*[–-][^\S\r\n]*(\d{1,2})|(\d{1,2}))?[^\S\r\n]*(${months.join("|")})[^\S\r\n]+(\d{4})(?!\d)`, 'giu'))];
       const isMonth = (ref, year, month) => ref && Number(ref[5]) === year
         && ref[4].toLocaleLowerCase(en ? 'en' : 'tr') === months[month - 1].toLocaleLowerCase(en ? 'en' : 'tr');
       const isFull = ([, start, end, single], year, month) => !single && (!start || Number(start) === 1 && Number(end) === new Date(Date.UTC(year, month, 0)).getUTCDate());
@@ -54,8 +54,7 @@ function semanticFailures(expected, rendered, trace, now = new Date(), expectedC
           const [first] = monthReferences(clause);
           return isMonth(first, year, month) && isFull(first, year, month);
         }
-        const matches = references.filter((ref) => isMonth(ref, year, month));
-        return matches.some((ref) => isFull(ref, year, month)) && matches.every((ref) => !ref[1] || isFull(ref, year, month));
+        return references.some((ref) => isMonth(ref, year, month) && isFull(ref, year, month));
       };
       if (!validMonth(prevY, prevM, previous) || !validMonth(y, m, current)) failures.push('istenen ay karşılaştırma dönemleri görünmüyor');
     }

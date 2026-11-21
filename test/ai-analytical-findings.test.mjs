@@ -107,6 +107,9 @@ test('yaklaşan listenin en yakın teslimatı: tekil değilse "dahil" biçimiyle
   assert.deepEqual([nearest.metrics.due, nearest.metrics.sole], ['2026-10-01', false]);
   const sole = analyticalFindings([part(0, taskList('upcoming', [['Ağ', '2026-10-01', 'Portal', 'p5'], ['Test', '2026-10-03', 'Portal', 'p5']]), ranking)]);
   assert.equal(sole.find((item) => item.kind === 'nearestDelivery').metrics.sole, true);
+  const noted = taskList('upcoming', [['Test', '2026-10-03', 'Portal', 'p5']]).map((item) => ({ ...item,
+    fact: { ...item.fact, semantic: { ...item.fact.semantic, filters: { ...item.fact.semantic.filters, hasDescription: true } } } }));
+  assert.equal(analyticalFindings([part(0, noted, ranking)]).some((item) => item.kind === 'nearestDelivery'), false);
 });
 
 test('gecikme payı listede görünmeyen adaş projeden doğrulanmış kodla ayrılır; kod yoksa yorumlanmaz', () => {
