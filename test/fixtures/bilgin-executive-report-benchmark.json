@@ -1300,12 +1300,9 @@
       "PRJ-UFUK",
       "PRJ-PUSULA"
      ],
-     "donem": {
-      "baslangic": "2026-11-02",
-      "bitis": "2026-11-08"
-     },
      "olcu": "acik",
-     "deger": 52
+     "deger": 52,
+     "veri_ani": "2026-11-08T23:59:59+03:00"
     },
     {
      "id": "E3",
@@ -1316,12 +1313,9 @@
       "PRJ-UFUK",
       "PRJ-PUSULA"
      ],
-     "donem": {
-      "baslangic": "2026-11-02",
-      "bitis": "2026-11-08"
-     },
      "olcu": "geciken",
-     "deger": 7
+     "deger": 7,
+     "veri_ani": "2026-11-08T23:59:59+03:00"
     },
     {
      "id": "E4",
@@ -1332,12 +1326,9 @@
       "PRJ-UFUK",
       "PRJ-PUSULA"
      ],
-     "donem": {
-      "baslangic": "2026-11-02",
-      "bitis": "2026-11-08"
-     },
      "olcu": "yaklasan_7_gun",
-     "deger": 14
+     "deger": 14,
+     "veri_ani": "2026-11-08T23:59:59+03:00"
     }
    ],
    "taslak": [

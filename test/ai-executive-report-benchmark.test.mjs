@@ -117,18 +117,18 @@ function checkRepresentativeCase(item, scenario, roster) {
     if (entry.sorumlu) assert.ok(kisiler.includes(entry.sorumlu), `${item.id}/${entry.id}: kadro dışı kişi`);
     if (entry.kayit_zamani) assert.ok(!Number.isNaN(Date.parse(entry.kayit_zamani)), `${item.id}/${entry.id}`);
     if (entry.tur === 'olcu') {
-      const hasPeriod = Boolean(entry.donem);
-      const hasSnapshot = Boolean(entry.veri_ani);
-      assert.ok(hasPeriod || hasSnapshot, `${item.id}/${entry.id}: ölçü kanıtı dönem veya veri anı kökeni taşımalıdır`);
-      if (hasPeriod) {
+      const periodMetrics = new Set(['tamamlanan', 'hareket']);
+      const snapshotMetrics = new Set(['acik', 'geciken', 'yaklasan_7_gun', 'history.undatedDone']);
+      if (periodMetrics.has(entry.olcu)) {
+        assert.ok(entry.donem, `${item.id}/${entry.id}: dönem ölçüsü donem kökeni taşımalıdır`);
         assert.ok(calendarDate(entry.donem.baslangic) <= calendarDate(entry.donem.bitis),
           `${item.id}/${entry.id}: ölçü dönemi geçersiz`);
-      }
-      if (hasSnapshot) {
-        assert.ok(!Number.isNaN(Date.parse(entry.veri_ani)), `${item.id}/${entry.id}: ölçü veri_ani geçersiz`);
-      }
-      if (['tamamlanan', 'hareket'].includes(entry.olcu)) {
         assert.deepEqual(entry.donem, item.istek.donem, `${item.id}/${entry.id}: dönem ölçüsü istek dönemiyle eşleşmelidir`);
+      } else if (snapshotMetrics.has(entry.olcu)) {
+        assert.ok(entry.veri_ani && !Number.isNaN(Date.parse(entry.veri_ani)),
+          `${item.id}/${entry.id}: anlık durum ölçüsü geçerli veri_ani taşımalıdır`);
+      } else {
+        assert.ok(entry.donem || entry.veri_ani, `${item.id}/${entry.id}: ölçü kanıtı dönem veya veri anı kökeni taşımalıdır`);
       }
     }
   }
@@ -188,11 +188,17 @@ test('kıyas: temsili vakalar senaryolarla bire bir eşleşir; kanıt göndergel
   badDate.istek.donem.baslangic = '2026-02-30';
   assert.throws(() => checkRepresentativeCase(badDate, scenarios.get(badDate.senaryo), benchmark.sentetik_kadro),
     /geçersiz takvim tarihi/);
-  // Dönem kökeni olmayan tamamlanan ölçüsü reddedilmelidir.
+  // Dönem kökeni olmayan tamamlanan ölçüsü ve veri_ani olmayan anlık durum ölçüsü reddedilmelidir.
   const r2NoPeriod = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R2'));
   delete r2NoPeriod.kanitlar.find((entry) => entry.id === 'E1').donem;
   assert.throws(() => checkRepresentativeCase(r2NoPeriod, scenarios.get(r2NoPeriod.senaryo), benchmark.sentetik_kadro),
-    /ölçü kanıtı dönem veya veri anı kökeni taşımalıdır/);
+    /dönem ölçüsü donem kökeni taşımalıdır/);
+  const r3NoSnapshot = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R3'));
+  const openMetric = r3NoSnapshot.kanitlar.find((entry) => entry.olcu === 'acik');
+  delete openMetric.veri_ani;
+  openMetric.donem = { ...r3NoSnapshot.istek.donem };
+  assert.throws(() => checkRepresentativeCase(r3NoSnapshot, scenarios.get(r3NoSnapshot.senaryo), benchmark.sentetik_kadro),
+    /anlık durum ölçüsü geçerli veri_ani taşımalıdır/);
   // Kapalı varlık (Atlas) desteklenen ifadelere yetkili kanıt kimliğiyle bile eklenemez.
   const r8 = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R8'));
   r8.beklenen.desteklenen_ifadeler.push({
@@ -327,7 +333,11 @@ function checkMechanicalCalibration(mechanical) {
     const entry = mechanical.kanitlar.find((item) => item.tur === 'olcu' && item.olcu === metric);
     assert.ok(entry, 'R3 eksik ölçü kanıtı: ' + metric);
     assert.deepEqual(entry.kapsam, mechanical.istek.kapsam.projeler, 'R3 ölçü kapsamı istekle eşleşmelidir: ' + metric);
-    assert.deepEqual(entry.donem, mechanical.istek.donem, 'R3 ölçü dönemi istekle eşleşmelidir: ' + metric);
+    if (metric === 'tamamlanan') {
+      assert.deepEqual(entry.donem, mechanical.istek.donem, 'R3 tamamlanan ölçü dönemi istekle eşleşmelidir');
+    } else {
+      assert.ok(entry.veri_ani && !Number.isNaN(Date.parse(entry.veri_ani)), 'R3 anlık ölçüsü veri_ani taşımalıdır: ' + metric);
+    }
     assert.match(draft, matcher(entry.deger), `R3 taslağındaki ${metric} sayısı kanıt değeriyle eşleşmelidir`);
   }
 }
