@@ -26,8 +26,8 @@ export const DEFAULT_AI_MODEL_REGISTRY = Object.freeze({
   version: 1,
   models: [
     model('VoxCPM2', ['speech.tts']),
-    model('DeepSeek-V4.1-Flash', ['chat', 'tools', 'reasoning', 'vision'], 524288),
-    model('Qwen3.8-Flash-Next', ['chat', 'tools', 'reasoning', 'vision'], 262144),
+    model('DeepSeek-V4.1-Flash-1017', ['chat', 'tools', 'reasoning', 'vision'], 524288),
+    model('Qwen3.8-Flash-Next-FP8', ['chat', 'tools', 'reasoning', 'vision'], 262144),
     model('Qwen3.8-27B', ['chat', 'tools', 'reasoning', 'vision'], 262144),
     model('intfloat/multilingual-e5-large', ['embedding'], 512, { preprocessing: E5_PREPROCESSING }),
     model('tts-1-hd', ['speech.tts']),

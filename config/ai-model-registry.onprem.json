@@ -12,7 +12,7 @@
       "enabled": true
     },
     {
-      "id": "DeepSeek-V4.1-Flash",
+      "id": "DeepSeek-V4.1-Flash-1017",
       "provider": "onprem",
       "capabilities": [
         "chat",
@@ -25,7 +25,7 @@
       "enabled": true
     },
     {
-      "id": "Qwen3.8-Flash-Next",
+      "id": "Qwen3.8-Flash-Next-FP8",
       "provider": "onprem",
       "capabilities": [
         "chat",
