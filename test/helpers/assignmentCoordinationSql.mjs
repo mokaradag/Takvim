@@ -514,7 +514,8 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
       Number(recipient.Sicil) === sicil && ['MANAGER', 'ASSIGNEE'].includes(recipient.RecipientRole));
     if (!pageParticipant(row) || !(disclosureAllowed(db, row, params) || (params.evidenceSnapshotLimit != null && !taskAvailable(db, row) && historicalParticipant))) return false;
     const view = pageRow(row);
-    if (params.projectId && !sameGuid(recordProjectId(db, row), params.projectId)) return false;
+    const projectFilterId = params.evidenceSnapshotLimit == null ? view.ProjectId : recordProjectId(db, row);
+    if (params.projectId && !sameGuid(projectFilterId, params.projectId)) return false;
     if (params.taskId && !sameGuid(row.TaskId, params.taskId)) return false;
     if (params.status && row.Status !== params.status) return false;
     if (params.fromUtc && Date.parse(row.CreatedAt) < Date.parse(params.fromUtc)) return false;

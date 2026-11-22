@@ -56,6 +56,7 @@ const LIVE_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope 
 const LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
   WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = c.RequestedAssigneeSicil
     AND es.ScopeType IN ('UNIT','DEPARTMENT'))`;
+const LIVE_PROJECT_ID = 'COALESCE(t.ProjectId, c.ProjectIdSnapshot)';
 /**
  * Proje ölçütü görevin GÜNCEL projesidir; künye yalnızca silinmiş görev için
  * yedektir. Görev başka projeye taşındığında `decideAssignmentCoordination`
@@ -65,7 +66,7 @@ const LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_Ex
  */
 const LIVE_FULL_PROJECT_ACCESS = `EXISTS (SELECT 1 FROM STRING_SPLIT(@fullProjectIds, ',') fp
   WHERE TRY_CONVERT(uniqueidentifier, NULLIF(LTRIM(RTRIM(fp.value)), ''))
-    = COALESCE(t.ProjectId, c.ProjectIdSnapshot))`;
+    = ${LIVE_PROJECT_ID})`;
 const DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
   OR ${LIVE_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
 const NOTIFICATION_DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
@@ -310,8 +311,10 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
       CASE WHEN @searchRequesterMessage = 1 THEN CONCAT(' ', c.RequesterMessage) ELSE '' END,
       CASE WHEN @searchDecisionMessage = 1 THEN CONCAT(' ', c.DecisionMessage) ELSE '' END)`;
   const historicalParticipant = `(c.RequesterSicil = @sicil OR ${EXPLICIT_RECIPIENT})`;
+  // Ekran gösterilen proje künyesini, yapay zekâ kanıt sorgusu güncel proje kapsamını süzer.
+  const projectFilterId = evidenceSnapshotLimit == null ? DISPLAYED_PROJECT_ID : LIVE_PROJECT_ID;
   const filters = `${participant}${evidenceSnapshotLimit == null ? '' : ` AND (${CURRENT_TASK_DISCLOSURE_SQL} OR (NOT ${TASK_AVAILABLE} AND ${historicalParticipant}))`}
-    AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
+    AND (@projectId IS NULL OR ${projectFilterId} = @projectId)
     AND (@taskId IS NULL OR c.TaskId = @taskId)
     AND (@status IS NULL OR c.Status = @status)
     AND (@fromUtc IS NULL OR c.CreatedAt >= @fromUtc)

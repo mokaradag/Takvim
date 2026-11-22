@@ -627,7 +627,7 @@ test('kapatılmış projedeki görevin talebi onaylanamaz; kayıt güncelliğini
   } finally { await stack.dispose(); }
 });
 
-test('görev başka projeye taşınınca karar yetkisi GÜNCEL projeden gelir', async () => {
+test('taşınan görev gösterilen projeyle süzülür ve karar yetkisi güncel projeden gelir', async () => {
   const NEW_PROJECT_ID = '44444444-4444-4444-8444-000000000021';
   const NEW_ROOT_WBS_ID = '44444444-4444-4444-8444-000000000022';
   const stack = await createActualStack(seed({
@@ -677,20 +677,21 @@ test('görev başka projeye taşınınca karar yetkisi GÜNCEL projeden gelir', 
     assert.ok(currentItem, 'yeni projenin yetkilisi kaydı bulabilmelidir');
     assert.equal(currentItem.actionable, true);
 
-    const currentPage = await asUser(EXECUTIVE, async () => {
-      const { withSqlTransaction } = await import('../src/server/db/pool.js');
-      const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
-      return withSqlTransaction(async (transaction) => queries.readCoordinationPage(
-        transaction,
-        await loadAuthorizationContext(transaction),
-        { tab: 'all', projectId: NEW_PROJECT_ID, page: 0, pageSize: 25 }
-      ));
-    });
-    assert.equal(
-      currentPage.items.some((item) => item.id === coordinationId),
-      true,
-      'yeni proje filtresi taşınmış kaydı dışlamamalıdır'
-    );
+    const pageByProject = (projectId) => asUser(EXECUTIVE, () =>
+      queries.queryAssignmentCoordinations({ tab: 'all', projectId }));
+    const displayedPage = await pageByProject(PROJECT_ID);
+    assert.ok(displayedPage.projects.some((project) => project.id === PROJECT_ID));
+    assert.equal(displayedPage.items[0]?.id, coordinationId);
+    assert.equal(displayedPage.items[0].projectId, PROJECT_ID);
+    assert.equal(displayedPage.total, 1);
+    assert.deepEqual(displayedPage.counts, { all: 1, pending: 1, sent: 0, history: 0 });
+
+    const livePage = await pageByProject(NEW_PROJECT_ID);
+    assert.deepEqual(livePage.items, []);
+    assert.equal(livePage.total, 0);
+    assert.equal(livePage.counts.all, 0);
+    const pageSql = stack.db.statements.findLast(({ sql }) => sql.includes('WITH coordination_page_counts')).sql;
+    assert.match(pageSql, /@projectId IS NULL OR COALESCE\(c\.ProjectIdSnapshot, t\.ProjectId\) = @projectId/);
 
     const decision = await asUser(EXECUTIVE, () =>
       store.decideAssignmentCoordination(coordinationId, { decision: 'APPROVE' }));
