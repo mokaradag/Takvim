@@ -250,6 +250,7 @@ logo:
   kaynak_kurallari:
     yalnizca_sunucu: true
     kaynak: mutlak_dosya_yolu
+    dosya_turu: olagan_dosya
     uzanti: [".svg"]
     en_buyuk_bayt: 1048576
     url_kaynagi: yasak          # rapor üreticisi ağdan logo indirmez
@@ -319,9 +320,12 @@ onarim:
   deneme_butcesi: { paragraf_basina: 2, rapor_basina: 8 }
   denetim_ve_yeniden_siralama_cagri_tavani: 2
   anlamsal_denetim: >-
-    Maddi iddiaların kanıt desteği doğrulanır. Bağımsız denetçi yoksa eşdeğer kanıta dayalı denetim veya yetkili insan
-    incelemesi gerekir. Doğrulanamayan iddia kullanıcıya sunulmadan önce nitelenir ya da çıkarılır; çözülemeyen kritik
-    sorun sonlandırmayı engeller.
+    Maddi iddiaların kanıt desteği doğrulanır. Belirlenimci denetim her onarım denemesinden sonra çağrı harcamadan
+    çalışır; bağımsız model denetçisi ise 2 çağrılık ortak tavan içinde ilk taslak için en çok 1 çağrı ve onarılan
+    paragrafların tamamı için toplu 1 onarım sonrası çağrı kullanır. Ortak 2 çağrı tavanı dolduğunda belirlenimci
+    olarak çözülemeyen anlamsal sorunlarda yeni yeniden yazım denenmez; doğrudan nitele_ya_da_cikar (kritik sorunda
+    inceleme_iste) uygulanır. Bağımsız denetçi yoksa eşdeğer kanıta dayalı denetim veya yetkili insan incelemesi
+    gerekir; çözülemeyen kritik sorun sonlandırmayı engeller.
   yasaklar:
     - butun_raporu_tek_ifade_icin_reddetmek
     - paragrafi_hazir_sunucu_metniyle_degistirmek
@@ -336,7 +340,7 @@ ozellestirme:
     kapsam: [kisi, proje, projeler, ekip, birim, mudurluk, direktorluk]
     ayrinti: [kisa, standart, kapsamli]
     odak: [dengeli, basarilar, riskler, stratejik_oncelikler]
-    bolumler: [faaliyetler, basarilar, engeller, kararlar, bagimliliklar, oncelikler]
+    bolumler: [riskler, oncelikler, ekler]
     notlar: [dahil, haric]
     karsilastirma: [onceki_donem, ozel_donem, yok]
     destekleyici_belgeler: [yok, var]

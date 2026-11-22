@@ -118,7 +118,8 @@ yetkili kanıtlar ve anlatı için gerekli kapsam/tamlık açıklamaları aktar�
       "donem": { "baslangic": "2026-11-02", "bitis": "2026-11-08" }, "tamlik": "complete" },
     { "id": "E2", "tur": "gorev",   "kaynak": "rota_task_search", "gorev": "…", "proje": "…", "durum": "…", "hedef_bitis": "…", "gerceklesen_bitis": null },
     { "id": "E3", "tur": "not",     "kaynak": "MR_AuditLog", "gorev": "…", "kayit_zamani": "2026-11-06T16:40:00+03:00", "metin": "…", "kirpildi": false },
-    { "id": "E4", "tur": "hareket", "kaynak": "rota_activity_search", "donem_ozeti": { "…": "…" }, "kayit_kapsami": "partial" },
+    { "id": "E4", "tur": "hareket", "kaynak": "rota_activity_search", "donem": { "baslangic": "2026-11-02", "bitis": "2026-11-08" },
+      "donem_ozeti": { "…": "…" }, "kayit_kapsami": "partial" },
     { "id": "E5", "tur": "belge",   "kaynak": "gecici_yukleme", "dosya_turu": "docx", "bolum": "…", "metin": "…" }   // yalnızca 4I-F
   ],
   "turetilmis": [ { "id": "F1", "tur": "karsilastirma", "girdiler": ["E1", "E7"], "deger": "…", "kosul": "eşit ve bitmiş dönem" } ],
@@ -305,7 +306,8 @@ aynı cümleler değil:** bölüm başlıkları sabittir; cümleler her raporda 
    göndergelerini döndürür. Sunucu bu çıktıyı doğrular ve onarım sinyali olarak kullanır. Kanıt seçimi için
    belirlenimci eşleştirme temel yoldur. İsteğe bağlı toplu yeniden sıralama, doğrulama çağrılarına gerekecek
    pay ayrıldıktan sonra kalan bütçeyi kullanır. İlk denetim ve onarım sonrası denetim dâhil, denetçi ve yeniden
-   sıralayıcı toplamda en çok iki çağrı kullanır.
+   sıralayıcı toplamda en çok iki çağrı kullanır (en çok 1 ilk taslak denetimi + onarılan bütün paragrafları tek
+   seferde kapsayan en çok 1 toplu onarım sonrası denetim).
 3. **İnsan incelemesi:** Bağımsız denetçi kullanılamadığında eşdeğer kanıta dayalı denetim veya yetkili insan
    incelemesi gerekir. Bu inceleme tamamlanana kadar dışarı dönen taslakta doğrulanamayan maddi iddianın
    yerine inceleme işareti gösterilir. İddia ancak destek doğrulanınca veya kanıtla uyumlu biçimde nitelenince
@@ -319,9 +321,10 @@ Doğrulama **birebir cümle eşleşmesi aramaz**. Editoryal dil için kanıt ist
 her sorun için:  tespit → yerini belirle (bölüm, paragraf, cümle)
                  → yazara YALNIZCA o paragrafı, sorunun açıklamasını ve ilgili yetkili kanıtı ver
                  → yerel yeniden yazım (çevredeki doğrulanmış paragraflar değişmez)
-                 → yeniden yazılan paragrafın maddi iddialarını yeniden denetle
-                 → bütçe: paragraf başına 2, rapor başına 8 deneme
-bütçe tükenirse: ifade kanıta uygun NİTELENİR ya da yalnızca o ifade ÇIKARILIR; paragrafın geri kalanı korunur
+                 → her denemede belirlenimci denetim (0 çağrı); anlamsal sorunlar için toplu 1 onarım sonrası model denetimi
+                 → bütçe: paragraf başına en çok 2 (anlamsal model denetimi gerektirenlerde ortak 2 çağrı tavanı içinde en çok 1), rapor başına 8 deneme
+bütçe veya 2 çağrılık denetim tavanı tükenirse:
+                 yeni yeniden yazım denenmez; ifade kanıta uygun NİTELENİR ya da yalnızca o ifade ÇIKARILIR; paragrafın geri kalanı korunur
 kritik sorun çözülemezse: geçerli taslak korunur, sorunlu yer işaretlenir, rapor İNCELEME GEREKTİRİR
 ```
 
@@ -489,7 +492,7 @@ panelindedir:
 | Kapsam | Kişi, proje, projeler, ekip, birim, müdürlük, direktörlük (yalnızca yetkili olanlar listelenir) |
 | Ayrıntı | Kısa, standart, kapsamlı |
 | Odak | Dengeli, başarılar, riskler, stratejik öncelikler |
-| Bölümler | Faaliyetler, başarılar, engeller, kararlar, bağımlılıklar, öncelikler |
+| Bölümler | İsteğe bağlı bölümler: riskler (engeller ve bağımlılıklar), öncelikler, ekler (zorunlu bölümler kapatılamaz) |
 | Notlar | Dahil / hariç (açık yetki ve rıza ile) |
 | Karşılaştırma | Önceki dönem, özel dönem, yok |
 | Destekleyici belgeler | İsteğe bağlı (4I-F) |
@@ -511,8 +514,12 @@ panelindedir:
   masaüstü ve dar ekranda okunabilir; klavye ile kullanılabilir; teknik model ayarı gösterilmez.
 - **Taslak durumu:** 4I'de sunucuda kalıcı saklama yoktur. Önizleme ile sonlandırma arasındaki taslak ya bellekte,
   süre sınırlı ve kullanıcıya bağlı tutulur ya da sunucu anahtarıyla imzalanmış/şifrelenmiş bir zarfla istemcide
-  taşınır; seçim 4I-E'de gerekçelendirilir. Her iki durumda da tablo ve grafikler sonlandırmada sunucu kanıtından
-  yeniden üretilir, istemciden güvenilmez.
+  taşınır; seçim 4I-E'de gerekçelendirilir. Her iki durumda da tablo ve grafikler sonlandırmada istemciden
+  güvenilmeden, **taslağın doğrulandığı aynı dondurulmuş sunucu kanıt paketi sürümünden** (TTL içinde, imzalı özet
+  eşleşmesi ve §14 güncel yetki/rıza denetimiyle) üretilir. Alttaki yetkili veri yeniden sorgulandığında dondurulmuş
+  paket özetiyle ayrışırsa veya yetki/rıza değişirse taslak geçersiz kılınır ve etkilenen paragraflar sonlandırma
+  öncesinde 4I-C doğrulamasından yeniden geçirilir; böylece metin, tablo, grafik ve kapak `VERI_ANI` birbiriyle
+  çelişemez.
 
 ---
 

@@ -132,11 +132,15 @@ function enclosingParagraph(node) {
   return null;
 }
 
-/** Yalnızca kanonik şablonun yerel sayfa ve başlık sayaçlarına izin verir; revizyon ve gizli metni reddeder. */
+/** Yalnızca kanonik şablonun yerel sayfa ve başlık sayaçlarına izin verir; revizyon, dış veri bağlantısı ve gizli metni reddeder. */
 function checkWordFields(document, name) {
   const disallowed = [
     'w:object', 'o:OLEObject', 'w:altChunk', 'w:hyperlink', 'w:attachedTemplate', 'w:updateFields',
     'w:instrText', 'w:delInstrText', 'w:fldChar',
+    // Veri bağlantısı, gizli belge değişkeni, dış şema/çerçeve ve koşullu işaretleme dalları kanonik şablonda yasaktır.
+    'w:mailMerge', 'w:docVars', 'w:docVar', 'w:dataBinding', 'w:subDoc', 'w:control',
+    'w:frameset', 'w:attachedSchema', 'w:saveThroughXslt',
+    'mc:AlternateContent', 'mc:Choice', 'mc:Fallback',
     // İzlenen değişiklikler, taşınan aralıklar, biçim revizyonları ve açıklamalar kanonik şablonda bulunamaz.
     'w:del', 'w:delText', 'w:ins', 'w:moveFrom', 'w:moveTo',
     'w:moveFromRangeStart', 'w:moveFromRangeEnd', 'w:moveToRangeStart', 'w:moveToRangeEnd',
@@ -147,10 +151,20 @@ function checkWordFields(document, name) {
   for (const tag of disallowed) {
     assert.equal(all(document, tag).length, 0, name + ': izin verilmeyen öğe ' + tag);
   }
-  // Zorunlu metni gizleyebilecek doğrudan ya da stil tabanlı gizleme biçimleri yasaktır.
-  for (const hiddenTag of ['w:vanish', 'w:webHidden']) {
+  // Zorunlu metni veya paragraf sonunu gizleyebilecek doğrudan ya da stil tabanlı gizleme biçimleri yasaktır.
+  for (const hiddenTag of ['w:vanish', 'w:webHidden', 'w:specVanish']) {
     for (const element of all(document, hiddenTag)) {
       assert.equal(on(element), false, name + ': gizli metin biçimi yasak (' + hiddenTag + ')');
+    }
+  }
+  // Başında veya sonunda boşluk bulunan her w:t öğesi Word'ün boşlukları kırpmaması için xml:space="preserve" taşımalıdır.
+  for (const textNode of all(document, 'w:t')) {
+    if (/^\s|\s$/u.test(textNode.textContent)) {
+      assert.equal(
+        textNode.getAttributeNS('http://www.w3.org/XML/1998/namespace', 'space'),
+        'preserve',
+        `${name}: kenar boşluklu w:t öğesinde xml:space="preserve" zorunludur ("${textNode.textContent}")`
+      );
     }
   }
   // Şablon metninin düzenlenmesini engelleyen içerik denetimi kilitleri yasaktır.

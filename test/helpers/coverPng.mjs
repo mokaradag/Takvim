@@ -44,12 +44,16 @@ function validateAncillaryPayload(type, data) {
   }
 }
 
+/** W3C PNG belirtimine göre sRGB ile uyumlu cHRM kromatiklik değerleri (×100000). */
+const SRGB_CHRM_VALUES = [31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000];
+
 /** Kanonik kapak yedeğinin 8 bit RGB/RGBA PNG verisini, A4 oranını ve onaylı kapak piksel içeriğini denetler. */
 export function validateCoverPng(png, expected = { background: '003087', strokes: ['077780', 'FF5620'] }) {
   assert.ok(png.subarray(0, 8).equals(SIGNATURE), 'PNG imzası geçersiz');
   const imageData = [];
   const seenAncillary = new Set();
   let gammaValue = null;
+  let chrmValues = null;
   let width = 0;
   let height = 0;
   let bpp = 0;
@@ -89,6 +93,9 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
       assert.ok(validLength, `PNG yardımcı parça uzunluğu geçersiz: ${type}`);
       validateAncillaryPayload(type, data);
       if (type === 'gAMA') gammaValue = data.readUInt32BE(0);
+      if (type === 'cHRM') {
+        chrmValues = Array.from({ length: 8 }, (_v, idx) => data.readUInt32BE(idx * 4));
+      }
     } else {
       assert.fail('PNG parça sırası veya türü geçersiz: ' + type);
     }
@@ -97,6 +104,10 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
   assert.ok(endSeen && imageData.length > 0, 'PNG görüntü verisi veya bitişi eksik');
   if (seenAncillary.has('sRGB') && gammaValue !== null) {
     assert.equal(gammaValue, 45455, 'PNG sRGB ile birlikte gAMA değeri 45455 olmalıdır: ' + gammaValue);
+  }
+  if (seenAncillary.has('sRGB') && chrmValues !== null) {
+    assert.deepEqual(chrmValues, SRGB_CHRM_VALUES,
+      'PNG sRGB ile birlikte cHRM kromatiklik değerleri sRGB standardıyla uyumlu olmalıdır');
   }
   const compressed = Buffer.concat(imageData);
   const size = rowBytes * height;
@@ -138,13 +149,20 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
         continue;
       }
       if (alpha < 128) continue;
+      // Piksel yalnızca zeminden ve diğer çizgi renklerinden kesin olarak daha yakın olduğu hedef çizgi rengine sayılır.
+      const bgDist = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
+      let bestIndex = -1;
+      let bestDist = bgDist;
       for (let s = 0; s < strokeTargets.length; s += 1) {
         const [tr, tg, tb] = strokeTargets[s];
-        // Kenar yumuşatma (anti-aliasing) piksellerini de kapsayacak şekilde hedef çizgi rengine yakınlığı ölç.
-        if (Math.abs(r - tr) + Math.abs(g - tg) + Math.abs(b - tb) <= 180) {
-          strokeCounts[s] += 1;
-          break;
+        const dist = Math.abs(r - tr) + Math.abs(g - tg) + Math.abs(b - tb);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIndex = s;
         }
+      }
+      if (bestIndex >= 0 && bestDist <= 180) {
+        strokeCounts[bestIndex] += 1;
       }
     }
     const swap = prev;

@@ -113,6 +113,13 @@ function checkMandatorySections(styleSpec) {
   for (const id of ['kapak', 'yonetici_degerlendirmesi', 'one_cikan_gelismeler', 'faaliyetler', 'genel_sonuc', 'kaynak_ve_yontem']) {
     assert.equal(byId.get(id)?.zorunlu, true, 'zorunlu bölüm kapatılamaz: ' + id);
   }
+  const optionalIds = new Set(styleSpec.yapi.bolumler.filter((section) => section.zorunlu === false).map((section) => section.kimlik));
+  for (const id of styleSpec.ozellestirme.serbest.bolumler) {
+    assert.ok(byId.has(id), 'serbest bölüm kimliği tanımlı olmalıdır: ' + id);
+    assert.ok(optionalIds.has(id), 'zorunlu bölüm serbest bölüm listesinde yer alamaz: ' + id);
+  }
+  assert.deepEqual([...styleSpec.ozellestirme.serbest.bolumler].sort(), [...optionalIds].sort(),
+    'serbest.bolumler yalnızca tüm isteğe bağlı bölüm kimliklerini taşımalıdır');
   assert.match(styleSpec.yapi.bolum_kurallari.dengeli_sunum, /gizleyemez/);
 }
 
@@ -123,6 +130,12 @@ test('stil belgesi: kaynak ve yöntem notu ile zorunlu bölümler sunum tercihiy
     mutated.yapi.bolumler.find((section) => section.kimlik === id).zorunlu = false;
     assert.throws(() => checkMandatorySections(mutated), new RegExp('zorunlu bölüm kapatılamaz: ' + id));
   }
+  const mandatoryInFree = structuredClone(spec);
+  mandatoryInFree.ozellestirme.serbest.bolumler.push('faaliyetler');
+  assert.throws(() => checkMandatorySections(mandatoryInFree), /zorunlu bölüm serbest bölüm listesinde yer alamaz: faaliyetler/);
+  const unknownInFree = structuredClone(spec);
+  unknownInFree.ozellestirme.serbest.bolumler.push('kararlar');
+  assert.throws(() => checkMandatorySections(unknownInFree), /serbest bölüm kimliği tanımlı olmalıdır: kararlar/);
 });
 
 test('stil belgesi: dört iddia sınıfı ve orantılı yerel onarım politikası tanımlıdır', () => {
@@ -145,6 +158,7 @@ test('stil belgesi: logo politikası mevcut ayarı korur, uydurmayı ve ağ kayn
   const handler = await read('src/server/branding/companyLogo.js');
   assert.ok(handler.includes(logo.varyantlar.koyu_zemin.kaynak_ayari), 'koyu zemin varyantı mevcut logo ayarıdır');
   assert.equal(logo.varyantlar.acik_zemin.durum, 'bekleniyor');
+  assert.equal(logo.kaynak_kurallari.dosya_turu, 'olagan_dosya', 'rapor logosu yalnızca olağan dosya olmalıdır');
   assert.equal(logo.kaynak_kurallari.url_kaynagi, 'yasak');
   assert.equal(logo.kaynak_kurallari.yeni_uc, 'yok');
   assert.equal(logo.eksik_logo.davranis, 'alan_bos_birakilir');
@@ -459,13 +473,35 @@ const DARK_SURFACE_DIRECT_INKS = new Set(
   ['zemin', 'lacivert_20', 'vurgu_turuncu'].map((key) => paletteColor(key).toUpperCase())
 );
 
+const THEME_SCHEME_SLOTS = new Set([
+  'dk1', 'lt1', 'dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'
+]);
+
 function checkPalette(document, name) {
   const wordColors = new Set(all(document, 'w:color'));
   const drawingColors = new Set(all(document, 'a:srgbClr'));
+  const highlights = new Set(all(document, 'w:highlight'));
+  const presetOrSystemColors = new Set([...all(document, 'a:prstClr'), ...all(document, 'a:sysClr')]);
+  const schemeColors = new Set(all(document, 'a:schemeClr'));
+  const isThemePart = name === 'word/theme/theme1.xml';
   const themeOverrideAttrs = ['w:themeColor', 'w:themeTint', 'w:themeShade', 'w:themeFill', 'w:themeFillTint', 'w:themeFillShade'];
   for (const element of document.getElementsByTagName('*')) {
     for (const overrideAttr of themeOverrideAttrs) {
       assert.equal(attr(element, overrideAttr), null, name + ': tema renk geçersiz kılması yasak (' + overrideAttr + ')');
+    }
+    if (highlights.has(element)) {
+      const highlightVal = attr(element);
+      assert.ok(highlightVal === null || highlightVal === 'none', name + ': adlandırılmış vurgu rengi (w:highlight) yasak: ' + highlightVal);
+    }
+    if (presetOrSystemColors.has(element) && !isThemePart) {
+      assert.fail(name + ': adlandırılmış veya sistem DrawingML rengi yasak (' + element.localName + ')');
+    }
+    if (schemeColors.has(element)) {
+      assert.equal(element.children.length, 0, name + ': DrawingML renk dönüşümü yasak');
+      const schemeVal = attr(element, 'val');
+      if (!isThemePart) {
+        assert.ok(THEME_SCHEME_SLOTS.has(schemeVal), name + ': izinli olmayan şema rengi: ' + schemeVal);
+      }
     }
     const colors = [attr(element, 'w:color'), attr(element, 'w:fill')];
     if (wordColors.has(element)) colors.push(attr(element));
@@ -642,6 +678,51 @@ function checkCoverMetadata(document) {
   assert.deepEqual(actualPairs, expectedPairs, 'kapak künye etiket ve değer eşleşmesi bozulmuş');
 }
 
+/** Paragraf içindeki bitişik görünür metin parçalarını (alan, sekme, satır sonu ve yer tutucu sınırlarıyla) ayırır. */
+function collectParagraphFixedSegments(paragraph) {
+  const segments = [];
+  let buffer = '';
+  const flush = () => {
+    const trimmed = buffer.trim();
+    if (trimmed) segments.push(trimmed);
+    buffer = '';
+  };
+  const walk = (node) => {
+    const ns = node.namespaceURI;
+    const local = node.localName;
+    if (ns === 'http://schemas.openxmlformats.org/wordprocessingml/2006/main') {
+      if (local === 'fldSimple' || local === 'tab' || local === 'br' || local === 'cr' || local === 'drawing') {
+        flush();
+        return;
+      }
+      if (local === 't') {
+        const parts = node.textContent.split(/\{\{[A-Z0-9_]+\}\}/gu);
+        for (let i = 0; i < parts.length; i += 1) {
+          buffer += parts[i];
+          if (i < parts.length - 1) flush();
+        }
+        return;
+      }
+    }
+    for (const childNode of node.children ?? []) walk(childNode);
+  };
+  walk(paragraph);
+  flush();
+  return segments;
+}
+
+/** Parçadaki tüm paragrafların yer tutucu dışı bitişik sabit metinlerini ilan edilen sözlükle doğrular. */
+function checkDeclaredFixedText(document, allowed, name) {
+  const seen = new Set();
+  for (const paragraph of all(document, 'w:p')) {
+    for (const segment of collectParagraphFixedSegments(paragraph)) {
+      assert.ok(allowed.has(segment), `${name}: ilan edilmemiş metin "${segment}"`);
+      seen.add(segment);
+    }
+  }
+  assert.deepEqual([...allowed].filter((text) => !seen.has(text)), [], `${name}: ilan edilen ama şablonda olmayan metin`);
+}
+
 test('şablon: yer tutucu dışındaki her görünen metin stil belgesinde ilan edilmiştir (kurum adı ya da başıboş metin yok)', () => {
   const titles = spec.yapi.bolumler.map((section) => section.baslik).filter(Boolean);
   const declared = {
@@ -652,15 +733,7 @@ test('şablon: yer tutucu dışındaki her görünen metin stil belgesinde ilan 
     'word/footer2.xml': new Set()
   };
   for (const [name, allowed] of Object.entries(declared)) {
-    const seen = new Set();
-    for (const node of all(xml(name), 'w:t')) {
-      if (insideField(node)) continue;
-      const rest = node.textContent.replace(PLACEHOLDER, '').trim();
-      if (!rest) continue;
-      assert.ok(allowed.has(rest), `${name}: ilan edilmemiş metin "${rest}"`);
-      seen.add(rest);
-    }
-    assert.deepEqual([...allowed].filter((text) => !seen.has(text)), [], `${name}: ilan edilen ama şablonda olmayan metin`);
+    checkDeclaredFixedText(xml(name), allowed, name);
   }
   checkCoverMetadata(xml(part('officeDocument')));
   // Belge özelliklerinde de kişi ya da kurum adı yoktur.
@@ -680,10 +753,12 @@ function checkSummaryTable(document) {
   const tables = all(document, 'w:tbl');
   const summary = tables.filter((table) => attr(child(child(table, 'w:tblPr'), 'w:tblStyle')) === spec.tablolar.donem_gorev_ozeti.stil);
   assert.equal(summary.length, 1);
+  const tblPr = child(summary[0], 'w:tblPr');
+  assert.equal(on(child(tblPr, 'w:bidiVisual')), false, 'özet tablo soldan sağa görüntülenmelidir (w:bidiVisual kapalı olmalıdır)');
   const expectedColumnCount = spec.tablolar.donem_gorev_ozeti.sutunlar.length;
   const gridCols = children(child(summary[0], 'w:tblGrid'), 'w:gridCol');
   assert.equal(gridCols.length, expectedColumnCount, 'özet tablo ızgara sütun sayısı');
-  const tblLook = child(child(summary[0], 'w:tblPr'), 'w:tblLook');
+  const tblLook = child(tblPr, 'w:tblLook');
   assert.ok(tblLook, 'özet tabloda w:tblLook zorunludur');
   assert.equal(attr(tblLook, 'w:firstRow'), '1', 'özet tabloda ilk satır koşullu biçimi etkin olmalıdır');
   assert.equal(attr(tblLook, 'w:lastRow'), '1', 'özet tabloda son satır koşullu biçimi etkin olmalıdır');
@@ -925,29 +1000,46 @@ function checkCoverRelationships(document, relationship) {
     assert.ok(picTitle === null || picTitle === '', 'kapak resmi pic:cNvPr title alanı boş olmalıdır');
     assert.ok(picDescr === null || picDescr === '', 'kapak resmi pic:cNvPr descr alanı boş olmalıdır');
   }
+  /** Boş veya eksik özniteliğin Number(null)/Number('') ile 0'a zorlanmasını engeller. */
+  const parseStrictInt = (raw, message) => {
+    assert.ok(typeof raw === 'string' && /^-?\d+$/u.test(raw.trim()), message);
+    return Number(raw.trim());
+  };
   const posH = child(anchor, 'wp:positionH');
   const posV = child(anchor, 'wp:positionV');
   assert.equal(posH?.getAttribute('relativeFrom'), 'page', 'kapak yatay konumu sayfaya göre olmalıdır');
   assert.equal(posV?.getAttribute('relativeFrom'), 'page', 'kapak dikey konumu sayfaya göre olmalıdır');
-  assert.equal(Number(child(posH, 'wp:posOffset')?.textContent?.trim()), 0, 'kapak yatay konumu sayfa başlangıcında (0 EMU) olmalıdır');
-  assert.equal(Number(child(posV, 'wp:posOffset')?.textContent?.trim()), 0, 'kapak dikey konumu sayfa başlangıcında (0 EMU) olmalıdır');
+  assert.equal(parseStrictInt(child(posH, 'wp:posOffset')?.textContent, 'kapak yatay konumu sayfa başlangıcında (0 EMU) olmalıdır'), 0,
+    'kapak yatay konumu sayfa başlangıcında (0 EMU) olmalıdır');
+  assert.equal(parseStrictInt(child(posV, 'wp:posOffset')?.textContent, 'kapak dikey konumu sayfa başlangıcında (0 EMU) olmalıdır'), 0,
+    'kapak dikey konumu sayfa başlangıcında (0 EMU) olmalıdır');
   assert.equal(anchor.parentNode?.parentNode?.parentNode, all(document, 'w:body')[0].firstElementChild,
     'kapak çizimi ilk paragraftadır');
   const wpExtent = child(anchor, 'wp:extent');
-  assert.equal(Number(wpExtent?.getAttribute('cx')), APPROVED_COVER_EXTENT_EMU.cx, 'kapak wp:extent genişliği A4 ile eşleşmelidir');
-  assert.equal(Number(wpExtent?.getAttribute('cy')), APPROVED_COVER_EXTENT_EMU.cy, 'kapak wp:extent yüksekliği A4 ile eşleşmelidir');
+  assert.equal(parseStrictInt(wpExtent?.getAttribute('cx'), 'kapak wp:extent genişliği A4 ile eşleşmelidir'), APPROVED_COVER_EXTENT_EMU.cx,
+    'kapak wp:extent genişliği A4 ile eşleşmelidir');
+  assert.equal(parseStrictInt(wpExtent?.getAttribute('cy'), 'kapak wp:extent yüksekliği A4 ile eşleşmelidir'), APPROVED_COVER_EXTENT_EMU.cy,
+    'kapak wp:extent yüksekliği A4 ile eşleşmelidir');
   const picSpPr = all(anchor, 'pic:spPr')[0];
   const picXfrm = child(picSpPr, 'a:xfrm');
+  assert.ok(picXfrm, 'kapak resmi pic:spPr/a:xfrm zorunludur');
+  const rotVal = picXfrm.getAttribute('rot');
+  assert.ok(rotVal === null || parseStrictInt(rotVal, `kapak resmi döndürülemez (a:xfrm rot=${rotVal})`) === 0,
+    `kapak resmi döndürülemez (a:xfrm rot=${rotVal})`);
   for (const flipAttr of ['flipH', 'flipV']) {
-    const flipVal = picXfrm?.getAttribute(flipAttr) ?? null;
+    const flipVal = picXfrm.getAttribute(flipAttr);
     assert.ok([null, '0', 'false'].includes(flipVal), `kapak resmi çevrilemez (a:xfrm ${flipAttr}=${flipVal})`);
   }
   const picOff = child(picXfrm, 'a:off');
-  assert.equal(Number(picOff?.getAttribute('x')), 0, 'kapak pic:spPr/a:xfrm/a:off x konumu 0 olmalıdır');
-  assert.equal(Number(picOff?.getAttribute('y')), 0, 'kapak pic:spPr/a:xfrm/a:off y konumu 0 olmalıdır');
+  assert.equal(parseStrictInt(picOff?.getAttribute('x'), 'kapak pic:spPr/a:xfrm/a:off x konumu 0 olmalıdır'), 0,
+    'kapak pic:spPr/a:xfrm/a:off x konumu 0 olmalıdır');
+  assert.equal(parseStrictInt(picOff?.getAttribute('y'), 'kapak pic:spPr/a:xfrm/a:off y konumu 0 olmalıdır'), 0,
+    'kapak pic:spPr/a:xfrm/a:off y konumu 0 olmalıdır');
   const picExt = child(picXfrm, 'a:ext');
-  assert.equal(Number(picExt?.getAttribute('cx')), APPROVED_COVER_EXTENT_EMU.cx, 'kapak pic:spPr/a:xfrm/a:ext genişliği A4 ile eşleşmelidir');
-  assert.equal(Number(picExt?.getAttribute('cy')), APPROVED_COVER_EXTENT_EMU.cy, 'kapak pic:spPr/a:xfrm/a:ext yüksekliği A4 ile eşleşmelidir');
+  assert.equal(parseStrictInt(picExt?.getAttribute('cx'), 'kapak pic:spPr/a:xfrm/a:ext genişliği A4 ile eşleşmelidir'), APPROVED_COVER_EXTENT_EMU.cx,
+    'kapak pic:spPr/a:xfrm/a:ext genişliği A4 ile eşleşmelidir');
+  assert.equal(parseStrictInt(picExt?.getAttribute('cy'), 'kapak pic:spPr/a:xfrm/a:ext yüksekliği A4 ile eşleşmelidir'), APPROVED_COVER_EXTENT_EMU.cy,
+    'kapak pic:spPr/a:xfrm/a:ext yüksekliği A4 ile eşleşmelidir');
   const png = all(anchor, 'a:blip');
   const svg = all(anchor, 'asvg:svgBlip');
   assert.equal(png.length, 1, 'kapak PNG başvurusu');
@@ -961,7 +1053,8 @@ function checkCoverRelationships(document, relationship) {
   if (srcRects.length === 1) {
     for (const side of ['l', 't', 'r', 'b']) {
       const inset = srcRects[0].getAttribute(side);
-      assert.ok(inset === null || Number(inset) === 0, `kapak resmi kırpılamaz (a:srcRect ${side}=${inset})`);
+      assert.ok(inset === null || parseStrictInt(inset, `kapak resmi kırpılamaz (a:srcRect ${side}=${inset})`) === 0,
+        `kapak resmi kırpılamaz (a:srcRect ${side}=${inset})`);
     }
   }
   assert.equal(relationship(attr(png[0], 'r:embed'), 'image'), 'word/media/kapak-yedigen.png');
@@ -1128,22 +1221,24 @@ test('şablon: geçersiz OOXML, dış ilişki, içerik türü, revizyon, gizli m
   }, /değişiklik izleme \(w:trackRevisions\) kapalı olmalıdır/);
 
   // Bölüm sayfa numarası başlangıcı 1'den büyük olduğunda reddedilmeli, 1 olduğunda kabul edilmelidir.
-  assert.throws(() => {
-    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+  const setSectionPageStart = (doc, startValue) => {
     const wNs = doc.documentElement.namespaceURI;
     const sectPr = all(doc, 'w:sectPr')[0];
-    const pgNumType = doc.createElementNS(wNs, 'w:pgNumType');
-    pgNumType.setAttributeNS(wNs, 'w:start', '25');
-    sectPr.appendChild(pgNumType);
+    let pgNumType = child(sectPr, 'w:pgNumType');
+    if (!pgNumType) {
+      pgNumType = doc.createElementNS(wNs, 'w:pgNumType');
+      sectPr.appendChild(pgNumType);
+    }
+    pgNumType.setAttributeNS(wNs, 'w:start', startValue);
+  };
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    setSectionPageStart(doc, '25');
     checkSectionLayout(doc);
   }, /sayfa numaralandırması 1 ile başlamalıdır/);
   {
     const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
-    const wNs = doc.documentElement.namespaceURI;
-    const sectPr = all(doc, 'w:sectPr')[0];
-    const pgNumType = doc.createElementNS(wNs, 'w:pgNumType');
-    pgNumType.setAttributeNS(wNs, 'w:start', '1');
-    sectPr.appendChild(pgNumType);
+    setSectionPageStart(doc, '1');
     checkSectionLayout(doc);
   }
 
@@ -1248,7 +1343,139 @@ test('şablon: geçersiz OOXML, dış ilişki, içerik türü, revizyon, gizli m
     checkCoverRelationships(doc, documentRelationship);
   }, /wp:docPr descr alanı/);
 
-  // PNG yardımcı parça doğrulaması: pHYs yoğunluk eşitliği ile sRGB/gAMA uyumluluğu.
+  // Kapak resmi döndürme (rot) ve eksik/boş konum öznitelikleri reddedilmelidir.
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const picXfrm = child(all(all(doc, 'wp:anchor')[0], 'pic:spPr')[0], 'a:xfrm');
+    picXfrm.setAttribute('rot', '5400000');
+    checkCoverRelationships(doc, documentRelationship);
+  }, /kapak resmi döndürülemez/);
+  {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const picXfrm = child(all(all(doc, 'wp:anchor')[0], 'pic:spPr')[0], 'a:xfrm');
+    picXfrm.setAttribute('rot', '0');
+    checkCoverRelationships(doc, documentRelationship);
+  }
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const picOff = child(child(all(all(doc, 'wp:anchor')[0], 'pic:spPr')[0], 'a:xfrm'), 'a:off');
+    picOff.removeAttribute('x');
+    checkCoverRelationships(doc, documentRelationship);
+  }, /a:off x konumu 0 olmalıdır/);
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const posOffset = child(child(all(doc, 'wp:anchor')[0], 'wp:positionH'), 'wp:posOffset');
+    posOffset.textContent = '';
+    checkCoverRelationships(doc, documentRelationship);
+  }, /kapak yatay konumu sayfa başlangıcında/);
+
+  // Özet tabloda sağdan sola görünüm (w:bidiVisual) reddedilmelidir.
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const wNs = doc.documentElement.namespaceURI;
+    const summaryTable = all(doc, 'w:tbl').find((table) => attr(child(child(table, 'w:tblPr'), 'w:tblStyle')) === spec.tablolar.donem_gorev_ozeti.stil);
+    const tblPr = child(summaryTable, 'w:tblPr');
+    tblPr.appendChild(doc.createElementNS(wNs, 'w:bidiVisual'));
+    checkSummaryTable(doc);
+  }, /w:bidiVisual kapalı olmalıdır/);
+
+  // Sabit metin bitişik w:r/w:t akışlarına bölündüğünde kabul edilmelidir.
+  {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const wNs = doc.documentElement.namespaceURI;
+    const xmlNs = 'http://www.w3.org/XML/1998/namespace';
+    const targetText = all(doc, 'w:t').find((node) => node.textContent === 'Kurum İçi');
+    assert.ok(targetText);
+    const parentRun = targetText.parentNode;
+    targetText.textContent = 'Kurum ';
+    targetText.setAttributeNS(xmlNs, 'xml:space', 'preserve');
+    const nextRun = doc.createElementNS(wNs, 'w:r');
+    const nextText = doc.createElementNS(wNs, 'w:t');
+    nextText.textContent = 'İçi';
+    nextRun.appendChild(nextText);
+    parentRun.parentNode.insertBefore(nextRun, parentRun.nextSibling);
+    const titles = spec.yapi.bolumler.map((section) => section.baslik).filter(Boolean);
+    const allowedDoc = new Set([...spec.sabit_metinler.kapak, ...spec.sabit_metinler.govde, ...titles]);
+    checkDeclaredFixedText(doc, allowedDoc, 'word/document.xml');
+  }
+
+  // Adlandırılmış vurgu rengi (w:highlight), a:prstClr ve dönüşümlü a:schemeClr palet denetiminde reddedilmelidir.
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const wNs = doc.documentElement.namespaceURI;
+    const rPr = all(doc, 'w:rPr')[0];
+    const hl = doc.createElementNS(wNs, 'w:highlight');
+    hl.setAttributeNS(wNs, 'w:val', 'yellow');
+    rPr.appendChild(hl);
+    checkPalette(doc, 'word/document.xml');
+  }, /adlandırılmış vurgu rengi \(w:highlight\) yasak/);
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const aNs = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+    const prst = doc.createElementNS(aNs, 'a:prstClr');
+    prst.setAttribute('val', 'red');
+    all(doc, 'pic:spPr')[0].appendChild(prst);
+    checkPalette(doc, 'word/document.xml');
+  }, /adlandırılmış veya sistem DrawingML rengi yasak/);
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const aNs = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+    const scheme = doc.createElementNS(aNs, 'a:schemeClr');
+    scheme.setAttribute('val', 'accent1');
+    const lumMod = doc.createElementNS(aNs, 'a:lumMod');
+    lumMod.setAttribute('val', '50000');
+    scheme.appendChild(lumMod);
+    all(doc, 'pic:spPr')[0].appendChild(scheme);
+    checkPalette(doc, 'word/document.xml');
+  }, /DrawingML renk dönüşümü yasak/);
+
+  // Dış SQL veri bağlantısı (w:mailMerge), gizli belge değişkeni (w:docVars), mc:AlternateContent, w:specVanish ve xml:space eksikliği reddedilmelidir.
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/settings.xml', (doc) => {
+    const wNs = doc.documentElement.namespaceURI;
+    doc.documentElement.appendChild(doc.createElementNS(wNs, 'w:mailMerge'));
+  })), /izin verilmeyen öğe w:mailMerge/);
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/settings.xml', (doc) => {
+    const wNs = doc.documentElement.namespaceURI;
+    const vars = doc.createElementNS(wNs, 'w:docVars');
+    const v = doc.createElementNS(wNs, 'w:docVar');
+    v.setAttributeNS(wNs, 'w:name', 'gizli');
+    v.setAttributeNS(wNs, 'w:val', 'Atlas');
+    vars.appendChild(v);
+    doc.documentElement.appendChild(vars);
+  })), /izin verilmeyen öğe w:docVars/);
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/document.xml', (doc) => {
+    const mcNs = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
+    const alt = doc.createElementNS(mcNs, 'mc:AlternateContent');
+    all(doc, 'w:body')[0].appendChild(alt);
+  })), /izin verilmeyen öğe mc:AlternateContent/);
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/document.xml', (doc) => {
+    const wNs = doc.documentElement.namespaceURI;
+    const notePara = all(doc, 'w:p').find((p) => all(p, 'w:t').some((t) => t.textContent.includes('{{KAYNAK_VE_YONTEM_NOTU}}')));
+    assert.ok(notePara);
+    const pPr = child(notePara, 'w:pPr');
+    const rPr = doc.createElementNS(wNs, 'w:rPr');
+    rPr.appendChild(doc.createElementNS(wNs, 'w:specVanish'));
+    pPr.appendChild(rPr);
+  })), /gizli metin biçimi yasak \(w:specVanish\)/);
+  assert.throws(() => validateDocxXml(mutateXmlPart('word/footer1.xml', (doc) => {
+    const sayfaText = all(doc, 'w:t').find((node) => node.textContent === 'Sayfa ');
+    assert.ok(sayfaText);
+    sayfaText.removeAttributeNS('http://www.w3.org/XML/1998/namespace', 'space');
+  })), /xml:space="preserve" zorunludur/);
+
+  // PNG yardımcı parça doğrulaması: mevcut parçalar temizlenerek pHYs, sRGB/gAMA ve sRGB/cHRM uyumluluğu sınanır.
+  const stripPngChunks = (png, types) => {
+    const drop = new Set(types);
+    const out = [png.subarray(0, 8)];
+    for (let offset = 8; offset < png.length;) {
+      const length = png.readUInt32BE(offset);
+      const end = offset + 12 + length;
+      const type = png.toString('latin1', offset + 4, offset + 8);
+      if (!drop.has(type)) out.push(png.subarray(offset, end));
+      offset = end;
+    }
+    return Buffer.concat(out);
+  };
   const insertPngChunk = (png, chunkType, data) => {
     const type = Buffer.from(chunkType, 'latin1');
     const len = Buffer.alloc(4);
@@ -1264,12 +1491,17 @@ test('şablon: geçersiz OOXML, dış ilişki, içerik türü, revizyon, gizli m
     data.writeUInt32BE(ppuX, 0);
     data.writeUInt32BE(ppuY, 4);
     data[8] = unit;
-    return insertPngChunk(png, 'pHYs', data);
+    return insertPngChunk(stripPngChunks(png, ['pHYs']), 'pHYs', data);
   };
   const insertGammaChunk = (png, gamma) => {
     const data = Buffer.alloc(4);
     data.writeUInt32BE(gamma, 0);
-    return insertPngChunk(png, 'gAMA', data);
+    return insertPngChunk(stripPngChunks(png, ['gAMA']), 'gAMA', data);
+  };
+  const insertChrmChunk = (png, values) => {
+    const data = Buffer.alloc(32);
+    values.forEach((value, idx) => data.writeUInt32BE(value, idx * 4));
+    return insertPngChunk(stripPngChunks(png, ['cHRM']), 'cHRM', data);
   };
   const coverPngBytes = docx.buffer('word/media/kapak-yedigen.png');
   const coverPalette = {
@@ -1282,10 +1514,53 @@ test('şablon: geçersiz OOXML, dış ilişki, içerik türü, revizyon, gizli m
   validateCoverPng(insertPhysChunk(coverPngBytes, 2953, 2953, 1), coverPalette);
   assert.throws(() => validateCoverPng(insertPhysChunk(coverPngBytes, 5906, 2953, 1), coverPalette),
     /PNG pHYs yatay ve dikey yoğunlukları eşit ve pozitif olmalıdır/);
-  const srgbPng = insertPngChunk(coverPngBytes, 'sRGB', Buffer.from([0]));
+  const srgbPng = insertPngChunk(stripPngChunks(coverPngBytes, ['sRGB', 'gAMA', 'cHRM']), 'sRGB', Buffer.from([0]));
   validateCoverPng(insertGammaChunk(srgbPng, 45455), coverPalette);
   assert.throws(() => validateCoverPng(insertGammaChunk(srgbPng, 100000), coverPalette),
     /PNG sRGB ile birlikte gAMA değeri 45455 olmalıdır/);
+  validateCoverPng(insertChrmChunk(srgbPng, [31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000]), coverPalette);
+  assert.throws(
+    () => validateCoverPng(insertChrmChunk(srgbPng, [31270, 32900, 63000, 33000, 30000, 60000, 15000, 6000]), coverPalette),
+    /PNG sRGB ile birlikte cHRM kromatiklik değerleri sRGB standardıyla uyumlu olmalıdır/
+  );
+  // Gerçek camgöbeği (077780) pikseli olmadan yalnızca laciverte yakın (003A90) satır taşıyan PNG reddedilmelidir.
+  {
+    const width = 210;
+    const height = 297;
+    const rowBytes = 1 + width * 3;
+    const raw = Buffer.alloc(rowBytes * height);
+    for (let y = 0; y < height; y += 1) {
+      const start = y * rowBytes;
+      raw[start] = 0;
+      const [r, g, b] = y === 10 ? [0x00, 0x3a, 0x90] : y === 20 ? [0xff, 0x56, 0x20] : [0x00, 0x30, 0x87];
+      for (let x = 0; x < width; x += 1) {
+        const px = start + 1 + x * 3;
+        raw[px] = r;
+        raw[px + 1] = g;
+        raw[px + 2] = b;
+      }
+    }
+    const makeChunk = (chunkType, data) => {
+      const type = Buffer.from(chunkType, 'latin1');
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length, 0);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(crc32(Buffer.concat([type, data])), 0);
+      return Buffer.concat([len, type, data, crc]);
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8;
+    ihdr[9] = 2;
+    const noTealPng = Buffer.concat([
+      Buffer.from('89504e470d0a1a0a', 'hex'),
+      makeChunk('IHDR', ihdr),
+      makeChunk('IDAT', deflateSync(raw)),
+      makeChunk('IEND', Buffer.alloc(0))
+    ]);
+    assert.throws(() => validateCoverPng(noTealPng, coverPalette), /onaylı yedigen çizgi rengi bulunamadı: 077780/);
+  }
 
   // Paket kökü ana belge ilişkisi yanlış hedefe yönlendirildiğinde (ilişki türüyle seçilir)
   assert.throws(() => validateDocxXml(mutateXmlPart('_rels/.rels', (doc) => {
@@ -1973,9 +2248,11 @@ test('belgeler: yol haritası 4I-0…4I-F artımlarını on altı başlıkla, du
   assert.ok(management.includes('(BILGIN-4I-UYGULAMA-YOL-HARITASI.md)'), 'yönetim yol haritası ayrıntılı 4I belgesine bağlanır');
 });
 
-/** SQL Server iç içe blok yorumlarını, satır yorumlarını ve metin sabitlerini sınırlı tanımlayıcıları koruyarak temizler. */
+/** SQL Server iç içe blok yorumlarını, satır yorumlarını ve metin sabitlerini sınırlı tanımlayıcıları koruyarak ayrıştırır. */
 function stripSqlCommentsAndLiterals(sql) {
   let out = '';
+  const literals = [];
+  let currentLiteral = '';
   let blockDepth = 0;
   let inLineComment = false;
   let inString = false;
@@ -2005,11 +2282,17 @@ function stripSqlCommentsAndLiterals(sql) {
     if (inString) {
       if (ch === "'") {
         if (next === "'") {
+          currentLiteral += "'";
           i += 1;
         } else {
           inString = false;
-          out += ' ';
+          const idx = literals.length;
+          literals.push(currentLiteral);
+          currentLiteral = '';
+          out += ` __LIT_${idx}__ `;
         }
+      } else {
+        currentLiteral += ch;
       }
       continue;
     }
@@ -2046,8 +2329,10 @@ function stripSqlCommentsAndLiterals(sql) {
       i += 1;
     } else if (ch === "'") {
       inString = true;
+      currentLiteral = '';
     } else if ((ch === 'N' || ch === 'n') && next === "'") {
       inString = true;
+      currentLiteral = '';
       i += 1;
     } else if (ch === '[') {
       inBracketIdentifier = true;
@@ -2059,10 +2344,10 @@ function stripSqlCommentsAndLiterals(sql) {
       out += ch;
     }
   }
-  return out;
+  return { cleaned: out, literals };
 }
 
-const REPORT_TABLE_NAME = '(?:bilgin\\w{0,8}(?:rapor|report)|y[oö]netici\\w{0,3}rapor|executive\\w{0,3}report)';
+const REPORT_TABLE_NAME = '(?:bilgin(?:_[a-zçğıöşü0-9]+){0,3}_?(?:rapor|report)|bilgin[a-zçğıöşü0-9]{0,12}(?:rapor|report)|(?:mr_)?ai(?:_[a-zçğıöşü0-9]+){0,2}_?(?:rapor|report)|y[oö]netici(?:_[a-zçğıöşü0-9]+){0,2}_?rapor|executive(?:_[a-zçğıöşü0-9]+){0,2}_?report)';
 const REPORT_TARGET_RE = new RegExp(REPORT_TABLE_NAME, 'iu');
 const SQL_IDENT_PART = '(?:\\[(?:[^\\]]|\\]\\])+\\]|"(?:[^"]|"")+"|[#\\w]+)';
 const SQL_IDENT_PART_RE = new RegExp(SQL_IDENT_PART, 'gu');
@@ -2080,6 +2365,14 @@ const SQL_SELECT_INTO_RE = new RegExp(
   `\\bSELECT\\b(?:(?!${SQL_STATEMENT_BREAK})[\\s\\S])*?\\bINTO\\s+(?!@)(${SQL_QUALIFIED_TARGET})`,
   'giu'
 );
+const SQL_DYNAMIC_EXEC_RE = /\b(?:EXEC|EXECUTE)\s*\(\s*(__LIT_\d+__(?:\s*\+\s*__LIT_\d+__)*)\s*\)/giu;
+const SQL_SP_EXECUTESQL_RE = /\b(?:(?:dbo|sys)\.)?sp_executesql\b(?:\s+@stmt\s*=)?\s+(__LIT_\d+__(?:\s*\+\s*__LIT_\d+__)*)/giu;
+const SQL_SP_RENAME_RE = /\b(?:(?:dbo|sys)\.)?sp_rename\b[\s\S]*?,\s*(?:@newname\s*=\s*)?__LIT_(\d+)__/giu;
+
+/** Yer tutucu metin sabitlerini (isteğe bağlı + birleştirmesiyle) tek SQL metnine çözer. */
+function resolveLiteralExpr(expr, literals) {
+  return [...expr.matchAll(/__LIT_(\d+)__/gu)].map((m) => literals[Number(m[1])] ?? '').join('');
+}
 
 /** Nitelikli SQL hedef adının yerel geçici tablo (#... veya [#...]) olup olmadığını sınırlı tanımlayıcılardaki noktaları koruyarak belirler. */
 function isLocalTempTarget(qualifiedTarget) {
@@ -2100,9 +2393,10 @@ function isPermanentReportTarget(qualifiedTarget) {
   return REPORT_TARGET_RE.test(qualifiedTarget);
 }
 
-/** SQL yorumlarını ve metin sabitlerini temizleyerek yalnızca gerçek kalıcı şema işlemlerini rapor hedef adlarına göre denetler. */
-function hasReportSchemaOperation(sql) {
-  const cleaned = stripSqlCommentsAndLiterals(sql);
+/** SQL yorumlarını temizleyerek doğrudan ve dinamik (EXEC/sp_executesql/sp_rename) kalıcı rapor şema işlemlerini denetler. */
+function hasReportSchemaOperation(sql, depth = 0) {
+  if (depth > 4) return false;
+  const { cleaned, literals } = stripSqlCommentsAndLiterals(sql);
   for (const statement of cleaned.split(/;|^\s*GO\s*$/gim)) {
     for (const match of statement.matchAll(SQL_OBJECT_DDL_RE)) {
       if (isPermanentReportTarget(match[1])) return true;
@@ -2112,6 +2406,15 @@ function hasReportSchemaOperation(sql) {
     }
     for (const match of statement.matchAll(SQL_SELECT_INTO_RE)) {
       if (isPermanentReportTarget(match[1])) return true;
+    }
+    for (const match of statement.matchAll(SQL_DYNAMIC_EXEC_RE)) {
+      if (hasReportSchemaOperation(resolveLiteralExpr(match[1], literals), depth + 1)) return true;
+    }
+    for (const match of statement.matchAll(SQL_SP_EXECUTESQL_RE)) {
+      if (hasReportSchemaOperation(resolveLiteralExpr(match[1], literals), depth + 1)) return true;
+    }
+    for (const match of statement.matchAll(SQL_SP_RENAME_RE)) {
+      if (isPermanentReportTarget(literals[Number(match[1])])) return true;
     }
   }
   return false;
@@ -2131,19 +2434,26 @@ test('4I-0 sınırı: çalışma zamanı rapor motoru, yükleme hizmeti ya da ka
   };
   await walk('src');
   assert.deepEqual(offenders, [], '4I-A ve sonrası bu sınamayı bilinçli olarak günceller');
-  const reportFileName = /bilgin.{0,8}(?:rapor|report)|(?:y[oö]netici.{0,3}rapor|executive.{0,3}report)/iu;
-  // SQL yorumları, sütun tanımları, deyim sınırları ve yerel geçici tablolar yanlış pozitif üretmemeli; kalıcı DDL/INDEX/SELECT INTO yakalanmalıdır.
+  const reportFileName = new RegExp(REPORT_TABLE_NAME, 'iu');
+  // SQL yorumları, sütun tanımları, deyim sınırları ve yerel geçici tablolar yanlış pozitif üretmemeli; kalıcı DDL/INDEX/SELECT INTO/dinamik SQL/sp_rename yakalanmalıdır.
   assert.equal(hasReportSchemaOperation('-- No executive report tables are changed here\nSELECT 1;'), false);
   assert.equal(hasReportSchemaOperation("PRINT N'No executive report tables are changed here';"), false);
   assert.equal(hasReportSchemaOperation('/* Örnek /* not */ CREATE TABLE dbo.MR_BilginRaporlar (Id INT); */ SELECT 1;'), false);
+  assert.equal(hasReportSchemaOperation("/* EXEC(N'CREATE TABLE dbo.MR_BilginRaporlar (Id INT)'); */ SELECT 1;"), false);
   assert.equal(hasReportSchemaOperation('CREATE TABLE dbo.MR_TrainingTopics (ExecutiveReportWriting bit NOT NULL);'), false);
   assert.equal(hasReportSchemaOperation('CREATE INDEX IX_Training ON dbo.MR_TrainingTopics (ExecutiveReportWriting);'), false);
   assert.equal(hasReportSchemaOperation('CREATE TABLE #MR_BilginRaporlar (Id INT);'), false);
   assert.equal(hasReportSchemaOperation('CREATE TABLE [#MR_ExecutiveReports] (Id INT);'), false);
   assert.equal(hasReportSchemaOperation('CREATE TABLE [#MR_ExecutiveReports.v2] (Id INT);'), false);
   assert.equal(hasReportSchemaOperation('SELECT 1 AS Id INTO #MR_BilginRaporlar;'), false);
+  assert.equal(hasReportSchemaOperation("EXEC(N'CREATE TABLE #MR_BilginRaporlar (Id INT)');"), false);
   assert.equal(hasReportSchemaOperation('SELECT 1 AS CheckValue\nINSERT INTO dbo.ExecutiveReportTraining (Id) VALUES (1);'), false);
   assert.equal(hasReportSchemaOperation('CREATE TABLE dbo.MR_BilginRaporlar (Id INT);'), true);
+  assert.equal(hasReportSchemaOperation('CREATE TABLE dbo.MR_Bilgin_Kurumsal_Rapor (Id INT);'), true);
+  assert.equal(hasReportSchemaOperation('CREATE TABLE dbo.MR_AiReportDrafts (Id INT);'), true);
+  assert.equal(hasReportSchemaOperation("EXEC(N'CREATE TABLE dbo.MR_BilginRaporlar (Id INT)');"), true);
+  assert.equal(hasReportSchemaOperation("EXEC sp_executesql N'CREATE TABLE dbo.MR_BilginRaporlar (Id INT)';"), true);
+  assert.equal(hasReportSchemaOperation("EXEC sp_rename 'dbo.MR_Tmp', 'MR_BilginRaporlar';"), true);
   assert.equal(hasReportSchemaOperation('CREATE TABLE [dbo].[MR_ExecutiveReport--Archive] (Id INT);'), true);
   assert.equal(hasReportSchemaOperation('CREATE TABLE [dbo].[MR_ExecutiveReport]]Archive] (Id INT);'), true);
   assert.equal(hasReportSchemaOperation('CREATE TABLE\n  dbo.\n  [MR_BilginRaporlar] (Id INT);'), true);
@@ -2151,8 +2461,9 @@ test('4I-0 sınırı: çalışma zamanı rapor motoru, yükleme hizmeti ya da ka
   assert.equal(hasReportSchemaOperation('ALTER TABLE [dbo].[MR_YoneticiRaporlari] ADD Durum NVARCHAR(32);'), true);
   assert.equal(hasReportSchemaOperation('SELECT 1 AS Id INTO dbo.MR_BilginRaporlar;'), true);
   assert.equal(hasReportSchemaOperation('SELECT 1 AS Id INTO [dbo].[MR_ExecutiveReports] FROM dbo.MR_Tasks;'), true);
-  for (const name of await readdir(path.join(ROOT, 'database'))) {
-    if (!/^MR_Upgrade_\d{4}_.*\.sql$/u.test(name)) continue;
+  const sqlFiles = (await readdir(path.join(ROOT, 'database'))).filter((name) => /\.sql$/iu.test(name));
+  assert.ok(sqlFiles.includes('MR_Create_Durable_Persistence.sql'), 'temel kalıcılık şema betiği taranmalıdır');
+  for (const name of sqlFiles) {
     assert.doesNotMatch(name, reportFileName, 'yönetici raporu için kalıcılık 4J kapsamındadır: ' + name);
     assert.equal(hasReportSchemaOperation(await read(path.posix.join('database', name))), false,
       'yönetici raporu için kalıcılık 4J kapsamındadır: ' + name);

@@ -115,6 +115,7 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
    `docs/BILGIN-4I-YONETICI-RAPORU-MIMARISI.md`, `docs/BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md`,
    `config/ai/bilgin_rapor_stili.yaml`, `config/ai/bilgin_kurumsal_rapor_sablonu.docx`,
    `test/fixtures/bilgin-executive-report-benchmark.json`, `test/helpers/docxPackage.mjs`,
+   `test/helpers/docxXml.mjs`, `test/helpers/coverPng.mjs`,
    `test/ai-executive-report-foundation.test.mjs`, `test/ai-executive-report-benchmark.test.mjs`; güncellenen
    `config/ai-model-registry.onprem.json`, `src/server/ai/defaultModelRegistry.js`, `test/ai-model-registry.test.mjs`,
    `docs/YAPAY-ZEKA-PLATFORMU.md`, `docs/BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md`; `package.json` (`js-yaml`
@@ -144,9 +145,10 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
     bu model kimliklerine ve yazar adaylarına başvuran mimari/platform/kabul belgeleri
     (`docs/BILGIN-4I-YONETICI-RAPORU-MIMARISI.md`, `docs/YAPAY-ZEKA-PLATFORMU.md`,
     `docs/BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md`) ile ilgili model kimliği beklentilerini doğrulayan sınama
-    dosyaları (`test/ai-model-registry.test.mjs` ve `test/ai-executive-report-foundation.test.mjs`) birlikte geri
-    alınır; hiçbir profil bu modellere bağlı olmadığından sohbet etkilenmez. Belgeler, yapılandırma ve bu sınama
-    dosyaları tek commit'le birlikte geri alınabilir.
+    dosyaları (`test/ai-model-registry.test.mjs`, `test/ai-executive-report-foundation.test.mjs` ve yardımcıları
+    `test/helpers/docxPackage.mjs`, `test/helpers/docxXml.mjs`, `test/helpers/coverPng.mjs`) birlikte geri
+    alınır; hiçbir profil bu modellere bağlı olmadığından sohbet etkilenmez. Belgeler, yapılandırma, yardımcılar ve
+    bu sınama dosyaları tek commit'le birlikte geri alınabilir.
 15. **Kapsam dışı** — Rapor motoru, kanıt paketi kurucusu, yazar, doğrulayıcı, DOCX üreticisi, Stüdyo, yükleme,
     kalıcı saklama, model seçici arayüzü, canlı model nitelendirmesi.
 16. **Durum ve doğrulama kanıtı** — **Durum: DOĞRULANDI** (belirlenimci kapılar ve şablonun bütün sayfalarının
@@ -289,7 +291,8 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
    kaldırılması); sunucu tabloları, grafikleri ve gösterge kartları; logo politikası (koyu zemin varyantı kapakta;
    beyaz zemin varyantı sağlanınca); belge özellikleri (sürüm, model, veri anı, doğrulama, logo durumu).
 3. **Yeniden kullanılan altyapı** — Kanonik şablon ve stil belgesi, grafik dilbilgisi (`answerChart.js`) ilkeleri,
-   `companyLogo.js` kaynak çözümü (yalnızca yol biçimi), `test/helpers/docxPackage.mjs`.
+   `companyLogo.js` kaynak çözümü (yalnızca yol biçimi), `test/helpers/docxPackage.mjs`, `test/helpers/docxXml.mjs`,
+   `test/helpers/coverPng.mjs`.
 4. **Mimari sınırlar** — Ağsız, sunucu tarafı üretim; yeni logo ucu yok; yeni bağımlılık ancak gerekçeyle; model sayı
    ya da çizim üretmez; şablon ve stil belgesi aynı commit'te değişir.
 5. **Beklenen dosya ve bileşenler** — `reportDocx.js` (doldurma), `reportCharts.js`, `reportAssets.js` (logo
@@ -324,8 +327,10 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 3. **Yeniden kullanılan altyapı** — Uygulama tasarım değişkenleri ve bileşenleri, kimlik/oturum, mevcut rapor
    modülü gezinmesi, ağ geçidi iptali, yetki yeniden denetimi.
 4. **Mimari sınırlar** — Kalıcı saklama yok; taslak durumu bellekte süre sınırlı ya da imzalı/şifreli zarfla
-   (4I-E'de gerekçelendirilir); tablo ve grafikler sonlandırmada sunucu kanıtından yeniden üretilir; bütünlük
-   açıklamaları kapatılamaz; teknik model ayarı gösterilmez.
+   (4I-E'de gerekçelendirilir); tablo ve grafikler sonlandırmada aynı dondurulmuş sunucu kanıt paketi sürümünden
+   (güncel yetki/rıza yeniden denetimiyle) üretilir; paket sürümü veya alttaki yetkili veri özeti değişmişse taslak
+   geçersiz kılınıp etkilenen paragraflar 4I-C'den geçirilir; bütünlük açıklamaları kapatılamaz; teknik model ayarı
+   gösterilmez.
 5. **Beklenen dosya ve bileşenler** — `src/features/reports/executive/*` (arayüz), rapor uçları (`/api/mergen-rota/
    reports/executive/*`; bu artımda gerekçesiyle eklenir), `test/executive-report-studio-*.test.mjs`, arayüz kabul
    betiği.
@@ -334,9 +339,11 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 7. **Gerekli referans görüntüleri ve varlıklar** — Kurumsal palet ve tasarım dili; model kataloğu (yalnızca
    nitelikli seçenekler).
 8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Varsayılan görünüm sade; gelişmiş seçenekler göze batmaz;
-   kurumsal biçim seçeneklerden bağımsız; erişilebilirlik ve klavye; dar ekranda okunur.
+   kurumsal biçim seçeneklerden bağımsız; erişilebilirlik ve klavye; dar ekranda okunur; önizleme → veri değişimi →
+   sonlandırma akışında metin, tablo, grafik ve kapak `VERI_ANI` tek bir tutarlı kesite bağlı kalır.
 9. **Güvenlik ve yetki sınamaları** — Yetkili kapsam seçenekleri, ilk ve sonraki önizlemeler ile sonlandırma ve her
-   indirme öncesi güncel yetki/rıza denetimi (K20/S48), oturumlar arası yalıtım, CSRF ve mevcut uç güvenliği.
+   indirme öncesi güncel yetki/rıza denetimi (K20/S48), oturumlar arası yalıtım, CSRF ve mevcut uç güvenliği;
+   önizleme ile sonlandırma arasında veri değişimi sınaması.
    Elle düzenlenen metin de maddi iddia desteği ve yetki koşullarını karşılar.
 10. **Doğal dil kalite gereksinimleri** — Bölüm düzeltme isteği yerel yeniden yazımdır (4I-C kurallarıyla);
     arayüz metinleri sade Türkçe.

@@ -144,7 +144,7 @@ gizli kimliği kullanır, puanları insan puanlarıyla ayrı raporlanır ve insa
 
 | Boyut | Eşik |
 | --- | --- |
-| **A** (4I-B yazar nitelendirmesi — onarım öncesi taslak) | Yetkisiz açıklama **0**; uydurma kimlik ya da tarih **0**; çelişkili/eksik kanıtın açık işlenmesi **%100**; onarım öncesi taslakta nesnel olgu doğruluğu **rapor başına (her taslakta ayrı ayrı)** en az **%95**. Her dondurulmuş kanıt paketi isteğe bağlı desteklenen olgulardan ayrı bir **zorunlu olgular** listesi tanımlar; taslaktaki nesnel ifadeler konu/ölçü/varlık eşleştirmesiyle bu listeyle eşlenir. Zorunlu bir olgunun yanlış değerle yazılması **yalnızca bir kez `yanlis` ifade olarak sayılır**, ayrıca `atlanan_zorunlu` olarak çift sayılmaz (`atlanan_zorunlu` yalnızca taslakta hiç yer almayan zorunlu olguları sayar). Payda = `dogru + yanlis + atlanan_zorunlu`; payda `0` ise oran `Uygulanmaz (U/D)` kaydedilir ve diğer raporların paydasına katılmaz |
+| **A** (4I-B yazar nitelendirmesi — onarım öncesi taslak) | Yetkisiz açıklama **0**; uydurma kimlik ya da tarih **0**; çelişkili/eksik kanıtın açık işlenmesi **%100**; **zorunlu olgu tamlığı kapısı:** her taslakta ayrı ayrı **%100** (`atlanan_zorunlu = 0`; isteğe bağlı olgular atlanan zorunlu olguları telafi edemez); onarım öncesi taslakta nesnel olgu doğruluğu **rapor başına (her taslakta ayrı ayrı)** en az **%95**. Her dondurulmuş kanıt paketi isteğe bağlı desteklenen olgulardan ayrı sürümlü bir **zorunlu olgular** listesi tanımlar; taslaktaki nesnel ifadeler konu/ölçü/varlık eşleştirmesiyle bu listeyle eşlenir. Zorunlu bir olgunun yanlış değerle yazılması **yalnızca bir kez `yanlis` ifade olarak sayılır**, ayrıca `atlanan_zorunlu` olarak çift sayılmaz (`atlanan_zorunlu` yalnızca taslakta hiç yer almayan zorunlu olguları sayar). Payda = `dogru + yanlis + atlanan_zorunlu`; payda `0` ise oran `Uygulanmaz (U/D)` kaydedilir ve diğer raporların paydasına katılmaz |
 | **A** (yayımlama — 4I-C onarım sonrası, sonlandırma öncesi) | Yetkisiz açıklama **0**; yayımlanan desteksiz maddi iddia **0**; uydurma kimlik ya da tarih **0**; yayımlanan nesnel olgu doğruluğu **%100**; çelişkili/eksik kanıtın açık işlenmesi **%100** |
 | **B** | 1–5 ölçekte genel ortalama en az **4,0**; uygulanabilir hiçbir ölçütün ortalaması **3,5**'in altında değil; aday düzeyinde mekanik döküm oranı en çok **%5** (48 raporda ≤ 2); iki kör puanlayıcı, sayısal fark > 1 veya ikili bayrak uyuşmazlığında üçüncü |
 | **C** | Word'ün onarım istemeden açtığı belge oranı **%100**; standart ayrıntıda **2–3** sayfa (kapak ve ekler hariç); bütün sayfalar görsel incelenir; stil sözleşmesi sınaması geçer |
@@ -200,11 +200,16 @@ maddi iddia ve `%100` yayımlanan nesnel olgu doğruluğu) 4I-C onarım ve sonla
    toplu yeniden sıralama çağrılabilir. Pay kalmadığında kanıt belirlenimci olarak seçilir ve maddi iddia desteği
    mimari §8.2'ye göre doğrulanır. Kota, kimlik veya altyapı hatasında koşu durur. Başka modele sessiz geçiş yasaktır.
 6. **Ölçüm:** A için belirlenimci denetim + insan doğrulaması; B için §4; C için 4I-D'den sonra; D için çağrı,
-   belirteç, süre (p50/p95), iptal ve temizlik. Süre p95 hesabı 48 senaryoluk koşudaki bütün tamamlanmış `standart`
-   ayrıntı örnekleri üzerinden **en yakın sıra (nearest-rank)** yöntemiyle ($\lceil 0{,}95 \times N \rceil$-inci
-   sıralı değer) yapılır; koşudan önce ilan edilen ısınma çağrıları varsa dışarıda bırakılır, başarısız veya süre
-   aşımına uğrayan örnekler elenmez (5. adım uyarınca koşuyu durdurur/geçersiz kılar). Aynı p95 hesabı hem süre
-   kapısı hem de eşitlik bozma kuralı için kullanılır.
+   belirteç, süre (p50/p95), iptal ve temizlik. **Uçtan uca standart rapor süre aralığı**, dondurulmuş kanıt
+   paketinin rapor motoruna verilmesinden son çıktıya kadar olan toplam süreyi kapsar: yazar üretimi (4I-B),
+   doğrulama ve yerel onarım turları (4I-C) ile DOCX üretimi (4I-D). 4I-B aşamasında 4I-C ve 4I-D henüz
+   uygulanmadığından, yalnızca yazar aşamasının p95 ölçümü **ön yazar süre kapısı** olarak kaydedilir ve tam rapor
+   uçtan uca kapısının geçildiğine kanıt sayılmaz; tam **240 sn / 600 sn** uçtan uca p95 kapısı 4I-C ve 4I-D
+   eklendiğinde aynı 48 senaryoluk kümede yeniden ölçülerek kapatılır. Süre p95 hesabı 48 senaryoluk koşudaki bütün
+   tamamlanmış `standart` ayrıntı örnekleri üzerinden **en yakın sıra (nearest-rank)** yöntemiyle
+   ($\lceil 0{,}95 \times N \rceil$-inci sıralı değer) yapılır; koşudan önce ilan edilen ısınma çağrıları varsa
+   dışarıda bırakılır, başarısız veya süre aşımına uğrayan örnekler elenmez (5. adım uyarınca koşuyu
+   durdurur/geçersiz kılar). Aynı p95 hesabı hem süre kapısı hem de eşitlik bozma kuralı için kullanılır.
 7. **Kayıt:** 4I-B nitelendirme kaydı sentetik fikstürden ayrı ve sürümlü tutulur (model, tarih, ortam, ayarlar,
    kanıt paketi sürümleri, A/B/C/D sonuçları, puanlayıcı sayısı). Fikstürün `olcumler` alanı boş kalır. Sonuç
    kaydı yol haritasının oturum devrine bağlanır ve nitelikli modeller stil belgesindeki role işlenir.
