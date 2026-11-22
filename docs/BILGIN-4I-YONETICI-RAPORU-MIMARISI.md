@@ -222,7 +222,10 @@ olabilirler. Yazarın görevi bunları **kanıtın ötesine geçmeden** profesyo
 - **İlişki:** her not görev, proje ve zaman ilişkisini korur; kullanıcının gözlemi bağımsız doğrulanmış neden
   olarak işaretlenmez.
 - **Gizlilik:** not metni günlüğe, telemetriye ya da başka kullanıcının bağlamına girmez; rapor kanıt paketi
-  istek bitince bellekte bırakılır.
+  kalıcı olarak saklanmaz, tekil rapor isteği tamamlandığında veya iptal edildiğinde bellekten serbest bırakılır.
+  Etkileşimli Stüdyo oturumu boyunca yeniden kullanım gerekiyorsa not kanıt paketi de §12'deki geçici belge
+  kurallarıyla aynı temizlik tetikleyicilerine (sonlandırma, iptal veya en fazla 60 dakikalık süre aşımı) tabidir
+  ve süre dolduğunda bellekten silinir.
 
 **Regresyon riskleri ve korumaları:** Sohbetin `notes` yönü, `NOTE_LIMITS`, ileti başına rıza ve araç şemaları
 **değişmez**; rapor not okuması ayrı sabit sorgu ve ayrı sınırlarla yapılır. Riskler: (a) paylaşılan SQL parçalarının

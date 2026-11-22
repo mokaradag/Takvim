@@ -267,6 +267,35 @@ function checkStyles(styles) {
     assert.ok(styleId && !byId.has(styleId), 'yinelenen veya boş Word stil kimliği: ' + styleId);
     byId.set(styleId, element);
   }
+  // Bütün stillerin w:basedOn zinciri geçerli bir üst stile bağlanmalı ve döngü içermemelidir.
+  const inheritanceChain = (styleId) => {
+    const visited = [];
+    const seen = new Set();
+    let currentId = styleId;
+    while (currentId) {
+      assert.ok(!seen.has(currentId), `döngüsel Word stil kalıtımı yasak: ${currentId}`);
+      seen.add(currentId);
+      const current = byId.get(currentId);
+      assert.ok(current, `tanımsız üst Word stili: ${currentId}`);
+      visited.push(current);
+      const parentId = attr(child(current, 'w:basedOn'));
+      if (parentId) {
+        const parent = byId.get(parentId);
+        assert.ok(parent, `${currentId}: tanımsız w:basedOn üst stili (${parentId})`);
+        assert.equal(attr(parent, 'w:type'), attr(current, 'w:type'),
+          `${currentId}: w:basedOn üst stil türü uyuşmuyor (${parentId})`);
+      }
+      currentId = parentId;
+    }
+    return visited;
+  };
+  for (const styleId of byId.keys()) inheritanceChain(styleId);
+  const normal = byId.get('Normal');
+  assert.ok(normal, 'temel Normal stili zorunludur');
+  assert.equal(attr(child(normal, 'w:basedOn')), null, 'Normal stili başka bir stile dayanamaz');
+  assert.equal(on(child(child(normal, 'w:pPr'), 'w:keepNext')), false, 'Normal stili keepNext taşımamalıdır');
+  assert.equal(attr(child(child(normal, 'w:pPr'), 'w:outlineLvl')), null, 'Normal stili outlineLvl taşımamalıdır');
+
   const JC = { iki_yana: 'both', orta: 'center', sag: 'right' };
   for (const [id, entry] of Object.entries(spec.stiller)) {
     const element = byId.get(id);
@@ -274,6 +303,7 @@ function checkStyles(styles) {
     assert.equal(attr(child(element, 'w:name')), entry.ad, id);
     if (entry.tur === 'tablo') {
       assert.equal(attr(element, 'w:type'), 'table', id);
+      assert.equal(attr(child(element, 'w:basedOn')), 'TableNormal', `${id}: tablo stili TableNormal üst stiline dayanmalıdır`);
       const conditional = (type) => children(element, 'w:tblStylePr').find((node) => attr(node, 'w:type') === type);
       assert.equal(attr(child(child(conditional('firstRow'), 'w:tcPr'), 'w:shd'), 'w:fill'), paletteColor(entry.baslik_satiri_zemini), id);
       assert.equal(attr(child(child(conditional('lastRow'), 'w:tcPr'), 'w:shd'), 'w:fill'), paletteColor(entry.toplam_satiri_zemini), id);
@@ -281,6 +311,16 @@ function checkStyles(styles) {
       continue;
     }
     assert.equal(attr(element, 'w:type'), 'paragraph', id);
+    const expectedParent = id === 'Normal' ? null : 'Normal';
+    assert.equal(attr(child(element, 'w:basedOn')), expectedParent,
+      id === 'Normal' ? 'Normal stili başka bir stile dayanamaz' : `${id}: paragraf stili Normal üst stiline dayanmalıdır`);
+    if (id === 'BilginGovde') {
+      for (const ancestor of inheritanceChain(id)) {
+        const ancestorPpr = child(ancestor, 'w:pPr');
+        assert.equal(on(child(ancestorPpr, 'w:keepNext')), false, 'BilginGovde başlık keepNext özelliğini miras alamaz');
+        assert.equal(attr(child(ancestorPpr, 'w:outlineLvl')), null, 'BilginGovde başlık outlineLvl özelliğini miras alamaz');
+      }
+    }
     const rPr = child(element, 'w:rPr');
     const pPr = child(element, 'w:pPr');
     assert.equal(attr(child(rPr, 'w:sz')), String(Math.round(entry.boyut * 2)), `${id} boyut`);
@@ -469,7 +509,15 @@ function checkSectionPlaceholders(document) {
   }
   for (const paragraph of all(document, 'w:p')) {
     if (paragraph === firstBodyHeading) continue;
-    assert.equal(on(child(child(paragraph, 'w:pPr'), 'w:pageBreakBefore')), false,
+    const directBreak = child(child(paragraph, 'w:pPr'), 'w:pageBreakBefore');
+    if (paragraphStyle(paragraph) === 'BilginEkBasligi') {
+      // Ekler başlığı BilginEkBasligi stilinden yeni sayfa kırılımını miras alır; doğrudan kapatılamaz.
+      if (directBreak) {
+        assert.equal(on(directBreak), true, 'Ekler başlığında stil pageBreakBefore doğrudan kapatılamaz');
+      }
+      continue;
+    }
+    assert.equal(on(directBreak), false,
       'ilk gövde başlığı dışında doğrudan pageBreakBefore yasak');
   }
   assert.equal(tokens.length, sections.length, 'bölüm sayısı');
@@ -653,7 +701,15 @@ function checkCustomProperties(document) {
       'özel özellik pid değeri geçerli aralıkta (≥ 2) olmalıdır: ' + pid);
     assert.ok(!pids.has(pidNumber), 'özel özellik pid değeri tekil olmalıdır: ' + pid);
     pids.add(pidNumber);
-    properties[name] = element.textContent;
+    const valueElements = [...element.children];
+    assert.equal(valueElements.length, 1, 'özel özellik tam olarak bir değer öğesi taşımalıdır: ' + name);
+    const [valueEl] = valueElements;
+    assert.ok(
+      valueEl.namespaceURI === 'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes'
+        && valueEl.localName === 'lpwstr',
+      `özel özellik metin (vt:lpwstr) türünde olmalıdır: ${name}`
+    );
+    properties[name] = valueEl.textContent;
   }
   assert.deepEqual({ ...properties }, spec.sablon.belge_ozellikleri);
 }
@@ -668,13 +724,27 @@ const APPROVED_COVER_MATRIX = [0.62, 0, 0, 0.62, 191.652, 180.493];
 const APPROVED_COVER_STROKE_WIDTHS = { teal: 0.887, orange: 1.129 };
 const APPROVED_COVER_EXTENT_EMU = { cx: 210 * 36000, cy: 297 * 36000 };
 
+/** Yetkili kaynak dosyadan HEPT_PATHS dizisini biçimlendirmeden bağımsız olarak ayıklar. */
+function parseHeptPaths(source) {
+  const match = /\b(?:const|let|var)\s+HEPT_PATHS\s*=\s*\[([\s\S]*?)\]\s*;/u.exec(source);
+  assert.ok(match, 'yetkili HEPT_PATHS tanımı bulunamadı');
+  const items = [];
+  for (const entryMatch of match[1].matchAll(/\{([\s\S]*?)\}/gu)) {
+    const body = entryMatch[1];
+    const toneMatch = /\btone\s*:\s*(['"])(teal|orange)\1/u.exec(body);
+    const dMatch = /\bd\s*:\s*(['"])([^'"]+)\1/u.exec(body);
+    assert.ok(toneMatch && dMatch, 'HEPT_PATHS öğesi geçersiz');
+    items.push({ tone: toneMatch[2], d: dMatch[2] });
+  }
+  return items;
+}
+
 /** Yetkili HEPT_PATHS tanımından ve kurumsal paletten beklenen kapak SVG yol ve zemin renklerini türetir. */
 async function loadAuthorizedCoverExpectations() {
   const ui = await read(spec.gorseller.kapak_yedigeni.kaynak);
-  const block = ui.slice(ui.indexOf('const HEPT_PATHS = ['), ui.indexOf('];', ui.indexOf('const HEPT_PATHS = [')));
-  const paths = [...block.matchAll(/\{ tone: '(teal|orange)', d: '([^']+)' \}/g)];
+  const paths = parseHeptPaths(ui);
   assert.equal(paths.length, 5, 'yetkili beş yedigen yolu');
-  const expectedPaths = paths.map(([, tone, d]) => ({
+  const expectedPaths = paths.map(({ tone, d }) => ({
     d,
     stroke: '#' + paletteColor(spec.gorseller.kapak_yedigeni.renk_eslemesi[tone]).toUpperCase(),
     strokeWidth: APPROVED_COVER_STROKE_WIDTHS[tone]
@@ -808,6 +878,17 @@ function checkCoverRelationships(document, relationship) {
   assert.equal(png.length, 1, 'kapak PNG başvurusu');
   assert.equal(svg.length, 1, 'kapak SVG başvurusu');
   assert.ok(png[0].contains(svg[0]), 'kapak PNG ve SVG aynı çizimdedir');
+  // Kapak görselinde a:srcRect kırpması bulunmamalıdır (yoksa veya tüm kenarlar 0 ise geçerlidir).
+  const blipFill = png[0].parentNode;
+  assert.ok(blipFill && blipFill.localName === 'blipFill', 'kapak a:blip öğesi blipFill içinde olmalıdır');
+  const srcRects = children(blipFill, 'a:srcRect');
+  assert.ok(srcRects.length <= 1, 'kapak resmi en fazla bir a:srcRect öğesi taşıyabilir');
+  if (srcRects.length === 1) {
+    for (const side of ['l', 't', 'r', 'b']) {
+      const inset = srcRects[0].getAttribute(side);
+      assert.ok(inset === null || Number(inset) === 0, `kapak resmi kırpılamaz (a:srcRect ${side}=${inset})`);
+    }
+  }
   assert.equal(relationship(attr(png[0], 'r:embed'), 'image'), 'word/media/kapak-yedigen.png');
   assert.equal(relationship(attr(svg[0], 'r:embed'), 'image'), 'word/media/kapak-yedigen.svg');
 }
@@ -901,12 +982,114 @@ test('şablon: geçersiz OOXML, dış ilişki, içerik türü, revizyon, gizli m
   const brokenHeader = '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p></w:hdr>';
   assert.throws(() => validateDocxXml({ ...docx, text: (target) => target === 'word/header2.xml' ? brokenHeader : docx.text(target) }), /bozuk XML/);
 
-  // Dış ilişki (DOM üzerinden serileştirmeden bağımsız mutasyon)
+  // Dış ilişki (ana belge ilişkisi rId1 varsayımı yerine türüne göre seçilir)
   assert.throws(() => validateDocxXml(mutateXmlPart('_rels/.rels', (doc) => {
-    const rel = [...doc.documentElement.children].find((el) => el.getAttribute('Id') === 'rId1');
+    const rel = [...doc.documentElement.children].find((el) => el.getAttribute('Type')?.endsWith('/officeDocument'));
     assert.ok(rel);
     rel.setAttribute('TargetMode', 'External');
   })), /dış ilişki yasak/);
+
+  // OPC ilişki kimliği XML xsd:ID kuralına uymadığında reddedilmeli, rId dışı geçerli kimlik kabul edilmelidir.
+  assert.throws(() => validateDocxXml(mutateXmlPart('_rels/.rels', (doc) => {
+    const rel = [...doc.documentElement.children].find((el) => el.getAttribute('Type')?.endsWith('/officeDocument'));
+    assert.ok(rel);
+    rel.setAttribute('Id', '1');
+  })), /ilişki kimliği veya türü geçersiz/);
+  validateDocxXml(mutateXmlPart('_rels/.rels', (doc) => {
+    const rel = [...doc.documentElement.children].find((el) => el.getAttribute('Type')?.endsWith('/officeDocument'));
+    assert.ok(rel);
+    rel.setAttribute('Id', 'anaBelgeIliskisi');
+  }));
+
+  // Word stil kalıtımı: BilginGovde Heading1'e dayandırıldığında veya döngüsel kalıtım oluştuğunda reddedilmelidir.
+  assert.throws(() => {
+    const stylesDoc = parseDocxXml(docx.text('word/styles.xml'), 'word/styles.xml');
+    const bodyStyle = all(stylesDoc, 'w:style').find((el) => attr(el, 'w:styleId') === 'BilginGovde');
+    assert.ok(bodyStyle);
+    child(bodyStyle, 'w:basedOn').setAttribute('w:val', 'Heading1');
+    checkStyles(stylesDoc);
+  }, /Normal üst stiline dayanmalıdır/);
+  assert.throws(() => {
+    const stylesDoc = parseDocxXml(docx.text('word/styles.xml'), 'word/styles.xml');
+    const wNs = stylesDoc.documentElement.namespaceURI;
+    const normalStyle = all(stylesDoc, 'w:style').find((el) => attr(el, 'w:styleId') === 'Normal');
+    const basedOn = stylesDoc.createElementNS(wNs, 'w:basedOn');
+    basedOn.setAttributeNS(wNs, 'w:val', 'BilginGovde');
+    normalStyle.appendChild(basedOn);
+    checkStyles(stylesDoc);
+  }, /döngüsel Word stil kalıtımı yasak/);
+
+  // Ekler başlığında doğrudan w:pageBreakBefore w:val="0" geçersiz kılması reddedilmelidir.
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const wNs = doc.documentElement.namespaceURI;
+    const appendix = all(doc, 'w:p').find((p) => paragraphStyle(p) === 'BilginEkBasligi');
+    assert.ok(appendix);
+    const pPr = child(appendix, 'w:pPr');
+    const pb = doc.createElementNS(wNs, 'w:pageBreakBefore');
+    pb.setAttributeNS(wNs, 'w:val', '0');
+    pPr.appendChild(pb);
+    checkSectionPlaceholders(doc);
+  }, /Ekler başlığında stil pageBreakBefore doğrudan kapatılamaz/);
+
+  // Özel belge özelliği vt:lpwstr yerine vt:i4 içine yazıldığında reddedilmelidir.
+  assert.throws(() => {
+    const customDoc = parseDocxXml(docx.text('docProps/custom.xml'), 'docProps/custom.xml');
+    const prop = [...customDoc.documentElement.children].find((el) => el.getAttribute('name') === 'BilginStilSurumu');
+    assert.ok(prop);
+    const vtNs = 'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes';
+    const badVal = customDoc.createElementNS(vtNs, 'vt:i4');
+    badVal.textContent = '1.0.0';
+    prop.replaceChildren(badVal);
+    checkCustomProperties(customDoc);
+  }, /özel özellik metin \(vt:lpwstr\) türünde olmalıdır/);
+
+  // HEPT_PATHS ayıklayıcısı yeni satırda açılan dizi biçimlendirmesini de ayrıştırmalıdır.
+  const reformattedPaths = parseHeptPaths(
+    "const HEPT_PATHS =\n[\n  { tone: 'teal', d: 'M0 0L1 1' },\n  { d: 'M1 1L2 2', tone: \"orange\" },\n];"
+  );
+  assert.deepEqual(reformattedPaths, [
+    { tone: 'teal', d: 'M0 0L1 1' },
+    { tone: 'orange', d: 'M1 1L2 2' }
+  ]);
+
+  // Kapak görselinde sıfır olmayan a:srcRect kırpması reddedilmelidir.
+  assert.throws(() => {
+    const doc = parseDocxXml(docx.text('word/document.xml'), 'word/document.xml');
+    const blip = all(doc, 'a:blip')[0];
+    assert.ok(blip);
+    const srcRect = doc.createElementNS('http://schemas.openxmlformats.org/drawingml/2006/main', 'a:srcRect');
+    srcRect.setAttribute('r', '50000');
+    blip.parentNode.appendChild(srcRect);
+    checkCoverRelationships(doc, documentRelationship);
+  }, /kapak resmi kırpılamaz/);
+
+  // PNG pHYs parçasında yatay ve dikey yoğunluklar eşit değilse A4 görünüm oranı bozulacağından reddedilmelidir.
+  const insertPhysChunk = (png, ppuX, ppuY, unit = 1) => {
+    const type = Buffer.from('pHYs', 'latin1');
+    const data = Buffer.alloc(9);
+    data.writeUInt32BE(ppuX, 0);
+    data.writeUInt32BE(ppuY, 4);
+    data[8] = unit;
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(9, 0);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([type, data])), 0);
+    const chunk = Buffer.concat([len, type, data, crc]);
+    // IHDR (8 imza + 25 bayt IHDR = 33) hemen sonrasına yerleştirilir.
+    return Buffer.concat([png.subarray(0, 33), chunk, png.subarray(33)]);
+  };
+  const coverPngBytes = docx.buffer('word/media/kapak-yedigen.png');
+  const coverPalette = {
+    background: paletteColor(spec.gorseller.kapak_yedigeni.zemin),
+    strokes: [
+      paletteColor(spec.gorseller.kapak_yedigeni.renk_eslemesi.teal),
+      paletteColor(spec.gorseller.kapak_yedigeni.renk_eslemesi.orange)
+    ]
+  };
+  validateCoverPng(insertPhysChunk(coverPngBytes, 2953, 2953, 1), coverPalette);
+  assert.throws(() => validateCoverPng(insertPhysChunk(coverPngBytes, 5906, 2953, 1), coverPalette),
+    /PNG pHYs yatay ve dikey yoğunlukları eşit ve pozitif olmalıdır/);
 
   // Paket kökü ana belge ilişkisi yanlış hedefe yönlendirildiğinde
   assert.throws(() => validateDocxXml(mutateXmlPart('_rels/.rels', (doc) => {
@@ -1636,19 +1819,49 @@ function stripSqlCommentsAndLiterals(sql) {
 }
 
 const REPORT_TABLE_NAME = '(?:bilgin\\w{0,8}(?:rapor|report)|y[oö]netici\\w{0,3}rapor|executive\\w{0,3}report)';
-const REPORT_DDL_RE = new RegExp(
-  `\\b(?:CREATE|ALTER|DROP)\\s+(?:TABLE|VIEW|INDEX|UNIQUE\\s+INDEX|NONCLUSTERED\\s+INDEX|CLUSTERED\\s+INDEX|PROC(?:EDURE)?|TRIGGER|SCHEMA)\\s+[^;\\r\\n]*${REPORT_TABLE_NAME}`,
-  'iu'
+const REPORT_TARGET_RE = new RegExp(REPORT_TABLE_NAME, 'iu');
+const SQL_IDENT_PART = '(?:\\[[^\\]]+\\]|"[^"]+"|[#\\w]+)';
+const SQL_QUALIFIED_TARGET = `${SQL_IDENT_PART}(?:\\s*\\.\\s*${SQL_IDENT_PART}){0,3}`;
+const SQL_OBJECT_DDL_RE = new RegExp(
+  `\\b(?:CREATE|ALTER|DROP)\\s+(?:TABLE|VIEW|PROC(?:EDURE)?|TRIGGER|SCHEMA)\\s+(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?(${SQL_QUALIFIED_TARGET})`,
+  'giu'
 );
-const REPORT_SELECT_INTO_RE = new RegExp(
-  `\\bSELECT\\b[^;]*?\\bINTO\\s+(?!#|@)(?:(?:\\[[^\\]]+\\]|\\w+)\\.)?(?:\\[[^\\]]*${REPORT_TABLE_NAME}[^\\]]*\\]|\\w*${REPORT_TABLE_NAME}\\w*)`,
-  'iu'
+const SQL_INDEX_DDL_RE = new RegExp(
+  `\\b(?:CREATE\\s+(?:UNIQUE\\s+)?(?:(?:NON)?CLUSTERED\\s+)?|ALTER\\s+|DROP\\s+)INDEX\\s+(?:IF\\s+EXISTS\\s+)?(${SQL_QUALIFIED_TARGET})(?:\\s+ON\\s+(${SQL_QUALIFIED_TARGET}))?`,
+  'giu'
+);
+const SQL_SELECT_INTO_RE = new RegExp(
+  `\\bSELECT\\b[\\s\\S]*?\\bINTO\\s+(?!@)(${SQL_QUALIFIED_TARGET})`,
+  'giu'
 );
 
-/** SQL yorumlarını ve metin sabitlerini temizleyerek yalnızca gerçek şema işlemlerini rapor adlarına göre denetler. */
+/** Nitelikli SQL hedef adının yerel geçici tablo (#... veya [#...]) olup olmadığını belirler. */
+function isLocalTempTarget(qualifiedTarget) {
+  const lastPart = qualifiedTarget.split('.').at(-1).trim().replace(/^[["]|[\]"]$/gu, '');
+  return lastPart.startsWith('#') && !lastPart.startsWith('##');
+}
+
+/** Verilen nitelikli SQL hedef adının kalıcı bir rapor şema nesnesine işaret edip etmediğini sınar. */
+function isPermanentReportTarget(qualifiedTarget) {
+  if (!qualifiedTarget || isLocalTempTarget(qualifiedTarget)) return false;
+  return REPORT_TARGET_RE.test(qualifiedTarget);
+}
+
+/** SQL yorumlarını ve metin sabitlerini temizleyerek yalnızca gerçek kalıcı şema işlemlerini rapor hedef adlarına göre denetler. */
 function hasReportSchemaOperation(sql) {
   const cleaned = stripSqlCommentsAndLiterals(sql);
-  return REPORT_DDL_RE.test(cleaned) || REPORT_SELECT_INTO_RE.test(cleaned);
+  for (const statement of cleaned.split(/;|^\s*GO\s*$/gim)) {
+    for (const match of statement.matchAll(SQL_OBJECT_DDL_RE)) {
+      if (isPermanentReportTarget(match[1])) return true;
+    }
+    for (const match of statement.matchAll(SQL_INDEX_DDL_RE)) {
+      if (isPermanentReportTarget(match[1]) || isPermanentReportTarget(match[2])) return true;
+    }
+    for (const match of statement.matchAll(SQL_SELECT_INTO_RE)) {
+      if (isPermanentReportTarget(match[1])) return true;
+    }
+  }
+  return false;
 }
 
 test('4I-0 sınırı: çalışma zamanı rapor motoru, yükleme hizmeti ya da kalıcılık yoktur; sözleşmeler yalnızca sınanır', async () => {
@@ -1666,11 +1879,18 @@ test('4I-0 sınırı: çalışma zamanı rapor motoru, yükleme hizmeti ya da ka
   await walk('src');
   assert.deepEqual(offenders, [], '4I-A ve sonrası bu sınamayı bilinçli olarak günceller');
   const reportFileName = /bilgin.{0,8}(?:rapor|report)|(?:y[oö]netici.{0,3}rapor|executive.{0,3}report)/iu;
-  // SQL yorumları (iç içe blok yorumlar dâhil) ve PRINT tanı iletileri yanlış pozitif üretmemeli; gerçek DDL ve SELECT INTO yakalanmalıdır.
+  // SQL yorumları, sütun tanımları ve yerel geçici tablolar yanlış pozitif üretmemeli; kalıcı ve çok satırlı DDL/INDEX/SELECT INTO yakalanmalıdır.
   assert.equal(hasReportSchemaOperation('-- No executive report tables are changed here\nSELECT 1;'), false);
   assert.equal(hasReportSchemaOperation("PRINT N'No executive report tables are changed here';"), false);
   assert.equal(hasReportSchemaOperation('/* Örnek /* not */ CREATE TABLE dbo.MR_BilginRaporlar (Id INT); */ SELECT 1;'), false);
+  assert.equal(hasReportSchemaOperation('CREATE TABLE dbo.MR_TrainingTopics (ExecutiveReportWriting bit NOT NULL);'), false);
+  assert.equal(hasReportSchemaOperation('CREATE INDEX IX_Training ON dbo.MR_TrainingTopics (ExecutiveReportWriting);'), false);
+  assert.equal(hasReportSchemaOperation('CREATE TABLE #MR_BilginRaporlar (Id INT);'), false);
+  assert.equal(hasReportSchemaOperation('CREATE TABLE [#MR_ExecutiveReports] (Id INT);'), false);
+  assert.equal(hasReportSchemaOperation('SELECT 1 AS Id INTO #MR_BilginRaporlar;'), false);
   assert.equal(hasReportSchemaOperation('CREATE TABLE dbo.MR_BilginRaporlar (Id INT);'), true);
+  assert.equal(hasReportSchemaOperation('CREATE TABLE\n  dbo.\n  [MR_BilginRaporlar] (Id INT);'), true);
+  assert.equal(hasReportSchemaOperation('CREATE NONCLUSTERED INDEX IX_Rapor ON dbo.MR_BilginRaporlar (Id);'), true);
   assert.equal(hasReportSchemaOperation('ALTER TABLE [dbo].[MR_YoneticiRaporlari] ADD Durum NVARCHAR(32);'), true);
   assert.equal(hasReportSchemaOperation('SELECT 1 AS Id INTO dbo.MR_BilginRaporlar;'), true);
   assert.equal(hasReportSchemaOperation('SELECT 1 AS Id INTO [dbo].[MR_ExecutiveReports] FROM dbo.MR_Tasks;'), true);

@@ -55,14 +55,23 @@
   "birimler": [
    "Sistem Tasarım Birimi",
    "Test ve Doğrulama Birimi",
+   "Veri ve Entegrasyon Birimi",
+   "Altyapı ve Güvenlik Birimi",
+   "Yazılım Mimarisi Birimi",
+   "Süreç ve Planlama Birimi",
+   "Saha Destek ve Devreye Alma Birimi",
+   "Yapılandırma ve Sürüm Birimi",
    "Proje Yönetim ve Planlama Müdürlüğü",
+   "Sistem Geliştirme Müdürlüğü",
+   "Doğrulama ve Kalite Müdürlüğü",
    "Mühendislik Direktörlüğü"
   ],
   "kapali_varliklar": {
    "PRJ-ATLAS": "Atlas"
   },
   "ekipler": [
-   "Veri Akışı Ekibi"
+   "Veri Akışı Ekibi",
+   "Entegrasyon ve Arayüz Ekibi"
   ]
  },
  "esikler": {

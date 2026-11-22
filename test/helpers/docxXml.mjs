@@ -99,7 +99,10 @@ function readRelationships(document, name, pkg) {
     const type = attr(element, 'Type');
     const mode = attr(element, 'TargetMode');
     assert.ok(mode === null || mode === 'Internal', name + ': dış ilişki yasak');
-    assert.ok(id && !rows.has(id) && type, name + ': ilişki kimliği veya türü geçersiz');
+    assert.ok(
+      id && /^[A-Za-z_\p{L}][A-Za-z0-9._\-\p{L}\p{N}]*$/u.test(id) && !rows.has(id) && type,
+      name + ': ilişki kimliği veya türü geçersiz'
+    );
     assert.doesNotMatch(type, /vbaProject|activeX|oleObject|\/package$/iu, name + ': ilişki türü yasak');
     assert.ok(target && !/[\u0000-\u001f\\%:?#]/u.test(target) && !target.startsWith('//'),
       name + ': ilişki hedefi geçersiz');

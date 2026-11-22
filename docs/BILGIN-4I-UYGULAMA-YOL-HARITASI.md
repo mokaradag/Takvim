@@ -139,10 +139,12 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 12. **Başarım ve kaynak** — Çalışma zamanı etkisi yok; yeni sınamalar yalnızca yerel dosya okur.
 13. **Bağımlılıklar** — PR #120'nin birleştirilmiş olması (doğrulandı); F–H sözleşmeleri.
 14. **Riskler ve geri alma** — Model kimliği düzeltmesi yanlışsa (canlı katalog farklıysa) kayıt JSON'u
-    (`config/ai-model-registry.onprem.json`), varsayılan kayıt (`src/server/ai/defaultModelRegistry.js`) ve ilgili
-    model kimliği beklentilerini doğrulayan `test/ai-model-registry.test.mjs` birlikte geri alınır; hiçbir profil bu
-    modellere bağlı olmadığından sohbet etkilenmez. Belgeler, yapılandırma ve bu sınama dosyası tek commit'le
-    birlikte geri alınabilir.
+    (`config/ai-model-registry.onprem.json`), varsayılan kayıt (`src/server/ai/defaultModelRegistry.js`), stil
+    belirtimindeki rol aday listeleri ve `canli_dogrulama_bekleyen` kayıtları (`config/ai/bilgin_rapor_stili.yaml`)
+    ile ilgili model kimliği beklentilerini doğrulayan sınama dosyaları (`test/ai-model-registry.test.mjs` ve
+    `test/ai-executive-report-foundation.test.mjs`) birlikte geri alınır; hiçbir profil bu modellere bağlı
+    olmadığından sohbet etkilenmez. Belgeler, yapılandırma ve bu sınama dosyaları tek commit'le birlikte geri
+    alınabilir.
 15. **Kapsam dışı** — Rapor motoru, kanıt paketi kurucusu, yazar, doğrulayıcı, DOCX üreticisi, Stüdyo, yükleme,
     kalıcı saklama, model seçici arayüzü, canlı model nitelendirmesi.
 16. **Durum ve doğrulama kanıtı** — **Durum: DOĞRULANDI** (belirlenimci kapılar ve şablonun bütün sayfalarının
@@ -315,8 +317,8 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 1. **Amaç ve kullanıcı değeri** — Yöneticinin geliştirici yardımı olmadan rapor oluşturması, düzeltmesi,
    sonlandırması ve indirmesi.
 2. **İşlevsel kapsam** — Varsayılan görünüm (tür, dönem, kapsam, ayrıntı, Rapor Oluştur); gelişmiş panel (odak,
-   bölümler, notlar, karşılaştırma, belgeler, görseller, nitelikli model); ilerleme ve iptal; önizleme; bölüm
-   düzeltme isteği; metin düzenleme; sonlandırma; DOCX indirme.
+   bölümler, notlar, karşılaştırma, görseller, nitelikli model; belge zenginleştirme seçeneği 4I-E'de yer almaz,
+   4I-F'te eklenir); ilerleme ve iptal; önizleme; bölüm düzeltme isteği; metin düzenleme; sonlandırma; DOCX indirme.
 3. **Yeniden kullanılan altyapı** — Uygulama tasarım değişkenleri ve bileşenleri, kimlik/oturum, mevcut rapor
    modülü gezinmesi, ağ geçidi iptali, yetki yeniden denetimi.
 4. **Mimari sınırlar** — Kalıcı saklama yok; taslak durumu bellekte süre sınırlı ya da imzalı/şifreli zarfla

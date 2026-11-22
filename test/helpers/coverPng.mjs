@@ -28,6 +28,10 @@ const PRE_IDAT_ANCILLARY_LENGTHS = new Map([
 /** İzinli IDAT öncesi yardımcı PNG parçasının yük alanlarını doğrular. */
 function validateAncillaryPayload(type, data) {
   if (type === 'pHYs') {
+    const ppuX = data.readUInt32BE(0);
+    const ppuY = data.readUInt32BE(4);
+    assert.ok(ppuX > 0 && ppuY > 0 && ppuX === ppuY,
+      `PNG pHYs yatay ve dikey yoğunlukları eşit ve pozitif olmalıdır: ${ppuX}x${ppuY}`);
     assert.ok(data[8] === 0 || data[8] === 1, 'PNG pHYs birim alanı geçersiz: ' + data[8]);
   } else if (type === 'sRGB') {
     assert.ok(data[0] <= 3, 'PNG sRGB işleme amacı geçersiz: ' + data[0]);
