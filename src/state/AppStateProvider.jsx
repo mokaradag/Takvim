@@ -47,6 +47,12 @@ import {
 import { buildPortfolioSchedule } from './selectors/scheduleSelectors';
 import { selectWorkspaceContext, WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors';
 import { readWorkspacePreference, writeWorkspacePreference } from './workspacePreference';
+import { createNotificationActions } from './notificationActions.js';
+import {
+  decideAssignmentCoordinationRequest,
+  fetchAssignmentCoordination,
+  markNotificationItems
+} from '../data/api/assignmentCoordinationClient.js';
 import {
   decideScheduleChangeRequest,
   submitScheduleChangeRequest
@@ -70,6 +76,9 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
   const editorDraftsRef = useRef(createTaskEditorDraftRegistry());
   const loadRequestGuardRef = useRef(createDataRefreshRequestGuard());
   const loadSingleFlightRef = useRef(createDataRefreshSingleFlight());
+  // Zil kutusu okumalarının gönderim sırası (bkz. appState ·
+  // notifications/inbox-refreshed).
+  const inboxSequenceRef = useRef(0);
   const initialLoadStartedRef = useRef(false);
   const workspacePreferenceRef = useRef(null);
   const workspaceRestoredRef = useRef(false);
@@ -121,7 +130,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     persistence,
     getState: () => stateRef.current,
     applyStateAction,
-    requestGuard: loadRequestGuardRef.current
+    requestGuard: loadRequestGuardRef.current,
+    beginInboxRead: () => ++inboxSequenceRef.current
   }), [applyStateAction, persistence, repository]);
 
   const reloadData = useCallback((options = {}) => {
@@ -339,6 +349,18 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     const reloadResult = await reloadData({ preserveFailedTaskUpdates: true });
     return reloadResult.ok ? result : { ...result, refreshError: reloadResult.error || reloadResult };
   }, [persistence, reloadData]);
+
+  const { markNotifications, decideAssignmentCoordination } = useMemo(() => createNotificationActions({
+    isActualMode: () => String(stateRef.current.session?.dataMode || '').toLowerCase() === 'actual',
+    flush: () => persistence.flush(),
+    reloadData,
+    applyStateAction,
+    beginInboxRead: () => ++inboxSequenceRef.current,
+    getInboxSequence: () => inboxSequenceRef.current,
+    markItems: markNotificationItems,
+    decideCoordination: decideAssignmentCoordinationRequest,
+    readCoordination: fetchAssignmentCoordination
+  }), [applyStateAction, persistence, reloadData]);
 
   const addTask = useCallback(async (input = null) => {
     const current = stateRef.current;
@@ -714,6 +736,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     deleteTask,
     submitScheduleChange,
     decideScheduleChange,
+    markNotifications,
+    decideAssignmentCoordination,
     addTask,
     beginTaskDraft,
     updateTaskDraft,
@@ -748,6 +772,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     deleteTask,
     submitScheduleChange,
     decideScheduleChange,
+    markNotifications,
+    decideAssignmentCoordination,
     addTask,
     beginTaskDraft,
     updateTaskDraft,

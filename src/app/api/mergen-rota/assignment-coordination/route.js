@@ -22,7 +22,7 @@ export const POST = withRouteObservability('api.assignment-coordination.create',
   }
 });
 
-/** Sunucu tarafında sayfalanmış geçmiş. Tam geçmiş anlık görüntüye girmez. */
+/** Sayfalanmış geçmiş veya kimliği verilen tek yetkili koordinasyon kaydı. */
 export const GET = withRouteObservability('api.assignment-coordination.list', async (request) => {
   try {
     const query = Object.fromEntries(new URL(request.url).searchParams);

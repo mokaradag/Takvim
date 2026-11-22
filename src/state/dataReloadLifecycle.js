@@ -15,7 +15,6 @@ export function dataReloadSingleFlightOptions(refreshMode = 'manual', {
   return {
     skipIfBusy: refreshMode === 'automatic',
     operationKind: refreshMode,
-    queueIfActiveKind: refreshMode === 'automatic' ? null : 'automatic',
     requestKey: `${refreshMode}:${discardFailedTaskUpdates ? 1 : 0}:${preserveFailedTaskUpdates ? 1 : 0}`
   };
 }
@@ -32,6 +31,7 @@ export function createDataReloadOperation({
   getState,
   applyStateAction,
   requestGuard,
+  beginInboxRead = null,
   now = () => new Date().toISOString()
 }) {
   return async function runDataReload({
@@ -53,6 +53,11 @@ export function createDataReloadOperation({
     return persistence.runSerialized(async () => {
       if (!request.isCurrent()) return request.settle();
 
+      // Zil kutusu okumasının sıra numarası OKUMA BAŞLAMADAN alınır: bu okuma
+      // başladıktan sonra gönderilmiş bir okundu işaretinin yanıtı daha
+      // yenidir ve anlık görüntü onu geri almamalıdır (bkz. appState ·
+      // notifications/inbox-refreshed).
+      const inboxSequence = typeof beginInboxRead === 'function' ? beginInboxRead() : null;
       const result = await loadApplicationData(repository, { refreshMode });
       if (!request.isCurrent()) return request.settle(result);
 
@@ -65,7 +70,8 @@ export function createDataReloadOperation({
           type: 'data/load-success',
           snapshot: rebased.snapshot,
           preserveSaveError: preserveFailedTaskUpdates && persistence.hasFailedTaskUpdates(),
-          refreshedAt: now()
+          refreshedAt: now(),
+          inboxSequence
         });
         if (rebased.missingTaskIds.length) {
           const error = {

@@ -21,14 +21,26 @@ export function decideAssignmentCoordinationRequest(coordinationId, input) {
   });
 }
 
-export function fetchAssignmentCoordinations(query = {}) {
+async function fetchCoordinationQuery(query, isValid) {
   const params = new URLSearchParams(
     Object.entries(query).filter(([, value]) => value != null && value !== '')
   );
-  return requestJson(`${BASE}?${params}`, { method: 'GET' });
+  const result = await requestJson(`${BASE}?${params}`, { method: 'GET' });
+  return validateRead(result, isValid);
 }
 
-/** Zil bildirimlerini okundu/temizlendi işaretler (kaynak karışık olabilir). */
+export function fetchAssignmentCoordinations(query = {}) {
+  return fetchCoordinationQuery(query,
+    (value) => isValidRequestInboxResponse(value) && Number.isSafeInteger(value.counts.all) && value.counts.all >= 0);
+}
+
+export function fetchAssignmentCoordination(coordinationId) {
+  return fetchCoordinationQuery({ coordinationId }, (value) => value?.record === null
+    || (value?.record?.id === coordinationId && typeof value.record.status === 'string'
+      && typeof value.record.version === 'string' && Array.isArray(value.record.allowedDecisions)));
+}
+
+/** Zil kutusu, anlık görüntüyle aynı istemci kimliklerini kullanır. */
 export function markNotificationItems(notifications, action = 'read') {
   return requestJson('/api/mergen-rota/notifications', {
     method: 'PATCH',
@@ -36,5 +48,32 @@ export function markNotificationItems(notifications, action = 'read') {
       action,
       notifications: notifications.map(({ id, version, source }) => ({ id, version, source }))
     })
-  });
+  }, { restoreFormattingAliases: true });
+}
+
+function isValidRequestInboxResponse(value) {
+  return Boolean(
+    value && typeof value === 'object'
+    && Array.isArray(value.items)
+    && value.counts && typeof value.counts === 'object'
+    && Number.isFinite(Number(value.total))
+    && Number.isFinite(Number(value.page))
+    && Number.isFinite(Number(value.pageSize)) && Number(value.pageSize) > 0
+  );
+}
+
+function validateRead(result, isValid) {
+  if (result.ok && !isValid(result.value)) {
+    return { ok: false, code: 'INVALID_RESPONSE', message: 'Sunucu yanıtı geçersiz.' };
+  }
+  return result;
+}
+
+/** Talepler · Gelenler / Gönderdiklerim / Geçmiş birleşik sayfası. */
+export async function fetchRequestInbox(query = {}) {
+  const params = new URLSearchParams(
+    Object.entries(query).filter(([, value]) => value != null && value !== '')
+  );
+  const result = await requestJson(`/api/mergen-rota/notifications?${params}`, { method: 'GET' });
+  return validateRead(result, isValidRequestInboxResponse);
 }

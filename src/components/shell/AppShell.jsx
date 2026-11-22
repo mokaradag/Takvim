@@ -295,7 +295,7 @@ export default function AppShell() {
   const renderView = () => {
     if (simpleMode && !SIMPLE_NAV_IDS.has(view) && !ADMIN_NAV_IDS.has(view)) return null;
     switch (view) {
-      case 'talepler': return <ScheduleRequestsView />;
+      case 'talepler': return <ScheduleRequestsView key={currentUser?.employeeNo ?? currentUser?.id} />;
       case 'ozet': return <DashboardView variant={simpleMode ? 'simple' : 'advanced'} onNavigate={navigate} />;
       case 'veri': return simpleMode
         ? <SimpleTasksView onNewTask={() => navigate('takvim', 'entry')} />
@@ -475,7 +475,7 @@ export default function AppShell() {
           <div className="topbar-spacer" />
           <div className="topbar-actions">
             {assistant.enabled && <AssistantShell onChange={setAssistantActions} onOpenSettings={() => navigate('ayarlar')} answerDetail={t.assistantDetail} />}
-            <ScheduleRequestCenter onNavigate={navigate} />
+            <ScheduleRequestCenter key={currentUser?.employeeNo ?? currentUser?.id} onNavigate={navigate} />
             <DataRefreshControl />
             {exportVisible && (
               <ProjectExportMenu

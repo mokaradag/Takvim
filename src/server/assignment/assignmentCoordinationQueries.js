@@ -56,6 +56,7 @@ const LIVE_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope 
 const LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
   WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = c.RequestedAssigneeSicil
     AND es.ScopeType IN ('UNIT','DEPARTMENT'))`;
+const LIVE_PROJECT_ID = 'COALESCE(t.ProjectId, c.ProjectIdSnapshot)';
 /**
  * Proje ölçütü görevin GÜNCEL projesidir; künye yalnızca silinmiş görev için
  * yedektir. Görev başka projeye taşındığında `decideAssignmentCoordination`
@@ -65,11 +66,23 @@ const LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_Ex
  */
 const LIVE_FULL_PROJECT_ACCESS = `EXISTS (SELECT 1 FROM STRING_SPLIT(@fullProjectIds, ',') fp
   WHERE TRY_CONVERT(uniqueidentifier, NULLIF(LTRIM(RTRIM(fp.value)), ''))
-    = COALESCE(t.ProjectId, c.ProjectIdSnapshot))`;
+    = ${LIVE_PROJECT_ID})`;
 const DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
   OR ${LIVE_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
 const NOTIFICATION_DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
   OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
+/**
+ * Açıkça bildirim/karar rolü verilmiş alıcılar (yönetici veya onaylı sorumlu).
+ *
+ * Geçici tam proje erişimi olan bir kullanıcının geçmiş kaydı açıp okundu
+ * işaretlemesi `MR_AssignmentCoordinationRecipients` tablosuna yalnız okuma
+ * durumu tutmak için `REQUESTER` rolüyle satır ekler; bu satır hiçbir zaman
+ * kalıcı katılım yetkisine dönüşmez (gerçek talep eden `c.RequesterSicil = @sicil`
+ * ile zaten kapsanır).
+ */
+const EXPLICIT_RECIPIENT = `EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
+  WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil
+    AND r.RecipientRole IN ('MANAGER','ASSIGNEE'))`;
 /**
  * Katılım ALICI satırından ya da GÜNCEL karar yetkisinden türetilir.
  *
@@ -79,11 +92,11 @@ const NOTIFICATION_DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSys
  * dolmaz (bkz. bindCoordinationScope · boş `@fullProjectIds`).
  */
 const PARTICIPANT = `(c.RequesterSicil = @sicil
-  OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
-    WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil)
+  OR ${EXPLICIT_RECIPIENT}
   OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS})`;
 const IS_MANAGER = `CASE WHEN ${DECISION_AUTHORITY} THEN 1 ELSE 0 END`;
 const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
+const PENDING_ACTIONABLE = `(${TASK_AVAILABLE} AND ${NOTIFICATION_DECISION_AUTHORITY})`;
 const ACTIONABLE = `(${TASK_AVAILABLE} AND (
   (c.Status = 'PENDING' AND ${NOTIFICATION_DECISION_AUTHORITY})
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
@@ -92,10 +105,11 @@ const DECISION_ACTIONABLE = `(${TASK_AVAILABLE} AND (
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
 const UNREAD = '(n.ReadVersion IS NULL OR n.ReadVersion <> c.RowVersion)';
 const VISIBLE = `(${ACTIONABLE} OR n.DismissedVersion IS NULL OR n.DismissedVersion <> c.RowVersion)`;
+const DISPLAYED_PROJECT_ID = 'COALESCE(c.ProjectIdSnapshot, t.ProjectId)';
 const fieldsFor = (actionable) => `c.*, ${IS_MANAGER} AS IsManager,
   CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsActionable,
   COALESCE(c.TaskTitleSnapshot, t.Title) AS TaskTitle,
-  COALESCE(c.ProjectIdSnapshot, t.ProjectId) AS ProjectId,
+  ${DISPLAYED_PROJECT_ID} AS ProjectId,
   COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
   COALESCE(c.ProjectCodeSnapshot, p.ProjectCode) AS ProjectCode,
   requester.DisplayName AS RequesterName,
@@ -108,6 +122,15 @@ const orderFor = (actionable) => `CASE WHEN ${actionable} THEN 0 ELSE 1 END,
   COALESCE(c.DecidedAt, c.CreatedAt) DESC, c.CoordinationId DESC`;
 const FIELDS = fieldsFor(ACTIONABLE);
 const ORDER = orderFor(ACTIONABLE);
+
+/**
+ * Talepler gelen kutusunun ortak okumasında yeniden kullanılan yüklemler.
+ * Katılım, karar ve görünürlük kuralı burada TEK kez yazılır; birleşik okuma
+ * ikinci bir kural tanımlamaz (bkz. server/notifications/requestInboxQueries.js).
+ */
+export const COORDINATION_SQL = Object.freeze({
+  SOURCE, COUNT_SOURCE, PARTICIPANT, PENDING_ACTIONABLE, ACTIONABLE, UNREAD, VISIBLE, TASK_AVAILABLE, DISPLAYED_PROJECT_ID, FIELDS
+});
 
 /**
  * Okuma yüzeyinin AKTÖR kapsamı.
@@ -287,10 +310,11 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
       suggested.DisplayName, ' ', decidedBy.DisplayName,
       CASE WHEN @searchRequesterMessage = 1 THEN CONCAT(' ', c.RequesterMessage) ELSE '' END,
       CASE WHEN @searchDecisionMessage = 1 THEN CONCAT(' ', c.DecisionMessage) ELSE '' END)`;
-  const historicalParticipant = `(c.RequesterSicil = @sicil OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients recipient
-    WHERE recipient.CoordinationId = c.CoordinationId AND recipient.Sicil = @sicil))`;
+  const historicalParticipant = `(c.RequesterSicil = @sicil OR ${EXPLICIT_RECIPIENT})`;
+  // Ekran gösterilen proje künyesini, yapay zekâ kanıt sorgusu güncel proje kapsamını süzer.
+  const projectFilterId = evidenceSnapshotLimit == null ? DISPLAYED_PROJECT_ID : LIVE_PROJECT_ID;
   const filters = `${participant}${evidenceSnapshotLimit == null ? '' : ` AND (${CURRENT_TASK_DISCLOSURE_SQL} OR (NOT ${TASK_AVAILABLE} AND ${historicalParticipant}))`}
-    AND (@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)
+    AND (@projectId IS NULL OR ${projectFilterId} = @projectId)
     AND (@taskId IS NULL OR c.TaskId = @taskId)
     AND (@status IS NULL OR c.Status = @status)
     AND (@fromUtc IS NULL OR c.CreatedAt >= @fromUtc)
@@ -351,25 +375,61 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
     SELECT @total AS Total, @safePage AS Page;
     SELECT ${fields} ${SOURCE} WHERE ${filters} AND ${tabFilter}
     ORDER BY ${order} OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+    SELECT DISTINCT
+      ${DISPLAYED_PROJECT_ID} AS ProjectId,
+      COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
+      COALESCE(c.ProjectCodeSnapshot, p.ProjectCode) AS ProjectCode
+    ${COUNT_SOURCE}
+    WHERE ${participant} AND ${DISPLAYED_PROJECT_ID} IS NOT NULL;
   `);
   const counts = result.recordsets?.[0]?.[0] || {};
   const pagination = result.recordsets?.[1]?.[0] || {};
+  const items = (result.recordsets?.[2] || []).map((row) => mapCoordination(row, actor.sicil));
   return {
-    items: (result.recordsets?.[2] || []).map((row) => mapCoordination(row, actor.sicil)),
+    items,
     total: Number(pagination.Total || 0),
     page: Number(pagination.Page || 0),
     pageSize: query.pageSize,
     counts: {
+      // Süzgeçlere uyan bütün kayıtlar (kapsamdan bağımsız): sekme sayacı.
+      all: Number(counts.Total || 0),
       pending: Number(counts.PendingCount || 0),
       sent: Number(counts.SentCount || 0),
       history: Number(counts.HistoryCount || 0)
-    }
+    },
+    ...(evidenceSnapshotLimit == null ? { projects: mapAuthorizedProjects(result.recordsets?.[3], items) } : {})
   };
 }
 
+/** Kullanıcının görmeye yetkili olduğu kayıtlarda temsil edilen tekil projeler. */
+export function mapAuthorizedProjects(rows = [], fallbackItems = []) {
+  const byId = new Map();
+  const add = (rawId, rawName, rawCode) => {
+    const id = canonicalActualId(rawId);
+    if (!id) return;
+    const name = String(rawName || '').trim();
+    const code = String(rawCode || '').trim();
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, { id, name, code });
+    } else {
+      if (!existing.name && name) existing.name = name;
+      if (!existing.code && code) existing.code = code;
+    }
+  };
+  for (const row of rows || []) add(row?.ProjectId ?? row?.projectId, row?.ProjectName ?? row?.projectName, row?.ProjectCode ?? row?.projectCode);
+  for (const item of fallbackItems || []) add(item?.projectId, item?.projectName, item?.projectCode);
+  return [...byId.values()];
+}
+
 export async function queryAssignmentCoordinations(input) {
-  return withSqlTransaction(async (executor) =>
-    readCoordinationPage(executor, await loadAuthorizationContext(executor), input));
+  const coordinationId = input?.coordinationId == null ? null : canonicalActualId(input.coordinationId);
+  if (input?.coordinationId != null && !coordinationId) invalid('Koordinasyon kimliği geçersiz.');
+  return withSqlTransaction(async (executor) => {
+    const actor = await loadAuthorizationContext(executor);
+    if (coordinationId) return { record: await readCoordination(executor, actor, coordinationId) };
+    return readCoordinationPage(executor, actor, input);
+  });
 }
 
 /** Tek kaydın güncel künyesi (karar sonrası yanıt ve açılan pencere için). */

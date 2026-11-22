@@ -9,8 +9,8 @@ function validDay(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '1900-01-01'
     && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 }
-function midnightUtc(day) {
-  const wallTime = Date.parse(`${day}T00:00:00Z`);
+function midnightUtc(day, offsetDays = 0) {
+  const wallTime = Date.parse(`${day}T00:00:00Z`) + offsetDays * 86400000;
   let instant = wallTime;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const p = parts(clock, new Date(instant));
@@ -31,5 +31,7 @@ export function activityDateRange(input = {}, now = new Date()) {
   if (!validDay(from) || !validDay(to) || from > to || (Date.parse(to) - Date.parse(from)) / 86400000 > 365) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'En fazla 366 günlük geçerli bir tarih aralığı seçin.');
   }
-  return { from, to, startUtc: midnightUtc(from), endUtc: midnightUtc(shift(to, 1)), timeZone: TIME_ZONE };
+  // 9999-12-31 bitiş sınırında ertesi gün yıl 10000'e taşar; ISO metnini 10 karaktere
+  // kesmek yerine duvar saati doğrudan kaydırılarak Türkiye gece yarısı UTC'de (9999 içinde) hesaplanır.
+  return { from, to, startUtc: midnightUtc(from), endUtc: midnightUtc(to, 1), timeZone: TIME_ZONE };
 }

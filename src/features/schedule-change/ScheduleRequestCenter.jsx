@@ -1,10 +1,5 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { markScheduleNotifications } from '../../data/api/scheduleChangeClient.js';
-import {
-  decideAssignmentCoordinationRequest,
-  markNotificationItems
-} from '../../data/api/assignmentCoordinationClient.js';
 import { Icons } from '../../components/icons.jsx';
 import { fmt } from '../../scheduling/dates/index.js';
 import {
@@ -24,6 +19,7 @@ import {
 } from '../notifications/notificationCenterItems.js';
 import { SCHEDULE_DATE_ROWS, requestDates, scheduleDifferenceSummary } from './scheduleChangePresentation.js';
 import { reduceScheduleRequestCenterOpen, scheduleRequestCenterViewState } from './scheduleRequestCenterState.js';
+import { selectFresherRecord } from './requestInboxPresentation.js';
 import { useModalFocusTrap } from './useModalFocusTrap.js';
 
 export const STATUS_LABELS = SCHEDULE_STATUS_LABELS;
@@ -33,10 +29,13 @@ function requestHeadline(request) {
   return `Tarih değişikliği ${STATUS_LABELS[request.status]?.toLocaleLowerCase('tr-TR') || 'sonuçlandı'}`;
 }
 
-export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask, restoreFocusRef }) {
+export function ScheduleRequestDetails({ request: requestProp, onClose, onDecide, onOpenTask, restoreFocusRef }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [committedState, setCommittedState] = useState(null);
+  const request = selectFresherRecord(requestProp, committedState?.record, { supersededVersion: committedState?.baseVersion });
   const decisionAvailable = request.isDecisionOwner && request.status === 'PENDING' && request.taskAvailable !== false;
   const current = requestDates(request, 'original');
   const proposed = requestDates(request, 'proposed');
@@ -53,8 +52,10 @@ export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask,
   });
 
   const decide = async (decision) => {
+    const submittedVersion = request.version ?? null;
     setBusy(true);
     setError(null);
+    setNotice(null);
     let result;
     try {
       result = await onDecide(request.id, decision, message.trim());
@@ -65,11 +66,17 @@ export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask,
       setBusy(false);
     }
     if (!result?.ok) {
-      setError(result?.error?.message || 'Talep kararı kaydedilemedi.');
+      setError(result?.error?.message || result?.message || 'Talep kararı kaydedilemedi.');
       return;
     }
+    if (result.value?.request) setCommittedState({ record: result.value.request, baseVersion: submittedVersion });
     if (result.value?.outcome === 'STALE') {
       setError(result.value.message);
+      return;
+    }
+    // Karar kaydedildi ama görünüm yenilenemedi: kullanıcıya açıkça bildirilir.
+    if (result.refreshError) {
+      setNotice(`Karar kaydedildi. Ancak görünüm yenilenemedi: ${result.refreshError.message || 'bilinmeyen hata'}. Verileri yenileyin.`);
       return;
     }
     onClose();
@@ -128,6 +135,7 @@ export function ScheduleRequestDetails({ request, onClose, onDecide, onOpenTask,
           </label>
         )}
         {error && <div className="schedule-modal-error" role="alert"><Icons.Alert size={13} /> {error}</div>}
+        {notice && <div className="schedule-modal-error" role="status"><Icons.Alert size={13} /> {notice}</div>}
         <footer className="schedule-modal-actions">
           <button className="btn" type="button" disabled={busy || request.taskAvailable === false} title={request.taskAvailable === false ? 'Görev silinmiş veya proje kapatılmış.' : undefined} onClick={async () => {
             setBusy(true);
@@ -169,7 +177,7 @@ export function ScheduleRequestCenter({ onNavigate }) {
   const requests = useScheduleRequests();
   const coordinations = useAssignmentCoordinations();
   const taskEvents = useTaskNotifications();
-  const { decideScheduleChange, openTask, reloadData } = useTaskActions();
+  const { decideScheduleChange, openTask, markNotifications, decideAssignmentCoordination } = useTaskActions();
   const summary = useScheduleRequestSummary();
   const notificationSummary = useNotificationSummary();
   const [notificationError, setNotificationError] = useState(null);
@@ -195,17 +203,12 @@ export function ScheduleRequestCenter({ onNavigate }) {
     if (!items.length || marking) return;
     setMarking(true); setNotificationError(null);
     try {
-      // Kayıtlar kaynağına göre kendi ucuna gider; sürüm ve sahiplik kuralları
-      // her kaynakta ayrı uygulanır.
-      const scheduleItems = items.filter((item) => item.source === NOTIFICATION_SOURCES.SCHEDULE_REQUEST);
-      const otherItems = items.filter((item) => item.source !== NOTIFICATION_SOURCES.SCHEDULE_REQUEST);
-      const results = await Promise.all([
-        scheduleItems.length ? markScheduleNotifications(scheduleItems, action) : { ok: true },
-        otherItems.length ? markNotificationItems(otherItems, action) : { ok: true }
-      ]);
-      const failure = results.find((result) => !result.ok);
-      if (failure) setNotificationError(failure.message);
-      else await reloadData?.({ preserveFailedTaskUpdates: true });
+      // Kayıtlar kaynağına göre sunucuda kendi tablosuna yazılır; sürüm ve
+      // sahiplik kuralları her kaynakta ayrı uygulanır. Yanıt güncel zil
+      // kutusunu taşır: okundu işareti için tam anlık görüntü OKUNMAZ.
+      const result = await markNotifications(items, action);
+      if (!result?.ok) setNotificationError(result?.message || 'Bildirim güncellenemedi.');
+      else if (result.refreshError) setNotificationError(result.refreshError.message || 'Bildirimler yenilenemedi.');
     } catch (error) { setNotificationError(error.message || 'Bildirim güncellenemedi.'); }
     finally { setMarking(false); }
   };
@@ -320,14 +323,11 @@ export function ScheduleRequestCenter({ onNavigate }) {
       )}
       {selectedCoordination && (
         <AssignmentCoordinationDialog
+          key={selectedCoordination.id}
           record={coordinations.find((item) => item.id === selectedCoordination.id) || selectedCoordination}
           onClose={() => setSelectedCoordination(null)}
           onOpenTask={openTask}
-          onDecide={async (coordinationId, payload) => {
-            const result = await decideAssignmentCoordinationRequest(coordinationId, payload);
-            if (result.ok) await reloadData?.({ preserveFailedTaskUpdates: true });
-            return result;
-          }}
+          onDecide={decideAssignmentCoordination}
           restoreFocusRef={toggleRef}
         />
       )}

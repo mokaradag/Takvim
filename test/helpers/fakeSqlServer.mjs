@@ -475,10 +475,10 @@ function scheduleRequestRows(db, sicil, requestId = null) {
       const owner = db.people.find((person) => Number(person.Sicil) === Number(entry.DecisionOwnerSicil));
       return [{
         ...entry,
-        TaskTitle: task?.Title ?? entry.TaskTitleSnapshot ?? '',
-        ProjectId: task?.ProjectId ?? entry.ProjectIdSnapshot ?? null,
-        ProjectName: project?.ProjectName ?? entry.ProjectNameSnapshot ?? '',
-        ProjectCode: project?.ProjectCode ?? entry.ProjectCodeSnapshot ?? '',
+        TaskTitle: entry.TaskTitleSnapshot || task?.Title || '',
+        ProjectId: entry.ProjectIdSnapshot || task?.ProjectId || null,
+        ProjectName: entry.ProjectNameSnapshot || project?.ProjectName || '',
+        ProjectCode: entry.ProjectCodeSnapshot || project?.ProjectCode || '',
         TaskAvailable: Boolean(task && project?.IsActive),
         LiveProjectId: task?.ProjectId ?? null,
         IsUnread: !sameVersion(db.scheduleNotifications.find((n) => sameGuid(n.RequestId, entry.RequestId) && n.Sicil === sicil)?.ReadVersion, entry.RowVersion),
@@ -1293,7 +1293,12 @@ function runQuery(db, statement, params, { database }) {
 
   // Atama koordinasyonu, görev bildirimi, posta kuyruğu ve kullanıcı varlığı
   // (0015) ayrı bir modülde karşılanır.
-  const coordination = runAssignmentCoordinationQuery(db, sqlText, params);
+  const coordination = runAssignmentCoordinationQuery(db, sqlText, params, {
+    scheduleRows: (sicil) => {
+      throwIfScheduleChangeSchemaMissing(db);
+      return scheduleRequestRows(db, sicil);
+    }
+  });
   if (coordination) return result(coordination);
 
   // Rota AI konuşma geçmişi (0017) ayrı bir modülde karşılanır. Rehber
@@ -1493,7 +1498,8 @@ function runQuery(db, statement, params, { database }) {
   }
   if (sqlText.includes('DECLARE @safePage') || sqlText.includes('#ScheduleEvidenceSnapshot')) {
     throwIfScheduleChangeSchemaMissing(db);
-    const contains = (value, query) => String(value || '').toLocaleLowerCase('tr-TR').includes(String(query || '').toLocaleLowerCase('tr-TR'));
+    const fold = (value) => String(value || '').toLocaleLowerCase('tr-TR').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const contains = (value, query) => fold(value).includes(fold(query));
     const rows = scheduleRequestRows(db, params.sicil).filter((r) => (disclosureAllowed(db, r, params) || (params.evidenceSnapshotLimit != null && !r.TaskAvailable)) && (!params.projectId || sameGuid(r.ProjectId, params.projectId))
       && (!params.taskId || sameGuid(r.TaskId, params.taskId)) && (!params.status || r.Status === params.status)
       && (!params.from || isoDate(r.CreatedAt) >= params.from) && (!params.to || isoDate(r.CreatedAt) <= params.to)

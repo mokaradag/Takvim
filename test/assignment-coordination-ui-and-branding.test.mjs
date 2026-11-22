@@ -204,7 +204,7 @@ test('zil atama koordinasyonunu ve atama olayını aynı panelde gösterir', () 
   } finally { view.unmount(); delete globalThis.document; delete globalThis[CLIENT_STATE]; }
 });
 
-test('koordinasyon penceresi izin verilen eylemleri ve Sicil künyesini gösterir', () => {
+test('koordinasyon penceresi izin verilen eylemleri ve Sicil künyesini gösterir', async () => {
   const record = {
     id: 'c1', status: 'PENDING', mode: 'REQUEST', taskId: 't1', taskTitle: 'Saha kurulumu',
     projectCode: 'P1', projectName: 'Proje', requesterName: 'Talep Eden', requesterSicil: '100',
@@ -215,9 +215,11 @@ test('koordinasyon penceresi izin verilen eylemleri ve Sicil künyesini gösteri
     allowedDecisions: ['APPROVE', 'REQUEST_CHANGE', 'REJECT'], isManager: true, isRequester: false
   };
   const view = mountComponent(AssignmentCoordinationDialog, {
-    record, onClose() {}, onDecide: async () => ({ ok: true }), onOpenTask: async () => ({ ok: true })
+    record, loadRecord: async () => ({ ok: true, value: { record } }), onClose() {}, onDecide: async () => ({ ok: true }), onOpenTask: async () => ({ ok: true })
   });
   try {
+    await new Promise((resolve) => setImmediate(resolve));
+    view.render();
     const dialog = findElement(view.output, (node) => node.props?.role === 'dialog');
     assert.equal(dialog.props['aria-modal'], 'true');
     const buttons = [];
@@ -299,7 +301,7 @@ test('açılamayan görev bildirimi sessizce kapanmaz', async () => {
   } finally { view.unmount(); delete globalThis.document; delete globalThis[CLIENT_STATE]; }
 });
 
-test('değişiklik isteği yanıt notu boşken gönderilemez', () => {
+test('değişiklik isteği yanıt notu boşken gönderilemez', async () => {
   const record = {
     id: 'c1', status: 'PENDING', mode: 'REQUEST', taskId: 't1', taskTitle: 'Saha kurulumu',
     projectCode: 'P1', projectName: 'Proje', requesterName: 'Talep Eden', requesterSicil: '100',
@@ -311,10 +313,12 @@ test('değişiklik isteği yanıt notu boşken gönderilemez', () => {
   };
   const decided = [];
   const view = mountComponent(AssignmentCoordinationDialog, {
-    record, onClose() {}, onDecide: async (id, payload) => { decided.push(payload.decision); return { ok: true }; },
+    record, loadRecord: async () => ({ ok: true, value: { record } }), onClose() {}, onDecide: async (id, payload) => { decided.push(payload.decision); return { ok: true }; },
     onOpenTask: async () => ({ ok: true })
   });
   try {
+    await new Promise((resolve) => setImmediate(resolve));
+    view.render();
     const buttonFor = (label) => {
       const buttons = [];
       const collect = (node) => {

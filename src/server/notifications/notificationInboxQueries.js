@@ -15,6 +15,7 @@ import { loadAuthorizationContext } from '../authorization/loadAuthorizationCont
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
+import { readScheduleInbox, writeScheduleNotificationMarks } from '../schedule-change/scheduleRequestQueries.js';
 import {
   TASK_NOTIFICATION_INBOX_SQL,
   TASK_NOTIFICATION_EVIDENCE_INBOX_SQL,
@@ -52,6 +53,28 @@ export async function readNotificationInbox(executor, actor, { evidenceSnapshotL
   };
 }
 
+/**
+ * Zil kutusunun anlık görüntüdeki BEŞ alanı.
+ *
+ * Anlık görüntü ve okundu işaretinin yanıtı aynı biçimi kullanır; istemci
+ * ikisini aynı kuralla uygular (bkz. state/appState.js).
+ */
+export function bellInboxFields(scheduleInbox, notificationInbox) {
+  return {
+    scheduleRequests: scheduleInbox.items,
+    scheduleRequestSummary: {
+      unreadCount: scheduleInbox.unreadCount,
+      pendingCount: scheduleInbox.pendingCount
+    },
+    assignmentCoordinations: notificationInbox.coordination.items,
+    taskNotifications: notificationInbox.taskEvents.items,
+    notificationSummary: {
+      unreadCount: notificationInbox.unreadCount,
+      pendingCount: notificationInbox.pendingCount
+    }
+  };
+}
+
 const MISSING_TABLE_NUMBERS = new Set([208, 4145]);
 const NEW_TABLES = [
   'MR_TaskAssignmentCoordinations',
@@ -73,30 +96,42 @@ function invalid(message) {
  * Okundu / temizlendi — kaynağına göre doğru tabloya yazar.
  *
  * İstemci tek uçtan karışık bir liste gönderebilir; her kayıt kendi kaynağının
- * sürüm ve sahiplik kurallarından geçer.
+ * sürüm ve sahiplik kurallarından geçer. Yanıt, AYNI işlemde okunan güncel zil
+ * kutusunu taşır: okundu işareti görev ve proje verisini değiştirmediği için
+ * istemci tam anlık görüntüyü yeniden okumaz. Okuma, işaretin yetki
+ * bağlamıyla ve anlık görüntüdeki önizleme sorgularıyla yapılır; ek bir
+ * görünürlük kuralı yazılmaz.
  */
 export async function markNotifications(input = {}) {
   const action = input.action === 'dismiss' ? 'dismiss' : 'read';
   if (!['read', 'dismiss'].includes(input.action)) invalid('Bildirim işlemi geçersiz.');
   const entries = Array.isArray(input.notifications) ? input.notifications : [];
   if (!entries.length || entries.length > 100) invalid('Bildirim işlemi geçersiz.');
+  const schedule = [];
   const coordination = [];
   const taskEvents = [];
+  const sourceBuckets = new Map([
+    [NOTIFICATION_SOURCES.SCHEDULE_REQUEST, schedule],
+    [NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION, coordination],
+    [NOTIFICATION_SOURCES.TASK_EVENT, taskEvents]
+  ]);
   for (const entry of entries) {
     const id = canonicalActualId(entry?.id);
     if (!id) invalid('Bildirim kimliği geçersiz.');
-    const source = entry?.source;
-    if (source !== NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION
-      && source !== NOTIFICATION_SOURCES.TASK_EVENT) {
-      invalid('Bildirim kaynağı geçersiz.');
-    }
-    const target = source === NOTIFICATION_SOURCES.TASK_EVENT ? taskEvents : coordination;
+    const target = sourceBuckets.get(entry?.source);
+    if (!target) invalid('Bildirim kaynağı geçersiz.');
     target.push({ id, version: entry?.version });
   }
   return withSqlTransaction(async (executor) => {
     const actor = await loadAuthorizationContext(executor);
+    if (schedule.length) await writeScheduleNotificationMarks(executor, actor, schedule, action);
     if (coordination.length) await updateCoordinationNotifications(executor, actor, coordination, action);
     if (taskEvents.length) await updateTaskNotifications(executor, actor, taskEvents, action);
-    return { ok: true };
+    const notificationInbox = await readNotificationInbox(executor, actor).catch((error) => {
+      if (isMissingNotificationInboxSchema(error)) return null;
+      throw error;
+    });
+    if (!notificationInbox) return { ok: true };
+    return { ok: true, inbox: bellInboxFields(await readScheduleInbox(executor, actor), notificationInbox) };
   }, { deadlockRetries: 2 });
 }

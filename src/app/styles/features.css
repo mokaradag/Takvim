@@ -1303,7 +1303,7 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
 
 /* ── Atama koordinasyonu ──────────────────────────────────── */
 .coordination-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.coordination-project-filter {
+.coordination-project-filter, .request-project-filter {
   display: flex;
   flex: 1 1 160px;
   flex-direction: column;
@@ -1313,6 +1313,51 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
   color: var(--text-dim);
 }
 .coordination-table td small { display: block; margin-top: 3px; font-size: 10.5px; }
+.requests-view .detail-list-table td small { display: block; margin-top: 3px; font-size: 10.5px; }
+.requests-view .detail-list-table td .schedule-new-label { margin-left: 6px; }
+
+/* ── Talepler · tam yükseklikli tablo çalışma alanı ─────────────
+   Dört sekme de aynı yükseklik sözleşmesini kullanır (bkz.
+   docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md · 2.3). `.content` kaydırılmaz;
+   yükseklik sekme şeridi → panel → (koordinasyon paneli) → tablo kabuğuna
+   devredilir. Süzgeçler taşarsa panel kayar, normalde tablo kabuğu kayar.
+   Yapışkan başlık satırı
+   böylece gerçekten kaydırılan öğenin içindedir. Alt nefes payı `.content`
+   alt dolgusudur (16px). Kurallar `.requests-view` altında sınırlıdır:
+   paylaşılan `.detail-list-scroll` KPI penceresinde ve başka modüllerde
+   olduğu gibi kalır. */
+.content-talepler { overflow: hidden; min-height: 0; padding-bottom: 16px; }
+.requests-view { height: 100%; min-height: 0; }
+.requests-view > .request-tabs { flex: 0 0 auto; flex-wrap: wrap; }
+.requests-view > .requests-panel {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.requests-panel > .coordination-panel { flex: 1 1 0; min-height: 0; }
+.requests-panel > :not(.detail-list-scroll):not(.coordination-panel),
+.coordination-panel > :not(.detail-list-scroll) { flex: 0 0 auto; }
+.requests-panel > .detail-list-scroll,
+.coordination-panel > .detail-list-scroll {
+  flex: 1 1 0;
+  /* Süzgeçler çok satıra sarıldığında da birkaç satır görünür kalır. */
+  min-height: 120px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+/* Kısa ya da dar görünümde süzgeçler ve tablo birlikte sığmaz: sayfa yeniden
+   kayar, tablo kabuğu görünümle orantılı bir üst sınırla kendi içinde kayar ve
+   başlık yine yapışkan kalır. */
+@media (max-height: 600px), (max-width: 760px) {
+  .content-talepler { overflow: auto; }
+  .requests-view, .requests-view > .requests-panel, .requests-panel > .coordination-panel { height: auto; flex: 0 0 auto; overflow: visible; }
+  .requests-panel > .detail-list-scroll,
+  .coordination-panel > .detail-list-scroll { flex: 0 0 auto; max-height: calc(var(--app-viewport-h, 100vh) * .65); }
+}
 .coordination-modal { width: min(640px, calc(var(--app-viewport-w, 100vw) * .94)); }
 .coordination-facts {
   display: grid;

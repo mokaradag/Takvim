@@ -1,11 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { fetchAssignmentCoordinations } from '../../data/api/assignmentCoordinationClient.js';
-import { useNotificationSummary, useSessionContext } from '../../state/hooks/index.js';
+import { useDataLifecycle, useNotificationSummary, useSessionContext } from '../../state/hooks/index.js';
+import { retainRequestProjects } from '../schedule-change/requestInboxPresentation.js';
 
 const EMPTY = Object.freeze({
   items: [], total: 0, page: 0, pageSize: 25,
-  counts: { pending: 0, sent: 0, history: 0 }
+  counts: { all: 0, pending: 0, sent: 0, history: 0 }
 });
 
 /**
@@ -18,29 +19,35 @@ const EMPTY = Object.freeze({
 export function useAssignmentCoordinationQuery(query, enabled = true) {
   const session = useSessionContext();
   const summary = useNotificationSummary();
+  const { lastRefreshedAt } = useDataLifecycle();
   const actual = session?.dataMode === 'actual';
   const key = JSON.stringify(query);
   const [revision, setRevision] = useState(0);
-  const [state, setState] = useState({ key: '', data: EMPTY, loading: false, error: null });
+  const [state, setState] = useState({ key: '', data: null, retainedProjects: [], loading: false, error: null });
   useEffect(() => {
     if (!actual || !enabled) return undefined;
     let cancelled = false;
-    setState((current) => ({ ...current, loading: true, error: null }));
+    // Doğrulanmış sayfa arka planda yenilenirken yükleme bildirimi gösterilmez.
+    setState((current) => (current.key === key && current.data ? current : { ...current, loading: true, error: null }));
     const timer = setTimeout(async () => {
       const result = await fetchAssignmentCoordinations(JSON.parse(key));
       if (cancelled) return;
-      setState({
+      setState((current) => ({
         key,
-        data: result.ok ? result.value : EMPTY,
+        data: result.ok ? result.value : (current.key === key ? current.data : null),
+        retainedProjects: result.ok ? retainRequestProjects(current.retainedProjects, result.value) : current.retainedProjects,
         loading: false,
         error: result.ok ? null : result.message
-      });
+      }));
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [actual, enabled, key, revision, summary]);
+  }, [actual, enabled, key, revision, summary, lastRefreshedAt]);
+  const confirmed = actual && state.key === key ? state.data : null;
   return {
-    data: actual && state.key === key ? state.data : EMPTY,
-    loading: actual && enabled && (state.loading || state.key !== key),
+    data: confirmed ?? EMPTY,
+    retainedProjects: actual ? state.retainedProjects : [],
+    confirmedTotal: confirmed?.counts.all ?? null,
+    loading: actual && enabled && (state.key !== key || (!confirmed && state.loading)),
     error: state.key === key ? state.error : null,
     actual,
     refresh: () => setRevision((value) => value + 1)

@@ -1,5 +1,6 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { fetchAssignmentCoordination } from '../../data/api/assignmentCoordinationClient.js';
 import { Icons } from '../../components/icons.jsx';
 import {
   COORDINATION_DECISIONS,
@@ -9,6 +10,7 @@ import {
 } from '../../domain/assignment/assignmentCoordination.js';
 import { fmt } from '../../scheduling/dates/index.js';
 import { useModalFocusTrap } from '../schedule-change/useModalFocusTrap.js';
+import { assignmentCoordinationDialogPolicy } from './assignmentCoordinationDialogPolicy.js';
 import { DirectoryPersonSearch } from './DirectoryPersonSearch.jsx';
 
 /**
@@ -27,21 +29,58 @@ function headline(record) {
 const PRIMARY_DECISIONS = new Set([COORDINATION_DECISIONS.APPROVE]);
 
 export function AssignmentCoordinationDialog({
-  record,
+  record: recordProp,
   onClose,
   onDecide,
   onOpenTask,
-  restoreFocusRef
+  restoreFocusRef,
+  loadRecord = fetchAssignmentCoordination
 }) {
   const [message, setMessage] = useState('');
   const [suggested, setSuggested] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  // Sunucunun kararla birlikte döndürdüğü YETKİLİ kayıt. Liste yenilenene dek
+  // eski durum/düğmeler gösterilmez; ancak daha yeni bir sunucu kaydı gelirse
+  // elde tutulan kopyanın yerini alır.
+  const [committedState, setCommittedState] = useState(null);
+  // Sonucu doğrulanamayan ağ/zaman aşımı yanıtında, aynı eski sürüm üzerinden
+  // yinelenen karar verilmesini engelleyen kilit.
+  const [unconfirmed, setUnconfirmed] = useState(null);
+  // Kesin yetki/çakışma reddinde yeni doğrulama tamamlanana dek bayat düğmeleri gizleyen kilit.
+  const [rejected, setRejected] = useState(null);
+  const [verification, setVerification] = useState(null);
+  const [revision, setRevision] = useState(0);
+  const lookupGeneration = useRef(0);
+  const { id } = recordProp;
+  const { permissionKey, shouldVerify, record, verifying, verificationError, hideDetails, decisionsLocked, decisions } =
+    assignmentCoordinationDialogPolicy(recordProp, { verification, revision, committedState, unconfirmed, rejected });
+  useEffect(() => {
+    if (!shouldVerify) return undefined;
+    const generation = ++lookupGeneration.current;
+    async function verify() {
+      try {
+        const result = await loadRecord(id);
+        if (generation !== lookupGeneration.current) return;
+        const record = result.ok ? result.value.record : null;
+        const message = result.message || 'Koordinasyon kaydı artık görüntülenemiyor.';
+        setVerification({ id, revision, permissionKey, record, error: record ? null : message });
+      } catch {
+        if (generation === lookupGeneration.current) {
+          setVerification({ id, revision, permissionKey, record: null, error: 'Koordinasyon kaydı yenilenemedi.' });
+        }
+      }
+    }
+    verify();
+    return () => { if (generation === lookupGeneration.current) lookupGeneration.current += 1; };
+  }, [id, loadRecord, permissionKey, revision, shouldVerify]);
+
   const closeRef = useRef(null);
   const dialogRef = useRef(null);
   useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: closeRef, restoreFocusRef, onClose, blocked: busy });
 
-  const decisions = useMemo(() => record.allowedDecisions || [], [record.allowedDecisions]);
+  const verifyAgain = () => { setError(null); setRevision((value) => value + 1); };
   const canSuggest = decisions.includes(COORDINATION_DECISIONS.REQUEST_CHANGE);
   // Etiket yanıt notunu "değişiklik isteğinde zorunlu" diye bildirir; düğme de
   // aynı kuralı uygular. Uygulanmadığında boş notlu istek gidiyor ve kullanıcı
@@ -49,14 +88,17 @@ export function AssignmentCoordinationDialog({
   const noteMissing = !message.trim();
 
   const decide = async (decision) => {
+    const submittedVersion = record.version;
+    const submittedLookup = lookupGeneration.current;
     setBusy(true);
     setError(null);
+    setNotice(null);
     let result;
     try {
       result = await onDecide(record.id, {
         decision,
         message: message.trim(),
-        version: record.version,
+        version: submittedVersion,
         suggestedAssigneeSicil: decision === COORDINATION_DECISIONS.REQUEST_CHANGE ? suggested?.sicil ?? null : null
       });
     } catch (decisionError) {
@@ -66,11 +108,37 @@ export function AssignmentCoordinationDialog({
       setBusy(false);
     }
     if (!result?.ok) {
-      setError(result?.message || 'Karar kaydedilemedi.');
+      if (['OUTCOME_UNKNOWN', 'CONFLICT', 'FORBIDDEN'].includes(result?.code)) {
+        if (result.record) {
+          setCommittedState({ record: result.record, baseVersion: submittedVersion });
+          if (lookupGeneration.current === submittedLookup) {
+            lookupGeneration.current += 1;
+            setVerification({ id, revision, permissionKey, record: result.record, error: null });
+          }
+          setUnconfirmed(null);
+          setRejected(null);
+        } else if (result?.code === 'OUTCOME_UNKNOWN') {
+          setUnconfirmed({ id: record.id, version: submittedVersion });
+        } else {
+          setRejected({ id: record.id, version: submittedVersion, revision, permissionKey });
+        }
+      }
+      if (result?.refreshError) setNotice(result.refreshError.message || 'Görünüm yenilenemedi.');
+      setError(result?.message || result?.error?.message || 'Karar kaydedilemedi.');
       return;
     }
+    setUnconfirmed(null);
+    setRejected(null);
+    if (result.value?.record) setCommittedState({ record: result.value.record, baseVersion: submittedVersion });
     if (result.value?.outcome === 'STALE') {
       setError(result.value.message);
+      return;
+    }
+    // Karar KAYDEDİLDİ ama görünüm uzlaştırılamadı: bu başarılı eşitleme gibi
+    // sunulmaz. Pencere sunucunun döndürdüğü kayıtla açık kalır.
+    if (result.refreshError) {
+      setNotice(`${result.value?.message || 'Karar kaydedildi.'} Ancak görünüm yenilenemedi: `
+        + `${result.refreshError.message || 'bilinmeyen hata'}. Verileri yenileyin.`);
       return;
     }
     onClose();
@@ -81,18 +149,23 @@ export function AssignmentCoordinationDialog({
       <button className="schedule-modal-backdrop" type="button" aria-label="Atama koordinasyonunu kapat" onClick={onClose} disabled={busy} />
       <section ref={dialogRef} className="schedule-modal coordination-modal" role="dialog" aria-modal="true" aria-labelledby="coordination-title" tabIndex={-1}>
         <header className="schedule-modal-head">
-          <div>
+          {hideDetails ? <h2 id="coordination-title">Atama koordinasyonu</h2> : <div>
             <span className={`schedule-status coordination-${record.status.toLowerCase()}`}>
               {COORDINATION_STATUS_LABELS[record.status] || record.status}
             </span>
             <h2 id="coordination-title">{headline(record)}</h2>
             <p>{record.projectCode ? `${record.projectCode} · ` : ''}{record.taskTitle || 'Silinen görev'}</p>
-          </div>
+          </div>}
           <button ref={closeRef} className="icon-btn" type="button" onClick={onClose} aria-label="Kapat" disabled={busy}>
             <Icons.Close size={15} />
           </button>
         </header>
 
+        {verifying && <p role="status">Güncel kayıt yükleniyor…</p>}
+        {verificationError && <p role="alert" className="schedule-modal-error">{verificationError}
+          <button type="button" className="btn ghost sm" onClick={verifyAgain}>Kaydı yenile</button>
+        </p>}
+        {!hideDetails && <>
         <dl className="coordination-facts">
           <div>
             <dt>Görevlendirilen</dt>
@@ -169,6 +242,8 @@ export function AssignmentCoordinationDialog({
         )}
 
         {error && <div className="schedule-modal-error" role="alert"><Icons.Alert size={13} /> {error}</div>}
+        {notice && <div className="schedule-modal-error" role="status"><Icons.Alert size={13} /> {notice}</div>}
+        {decisionsLocked && shouldVerify && <button type="button" className="btn ghost sm" onClick={verifyAgain}>Kaydı yenile</button>}
 
         <footer className="schedule-modal-actions">
           <button className="btn" type="button" disabled={busy || record.taskAvailable === false}
@@ -198,6 +273,7 @@ export function AssignmentCoordinationDialog({
             </button>
           )) : <button className="btn primary" type="button" onClick={onClose} disabled={busy}>Tamam</button>}
         </footer>
+        </>}
       </section>
     </div>
   );

@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput.jsx';
 import { Icons } from '../../components/icons.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
@@ -7,8 +7,9 @@ import {
   COORDINATION_MODES,
   COORDINATION_STATUS_LABELS
 } from '../../domain/assignment/assignmentCoordination.js';
-import { decideAssignmentCoordinationRequest, markNotificationItems } from '../../data/api/assignmentCoordinationClient.js';
-import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
+import { useAllProjects, useAssignmentCoordinations, useTaskActions } from '../../state/hooks/index.js';
+import { useNotificationRead } from '../notifications/useNotificationRead.js';
+import { buildRequestProjectOptions } from '../schedule-change/requestInboxPresentation.js';
 import { TaskTablePagination } from '../tasks/TaskTablePagination.jsx';
 import { AssignmentCoordinationDialog } from './AssignmentCoordinationDialog.jsx';
 import { useAssignmentCoordinationQuery } from './useAssignmentCoordinationQuery.js';
@@ -32,45 +33,38 @@ const INITIAL = Object.freeze({
  * uygulanır. Kapsam seçimi ikinci bir sekme katmanı açmaz; olağan süzgeç
  * satırında durur.
  */
-export function AssignmentCoordinationView() {
+export function AssignmentCoordinationView({ onTotalChange } = {}) {
   const [query, setQuery] = useState(INITIAL);
   const [selected, setSelected] = useState(null);
-  const [readError, setReadError] = useState(null);
   const openerRef = useRef(null);
   const projects = useAllProjects();
-  const { openTask, reloadData } = useTaskActions();
-  const { data, loading, error, actual, refresh } = useAssignmentCoordinationQuery(query);
+  const bellCoordinations = useAssignmentCoordinations();
+  const { openTask, markNotifications, decideAssignmentCoordination } = useTaskActions();
+  const { data, retainedProjects, confirmedTotal, loading, error, actual, refresh } = useAssignmentCoordinationQuery(query);
+  const { markRead, markError, retryMark } = useNotificationRead(markNotifications, refresh);
+  // Sekme sayacı, süzgeçlere uyan "Tüm kayıtlar" sayısıdır. Kapsam seçimi
+  // (ör. Kararımı bekleyenler) onu sıfıra indirmez; karar bekleyen sayısı
+  // ayrı bir anlamdır.
+  useEffect(() => {
+    if (confirmedTotal != null) onTotalChange?.(confirmedTotal);
+  }, [confirmedTotal, onTotalChange]);
 
-  const projectOptions = useMemo(() => [
-    { value: '', label: 'Tüm projeler' },
-    ...projects
-      .map((project) => ({
-        value: project.id,
-        label: project.name || project.projectName || project.code || 'Adsız proje',
-        description: project.code || '',
-        keywords: [project.code, project.name, project.projectName].filter(Boolean)
-      }))
-      .sort((left, right) => left.label.localeCompare(right.label, 'tr'))
-  ], [projects]);
+  const projectOptions = useMemo(
+    () => buildRequestProjectOptions(projects, bellCoordinations, retainedProjects, data.projects, data.items),
+    [bellCoordinations, data.items, data.projects, projects, retainedProjects]
+  );
 
   const change = (key, value) => setQuery((current) => ({ ...current, [key]: value, page: 0 }));
 
   const open = async (record, target) => {
     openerRef.current = target;
     setSelected(record);
-    setReadError(null);
-    const result = await markNotificationItems([record]);
-    if (!result.ok) setReadError(result.message);
-    else { refresh(); await reloadData?.({ preserveFailedTaskUpdates: true }); }
+    await markRead(record);
   };
 
   const decide = async (coordinationId, input) => {
-    const result = await decideAssignmentCoordinationRequest(coordinationId, input);
+    const result = await decideAssignmentCoordination(coordinationId, input);
     refresh();
-    if (result.ok) {
-      await reloadData?.({ preserveFailedTaskUpdates: true });
-      if (result.value?.record) setSelected(result.value.record);
-    }
     return result;
   };
 
@@ -121,12 +115,12 @@ export function AssignmentCoordinationView() {
         <button type="button" className="btn ghost sm" onClick={() => setQuery(INITIAL)}>Filtreleri temizle</button>
       </div>
 
-      {(error || readError) && (
-        <p role="alert" className="schedule-modal-error">
-          {error || readError}
-          <button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button>
-        </p>
-      )}
+      {error && <p role="alert" className="schedule-modal-error">{error}
+        <button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button>
+      </p>}
+      {markError && <p role="alert" className="schedule-modal-error">{markError}
+        <button type="button" className="btn ghost sm" onClick={retryMark}>Okundu işaretini yinele</button>
+      </p>}
       {!actual && <p className="empty">Atama koordinasyonu Gerçek Sistem kipinde kullanılabilir.</p>}
       {loading && <p className="muted" role="status">Kayıtlar yükleniyor…</p>}
 
@@ -186,6 +180,7 @@ export function AssignmentCoordinationView() {
 
       {selected && (
         <AssignmentCoordinationDialog
+          key={selected.id}
           record={rows.find((item) => item.id === selected.id) || selected}
           restoreFocusRef={openerRef}
           onClose={() => setSelected(null)}

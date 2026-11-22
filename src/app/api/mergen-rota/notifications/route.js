@@ -1,6 +1,7 @@
 import { safeErrorResponse } from '../../../../server/errors.js';
 import { assertBrowserMutationIntent } from '../../../../server/identity/sameOriginRequest.js';
 import { markNotifications } from '../../../../server/notifications/notificationInboxQueries.js';
+import { queryRequestInbox } from '../../../../server/notifications/requestInboxQueries.js';
 import { withRouteObservability } from '../../../../server/observability/observeOperation.js';
 
 export const runtime = 'nodejs';
@@ -8,10 +9,26 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 /**
+ * Talepler · Gelenler / Gönderdiklerim / Geçmiş: üç kaynağın birleşik, sunucuda
+ * süzülen ve sayfalanan okuması. Kimlik oturumdan gelir; yanıt önbelleğe
+ * alınmaz.
+ */
+export const GET = withRouteObservability('api.notifications.list', async (request) => {
+  try {
+    return Response.json(await queryRequestInbox(Object.fromEntries(new URL(request.url).searchParams)), {
+      headers: { 'cache-control': 'no-store' }
+    });
+  } catch (error) {
+    return safeErrorResponse(error);
+  }
+});
+
+/**
  * Zil bildirimlerini okundu/temizlendi işaretler.
  *
  * Kayıtlar kaynağına göre kendi tablosuna yazılır; sürüm ve sahiplik kuralları
- * her kaynakta ayrı ayrı uygulanır.
+ * her kaynakta ayrı ayrı uygulanır. Yanıt aynı işlemde okunan güncel zil
+ * kutusunu taşır.
  */
 export const PATCH = withRouteObservability('api.notifications.mark', async (request) => {
   try {

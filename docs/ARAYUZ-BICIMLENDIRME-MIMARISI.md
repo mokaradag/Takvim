@@ -78,7 +78,7 @@ Bu hesabı iki saf modül üstlenir; React'ten bağımsız birim testleri vardı
 
 ### 2.3 Yapışkan başlıklı tam yükseklikli sayfalar
 
-Tablonun ana öğe olduğu sayfalar (Görevler, Ekip, Proje Yapısı → İş Dağılım Ağacı) `.content` öğesini kaydırmaz. Yüksekliğini doldurur ve kaydırmayı tablo kabuğuna devreder:
+Tablonun ana öğe olduğu sayfalar (Görevler, Ekip, Proje Yapısı → İş Dağılım Ağacı, Görev Hareketleri, Talepler'in dört sekmesi) `.content` öğesini kaydırmaz. Yüksekliğini doldurur ve kaydırmayı tablo kabuğuna devreder:
 
 ```text
 .content (sabit yükseklik, overflow auto)

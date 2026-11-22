@@ -8,7 +8,7 @@ import React from 'react';
 export const CLIENT_STATE = '__TASK_EDITOR_TEST_STATE__';
 const stateModule = `data:text/javascript,${encodeURIComponent(`
 export function useAppState() { return globalThis.${CLIENT_STATE}; }
-export function useDataLifecycleState() { return {}; }
+export function useDataLifecycleState() { return globalThis.${CLIENT_STATE}.dataLifecycle ?? {}; }
 `)}`;
 
 registerHooks({
