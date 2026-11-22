@@ -30,6 +30,7 @@ const { createNotificationActions, OUTCOME_UNKNOWN_MESSAGE, OUTCOME_UNKNOWN_UNRE
 const { requestInboxRow, requestInboxKey, selectFresherRecord } = await import('../src/features/schedule-change/requestInboxPresentation.js');
 const { AssignmentCoordinationView } = await import('../src/features/assignment-coordination/AssignmentCoordinationView.jsx');
 const { AssignmentCoordinationDialog } = await import('../src/features/assignment-coordination/AssignmentCoordinationDialog.jsx');
+const { assignmentCoordinationDialogPolicy } = await import('../src/features/assignment-coordination/assignmentCoordinationDialogPolicy.js');
 const { useAssignmentCoordinationQuery } = await import('../src/features/assignment-coordination/useAssignmentCoordinationQuery.js');
 const { ScheduleRequestDetails } = await import('../src/features/schedule-change/ScheduleRequestCenter.jsx');
 const { ScheduleRequestsView } = await import('../src/features/schedule-change/ScheduleRequestsView.jsx');
@@ -709,10 +710,13 @@ test('geçici tam proje yetkisiyle geçmiş koordinasyonu okundu işaretlemek ye
       action: 'read',
       notifications: [{ id: found.id, version: found.version, source: 'ASSIGNMENT_COORDINATION' }]
     }));
-    const readRow = stack.db.assignmentCoordinationRecipients.find(
-      (row) => Number(row.Sicil) === TEMP_MANAGER
+    const findRecipient = () => stack.db.assignmentCoordinationRecipients.find(
+      (row) => Number(row.Sicil) === TEMP_MANAGER && row.CoordinationId.toLowerCase() === created.id
     );
+    const readRow = findRecipient();
     assert.equal(readRow?.RecipientRole, 'REQUESTER', 'okuma işareti yalnızca okuma satırı üretir');
+    const priorReadVersion = Buffer.from(found.version, 'base64');
+    assert.deepEqual(readRow.ReadVersion, priorReadVersion, 'okundu izi ilk sürümü taşır');
     const afterMark = await asUser(TEMP_MANAGER, () => page({ tab: 'history' }));
     assert.equal(afterMark.items.find((item) => item.id === created.id)?.unread, false, 'yetki sürerken okundu durumu korunur');
 
@@ -736,11 +740,9 @@ test('geçici tam proje yetkisiyle geçmiş koordinasyonu okundu işaretlemek ye
       action: 'read',
       notifications: [{ id: created.id, version: cancellation.record.version, source: 'ASSIGNMENT_COORDINATION' }]
     }));
-    assert.notEqual(
-      stack.db.assignmentCoordinationRecipients.find((row) => Number(row.Sicil) === TEMP_MANAGER)?.ReadVersion?.toString('hex'),
-      Buffer.from(cancellation.record.version, 'base64').toString('hex'),
-      'yetki iptali sonrası yeni sürüm için okundu işareti yazılamaz'
-    );
+    const retainedRecipient = findRecipient();
+    assert.ok(retainedRecipient, 'önceki alıcı satırı korunur');
+    assert.deepEqual(retainedRecipient.ReadVersion, priorReadVersion, 'yetki iptali sonrası önceki okundu sürümü korunur');
     const keptApproved = await asUser(ORDINARY, () => store.decideAssignmentCoordination(created.id, {
       decision: 'REJECT', version: cancellation.record.version, message: 'Sorumlu korunmalı.'
     }));
@@ -1657,6 +1659,38 @@ test('arama yüklemi Turkish_100_CI_AI aksan duyarsızlığını ve Türkçe I/�
   } finally {
     await stack.dispose();
   }
+});
+
+test('karar kuralı güncel doğrulama olmadan karar düğmelerini açmaz', () => {
+  const record = { id: 'k1', mode: 'REQUEST', status: 'PENDING', version: 'v1', allowedDecisions: ['APPROVE'] };
+  const permissionKey = JSON.stringify([true, ['APPROVE']]);
+  const verification = { id: record.id, revision: 1, permissionKey, record };
+
+  const stale = assignmentCoordinationDialogPolicy(record, { verification, revision: 2 });
+  assert.equal(stale.verifying, true);
+  assert.deepEqual(stale.decisions, []);
+
+  const denied = assignmentCoordinationDialogPolicy(record, {
+    verification: { ...verification, record: null, error: 'Erişim kaldırıldı.' }, revision: 1
+  });
+  assert.equal(denied.verificationError, 'Erişim kaldırıldı.');
+  assert.ok(denied.hideDetails);
+  assert.deepEqual(denied.decisions, []);
+});
+
+test('karar kuralı kesin ret kilidini güncel yetkiyle, belirsiz sonuç kilidini yeni sürümle açar', () => {
+  const record = { id: 'k1', mode: 'REQUEST', status: 'PENDING', version: 'v1', allowedDecisions: ['APPROVE'] };
+  const permissionKey = JSON.stringify([true, ['APPROVE']]);
+  const verification = { id: record.id, revision: 1, permissionKey, record };
+  const rejected = { id: record.id, revision: 1, permissionKey, version: record.version };
+  const refreshed = { ...verification, revision: 2 };
+  const unconfirmed = { id: record.id, version: record.version };
+
+  assert.deepEqual(assignmentCoordinationDialogPolicy(record, { verification, revision: 1, rejected }).decisions, []);
+  assert.deepEqual(assignmentCoordinationDialogPolicy(record, { verification: refreshed, revision: 2, rejected }).decisions, ['APPROVE']);
+  assert.deepEqual(assignmentCoordinationDialogPolicy(record, { verification: refreshed, revision: 2, unconfirmed }).decisions, []);
+  const advanced = { ...refreshed, record: { ...record, version: 'v2' } };
+  assert.deepEqual(assignmentCoordinationDialogPolicy(record, { verification: advanced, revision: 2, unconfirmed }).decisions, ['APPROVE']);
 });
 
 test('karar penceresinde kesin FORBIDDEN reddi yetki geri geldiğinde yenilemeyle kurtarılırken OUTCOME_UNKNOWN kilidi korunur', async (t) => {

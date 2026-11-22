@@ -10,7 +10,7 @@ import {
 } from '../../domain/assignment/assignmentCoordination.js';
 import { fmt } from '../../scheduling/dates/index.js';
 import { useModalFocusTrap } from '../schedule-change/useModalFocusTrap.js';
-import { selectFresherRecord } from '../schedule-change/requestInboxPresentation.js';
+import { assignmentCoordinationDialogPolicy } from './assignmentCoordinationDialogPolicy.js';
 import { DirectoryPersonSearch } from './DirectoryPersonSearch.jsx';
 
 /**
@@ -53,10 +53,9 @@ export function AssignmentCoordinationDialog({
   const [verification, setVerification] = useState(null);
   const [revision, setRevision] = useState(0);
   const lookupGeneration = useRef(0);
-  const { id, mode } = recordProp;
-  // Canlı yetki, koordinasyon satırının sürümü değişmeden de değişebilir.
-  const permissionKey = JSON.stringify([recordProp.taskAvailable !== false, recordProp.allowedDecisions ?? []]);
-  const shouldVerify = mode !== COORDINATION_MODES.NOTICE || Boolean(recordProp.allowedDecisions?.length);
+  const { id } = recordProp;
+  const { permissionKey, shouldVerify, record, verifying, verificationError, hideDetails, decisionsLocked, decisions } =
+    assignmentCoordinationDialogPolicy(recordProp, { verification, revision, committedState, unconfirmed, rejected });
   useEffect(() => {
     if (!shouldVerify) return undefined;
     const generation = ++lookupGeneration.current;
@@ -77,35 +76,10 @@ export function AssignmentCoordinationDialog({
     return () => { if (generation === lookupGeneration.current) lookupGeneration.current += 1; };
   }, [id, loadRecord, permissionKey, revision, shouldVerify]);
 
-  const verified = verification?.id === id && verification.revision === revision
-    && verification.permissionKey === permissionKey ? verification : null;
-  const latest = verified?.record ? selectFresherRecord(verified.record, recordProp) : recordProp;
-  const record = selectFresherRecord(latest, committedState?.record, { supersededVersion: committedState?.baseVersion });
-  const outcomeUnconfirmed = Boolean(
-    unconfirmed
-    && String(unconfirmed.id) === String(record.id)
-    && (!record.version || unconfirmed.version === record.version)
-  );
-  const recoveredFromRejection = Boolean(
-    rejected
-    && verified?.record?.allowedDecisions?.length
-    && (verified.revision !== rejected.revision || verified.permissionKey !== rejected.permissionKey)
-  );
-  const definiteRejectionLocked = Boolean(
-    rejected
-    && !recoveredFromRejection
-    && String(rejected.id) === String(record.id)
-    && (!record.version || rejected.version === record.version)
-  );
-  const decisionsLocked = outcomeUnconfirmed || definiteRejectionLocked;
   const closeRef = useRef(null);
   const dialogRef = useRef(null);
   useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: closeRef, restoreFocusRef, onClose, blocked: busy });
 
-  const verifying = shouldVerify && !verified;
-  const verificationError = shouldVerify ? verified?.error : null;
-  const hideDetails = verificationError || (verifying && !(verification?.id === id && verification.record));
-  const decisions = decisionsLocked || verifying || verificationError ? [] : (record.allowedDecisions || []);
   const verifyAgain = () => { setError(null); setRevision((value) => value + 1); };
   const canSuggest = decisions.includes(COORDINATION_DECISIONS.REQUEST_CHANGE);
   // Etiket yanıt notunu "değişiklik isteğinde zorunlu" diye bildirir; düğme de
