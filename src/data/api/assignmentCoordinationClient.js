@@ -40,7 +40,7 @@ export function fetchAssignmentCoordination(coordinationId) {
       && typeof value.record.version === 'string' && Array.isArray(value.record.allowedDecisions)));
 }
 
-/** Zil bildirimlerini okundu/temizlendi işaretler (kaynak karışık olabilir). */
+/** Zil kutusu, anlık görüntüyle aynı istemci kimliklerini kullanır. */
 export function markNotificationItems(notifications, action = 'read') {
   return requestJson('/api/mergen-rota/notifications', {
     method: 'PATCH',
@@ -48,7 +48,7 @@ export function markNotificationItems(notifications, action = 'read') {
       action,
       notifications: notifications.map(({ id, version, source }) => ({ id, version, source }))
     })
-  });
+  }, { restoreFormattingAliases: true });
 }
 
 function isValidRequestInboxResponse(value) {

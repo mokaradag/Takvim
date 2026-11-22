@@ -527,7 +527,10 @@ export async function readRequestInboxPage(executor, actor, input = {}, attempt 
     .map((entry) => ({ entry, item: details.get(`${entry.Source}:${idKey(entry.ItemId)}`) }))
     .filter(({ item }) => itemBelongsToTab(item, query.tab, actor.sicil));
   const items = matched.slice(0, query.pageSize).map(({ item }) => item);
-  const boundary = matched[query.pageSize - 1];
+  // Ayrıntı okumasında elenen adaylar devamı kapatmaz. İmleç yalnızca
+  // gösterilen satırdan üretilir; hiçbiri kalmadıysa sayfa numarasıyla ilerlenir.
+  const hasNext = order.length > query.pageSize;
+  const boundary = matched[items.length - 1];
   const total = Number(pagination.Total || 0);
   const page = Number(pagination.Page || 0);
   return {
@@ -535,8 +538,8 @@ export async function readRequestInboxPage(executor, actor, input = {}, attempt 
     total,
     page,
     pageSize: query.pageSize,
-    hasNext: matched.length > query.pageSize,
-    nextCursor: matched.length > query.pageSize ? encodeRequestInboxCursor(boundary.item, boundary.entry, pagination) : null,
+    hasNext,
+    nextCursor: hasNext && boundary ? encodeRequestInboxCursor(boundary.item, boundary.entry, pagination) : null,
     cursorReset: Boolean(query.cursor && !pagination.CursorUsed),
     counts: {
       pending: Number(counts.IncomingCount || 0),

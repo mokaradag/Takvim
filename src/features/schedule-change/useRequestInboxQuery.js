@@ -17,8 +17,8 @@ const EMPTY = Object.freeze({
  * Talepler · Gelenler / Gönderdiklerim / Geçmiş sorgusu.
  *
  * Üç kaynağın birleşik listesi SUNUCUDA süzülür ve sayfalanır; geçmiş uygulama
- * anlık görüntüsüne yüklenmez. Zil sayaçları değiştiğinde (okundu işareti,
- * karar, yeni bildirim) sayfa yeniden okunur; geç gelen yanıt yok sayılır.
+ * anlık görüntüsüne yüklenmez. Zil sayaçları değiştiğinde veya anlık görüntü
+ * yenilendiğinde sayfa yeniden okunur; geç gelen yanıt yok sayılır.
  */
 export function useRequestInboxQuery(query, enabled = true) {
   const session = useSessionContext();
@@ -28,17 +28,18 @@ export function useRequestInboxQuery(query, enabled = true) {
   const actual = session?.dataMode === 'actual';
   const key = JSON.stringify(query);
   const [revision, setRevision] = useState(0);
-  const [state, setState] = useState({ key: '', data: EMPTY, retainedItems: [], loading: false, error: null });
+  const [state, setState] = useState({ key: '', data: null, retainedItems: [], loading: false, error: null });
   useEffect(() => {
     if (!actual || !enabled) return undefined;
     let cancelled = false;
-    setState((current) => ({ ...current, loading: true, error: null }));
+    // Doğrulanmış sayfa arka planda yenilenirken yükleme bildirimi gösterilmez.
+    setState((current) => (current.key === key && current.data ? current : { ...current, loading: true, error: null }));
     const timer = setTimeout(async () => {
       const result = await fetchRequestInbox(JSON.parse(key));
       if (cancelled) return;
       setState((current) => ({
         key,
-        data: result.ok ? result.value : (current.key === key ? current.data : EMPTY),
+        data: result.ok ? result.value : (current.key === key ? current.data : null),
         retainedItems: result.ok
           ? (Array.isArray(result.value.projects) ? result.value.projects : [...current.retainedItems, ...(result.value.items || [])])
           : current.retainedItems,
@@ -49,9 +50,9 @@ export function useRequestInboxQuery(query, enabled = true) {
     return () => { cancelled = true; clearTimeout(timer); };
   }, [actual, enabled, key, revision, summary, notificationSummary, lastRefreshedAt]);
   return {
-    data: actual && state.key === key ? state.data : EMPTY,
+    data: actual && state.key === key ? (state.data ?? EMPTY) : EMPTY,
     retainedProjects: actual ? state.retainedItems : [],
-    loading: actual && enabled && (state.loading || state.key !== key),
+    loading: actual && enabled && (state.key !== key || (!state.data && state.loading)),
     error: state.key === key ? state.error : null,
     actual,
     refresh: () => setRevision((value) => value + 1)

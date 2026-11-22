@@ -9,8 +9,10 @@ let accountGuard = null;
 // sunucu yetkisinde kullanılmaz. Eşlemeler yalnızca kimlik çevirir; erişim vermez.
 export function activateActualIdAliases(aliases, guard = null) {
   accountGuard = guard;
-  activeAliases = new Map([...aliases].filter(([actual, client]) => extractActualId(client) !== actual));
-  outgoingIds = new Map([...activeAliases].map(([actual, client]) => [`${actualIdAliasType(aliases, actual)}:${extractActualId(client)}`, actual]));
+  activeAliases = aliases;
+  outgoingIds = new Map([...aliases]
+    .filter(([actual, client]) => extractActualId(client) !== actual)
+    .map(([actual, client]) => [`${actualIdAliasType(aliases, actual)}:${extractActualId(client)}`, actual]));
 }
 
 export function clearActualAccount(storage) {
@@ -19,7 +21,11 @@ export function clearActualAccount(storage) {
 }
 
 function outgoing(value, type) { return outgoingIds.get(`${type}:${extractActualId(value)}`) || value; }
-function incoming(value) { return activeAliases.get(extractActualId(value)) || value; }
+function incoming(value, restoreFormattingAliases) {
+  const actual = extractActualId(value);
+  const alias = activeAliases.get(actual);
+  return alias && (restoreFormattingAliases || extractActualId(alias) !== actual) ? alias : value;
+}
 const ENTITY_KEYS = new Map([['taskId', 'TASK'], ['projectId', 'PROJECT'], ['currentProjectId', 'PROJECT'], ['wbsId', 'WBS']]);
 
 export function translateEntityRequest(path, init) {
@@ -47,7 +53,7 @@ export function translateEntityRequest(path, init) {
 }
 
 export function restoreEntityResponse(value, context = {}) {
-  const { method = 'GET', guard = accountGuard } = context;
+  const { method = 'GET', guard = accountGuard, restoreFormattingAliases = false } = context;
   // Yanıt beklenirken hesap değişse de başarılı sunucu değişimi başarılı kalır.
   // Başka hesabın eşlemeleriyle geri yükleme yapılmaz.
   try {
@@ -64,7 +70,7 @@ export function restoreEntityResponse(value, context = {}) {
     if (Array.isArray(item)) return item.map(restore);
     if (!item || typeof item !== 'object') return item;
     return Object.fromEntries(Object.entries(item).map(([key, child]) => [key,
-      ENTITY_KEYS.has(key) ? incoming(child) : restore(child)]));
+      ENTITY_KEYS.has(key) ? incoming(child, restoreFormattingAliases) : restore(child)]));
   }
   return restore(value);
 }

@@ -15,7 +15,6 @@ export function dataReloadSingleFlightOptions(refreshMode = 'manual', {
   return {
     skipIfBusy: refreshMode === 'automatic',
     operationKind: refreshMode,
-    queueIfActiveKind: refreshMode === 'automatic' ? null : 'automatic',
     requestKey: `${refreshMode}:${discardFailedTaskUpdates ? 1 : 0}:${preserveFailedTaskUpdates ? 1 : 0}`
   };
 }

@@ -26,7 +26,8 @@ export function useAssignmentCoordinationQuery(query, enabled = true) {
   useEffect(() => {
     if (!actual || !enabled) return undefined;
     let cancelled = false;
-    setState((current) => ({ ...current, loading: true, error: null }));
+    // Doğrulanmış sayfa arka planda yenilenirken yükleme bildirimi gösterilmez.
+    setState((current) => (current.key === key && current.data ? current : { ...current, loading: true, error: null }));
     const timer = setTimeout(async () => {
       const result = await fetchAssignmentCoordinations(JSON.parse(key));
       if (cancelled) return;
@@ -47,7 +48,7 @@ export function useAssignmentCoordinationQuery(query, enabled = true) {
     data: confirmed ?? EMPTY,
     retainedProjects: actual ? state.retainedItems : [],
     confirmedTotal: confirmed?.counts.all ?? null,
-    loading: actual && enabled && (state.loading || state.key !== key),
+    loading: actual && enabled && (state.key !== key || (!confirmed && state.loading)),
     error: state.key === key ? state.error : null,
     actual,
     refresh: () => setRevision((value) => value + 1)

@@ -544,7 +544,7 @@ test('farklı seçenek taşıyan yenileme isteği yutulmaz', async () => {
   const second = singleFlight.run(async () => {
     ran.push('discard');
     return { ok: true };
-  }, { operationKind: 'manual', queueIfActiveKind: 'automatic', requestKey: 'manual:1:0' });
+  }, { operationKind: 'manual', requestKey: 'manual:1:0' });
 
   release();
   await Promise.all([first, second]);

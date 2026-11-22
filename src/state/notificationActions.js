@@ -74,8 +74,7 @@ export function createNotificationActions({
       const result = await markItems(notifications, action);
       if (!result?.ok) {
         if (AMBIGUOUS_OUTCOME_CODES.has(result?.code)) {
-          const reload = await refreshAfterWrite();
-          if (reload?.ok === false) beginInboxRead();
+          await refreshAfterWrite();
         }
         return result;
       }

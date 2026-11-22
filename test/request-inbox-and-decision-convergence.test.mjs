@@ -6,6 +6,8 @@ import postcss from 'postcss';
 import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mjs';
 import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 import { CLIENT_STATE, findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
+import { activateActualIdAliases } from '../src/data/api/activeActualIdAliases.js';
+import { restoreActualSnapshotIds } from '../src/data/api/createApiRepository.js';
 
 registerServerOnlyShim();
 
@@ -32,7 +34,7 @@ const { ScheduleRequestDetails } = await import('../src/features/schedule-change
 const { ScheduleRequestsView } = await import('../src/features/schedule-change/ScheduleRequestsView.jsx');
 const { TaskTablePagination } = await import('../src/features/tasks/TaskTablePagination.jsx');
 const { useRequestInboxQuery } = await import('../src/features/schedule-change/useRequestInboxQuery.js');
-const { fetchRequestInbox } = await import('../src/data/api/assignmentCoordinationClient.js');
+const { fetchRequestInbox, markNotificationItems } = await import('../src/data/api/assignmentCoordinationClient.js');
 const store = await import('../src/server/assignment/assignmentCoordinationStore.js');
 const coordinationQueries = await import('../src/server/assignment/assignmentCoordinationQueries.js');
 const { withSqlTransaction } = await import('../src/server/db/pool.js');
@@ -231,6 +233,33 @@ test('birleşik okundu ucu tarih talebi kaynağını sürüm denetimiyle kabul e
       notificationQueries.markNotifications({ action: 'read', notifications: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', source: 'SCHEDULE_REQUEST' }] }),
       (error) => error.code === 'CONFLICT'
     );
+  } finally { await stack.dispose(); }
+});
+
+test('karışık okundu işleminde eski tarih talebi sürümü güncel koordinasyonun işaretlenmesini engellemez', async () => {
+  const requestId = '66666666-6666-4666-8666-000000000088';
+  const stack = await createActualStack(seed({
+    taskScheduleChangeRequests: [{
+      RequestId: requestId, TaskId: TASK_ID, RequesterSicil: ORDINARY, DecisionOwnerSicil: UNIT_MANAGER,
+      Status: 'ACCEPTED', CreatedAt: '2026-10-02T10:00:00Z', DecidedAt: '2026-10-03T10:00:00Z'
+    }]
+  }), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const record = await requestAssignment(stack);
+    await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(record.id, {
+      decision: 'REJECT', version: record.version
+    }));
+    const before = await page({ tab: 'pending' });
+    const schedule = before.items.find((item) => item.id === requestId);
+    const coordination = before.items.find((item) => item.id === record.id);
+    assert.ok(schedule?.unread && coordination?.unread);
+    const result = await notificationQueries.markNotifications({ action: 'read', notifications: [
+      { ...schedule, version: Buffer.alloc(8, 255).toString('base64') },
+      coordination
+    ] });
+    assert.equal(result.ok, true);
+    assert.equal(result.inbox.scheduleRequests.find((item) => item.id === requestId)?.unread, true);
+    assert.equal(result.inbox.assignmentCoordinations.find((item) => item.id === record.id)?.unread, false);
   } finally { await stack.dispose(); }
 });
 
@@ -483,6 +512,29 @@ test('okundu işareti tam anlık görüntü okumadan yalnız dönen zil kutusunu
   assert.equal(legacy.calls.reload, 1, 'kutuyu döndürmeyen eski sunucuda olağan yenilemeye düşülür');
 });
 
+test('okundu yanıtındaki üç zil kaynağı anlık görüntüyle aynı istemci kimliklerini taşır', async (t) => {
+  const currentProjectId = '66666666-6666-4666-8666-000000000087';
+  const aliases = new Map([
+    [TASK_ID, `task-${TASK_ID}`],
+    [PROJECT_ID, `project-${PROJECT_ID}`],
+    [currentProjectId, 'project-88888888-8888-4888-8888-000000000088']
+  ]);
+  activateActualIdAliases(aliases);
+  t.after(() => activateActualIdAliases(new Map()));
+  const item = { id: TASK_ID, taskId: TASK_ID, projectId: PROJECT_ID, currentProjectId, version: 'sürüm' };
+  const bell = { scheduleRequests: [item], assignmentCoordinations: [item], taskNotifications: [item] };
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    assert.equal(init.method, 'PATCH');
+    return readResponse({ ok: true, inbox: bell });
+  });
+  const { actions, calls } = actionsHarness({ mark: markNotificationItems });
+  const result = await actions.markNotifications([{ ...item, source: 'TASK_EVENT' }]);
+  assert.equal(result.ok, true);
+  const restored = restoreActualSnapshotIds(bell, aliases);
+  for (const key of Object.keys(bell)) assert.deepEqual(calls.applied[0].inbox[key], restored[key], key);
+  assert.equal(calls.reload, 0);
+});
+
 test('daha önce gönderilmiş okumanın geç yanıtı yeni zil durumunu geri almaz', () => {
   const base = createInitialState({ tasks: [], notificationSummary: { unreadCount: 2, pendingCount: 1 } });
   const marked = appStateReducer(base, {
@@ -553,6 +605,8 @@ test('Atama Koordinasyonu aynı zil sayısıyla yenilenir, hatada son geçerli s
   assert.deepEqual(counts, [40]);
   lifecycle.lastRefreshedAt = 'ikinci';
   view.render();
+  view.render();
+  assert.equal(findElement(view.output, (node) => node.props?.role === 'status'), null);
   await showResponse();
   assert.ok(findElement(view.output, (node) => node.props?.role === 'alert'));
   assert.deepEqual(counts, [40]);
@@ -707,6 +761,15 @@ test('geçici tam proje yetkisiyle geçmiş koordinasyonu okundu işaretlemek ye
   } finally {
     await stack.dispose();
   }
+});
+
+test('eski koordinasyon alıcılarını düzeltirken aynı kayıt ve Sicil için karar denetimi aranır', () => {
+  const migration = read('database/MR_Upgrade_0020_Coordination_Recipient_History.sql');
+  assert.match(migration, /SET RecipientRole = 'MANAGER'/);
+  assert.match(migration, /WHERE r\.RecipientRole = 'REQUESTER'\s+AND r\.Sicil <> c\.RequesterSicil\s+AND EXISTS/);
+  assert.match(migration, /a\.EntityType = 'TASK_ASSIGNMENT_COORDINATION'\s+AND a\.EntityId = LOWER\(CONVERT\(nvarchar\(36\), c\.CoordinationId\)\)\s+AND a\.ActionCode = 'UPDATE'\s+AND a\.ActorSicil = r\.Sicil/);
+  assert.doesNotMatch(migration, /DecisionBySicil|SET[^;]*ReadVersion/i);
+  assert.match(read('database/MR_Create_Durable_Persistence.sql'), /N'0020_coordination_recipient_history'/);
 });
 
 test('örtüşen okundu işaretleri sıraya girer ve son işlenen durumu korur', async () => {
@@ -894,6 +957,47 @@ test('birleşik gelen kutusu üyelik ile ayrıntı arasında eşzamanlı değiş
   assert.equal(calls, 2, 'anlık görüntü sapmasında sınırlı tek yineleme yapılır');
   assert.equal(result.items.length, 0, 'okunmuş bilgilendirme Gelenler listesine sızmaz');
   assert.equal(result.counts.pending, 0);
+});
+
+test('yinelemeden sonra adaylar eksilse bile sonraki sayfa gösterilen son satırın imleciyle açılır', async () => {
+  const ids = [31, 32, 33, 34].map((suffix) => `66666666-6666-4666-8666-0000000000${suffix}`);
+  const rows = ids.map((id, index) => taskEvent(id, `2026-10-0${4 - index}T10:00:00.0000000Z`));
+  const orderFor = (list) => list.map((row, index) => ({
+    Ordinal: index + 1, Source: 'TASK_EVENT', ItemId: row.NotificationId, CursorSortAt: row.OccurredAt
+  }));
+  const actor = { sicil: EXTERNAL };
+  let calls = 0;
+  let visible = [rows[0]];
+  const executor = { request() {
+    const params = {};
+    const req = {
+      input(name, _type, value) { params[name] = value; return req; },
+      async query() {
+        calls += 1;
+        if (params.hasCursor) assert.equal(params.cursorItemId, ids[0]);
+        const candidates = params.hasCursor ? [rows[3]] : rows.slice(0, 3);
+        const details = params.hasCursor ? candidates : visible;
+        return { recordsets: [
+          [], [], [{ Total: 4, Page: params.page, CursorUsed: params.hasCursor }],
+          orderFor(candidates), [], [], details
+        ] };
+      }
+    };
+    return req;
+  } };
+  const first = await inbox.readRequestInboxPage(executor, actor, { tab: 'history', pageSize: 2 });
+  assert.equal(calls, 2);
+  assert.deepEqual(first.items.map((item) => item.id), [ids[0]]);
+  assert.equal(first.hasNext, true);
+  assert.equal(JSON.parse(Buffer.from(first.nextCursor, 'base64url')).i, ids[0]);
+  const next = await inbox.readRequestInboxPage(executor, actor, { tab: 'history', page: 1, pageSize: 2, cursor: first.nextCursor });
+  assert.deepEqual(next.items.map((item) => item.id), [ids[3]]);
+  assert.equal(next.hasNext, false);
+  visible = [];
+  const empty = await inbox.readRequestInboxPage(executor, actor, { tab: 'history', pageSize: 2 });
+  assert.deepEqual(empty.items, []);
+  assert.equal(empty.hasNext, true);
+  assert.equal(empty.nextCursor, null, 'görünmeyen satırın kimliği imlece yazılmaz');
 });
 
 test('çok projeli toplu atama bildirimi proje süzgecinde yalnızca ilk görevin projesine bağlanmaz ve uzun tarih aralığı kabul edilir', async () => {
@@ -1258,7 +1362,8 @@ test('bozuk başarılı gelen kutusu yanıtı INVALID_RESPONSE olarak reddedilir
 
   // Aynı sorgunun ikinci okuması başarısız olduğunda son geçerli liste korunur.
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  globalThis[CLIENT_STATE] = { session: { dataMode: 'actual' }, scheduleRequestSummary: { unreadCount: 0, pendingCount: 0 }, notificationSummary: { unreadCount: 1, pendingCount: 0 } };
+  const dataLifecycle = { lastRefreshedAt: 'ilk' };
+  globalThis[CLIENT_STATE] = { session: { dataMode: 'actual' }, dataLifecycle, scheduleRequestSummary: { unreadCount: 0, pendingCount: 0 }, notificationSummary: { unreadCount: 1, pendingCount: 0 } };
   t.after(() => { delete globalThis[CLIENT_STATE]; });
   let latest;
   function Probe({ query }) {
@@ -1268,6 +1373,7 @@ test('bozuk başarılı gelen kutusu yanıtı INVALID_RESPONSE olarak reddedilir
   const query = { tab: 'pending', page: 0 };
   const view = mountComponent(Probe, { query });
   t.after(() => view.unmount());
+  assert.equal(latest.loading, true, 'ilk yükleme bildirilir');
   t.mock.timers.tick(250);
   await new Promise((resolve) => setImmediate(resolve));
   view.render({ query });
@@ -1275,8 +1381,10 @@ test('bozuk başarılı gelen kutusu yanıtı INVALID_RESPONSE olarak reddedilir
 
   // Sonraki yenileme geçici ağ hatası döndürür.
   globalThis.fetch = async () => { throw new Error('ağ koptu'); };
-  latest.refresh();
+  dataLifecycle.lastRefreshedAt = 'ikinci';
   view.render({ query });
+  view.render({ query });
+  assert.equal(latest.loading, false, 'aynı sayfanın arka plan yenilemesi yükleme bildirimi göstermez');
   t.mock.timers.tick(250);
   await new Promise((resolve) => setImmediate(resolve));
   view.render({ query });

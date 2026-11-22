@@ -12,7 +12,7 @@ import { translateEntityRequest, restoreEntityResponse } from './activeActualIdA
  */
 const REQUEST_TIMEOUT_MS = 30000;
 
-export async function requestJson(path, init) {
+export async function requestJson(path, init, { restoreFormattingAliases = false } = {}) {
   const translated = translateEntityRequest(path, init);
   if (translated.failure) return translated.failure;
   ({ path, init } = translated);
@@ -56,7 +56,9 @@ export async function requestJson(path, init) {
       message: body?.error?.message || 'İşlem tamamlanamadı.'
     };
   }
-  const restored = restoreEntityResponse(body, { method: init?.method, guard: translated.responseGuard, account: translated.responseAccount });
+  const restored = restoreEntityResponse(body, {
+    method: init?.method, guard: translated.responseGuard, account: translated.responseAccount, restoreFormattingAliases
+  });
   return restored?.ok === false ? restored : { ok: true, value: restored };
 }
 

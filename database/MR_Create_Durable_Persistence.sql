@@ -1056,7 +1056,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0016_ai_user_credentials', N'Sicil başına şifreli kişisel yapay zekâ API anahtarı (AES-256-GCM, düz metin saklanmaz)'),
            (N'0017_ai_assistant_conversations', N'Rota AI konuşma geçmişi: Sicil sahipli konuşmalar ve sıralı iletiler (akıl yürütme ve ham akış saklanmaz)'),
            (N'0018_ai_message_evidence', N'Rota AI yanıt kanıtları: iletiye bağlı sınırlı ve güvenli araç sonucu görünümü (SQL, yetki ayrıntısı ve anahtar saklanmaz)'),
-           (N'0019_creation_allocations', N'Caller-bound, expiring one-use server creation IDs');
+           (N'0019_creation_allocations', N'Caller-bound, expiring one-use server creation IDs'),
+           (N'0020_coordination_recipient_history', N'Eski atama koordinasyonu karar alıcılarının rolünü düzeltir');
 
     COMMIT TRANSACTION;
 END TRY
