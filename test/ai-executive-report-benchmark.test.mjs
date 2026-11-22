@@ -113,39 +113,107 @@ test('kıyas: özel karşılaştırma iki geçerli tarih ve eşit uzunlukta bitm
     'S39 yönetici beyanı kökeni taşımalıdır');
 });
 
-/** Anlık ölçülerin veri_ani zaman damgasını isteğin kesiti ve kıyas günü üst sınırıyla doğrular. */
-function checkSnapshotTimestamp(veriAni, request, asOf, label) {
-  assert.match(veriAni ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u,
-    `${label}: anlık durum ölçüsü geçerli veri_ani taşımalıdır`);
-  const parsed = Date.parse(veriAni);
-  assert.ok(Number.isFinite(parsed), `${label}: anlık durum ölçüsü geçerli veri_ani taşımalıdır`);
-  const snapshotDay = calendarDate(veriAni.slice(0, 10));
+const REPRESENTATIVE_SCOPE_TYPES = new Set(['proje', 'projeler', 'kisi', 'ekip']);
+const LEGACY_SCOPE_KEYS = ['proje', 'projeler', 'kisi', 'ekip'];
+const PROTECTED_TEXT_FIELDS = ['degisiklik_metni', 'once_metin', 'sonra_metin', 'not_metni'];
+const EVIDENCE_SOURCES = {
+  gorev: new Set(['rota_task_search']),
+  not: new Set(['MR_AuditLog']),
+  hareket: new Set(['rota_activity_search']),
+  belge: new Set(['gecici_yukleme'])
+};
+const METRIC_SPECS = {
+  tamamlanan: { kind: 'period', sources: new Set(['rota_task_analytics']) },
+  hareket: { kind: 'period', sources: new Set(['rota_activity_search']) },
+  acik: { kind: 'snapshot', sources: new Set(['rota_task_analytics']) },
+  geciken: { kind: 'snapshot', sources: new Set(['rota_task_analytics']) },
+  yaklasan_7_gun: { kind: 'snapshot', sources: new Set(['rota_task_analytics']) },
+  'history.undatedDone': { kind: 'snapshot', sources: new Set(['rota_task_analytics']) }
+};
+const TURKISH_MONTHS = {
+  Ocak: '01', Şubat: '02', Mart: '03', Nisan: '04', Mayıs: '05', Haziran: '06',
+  Temmuz: '07', Ağustos: '08', Eylül: '09', Ekim: '10', Kasım: '11', Aralık: '12'
+};
+
+/** Saat dilimi bilgisi taşıyan ISO-8601 zaman damgasını doğrular ve milisaniye/gün bilgisini döndürür. */
+function parseIsoTimestamp(value, label, message) {
+  assert.match(value ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u, `${label}: ${message}`);
+  const ms = Date.parse(value);
+  assert.ok(Number.isFinite(ms), `${label}: ${message}`);
+  const day = calendarDate(value.slice(0, 10));
+  return { ms, day };
+}
+
+/** 4i-kanit-1 kanonik paket kesiti (kök veri_ani) ile rapor dönemi ve kıyas günü sınırlarını doğrular. */
+function resolvePackageCutOff(item, asOf) {
+  const cutOffValue = item.veri_ani ?? item.istek?.veri_ani;
+  const parsed = parseIsoTimestamp(cutOffValue, item.id, 'kanonik paket veri_ani kesiti geçerli olmalıdır');
+  if (item.veri_ani && item.istek?.veri_ani) {
+    const reqParsed = parseIsoTimestamp(item.istek.veri_ani, item.id, 'istek veri_ani geçersiz');
+    assert.equal(parsed.ms, reqParsed.ms, `${item.id}: istek veri_ani paket kökündeki veri_ani ile eşleşmelidir`);
+  }
+  const periodEnd = calendarDate(item.istek.donem.bitis);
   const asOfDay = calendarDate(asOf);
-  assert.ok(snapshotDay <= asOfDay, `${label}: anlık ölçünün veri_ani kıyas gününü aşamaz`);
-  if (request.veri_ani) {
-    const requestParsed = Date.parse(request.veri_ani);
-    assert.ok(Number.isFinite(requestParsed) && calendarDate(request.veri_ani.slice(0, 10)) <= asOfDay,
-      `${label}: istek veri_ani geçersiz`);
-    assert.equal(parsed, requestParsed, `${label}: anlık ölçünün veri_ani istek kesitiyle eşleşmelidir`);
+  assert.ok(parsed.day >= periodEnd, `${item.id}: paket veri_ani kesiti rapor dönemi bitişinden önce olamaz`);
+  assert.ok(parsed.day <= asOfDay, `${item.id}: paket veri_ani kıyas gününü aşamaz`);
+  return parsed;
+}
+
+/** Anlık ölçülerin veri_ani zaman damgasını paket kökündeki kanonik kesit ve kıyas günü üst sınırıyla doğrular. */
+function checkSnapshotTimestamp(veriAni, cutOff, asOf, label) {
+  const parsed = parseIsoTimestamp(veriAni, label, 'anlık durum ölçüsü geçerli veri_ani taşımalıdır');
+  const asOfDay = calendarDate(asOf);
+  assert.ok(parsed.day <= asOfDay, `${label}: anlık ölçünün veri_ani kıyas gününü aşamaz`);
+  assert.equal(parsed.ms, cutOff.ms, `${label}: anlık ölçünün veri_ani paket veri_ani kesitiyle eşleşmelidir`);
+}
+
+/** Ölçü kanıtının adını, güvenilir kaynağını, sonlu negatif olmayan değerini ve zaman kökenini doğrular. */
+function checkMetricEvidence(entry, item, cutOff, asOf, label) {
+  assert.ok(Object.hasOwn(METRIC_SPECS, entry.olcu), `${label}: tanımsız ölçü adı (${entry.olcu})`);
+  const metricSpec = METRIC_SPECS[entry.olcu];
+  assert.ok(metricSpec.sources.has(entry.kaynak), `${label}: ölçü kanıtı için güvenilir kaynak zorunludur (${entry.kaynak})`);
+  assert.ok(typeof entry.deger === 'number' && Number.isFinite(entry.deger) && Number.isInteger(entry.deger) && entry.deger >= 0,
+    `${label}: sayım ölçüsü sonlu ve negatif olmayan tamsayı olmalıdır`);
+  if (metricSpec.kind === 'period') {
+    assert.ok(entry.donem, `${label}: dönem ölçüsü donem kökeni taşımalıdır`);
+    assert.ok(calendarDate(entry.donem.baslangic) <= calendarDate(entry.donem.bitis), `${label}: ölçü dönemi geçersiz`);
+    assert.deepEqual(entry.donem, item.istek.donem, `${label}: dönem ölçüsü istek dönemiyle eşleşmelidir`);
   } else {
-    assert.equal(snapshotDay, calendarDate(request.donem.bitis),
-      `${label}: anlık ölçünün veri_ani rapor dönemi bitiş kesitiyle eşleşmelidir`);
+    checkSnapshotTimestamp(entry.veri_ani, cutOff, asOf, label);
   }
 }
 
-/** Kanıtın yetkili kişi/proje nüfusunun istek kapsamıyla uyumlu olduğunu doğrular. */
+/** Kanonik istek.kapsam ({ tur, kimlikler }) yapısını doğrular ve paralel eski alanları reddeder. */
+function validateCanonicalScope(item) {
+  const scope = item.istek?.kapsam;
+  assert.ok(scope && typeof scope === 'object', `${item.id}: istek.kapsam nesnesi zorunludur`);
+  assert.ok(REPRESENTATIVE_SCOPE_TYPES.has(scope.tur), `${item.id}: tanımsız kapsam türü (${scope.tur})`);
+  for (const legacyKey of LEGACY_SCOPE_KEYS) {
+    assert.equal(Object.hasOwn(scope, legacyKey), false,
+      `${item.id}: istek.kapsam paralel '${legacyKey}' alanı yerine kanonik 'kimlikler' dizisini kullanmalıdır`);
+  }
+  assert.ok(Array.isArray(scope.kimlikler) && scope.kimlikler.length > 0, `${item.id}: istek.kapsam.kimlikler boş olamaz`);
+  assert.equal(new Set(scope.kimlikler).size, scope.kimlikler.length, `${item.id}: istek.kapsam.kimlikler tekil olmalıdır`);
+  if (scope.tur !== 'projeler') {
+    assert.equal(scope.kimlikler.length, 1, `${item.id}: tekil kapsam türü (${scope.tur}) tek kimlik taşımalıdır`);
+  }
+  return scope;
+}
+
+/** Kanıtın yetkili kişi/proje/ekip nüfusunun istek kapsamıyla uyumlu olduğunu doğrular. */
 function checkEvidenceScope(item, entry, roster) {
   const { kisiler, projeler, ekipler } = roster;
-  const scope = item.istek.kapsam;
+  const scope = validateCanonicalScope(item);
   const label = `${item.id}/${entry.id}`;
   // Kadro doğrulaması ayrı bir bütünlük kuralı olarak korunur.
   if (entry.proje) assert.ok(Object.hasOwn(projeler, entry.proje), `${label}: kadro dışı proje`);
   for (const project of entry.kapsam || []) assert.ok(Object.hasOwn(projeler, project), `${label}: kadro dışı proje`);
   if (entry.sorumlu) assert.ok(kisiler.includes(entry.sorumlu), `${label}: kadro dışı kişi`);
+  if (entry.ekip) assert.ok(ekipler.includes(entry.ekip), `${label}: kadro dışı ekip`);
 
   if (scope.tur === 'proje' || scope.tur === 'projeler') {
-    const requestedProjects = new Set(scope.tur === 'proje' ? [scope.proje] : scope.projeler);
-    assert.ok(requestedProjects.size > 0 && [...requestedProjects].every((code) => Object.hasOwn(projeler, code)),
+    const requestedProjects = new Set(scope.kimlikler);
+    assert.ok([...requestedProjects].every((code) => Object.hasOwn(projeler, code)),
       `${item.id}: istek proje kapsamı geçersiz`);
     const entryProjects = [...(entry.proje ? [entry.proje] : []), ...(entry.kapsam || [])];
     assert.ok(entryProjects.length > 0, `${label}: proje kapsamlı istekte kanıt proje kimliği taşımalıdır`);
@@ -153,14 +221,19 @@ function checkEvidenceScope(item, entry, roster) {
       assert.ok(requestedProjects.has(code), `${label}: kanıt istenen proje kapsamı dışındadır (${code})`);
     }
   } else if (scope.tur === 'kisi') {
-    assert.ok(kisiler.includes(scope.kisi), `${item.id}: istek kişisi kadro dışı`);
-    assert.equal(entry.sorumlu, scope.kisi, `${label}: kişi kapsamlı istekte kanıt istenen kişiye ait olmalıdır`);
+    const [requestedPerson] = scope.kimlikler;
+    assert.ok(kisiler.includes(requestedPerson), `${item.id}: istek kişisi kadro dışı`);
+    assert.equal(entry.sorumlu, requestedPerson, `${label}: kişi kapsamlı istekte kanıt istenen kişiye ait olmalıdır`);
   } else if (scope.tur === 'ekip') {
-    assert.ok(ekipler.includes(scope.ekip), `${item.id}: istek ekibi kadro dışı`);
+    const [requestedTeam] = scope.kimlikler;
+    assert.ok(ekipler.includes(requestedTeam), `${item.id}: istek ekibi kadro dışı`);
+    assert.equal(entry.ekip, requestedTeam, `${label}: ekip kapsamlı istekte kanıt istenen ekibe ait olmalıdır`);
     if (entry.tur === 'olcu') {
       const entryProjects = [...(entry.proje ? [entry.proje] : []), ...(entry.kapsam || [])];
       assert.ok(entryProjects.length > 0, `${label}: ekip kapsamlı toplu ölçü açık kapsam kimliği taşımalıdır`);
     }
+  } else {
+    assert.fail(`${item.id}: desteklenmeyen kapsam türü (${scope.tur})`);
   }
 }
 
@@ -168,25 +241,38 @@ function checkRepresentativeCase(item, scenario, roster, asOf = benchmark.kiyas_
   const { projeler, kapali_varliklar: closed } = roster;
   assert.equal(scenario?.temsili_vaka, item.id, item.id);
   assert.equal(scenario.kategori, item.kategori, item.id);
+  assert.ok(spec.ozellestirme.serbest.notlar.includes(item.istek.notlar), `${item.id}: istek.notlar değeri geçersiz`);
   const { baslangic, bitis } = item.istek.donem;
-  assert.ok(calendarDate(baslangic) <= calendarDate(bitis), `${item.id}: dönem tarih sırası geçersiz`);
+  const periodEnd = calendarDate(bitis);
+  assert.ok(calendarDate(baslangic) <= periodEnd, `${item.id}: dönem tarih sırası geçersiz`);
+  const cutOff = resolvePackageCutOff(item, asOf);
+  const asOfDay = calendarDate(asOf);
   const evidence = new Map(item.kanitlar.map((entry) => [entry.id, entry]));
   assert.equal(evidence.size, item.kanitlar.length, `${item.id}: kanıt kimliği benzersiz`);
   for (const entry of item.kanitlar) {
+    const label = `${item.id}/${entry.id}`;
     checkEvidenceScope(item, entry, roster);
-    if (entry.kayit_zamani) assert.ok(!Number.isNaN(Date.parse(entry.kayit_zamani)), `${item.id}/${entry.id}`);
+    // Rıza yoksa (notlar !== 'dahil') görev notu veya korunan değişiklik metni kanıt paketine giremez.
+    if (item.istek.notlar !== 'dahil') {
+      assert.notEqual(entry.tur, 'not', `${label}: notlar hariç istendiğinde not kanıtı kabul edilmez`);
+      assert.notEqual(entry.kaynak, 'MR_AuditLog', `${label}: notlar hariç istendiğinde denetim metni kanıtı kabul edilmez`);
+      for (const field of PROTECTED_TEXT_FIELDS) {
+        assert.equal(Object.hasOwn(entry, field), false, `${label}: notlar hariç istendiğinde korunan metin alanı (${field}) yasak`);
+      }
+    }
+    if (entry.kayit_zamani) {
+      const recorded = parseIsoTimestamp(entry.kayit_zamani, label, 'kayıt zamanı geçerli ISO zaman damgası olmalıdır');
+      assert.ok(recorded.ms <= cutOff.ms && recorded.day <= asOfDay, `${label}: not kayıt zamanı veri kesitini aşamaz`);
+    }
     if (entry.tur === 'olcu') {
-      const periodMetrics = new Set(['tamamlanan', 'hareket']);
-      const snapshotMetrics = new Set(['acik', 'geciken', 'yaklasan_7_gun', 'history.undatedDone']);
-      if (periodMetrics.has(entry.olcu)) {
-        assert.ok(entry.donem, `${item.id}/${entry.id}: dönem ölçüsü donem kökeni taşımalıdır`);
-        assert.ok(calendarDate(entry.donem.baslangic) <= calendarDate(entry.donem.bitis),
-          `${item.id}/${entry.id}: ölçü dönemi geçersiz`);
-        assert.deepEqual(entry.donem, item.istek.donem, `${item.id}/${entry.id}: dönem ölçüsü istek dönemiyle eşleşmelidir`);
-      } else if (snapshotMetrics.has(entry.olcu)) {
-        checkSnapshotTimestamp(entry.veri_ani, item.istek, asOf, `${item.id}/${entry.id}`);
-      } else {
-        assert.ok(entry.donem || entry.veri_ani, `${item.id}/${entry.id}: ölçü kanıtı dönem veya veri anı kökeni taşımalıdır`);
+      checkMetricEvidence(entry, item, cutOff, asOf, label);
+    } else {
+      assert.ok(Object.hasOwn(EVIDENCE_SOURCES, entry.tur), `${label}: tanımsız kanıt türü (${entry.tur})`);
+      assert.ok(EVIDENCE_SOURCES[entry.tur].has(entry.kaynak), `${label}: kanıt türü ile kaynak uyuşmuyor (${entry.kaynak})`);
+      if (entry.tur === 'gorev' && entry.gerceklesen_bitis != null) {
+        const completionDay = calendarDate(entry.gerceklesen_bitis);
+        assert.ok(completionDay <= periodEnd && completionDay <= cutOff.day,
+          `${label}: gerçekleşen bitiş tarihi rapor dönemini veya veri kesitini aşamaz`);
       }
     }
   }
@@ -203,6 +289,17 @@ function checkRepresentativeCase(item, scenario, roster, asOf = benchmark.kiyas_
     }
     for (const hiddenId of hiddenTasks) {
       assert.equal(claim.ifade.includes(hiddenId), false, `${item.id}: desteklenen ifade gizli görev içeremez (${hiddenId})`);
+    }
+    // Tekil görev kanıtının gerçekleşen bitiş tarihini anan ifade, kanıttaki tarihle tutarlı olmalıdır.
+    if (claim.kanitlar.length === 1) {
+      const cited = evidence.get(claim.kanitlar[0]);
+      if (cited?.tur === 'gorev' && cited.gerceklesen_bitis) {
+        const dateMatch = /(\d{1,2})\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+(\d{4})/u.exec(claim.ifade);
+        if (dateMatch) {
+          const isoClaimDate = `${dateMatch[3]}-${TURKISH_MONTHS[dateMatch[2]]}-${dateMatch[1].padStart(2, '0')}`;
+          assert.equal(isoClaimDate, cited.gerceklesen_bitis, `${item.id}: beklenen ifadedeki bitiş tarihi kanıtla eşleşmelidir`);
+        }
+      }
     }
     // Desteklenen ifadede anılan her proje, işaret edilen yetkili kanıtların kapsamında olmalıdır.
     const citedProjects = new Set();
@@ -232,23 +329,103 @@ function checkRepresentativeCase(item, scenario, roster, asOf = benchmark.kiyas_
   }
 }
 
-test('kıyas: temsili vakalar senaryolarla bire bir eşleşir; kanıt göndergeleri, tarihler ve kapsam geçerlidir', () => {
-  const scenarios = new Map(benchmark.senaryolar.map((scenario) => [scenario.id, scenario]));
-  const referenced = benchmark.senaryolar.filter((scenario) => scenario.temsili_vaka).map((scenario) => scenario.temsili_vaka);
-  assert.deepEqual([...referenced].sort(), benchmark.temsili_vakalar.map((item) => item.id).sort());
+/** Senaryo ↔ temsili vaka eşlemesinin tekil ve çift yönlü bire bir olduğunu doğrular. */
+function checkRepresentativeCaseMapping(scenariosList, casesList) {
+  const scenarios = new Map(scenariosList.map((scenario) => [scenario.id, scenario]));
+  const caseMap = new Map();
+  for (const item of casesList) {
+    assert.ok(!caseMap.has(item.id), `temsili vaka kimliği tekil olmalıdır: ${item.id}`);
+    caseMap.set(item.id, item);
+  }
+  const referencedCases = new Set();
+  for (const scenario of scenariosList) {
+    if (!scenario.temsili_vaka) continue;
+    assert.ok(!referencedCases.has(scenario.temsili_vaka), `temsili vaka birden fazla senaryoya bağlanamaz: ${scenario.temsili_vaka}`);
+    referencedCases.add(scenario.temsili_vaka);
+    const linked = caseMap.get(scenario.temsili_vaka);
+    assert.ok(linked, `senaryonun işaret ettiği temsili vaka yok: ${scenario.id} -> ${scenario.temsili_vaka}`);
+    assert.equal(linked.senaryo, scenario.id, `senaryo ↔ temsili vaka ters eşleşmesi bozuk: ${scenario.id} -> ${linked.id}`);
+  }
+  assert.equal(referencedCases.size, caseMap.size, 'bütün temsili vakalar bir senaryoya bağlı olmalıdır');
+  return scenarios;
+}
+
+test('kıyas: temsili vakalar senaryolarla bire bir eşleşir; kanıt göndergeleri, tarihler, kaynaklar ve kapsam geçerlidir', () => {
+  // S04 dokuz ayrı proje ve dört birim gerektirir; sentetik kadro bunu karşılamalıdır.
+  assert.ok(Object.keys(benchmark.sentetik_kadro.projeler).length >= 9, 'sentetik kadro S04 için en az 9 proje içermelidir');
+  assert.ok(benchmark.sentetik_kadro.birimler.length >= 4, 'sentetik kadro S04 için en az 4 birim içermelidir');
+
+  const scenarios = checkRepresentativeCaseMapping(benchmark.senaryolar, benchmark.temsili_vakalar);
   for (const item of benchmark.temsili_vakalar) {
     checkRepresentativeCase(item, scenarios.get(item.senaryo), benchmark.sentetik_kadro, benchmark.kiyas_gunu);
   }
+
+  // Yinelenen temsili vaka kimliği, ters senaryo eşleşmesi bozukluğu ve çoklu senaryo başvurusu reddedilmelidir.
+  const duplicatedCases = [...benchmark.temsili_vakalar, structuredClone(benchmark.temsili_vakalar[0])];
+  assert.throws(() => checkRepresentativeCaseMapping(benchmark.senaryolar, duplicatedCases), /temsili vaka kimliği tekil olmalıdır/);
+  const wrongReverseScenarios = structuredClone(benchmark.senaryolar);
+  wrongReverseScenarios.find((s) => s.id === 'S01').temsili_vaka = 'R1';
+  assert.throws(() => checkRepresentativeCaseMapping(wrongReverseScenarios, benchmark.temsili_vakalar), /ters eşleşmesi bozuk/);
+  const duplicateRefScenarios = structuredClone(benchmark.senaryolar);
+  duplicateRefScenarios.find((s) => s.id === 'S48').temsili_vaka = 'R1';
+  assert.throws(() => checkRepresentativeCaseMapping(duplicateRefScenarios, benchmark.temsili_vakalar), /birden fazla senaryoya bağlanamaz/);
+
   // İmkânsız takvim tarihi temsili vaka isteğinde reddedilmelidir.
   const badDate = structuredClone(benchmark.temsili_vakalar[0]);
   badDate.istek.donem.baslangic = '2026-02-30';
   assert.throws(() => checkRepresentativeCase(badDate, scenarios.get(badDate.senaryo), benchmark.sentetik_kadro),
     /geçersiz takvim tarihi/);
+
+  // Tanımsız kapsam türü veya eski paralel kapsam alanı (kimlikler yerine proje/projeler) reddedilmelidir.
+  const unknownScopeType = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R4'));
+  unknownScopeType.istek.kapsam = { tur: 'projee', kimlikler: ['PRJ-MELTEM'] };
+  assert.throws(() => checkRepresentativeCase(unknownScopeType, scenarios.get(unknownScopeType.senaryo), benchmark.sentetik_kadro),
+    /tanımsız kapsam türü/);
+  const legacyScopeKey = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R2'));
+  legacyScopeKey.istek.kapsam = { tur: 'projeler', projeler: ['PRJ-KUZEY', 'PRJ-UFUK', 'PRJ-PUSULA'] };
+  assert.throws(() => checkRepresentativeCase(legacyScopeKey, scenarios.get(legacyScopeKey.senaryo), benchmark.sentetik_kadro),
+    /kanonik 'kimlikler' dizisini kullanmalıdır/);
+
   // R1 isteği başka projeye çevrildiğinde eski proje kanıtı kadroda olsa bile reddedilmelidir.
   const r1WrongProject = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R1'));
-  r1WrongProject.istek.kapsam.proje = 'PRJ-UFUK';
+  r1WrongProject.istek.kapsam.kimlikler = ['PRJ-UFUK'];
   assert.throws(() => checkRepresentativeCase(r1WrongProject, scenarios.get(r1WrongProject.senaryo), benchmark.sentetik_kadro),
     /istenen proje kapsamı dışındadır/);
+
+  // Dönem sonrası gerçekleşen bitiş ve veri kesiti sonrası not kayıt zamanı reddedilmelidir.
+  const r1FutureCompletion = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R1'));
+  r1FutureCompletion.kanitlar.find((entry) => entry.id === 'E1').gerceklesen_bitis = '2027-01-01';
+  assert.throws(() => checkRepresentativeCase(r1FutureCompletion, scenarios.get(r1FutureCompletion.senaryo), benchmark.sentetik_kadro),
+    /gerçekleşen bitiş tarihi rapor dönemini veya veri kesitini aşamaz/);
+  const r4FutureNote = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R4'));
+  r4FutureNote.kanitlar.find((entry) => entry.id === 'E2').kayit_zamani = '2027-01-02T15:30:00+03:00';
+  assert.throws(() => checkRepresentativeCase(r4FutureNote, scenarios.get(r4FutureNote.senaryo), benchmark.sentetik_kadro),
+    /not kayıt zamanı veri kesitini aşamaz/);
+
+  // Notlar hariç istendiğinde (R5) not kanıtı veya korunan değişiklik metni reddedilmelidir.
+  const r5WithNote = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R5'));
+  r5WithNote.kanitlar.push({
+    id: 'E3', tur: 'not', kaynak: 'MR_AuditLog', proje: 'PRJ-UFUK', gorev: 'T-UFK-31',
+    kayit_zamani: '2026-11-07T10:00:00+03:00', metin: 'Rıza dışı görev notu'
+  });
+  assert.throws(() => checkRepresentativeCase(r5WithNote, scenarios.get(r5WithNote.senaryo), benchmark.sentetik_kadro),
+    /notlar hariç istendiğinde not kanıtı kabul edilmez/);
+
+  // Tanımsız ölçü adı, negatif ölçü değeri ve güvenilir olmayan ölçü kaynağı reddedilmelidir.
+  const r5BadMetric = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R5'));
+  r5BadMetric.kanitlar.find((entry) => entry.id === 'E2').olcu = 'tanimsiz_olcu';
+  r5BadMetric.kanitlar.find((entry) => entry.id === 'E2').deger = -19;
+  assert.throws(() => checkRepresentativeCase(r5BadMetric, scenarios.get(r5BadMetric.senaryo), benchmark.sentetik_kadro),
+    /tanımsız ölçü adı/);
+  const r5NegativeMetric = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R5'));
+  r5NegativeMetric.kanitlar.find((entry) => entry.id === 'E2').deger = -1;
+  assert.throws(() => checkRepresentativeCase(r5NegativeMetric, scenarios.get(r5NegativeMetric.senaryo), benchmark.sentetik_kadro),
+    /sonlu ve negatif olmayan tamsayı olmalıdır/);
+  const r3BadSource = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R3'));
+  r3BadSource.kanitlar.find((entry) => entry.id === 'E1').kaynak = 'MR_AuditLog';
+  assert.throws(() => checkRepresentativeCase(r3BadSource, scenarios.get(r3BadSource.senaryo), benchmark.sentetik_kadro),
+    /ölçü kanıtı için güvenilir kaynak zorunludur/);
+
   // R5 E2 ve R7 E2 toplu ölçüleri kapsam kimliği eksik veya çapraz kapsamlı olduğunda reddedilmelidir.
   const r5MissingScope = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R5'));
   delete r5MissingScope.kanitlar.find((entry) => entry.id === 'E2').kapsam;
@@ -266,6 +443,7 @@ test('kıyas: temsili vakalar senaryolarla bire bir eşleşir; kanıt göndergel
   r7CrossPerson.kanitlar.find((entry) => entry.id === 'E2').sorumlu = 'Can Ertem';
   assert.throws(() => checkRepresentativeCase(r7CrossPerson, scenarios.get(r7CrossPerson.senaryo), benchmark.sentetik_kadro),
     /istenen kişiye ait olmalıdır/);
+
   // Dönem kökeni olmayan tamamlanan ölçüsü ve veri_ani olmayan / gelecek / farklı kesitli anlık durum ölçüsü reddedilmelidir.
   const r2NoPeriod = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R2'));
   delete r2NoPeriod.kanitlar.find((entry) => entry.id === 'E1').donem;
@@ -284,14 +462,24 @@ test('kıyas: temsili vakalar senaryolarla bire bir eşleşir; kanıt göndergel
   const r3DifferentCut = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R3'));
   r3DifferentCut.kanitlar.find((entry) => entry.id === 'E2').veri_ani = '2026-10-15T12:00:00+03:00';
   assert.throws(() => checkRepresentativeCase(r3DifferentCut, scenarios.get(r3DifferentCut.senaryo), benchmark.sentetik_kadro),
-    /rapor dönemi bitiş kesitiyle eşleşmelidir/);
-  // Açıkça ilan edilen ve kıyas gününü aşmayan istek veri_ani kesiti kabul edilmelidir.
-  const r3ExplicitCut = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R3'));
-  r3ExplicitCut.istek.veri_ani = '2026-11-09T09:00:00+03:00';
-  for (const entry of r3ExplicitCut.kanitlar) {
-    if (entry.veri_ani) entry.veri_ani = r3ExplicitCut.istek.veri_ani;
+    /paket veri_ani kesitiyle eşleşmelidir/);
+
+  // 4i-kanit-1 kanonik paket kök veri_ani (istek.veri_ani olmadan, dönem bitişinden sonra ve kıyas günü içinde) kabul edilmelidir.
+  const r3RootCutOff = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R3'));
+  r3RootCutOff.veri_ani = '2026-11-09T08:30:00+03:00';
+  for (const entry of r3RootCutOff.kanitlar) {
+    if (entry.veri_ani) entry.veri_ani = r3RootCutOff.veri_ani;
   }
-  checkRepresentativeCase(r3ExplicitCut, scenarios.get(r3ExplicitCut.senaryo), benchmark.sentetik_kadro, benchmark.kiyas_gunu);
+  checkRepresentativeCase(r3RootCutOff, scenarios.get(r3RootCutOff.senaryo), benchmark.sentetik_kadro, benchmark.kiyas_gunu);
+
+  // R8 isteği kadrodaki başka bir ekibe çevrildiğinde eski ekibin kanıtları reddedilmelidir.
+  const rosterWithSecondTeam = structuredClone(benchmark.sentetik_kadro);
+  rosterWithSecondTeam.ekipler.push('Platform Altyapı Ekibi');
+  const r8OtherTeam = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R8'));
+  r8OtherTeam.istek.kapsam.kimlikler = ['Platform Altyapı Ekibi'];
+  assert.throws(() => checkRepresentativeCase(r8OtherTeam, scenarios.get(r8OtherTeam.senaryo), rosterWithSecondTeam),
+    /ekip kapsamlı istekte kanıt istenen ekibe ait olmalıdır/);
+
   // Kapalı varlık (Atlas) desteklenen ifadelere yetkili kanıt kimliğiyle bile eklenemez.
   const r8 = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R8'));
   r8.beklenen.desteklenen_ifadeler.push({
@@ -341,31 +529,36 @@ function checkSingleRepair(repair) {
     .filter((index) => index !== issue.paragraf));
 }
 
-function checkPartialGate(gate) {
+function checkPartialGate(gate, roster = benchmark.sentetik_kadro) {
   assert.equal(gate.beklenen.kesin_kapi, 'yetkisiz_aciklama', 'yetkisiz açıklama kesin kapısı');
   assert.ok(spec.onarim.kesin_kapilar.includes(gate.beklenen.kesin_kapi));
   const [issue] = gate.beklenen.sorunlar;
   assert.equal(issue.islem, 'kesin_kapi');
   const sentence = sentences(gate.taslak[issue.paragraf - 1])[issue.cumle - 1];
-  const closed = benchmark.sentetik_kadro.kapali_varliklar;
+  const closed = roster.kapali_varliklar;
   assert.ok(gate.yetkisiz_varliklar.length > 0);
   assert.ok(gate.yetkisiz_varliklar.every((code) => Object.hasOwn(closed, code) && sentence.includes(closed[code])));
-  assert.equal(gate.istek.kapsam.tur, 'ekip');
-  assert.ok(benchmark.sentetik_kadro.ekipler.includes(gate.istek.kapsam.ekip));
+  const scope = validateCanonicalScope(gate);
+  assert.equal(scope.tur, 'ekip');
+  const [requestedTeam] = scope.kimlikler;
+  assert.ok(roster.ekipler.includes(requestedTeam), 'istek ekibi kadroda olmalıdır');
 
-  const { proje, gorunurluk, gorunur_gorevler, gorunmeyen_tamamlanmis_gorevler } = gate.yetki_sinamasi;
+  const { ekip, proje, gorunurluk, gorunur_gorevler, gorunmeyen_tamamlanmis_gorevler } = gate.yetki_sinamasi;
+  assert.equal(ekip, requestedTeam, 'yetki sınaması seçilen ekibe bağlı olmalıdır');
   assert.equal(gorunurluk, 'PARTIAL');
   const tasks = gate.kanitlar.filter((entry) => entry.tur === 'gorev');
   assert.equal(new Set(tasks.map((task) => task.gorev)).size, tasks.length, 'görev kanıtları görev kimliğine göre tekil olmalıdır');
   assert.deepEqual(tasks.map((task) => task.gorev).sort(), [...gorunur_gorevler].sort(),
     'kanıtta yalnızca görünür görevler');
-  assert.ok(tasks.every((task) => task.proje === proje));
+  assert.ok(tasks.every((task) => task.proje === proje && task.ekip === requestedTeam),
+    'görev kanıtları seçilen ekibin yetkili proje/görev nüfusuna ait olmalıdır');
   assert.ok(gorunmeyen_tamamlanmis_gorevler.length > 0);
   const evidence = JSON.stringify(gate.kanitlar);
   assert.ok(gorunmeyen_tamamlanmis_gorevler.every((id) => !evidence.includes(id)), 'gizli görev kanıta giremez');
   const totals = gate.kanitlar.filter((entry) => entry.tur === 'olcu' && entry.olcu === 'tamamlanan');
   assert.equal(totals.length, 1);
   const [total] = totals;
+  assert.equal(total.ekip, requestedTeam, 'toplu ölçü seçilen ekibe ait olmalıdır');
   const completed = tasks.filter((task) => task.durum === 'tamamlandi');
   for (const task of completed) {
     const completion = calendarDate(task.gerceklesen_bitis);
@@ -375,10 +568,12 @@ function checkPartialGate(gate) {
   assert.ok(completed.length > 0 && completed.length < tasks.length);
   assert.deepEqual([...total.gorev_kanitlari].sort(), completed.map((task) => task.id).sort());
   assert.equal(total.deger, completed.length, 'toplam yalnızca görünür tamamlanmış görevlerden gelir');
-  // Beklenen desteklenen ifade, görünür tamamlanmış görev sayısını yapılandırılmış ölçüyle taşımalıdır.
+  // Beklenen desteklenen ifade, seçilen ekibi ve görünür tamamlanmış görev sayısını yapılandırılmış ölçüyle taşımalıdır.
   const totalClaims = (gate.beklenen.desteklenen_ifadeler ?? []).filter((claim) => claim.kanitlar.includes(total.id));
   assert.equal(totalClaims.length, 1, 'R8 görünür toplamı için tekil beklenen ifade zorunludur');
   const [totalClaim] = totalClaims;
+  const teamStem = requestedTeam.replace(/i$/u, '');
+  assert.ok(totalClaim.ifade.includes(teamStem), 'R8 beklenen ifade metni istenen ekiple eşleşmelidir');
   assert.deepEqual(totalClaim.beklenen_olcu, { olcu: 'tamamlanan', proje, deger: completed.length },
     'R8 beklenen ifadedeki yapılandırılmış toplam görünür tamamlanmış görev sayısına eşit olmalıdır');
   const turkishCountWords = { 0: 'sıfır', 1: 'bir', 2: 'iki', 3: 'üç', 4: 'dört', 5: 'beş' };
@@ -395,6 +590,12 @@ test('kıyas: kısmi görünürlük toplamı sınırlar ve kapalı varlık kesin
   const wrongGate = structuredClone(gate);
   wrongGate.beklenen.kesin_kapi = 'cozulemeyen_kritik_olgu_hatasi';
   assert.throws(() => checkPartialGate(wrongGate), /yetkisiz açıklama kesin kapısı/);
+  // İstek ekibi başka bir geçerli ekibe çevrildiğinde eski ekibin kanıtları ve anlatısı reddedilmelidir.
+  const rosterWithSecondTeam = structuredClone(benchmark.sentetik_kadro);
+  rosterWithSecondTeam.ekipler.push('Platform Altyapı Ekibi');
+  const wrongTeam = structuredClone(gate);
+  wrongTeam.istek.kapsam.kimlikler = ['Platform Altyapı Ekibi'];
+  assert.throws(() => checkPartialGate(wrongTeam, rosterWithSecondTeam), /yetki sınaması seçilen ekibe bağlı olmalıdır/);
   const fullTotal = structuredClone(gate);
   fullTotal.kanitlar.find((entry) => entry.olcu === 'tamamlanan').deger +=
     fullTotal.yetki_sinamasi.gorunmeyen_tamamlanmis_gorevler.length;
@@ -442,6 +643,9 @@ function checkInjectionRisk(injection) {
 
 function checkMechanicalCalibration(mechanical, asOf = benchmark.kiyas_gunu) {
   assert.deepEqual([mechanical.beklenen.butunluk, mechanical.beklenen.editoryal, mechanical.beklenen.mekanik_dokum], ['gecer', 'kalir', true]);
+  const scope = validateCanonicalScope(mechanical);
+  assert.equal(scope.tur, 'projeler');
+  const cutOff = resolvePackageCutOff(mechanical, asOf);
   const draft = mechanical.taslak.join(' ');
   const expectedMetrics = {
     tamamlanan: (value) => new RegExp(`\\b${value}\\s+görev\\s+tamamlanmıştır`, 'u'),
@@ -452,12 +656,8 @@ function checkMechanicalCalibration(mechanical, asOf = benchmark.kiyas_gunu) {
   for (const [metric, matcher] of Object.entries(expectedMetrics)) {
     const entry = mechanical.kanitlar.find((item) => item.tur === 'olcu' && item.olcu === metric);
     assert.ok(entry, 'R3 eksik ölçü kanıtı: ' + metric);
-    assert.deepEqual(entry.kapsam, mechanical.istek.kapsam.projeler, 'R3 ölçü kapsamı istekle eşleşmelidir: ' + metric);
-    if (metric === 'tamamlanan') {
-      assert.deepEqual(entry.donem, mechanical.istek.donem, 'R3 tamamlanan ölçü dönemi istekle eşleşmelidir');
-    } else {
-      checkSnapshotTimestamp(entry.veri_ani, mechanical.istek, asOf, 'R3/' + metric);
-    }
+    assert.deepEqual(entry.kapsam, scope.kimlikler, 'R3 ölçü kapsamı istekle eşleşmelidir: ' + metric);
+    checkMetricEvidence(entry, mechanical, cutOff, asOf, 'R3/' + metric);
     assert.match(draft, matcher(entry.deger), `R3 taslağındaki ${metric} sayısı ve zaman ufku kanıtla eşleşmelidir`);
   }
 }
@@ -479,6 +679,9 @@ test('kıyas: parçalı not, mekanik taslak, çelişki ve gömülü yönerge vak
   const futureMechanical = structuredClone(mechanical);
   futureMechanical.kanitlar.find((entry) => entry.id === 'E2').veri_ani = '2027-01-01T12:00:00+03:00';
   assert.throws(() => checkMechanicalCalibration(futureMechanical, benchmark.kiyas_gunu), /veri_ani kıyas gününü aşamaz/);
+  const wrongSourceMechanical = structuredClone(mechanical);
+  wrongSourceMechanical.kanitlar.find((entry) => entry.id === 'E1').kaynak = 'MR_AuditLog';
+  assert.throws(() => checkMechanicalCalibration(wrongSourceMechanical, benchmark.kiyas_gunu), /ölçü kanıtı için güvenilir kaynak zorunludur/);
 
   const contradiction = byCategory('K07');
   const times = contradiction.kanitlar.filter((entry) => entry.tur === 'not').map((entry) => Date.parse(entry.kayit_zamani));
@@ -536,12 +739,24 @@ function checkThresholds(esikler) {
   assert.equal(editorial.genel_ortalama_en_az, 4, 'editoryal genel ortalama eşiği 4,0 olmalıdır');
   assert.equal(editorial.boyut_ortalamasi_en_az, 3.5, 'editoryal ölçüt ortalaması eşiği 3,5 olmalıdır');
   assert.ok(editorial.mekanik_dokum_orani_en_fazla <= 0.05);
-  assert.deepEqual(esikler.C_belge_kalitesi.standart_ayrinti_sayfa_araligi, spec.sayfa.uzunluk.ayrinti_duzeyi.standart);
-  assert.equal(esikler.D_isletim_kalitesi.standart_rapor_uctan_uca_p95_saniye_en_fazla, 240,
+  const docQuality = esikler.C_belge_kalitesi;
+  assert.equal(docQuality.word_onarimsiz_acilis_orani, 1, 'Word onarımsız açılış oranı 1,0 olmalıdır');
+  assert.deepEqual(docQuality.standart_ayrinti_sayfa_araligi, spec.sayfa.uzunluk.ayrinti_duzeyi.standart);
+  assert.equal(docQuality.tum_sayfalar_gorsel_inceleme, true, 'bütün sayfaların görsel incelemesi zorunludur');
+  assert.equal(docQuality.stil_sozlesmesi_testi, 'gecer', 'stil sözleşmesi testi gecer olmalıdır');
+  const ops = esikler.D_isletim_kalitesi;
+  assert.equal(ops.standart_rapor_uctan_uca_p95_saniye_en_fazla, 240,
     'standart rapor uçtan uca p95 süresi en fazla 240 sn olmalıdır');
-  assert.equal(esikler.D_isletim_kalitesi.yuksek_kalite_rapor_uctan_uca_p95_saniye_en_fazla, 600,
+  assert.equal(ops.yuksek_kalite_rapor_uctan_uca_p95_saniye_en_fazla, 600,
     'yüksek kalite rapor uçtan uca p95 süresi en fazla 600 sn olmalıdır');
-  assert.equal(esikler.onarim_4I_C.butun_raporun_hazir_metne_dusmesi, 0);
+  assert.equal(ops.iptal_sonrasi_gecici_veri_kalmamasi, 1, 'iptal sonrası geçici veri temizliği 1,0 olmalıdır');
+  assert.equal(ops.mevcut_bilgin_regresyonu, 0, 'mevcut Bilgin regresyon sınırı 0 olmalıdır');
+  const repairGate = esikler.onarim_4I_C;
+  assert.equal(repairGate.onarim_sonrasi_editoryal_dusus_en_fazla, 0.3,
+    'onarım sonrası editoryal düşüş en fazla 0,3 olmalıdır');
+  assert.equal(repairGate.yerel_onarimla_cozulen_tekil_sorun_orani_en_az, 0.9,
+    'tekil sorunlarda yerel onarım başarısı en az 0,9 olmalıdır');
+  assert.equal(repairGate.butun_raporun_hazir_metne_dusmesi, 0);
 }
 
 test('kıyas: eşikler deneylerden önce tanımlıdır ve hiçbir gerçek model ölçümü kaydedilmemiştir', () => {
@@ -555,11 +770,15 @@ test('kıyas: eşikler deneylerden önce tanımlıdır ve hiçbir gerçek model 
   ];
   assert.equal(evaluateDraftFactualAccuracy(pooledTrap, 0.95).gecti, false,
     'tek bir %50 doğruluklu taslak diğer 47 taslağın ortalamasıyla geçemez');
+  // Yanlış değerle yazılan zorunlu olgu yalnızca bir kez yanlis sayılır (19/20 = 0,95 geçer, 19/21 olarak çift sayılmaz).
+  const wrongRequiredFactOnce = evaluateDraftFactualAccuracy([{ dogru: 19, yanlis: 1, atlanan_zorunlu: 0 }], 0.95);
+  assert.equal(wrongRequiredFactOnce.gecti, true);
+  assert.equal(wrongRequiredFactOnce.sonuclar[0].oran, 19 / 20);
   const zeroDenominator = evaluateDraftFactualAccuracy([{ dogru: 0, yanlis: 0, atlanan_zorunlu: 0 }], 0.95);
   assert.equal(zeroDenominator.sonuclar[0].durum, 'uygulanmaz');
   assert.equal(evaluateDraftFactualAccuracy([{ dogru: 0, yanlis: 0, atlanan_zorunlu: 1 }], 0.95).gecti, false,
     'zorunlu olgu atlandığında payda sıfır değildir ve taslak düşer');
-  // Zorunlu A, B ve D eşikleri birbirinden bağımsızdır ve sessizce gevşetilemez.
+  // Zorunlu A, B, C, D ve 4I-C onarım eşikleri birbirinden bağımsızdır ve sessizce gevşetilemez.
   const weakerDraft = structuredClone(benchmark.esikler);
   weakerDraft.A_guvenlik_ve_olgusal_butunluk.taslak_nesnel_olgu_dogrulugu_en_az = 0.9;
   assert.throws(() => checkThresholds(weakerDraft), /en az %95/);
@@ -572,9 +791,30 @@ test('kıyas: eşikler deneylerden önce tanımlıdır ve hiçbir gerçek model 
   const weakerDimensionEditorial = structuredClone(benchmark.esikler);
   weakerDimensionEditorial.B_editoryal_kalite.boyut_ortalamasi_en_az = 3.0;
   assert.throws(() => checkThresholds(weakerDimensionEditorial), /ölçüt ortalaması eşiği 3,5 olmalıdır/);
+  const weakerWordOpen = structuredClone(benchmark.esikler);
+  weakerWordOpen.C_belge_kalitesi.word_onarimsiz_acilis_orani = 0.9;
+  assert.throws(() => checkThresholds(weakerWordOpen), /Word onarımsız açılış oranı 1,0 olmalıdır/);
+  const weakerVisualCheck = structuredClone(benchmark.esikler);
+  weakerVisualCheck.C_belge_kalitesi.tum_sayfalar_gorsel_inceleme = false;
+  assert.throws(() => checkThresholds(weakerVisualCheck), /bütün sayfaların görsel incelemesi zorunludur/);
+  const weakerStyleTest = structuredClone(benchmark.esikler);
+  weakerStyleTest.C_belge_kalitesi.stil_sozlesmesi_testi = 'kalir';
+  assert.throws(() => checkThresholds(weakerStyleTest), /stil sözleşmesi testi gecer olmalıdır/);
   const weakerLatency = structuredClone(benchmark.esikler);
   weakerLatency.D_isletim_kalitesi.standart_rapor_uctan_uca_p95_saniye_en_fazla = 300;
   assert.throws(() => checkThresholds(weakerLatency), /p95 süresi en fazla 240 sn olmalıdır/);
+  const weakerCleanup = structuredClone(benchmark.esikler);
+  weakerCleanup.D_isletim_kalitesi.iptal_sonrasi_gecici_veri_kalmamasi = 0;
+  assert.throws(() => checkThresholds(weakerCleanup), /iptal sonrası geçici veri temizliği 1,0 olmalıdır/);
+  const weakerRegression = structuredClone(benchmark.esikler);
+  weakerRegression.D_isletim_kalitesi.mevcut_bilgin_regresyonu = 1;
+  assert.throws(() => checkThresholds(weakerRegression), /mevcut Bilgin regresyon sınırı 0 olmalıdır/);
+  const weakerEditorialDrop = structuredClone(benchmark.esikler);
+  weakerEditorialDrop.onarim_4I_C.onarim_sonrasi_editoryal_dusus_en_fazla = 1;
+  assert.throws(() => checkThresholds(weakerEditorialDrop), /editoryal düşüş en fazla 0,3 olmalıdır/);
+  const weakerLocalRepair = structuredClone(benchmark.esikler);
+  weakerLocalRepair.onarim_4I_C.yerel_onarimla_cozulen_tekil_sorun_orani_en_az = 0.5;
+  assert.throws(() => checkThresholds(weakerLocalRepair), /yerel onarım başarısı en az 0,9 olmalıdır/);
 });
 
 function checkCallBudget(maximum) {

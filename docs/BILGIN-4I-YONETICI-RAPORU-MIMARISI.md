@@ -131,10 +131,17 @@ yetkili kanıtlar ve anlatı için gerekli kapsam/tamlık açıklamaları aktar�
 Kurallar:
 
 - **Kararlı kimlikler.** Her kanıt `E#`, her sunucu türetimi `F#` kimliği taşır; onarım turlarında değişmez.
-- **Köken.** Her kanıt kaynak aracı ya da tabloyu, görev/proje kimliğini ve zaman bilgisini taşır.
+- **Kanonik kapsam temsili.** `istek.kapsam` bütün kapsam türlerinde tek şemayı kullanır:
+  `{ "tur": "<kapsam_turu>", "kimlikler": ["…"] }` (tekil kapsam türlerinde — `proje`, `kisi`, `ekip`, `birim`,
+  `mudurluk`, `direktorluk` — tek elemanlı, `projeler` türünde en az bir elemanlı benzersiz dizi; paralel
+  `proje`/`projeler`/`kisi`/`ekip` alanları kullanılmaz).
+- **Köken.** Her kanıt güvenilir kaynak aracı ya da tabloyu (`kaynak`), görev/proje/ekip kimliğini ve zaman bilgisini
+  taşır; kanıt türüyle uyuşmayan kaynak kabul edilmez.
   Dönem temelli toplu ölçüler (`tamamlanan`, `hareket` vb.) uygulanan `donem` (`baslangic`, `bitis`) aralığını,
-  anlık durum ölçüleri (`acik`, `geciken` vb.) ise `veri_ani` (veya geçerli anlık kesit zamanını) kanıt üzerinde
-  açıkça taşır; karşılaştırma ve dönem cümlesi doğrulaması bu zaman kökenine dayanır.
+  anlık durum ölçüleri (`acik`, `geciken`, `yaklasan_7_gun`, `history.undatedDone`) ise paket kökündeki kanonik
+  `veri_ani` kesitiyle eşleşen `veri_ani` zaman damgasını taşır; karşılaştırma ve dönem cümlesi doğrulaması bu zaman
+  kökenine dayanır. Paket kökündeki `veri_ani` rapor dönemi bitişinden önce olamaz ve gelecek zamanlı olamaz; görev
+  tamamlanma tarihleri ve not kayıt zamanları paket kesitini aşamaz.
   Not kanıtında **kayıt zamanı** (`kayit_zamani`) ile metnin andığı **olay tarihi** ayrıdır; olay tarihi
   çıkarılmaz, metinde kalır ve yazara "notun kayıt gününe göre" yorumlanması söylenir.
 - **Tamlık ve sınır.** Kesilen koleksiyon, kırpılan metin, kısmi kayıt kapsamı ve tarihsiz tamamlanan görev açıkça

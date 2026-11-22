@@ -144,7 +144,7 @@ gizli kimliği kullanır, puanları insan puanlarıyla ayrı raporlanır ve insa
 
 | Boyut | Eşik |
 | --- | --- |
-| **A** (4I-B yazar nitelendirmesi — onarım öncesi taslak) | Yetkisiz açıklama **0**; uydurma kimlik ya da tarih **0**; çelişkili/eksik kanıtın açık işlenmesi **%100**; onarım öncesi taslakta nesnel olgu doğruluğu **rapor başına (her taslakta ayrı ayrı)** en az **%95** (payda = ilgili taslakta yer alan nesnel olgu sayısı + atlanan zorunlu olgu sayısı; atlanan zorunlu olgular doğruluğu düşürür; payda `0` ise oran `Uygulanmaz (U/D)` kaydedilir ve diğer raporların paydasına katılmaz) |
+| **A** (4I-B yazar nitelendirmesi — onarım öncesi taslak) | Yetkisiz açıklama **0**; uydurma kimlik ya da tarih **0**; çelişkili/eksik kanıtın açık işlenmesi **%100**; onarım öncesi taslakta nesnel olgu doğruluğu **rapor başına (her taslakta ayrı ayrı)** en az **%95**. Her dondurulmuş kanıt paketi isteğe bağlı desteklenen olgulardan ayrı bir **zorunlu olgular** listesi tanımlar; taslaktaki nesnel ifadeler konu/ölçü/varlık eşleştirmesiyle bu listeyle eşlenir. Zorunlu bir olgunun yanlış değerle yazılması **yalnızca bir kez `yanlis` ifade olarak sayılır**, ayrıca `atlanan_zorunlu` olarak çift sayılmaz (`atlanan_zorunlu` yalnızca taslakta hiç yer almayan zorunlu olguları sayar). Payda = `dogru + yanlis + atlanan_zorunlu`; payda `0` ise oran `Uygulanmaz (U/D)` kaydedilir ve diğer raporların paydasına katılmaz |
 | **A** (yayımlama — 4I-C onarım sonrası, sonlandırma öncesi) | Yetkisiz açıklama **0**; yayımlanan desteksiz maddi iddia **0**; uydurma kimlik ya da tarih **0**; yayımlanan nesnel olgu doğruluğu **%100**; çelişkili/eksik kanıtın açık işlenmesi **%100** |
 | **B** | 1–5 ölçekte genel ortalama en az **4,0**; uygulanabilir hiçbir ölçütün ortalaması **3,5**'in altında değil; aday düzeyinde mekanik döküm oranı en çok **%5** (48 raporda ≤ 2); iki kör puanlayıcı, sayısal fark > 1 veya ikili bayrak uyuşmazlığında üçüncü |
 | **C** | Word'ün onarım istemeden açtığı belge oranı **%100**; standart ayrıntıda **2–3** sayfa (kapak ve ekler hariç); bütün sayfalar görsel incelenir; stil sözleşmesi sınaması geçer |
@@ -152,10 +152,13 @@ gizli kimliği kullanır, puanları insan puanlarıyla ayrı raporlanır ve insa
 | **4I-C onarım** | Onarım sonrası editoryal puan düşüşü en çok **0,3**; tekil sorunların en az **%90**'ı yerel onarımla insan incelemesine gerek kalmadan çözülür; bütün raporun hazır metne düşmesi **0** |
 
 **Seçim kuralı (4I-B yazar nitelendirmesi):** **4I-B yazar nitelendirmesi** A eşiklerini geçen adaylar arasında
-`rapor_yazari_otomatik`, B eşiklerini geçen ve standart raporda p95 ≤ **240 sn** D süre eşiğini karşılayanların
-en yüksek B ortalamalısıdır (eşitlikte aynı en yakın sıra yöntemiyle hesaplanan düşük p95).
-`rapor_yazari_yuksek_kalite`, 4I-B A ve B eşiklerini geçenler arasında standart raporda p95 ≤ **600 sn** D süre
-eşiğini karşılayan en yüksek B ortalamalısıdır (aynı model her iki role de atanabilir). 4I-B kabulü ve sonraki
+`rapor_yazari_otomatik`, B eşiklerini geçen ve standart raporda p95 ≤ **240 sn** D süre eşiğini karşılayanların;
+`rapor_yazari_yuksek_kalite` ise B eşiklerini geçen ve standart raporda p95 ≤ **600 sn** D süre eşiğini
+karşılayanların en yüksek B ortalamalısıdır (aynı model her iki role de atanabilir). Her iki rolde de eşitlik
+bozma sırası aynıdır ve belirlenimcidir: (1) en yüksek B genel ortalaması, (2) aynı en yakın sıra yöntemiyle
+hesaplanan daha düşük standart rapor p95 süresi, (3) daha düşük ortalama rapor başı model çağrısı sayısı,
+(4) uygulanabilir E1–E9 ölçüt ortalamalarının en düşüğünün daha yüksek olması; tümü yine eşitse rol kilitlenmeden
+önce gerekçeli insan seçimi karar günlüğüne kaydedilir. 4I-B kabulü ve sonraki
 artıma geçiş için **`rapor_yazari_otomatik` rolünün doldurulması zorunludur**; `rapor_yazari_yuksek_kalite`
 isteğe bağlı ek roldür. `rapor_yazari_otomatik` için hiçbir aday A, B ve p95 ≤ 240 sn eşiklerini geçmezse
 (`rapor_yazari_yuksek_kalite` dolsa bile) rol boş kalır ve 4I-B kabulü **ENGELLİ** olur; eşikler adayı geçirmek

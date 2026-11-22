@@ -138,9 +138,11 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
     açılış ekranı logo davranışı değişmez.
 12. **Başarım ve kaynak** — Çalışma zamanı etkisi yok; yeni sınamalar yalnızca yerel dosya okur.
 13. **Bağımlılıklar** — PR #120'nin birleştirilmiş olması (doğrulandı); F–H sözleşmeleri.
-14. **Riskler ve geri alma** — Model kimliği düzeltmesi yanlışsa (canlı katalog farklıysa) yalnızca kayıt JSON'u ve
-    varsayılan kayıt geri alınır; hiçbir profil bu modellere bağlı olmadığından sohbet etkilenmez. Belgeler ve
-    yapılandırma tek commit'le geri alınabilir.
+14. **Riskler ve geri alma** — Model kimliği düzeltmesi yanlışsa (canlı katalog farklıysa) kayıt JSON'u
+    (`config/ai-model-registry.onprem.json`), varsayılan kayıt (`src/server/ai/defaultModelRegistry.js`) ve ilgili
+    model kimliği beklentilerini doğrulayan `test/ai-model-registry.test.mjs` birlikte geri alınır; hiçbir profil bu
+    modellere bağlı olmadığından sohbet etkilenmez. Belgeler, yapılandırma ve bu sınama dosyası tek commit'le
+    birlikte geri alınabilir.
 15. **Kapsam dışı** — Rapor motoru, kanıt paketi kurucusu, yazar, doğrulayıcı, DOCX üreticisi, Stüdyo, yükleme,
     kalıcı saklama, model seçici arayüzü, canlı model nitelendirmesi.
 16. **Durum ve doğrulama kanıtı** — **Durum: DOĞRULANDI** (belirlenimci kapılar ve şablonun bütün sayfalarının

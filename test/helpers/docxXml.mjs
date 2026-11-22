@@ -128,6 +128,7 @@ function checkWordFields(document, name) {
     'w:del', 'w:delText', 'w:ins', 'w:moveFrom', 'w:moveTo',
     'w:moveFromRangeStart', 'w:moveFromRangeEnd', 'w:moveToRangeStart', 'w:moveToRangeEnd',
     'w:rPrChange', 'w:pPrChange', 'w:sectPrChange', 'w:tblPrChange', 'w:trPrChange', 'w:tcPrChange',
+    'w:cellDel', 'w:cellIns', 'w:cellMerge',
     'w:commentReference', 'w:commentRangeStart', 'w:commentRangeEnd'
   ];
   for (const tag of disallowed) {
@@ -138,6 +139,12 @@ function checkWordFields(document, name) {
     for (const element of all(document, hiddenTag)) {
       assert.equal(on(element), false, name + ': gizli metin biçimi yasak (' + hiddenTag + ')');
     }
+  }
+  // Şablon metninin düzenlenmesini engelleyen içerik denetimi kilitleri yasaktır.
+  for (const lock of all(document, 'w:lock')) {
+    const lockVal = attr(lock, 'w:val');
+    assert.ok(!['sdtContentLocked', 'contentLocked'].includes(lockVal),
+      name + ': içerik düzenlemeyi engelleyen denetim kilidi yasak (' + lockVal + ')');
   }
   const fields = all(document, 'w:fldSimple');
   const allowed = {
