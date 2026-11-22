@@ -1,10 +1,11 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
 import { DateInput } from '../../components/DateInput.jsx';
 import { Icons } from '../../components/icons.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { NOTIFICATION_SOURCES } from '../../domain/notifications/notificationInbox.js';
+import { useNotificationRead } from '../notifications/useNotificationRead.js';
 import { TaskTablePagination } from '../tasks/TaskTablePagination.jsx';
 import { AssignmentCoordinationDialog } from '../assignment-coordination/AssignmentCoordinationDialog.jsx';
 import { AssignmentCoordinationView } from '../assignment-coordination/AssignmentCoordinationView.jsx';
@@ -63,7 +64,18 @@ export function ScheduleRequestsView() {
   const { data, loading, error, actual, refresh } = useRequestInboxQuery(query, !coordinationActive);
   const openerRef = useRef(null);
   const tabsRef = useRef(null);
-  const [readError, setReadError] = useState(null);
+  const [taskError, setTaskError] = useState(null);
+  const openSequence = useRef(0);
+  const { markRead, markError, retryMark, clearMarkError } = useNotificationRead(markNotifications, refresh);
+  const { cursorReset, page: visiblePage, pageSize, total, nextCursor, hasNext } = data;
+  const totalPages = Math.ceil(total / pageSize);
+  const pageCount = hasNext === false ? visiblePage + 1 : Math.max(visiblePage + (hasNext ? 2 : 1), totalPages);
+
+  useEffect(() => {
+    if (loading || error || (visiblePage === query.page && !cursorReset)) return;
+    setPageCursors({});
+    setQuery((current) => ({ ...current, page: visiblePage, cursor: '' }));
+  }, [cursorReset, error, loading, query.page, visiblePage]);
   const change = (key, value) => {
     setPageCursors({});
     setQuery((current) => ({ ...current, [key]: value, page: 0, cursor: '' }));
@@ -74,7 +86,9 @@ export function ScheduleRequestsView() {
     // Atama Koordinasyonu'na geçip geri dönen kullanıcının önüne çekmece
     // kendiliğinden yeniden açılıyordu.
     setSelected(null);
-    setReadError(null);
+    openSequence.current += 1;
+    setTaskError(null);
+    clearMarkError();
     if (id !== COORDINATION_TAB) change('tab', id);
     else setCoordinationTotal(null);
   };
@@ -85,18 +99,10 @@ export function ScheduleRequestsView() {
     ? (coordinationActive && coordinationTotal != null ? coordinationTotal : data.counts.coordination ?? 0)
     : data.counts[id] ?? 0);
 
-  const markRead = async (item) => {
-    if (!item.unread) return { ok: true };
-    const result = await markNotifications?.([item]);
-    if (result && !result.ok) setReadError(result.message || 'Bildirim güncellenemedi.');
-    else if (result?.refreshError) setReadError(result.refreshError.message || 'Bildirimler yenilenemedi.');
-    refresh();
-    return result;
-  };
-
   const open = async (item, target) => {
     openerRef.current = target;
-    setReadError(null);
+    const sequence = ++openSequence.current;
+    setTaskError(null);
     if (item.source === NOTIFICATION_SOURCES.TASK_EVENT) {
       // Atama olayı bir karar penceresi açmaz: görev olağan yetkili yolla
       // açılır. Sorumluluğu kaldırılan kişi görevi çoğu zaman artık göremez;
@@ -109,7 +115,7 @@ export function ScheduleRequestsView() {
         } catch (openError) { failure = openError?.message || 'Görev açılamadı.'; }
       } else failure = 'Görev silinmiş veya proje kapatılmış.';
       await markRead(item);
-      if (failure) setReadError(failure);
+      if (failure && sequence === openSequence.current) setTaskError(failure);
       return;
     }
     setSelected(item);
@@ -165,7 +171,13 @@ export function ScheduleRequestsView() {
         <label><span>Tarih · Son</span><DateInput ariaLabel="Son kayıt tarihi" value={query.to} onChange={(value) => change('to', value)} /></label>
         <button type="button" className="btn ghost sm" onClick={() => { setPageCursors({}); setQuery({ ...INITIAL, tab: query.tab }); }}>Filtreleri temizle</button>
       </div>
-      {(error || readError) && <p role="alert" className="schedule-modal-error">{error || readError}<button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button></p>}
+      {error && <p role="alert" className="schedule-modal-error">{error}
+        <button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button>
+      </p>}
+      {markError && <p role="alert" className="schedule-modal-error">{markError}
+        <button type="button" className="btn ghost sm" onClick={retryMark}>Okundu işaretini yinele</button>
+      </p>}
+      {taskError && <p role="alert" className="schedule-modal-error">{taskError}</p>}
       {!actual && <p className="empty">Talepler ve bildirimler Gerçek Sistem kipinde kullanılabilir.</p>}
       {loading && <p className="muted request-loading" role="status">Talepler yükleniyor…</p>}
       <div className="detail-list-scroll">
@@ -186,11 +198,12 @@ export function ScheduleRequestsView() {
         </table>
         {actual && !loading && !error && !data.items.length && <p className="empty">Bu görünümde kayıt bulunamadı.</p>}
       </div>
-      <TaskTablePagination page={data.page} pageCount={Math.max(1, Math.ceil(data.total / data.pageSize))} label="Talep sayfaları"
+      <TaskTablePagination page={visiblePage} pageCount={pageCount} label="Talep sayfaları"
         setPage={(update) => {
-          const nextPage = typeof update === 'function' ? update(data.page) : update;
+          const nextPage = typeof update === 'function' ? update(visiblePage) : update;
           const nextCursors = { ...pageCursors };
-          if (data.nextCursor) nextCursors[data.page + 1] = data.nextCursor;
+          if (nextCursor) nextCursors[visiblePage + 1] = nextCursor;
+          else delete nextCursors[visiblePage + 1];
           setPageCursors(nextCursors);
           setQuery((current) => ({ ...current, page: nextPage, cursor: nextPage === 0 ? '' : (nextCursors[nextPage] || '') }));
         }} />
@@ -205,7 +218,7 @@ export function ScheduleRequestsView() {
         return result;
       }} />}
     {!coordinationActive && selectedRecord?.source === NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION && <AssignmentCoordinationDialog
-      record={selectedRecord} restoreFocusRef={openerRef} onClose={closeDetails} onOpenTask={openTask}
+      key={selectedRecord.id} record={selectedRecord} restoreFocusRef={openerRef} onClose={closeDetails} onOpenTask={openTask}
       onDecide={async (...args) => {
         const result = await decideAssignmentCoordination(...args);
         refresh();

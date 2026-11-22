@@ -325,6 +325,7 @@ export function ScheduleRequestCenter({ onNavigate }) {
       )}
       {selectedCoordination && (
         <AssignmentCoordinationDialog
+          key={selectedCoordination.id}
           record={coordinations.find((item) => item.id === selectedCoordination.id) || selectedCoordination}
           onClose={() => setSelectedCoordination(null)}
           onOpenTask={openTask}

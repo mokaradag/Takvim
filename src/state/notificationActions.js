@@ -14,7 +14,7 @@ const AMBIGUOUS_OUTCOME_CODES = new Set(['NETWORK', 'REQUEST_TIMEOUT']);
 
 /** Sonucu bilinmeyen bir yazma: istek gitti ama yanıt gelmedi. */
 export const OUTCOME_UNKNOWN_MESSAGE = 'Sunucudan yanıt alınamadı; kararın kaydedilip kaydedilmediği doğrulanamadı. '
-  + 'Güncel durum yeniden yüklendi; kaydı kontrol etmeden yeniden karar vermeyin.';
+  + 'Güncel koordinasyon kaydı okundu; kaydı kontrol etmeden yeniden karar vermeyin.';
 export const OUTCOME_UNKNOWN_UNRECONCILED_MESSAGE = 'Sunucudan yanıt alınamadı; kararın kaydedilip kaydedilmediği doğrulanamadı '
   + 've güncel durum doğrulanamadı. Verileri yenileyip kaydı kontrol etmeden yeniden karar vermeyin.';
 
@@ -26,12 +26,6 @@ function refreshFailure(reload) {
   return reload?.error || { code: reload?.code || 'REFRESH_FAILED', message: reload?.message || 'Veriler yenilenemedi.' };
 }
 
-function findCoordinationInSnapshot(reload, coordinationId) {
-  const list = reload?.snapshot?.assignmentCoordinations;
-  if (!Array.isArray(list)) return null;
-  return list.find((item) => item && String(item.id) === String(coordinationId)) || null;
-}
-
 export function createNotificationActions({
   isActualMode,
   flush,
@@ -40,11 +34,20 @@ export function createNotificationActions({
   beginInboxRead,
   getInboxSequence = null,
   markItems,
-  decideCoordination
+  decideCoordination,
+  readCoordination
 }) {
   // Örtüşen okundu/temizlendi istekleri sıraya alınır: istemci başlangıç
   // sırasının sunucu işleme sırasından ayrışması engellenir.
   let markQueue = Promise.resolve();
+
+  async function refreshAfterWrite() {
+    try {
+      return await reloadData({ preserveFailedTaskUpdates: true });
+    } catch {
+      return { ok: false, code: 'REFRESH_FAILED', message: 'Veriler yenilenemedi.' };
+    }
+  }
 
   function enqueueMark(work) {
     const run = markQueue.then(work, work);
@@ -71,7 +74,7 @@ export function createNotificationActions({
       const result = await markItems(notifications, action);
       if (!result?.ok) {
         if (AMBIGUOUS_OUTCOME_CODES.has(result?.code)) {
-          const reload = await reloadData({ preserveFailedTaskUpdates: true });
+          const reload = await refreshAfterWrite();
           if (reload?.ok === false) beginInboxRead();
         }
         return result;
@@ -80,12 +83,12 @@ export function createNotificationActions({
         const superseded = typeof getInboxSequence === 'function' && getInboxSequence() > inboxSequence;
         applyStateAction({ type: 'notifications/inbox-refreshed', inbox: result.value.inbox, inboxSequence });
         if (superseded) {
-          const reload = await reloadData({ preserveFailedTaskUpdates: true });
+          const reload = await refreshAfterWrite();
           return reload?.ok === false ? { ...result, refreshError: refreshFailure(reload) } : result;
         }
         return result;
       }
-      const reload = await reloadData({ preserveFailedTaskUpdates: true });
+      const reload = await refreshAfterWrite();
       return reload?.ok === false ? { ...result, refreshError: refreshFailure(reload) } : result;
     });
   }
@@ -110,28 +113,31 @@ export function createNotificationActions({
     }
     const result = await decideCoordination(coordinationId, input);
     if (!result?.ok) {
-      if (AMBIGUOUS_OUTCOME_CODES.has(result?.code)) {
-        const reload = await reloadData({ preserveFailedTaskUpdates: true });
-        const observed = reload?.ok !== false ? findCoordinationInSnapshot(reload, coordinationId) : null;
-        // Kesin uzlaştırma yalnızca karar sonrası farklı bir sunucu sürümü
-        // gözlendiğinde kabul edilir; karar öncesi erken okuma uzlaşmış sayılmaz.
-        const versionAdvanced = Boolean(
-          observed && observed.version && (!input?.version || observed.version !== input.version)
-        );
-        const reconciled = reload?.ok !== false && versionAdvanced;
-        return {
-          ok: false,
-          code: 'OUTCOME_UNKNOWN',
-          message: reconciled ? OUTCOME_UNKNOWN_MESSAGE : OUTCOME_UNKNOWN_UNRECONCILED_MESSAGE,
-          reconciled,
-          ...(reconciled ? { record: observed } : {})
-        };
+      const ambiguous = AMBIGUOUS_OUTCOME_CODES.has(result?.code);
+      if (ambiguous || result?.code === 'CONFLICT' || result?.code === 'FORBIDDEN') {
+        // Zil önizlemesi sınırlıdır. Kaydı kendi yetki yüklemiyle kimliğinden oku.
+        const [lookup, reload] = await Promise.all([
+          readCoordination(coordinationId),
+          refreshAfterWrite()
+        ]);
+        const observed = lookup?.ok ? lookup.value?.record : null;
+        // Aynı sürüm, kararın henüz işlenmediği anlamına da gelebilir.
+        const advanced = Boolean(observed?.version && input?.version && observed.version !== input.version);
+        if (ambiguous) {
+          return {
+            ok: false,
+            code: 'OUTCOME_UNKNOWN',
+            message: advanced ? OUTCOME_UNKNOWN_MESSAGE : OUTCOME_UNKNOWN_UNRECONCILED_MESSAGE,
+            reconciled: advanced,
+            ...(advanced ? { record: observed } : {}),
+            ...(advanced && reload?.ok === false ? { refreshError: refreshFailure(reload) } : {})
+          };
+        }
+        return { ...result, record: observed };
       }
-      // Sürüm çakışmasında elde tutulan kayıt bayattır; güncel hâli okunur.
-      if (result?.code === 'CONFLICT') await reloadData({ preserveFailedTaskUpdates: true });
       return result;
     }
-    const reload = await reloadData({ preserveFailedTaskUpdates: true });
+    const reload = await refreshAfterWrite();
     return reload?.ok === false ? { ...result, refreshError: refreshFailure(reload) } : result;
   }
 

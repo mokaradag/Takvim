@@ -21,11 +21,23 @@ export function decideAssignmentCoordinationRequest(coordinationId, input) {
   });
 }
 
-export function fetchAssignmentCoordinations(query = {}) {
+async function fetchCoordinationQuery(query, isValid) {
   const params = new URLSearchParams(
     Object.entries(query).filter(([, value]) => value != null && value !== '')
   );
-  return requestJson(`${BASE}?${params}`, { method: 'GET' });
+  const result = await requestJson(`${BASE}?${params}`, { method: 'GET' });
+  return validateRead(result, isValid);
+}
+
+export function fetchAssignmentCoordinations(query = {}) {
+  return fetchCoordinationQuery(query,
+    (value) => isValidRequestInboxResponse(value) && Number.isSafeInteger(value.counts.all) && value.counts.all >= 0);
+}
+
+export function fetchAssignmentCoordination(coordinationId) {
+  return fetchCoordinationQuery({ coordinationId }, (value) => value?.record === null
+    || (value?.record?.id === coordinationId && typeof value.record.status === 'string'
+      && typeof value.record.version === 'string' && Array.isArray(value.record.allowedDecisions)));
 }
 
 /** Zil bildirimlerini okundu/temizlendi işaretler (kaynak karışık olabilir). */
@@ -50,14 +62,18 @@ function isValidRequestInboxResponse(value) {
   );
 }
 
+function validateRead(result, isValid) {
+  if (result.ok && !isValid(result.value)) {
+    return { ok: false, code: 'INVALID_RESPONSE', message: 'Sunucu yanıtı geçersiz.' };
+  }
+  return result;
+}
+
 /** Talepler · Gelenler / Gönderdiklerim / Geçmiş birleşik sayfası. */
 export async function fetchRequestInbox(query = {}) {
   const params = new URLSearchParams(
     Object.entries(query).filter(([, value]) => value != null && value !== '')
   );
   const result = await requestJson(`/api/mergen-rota/notifications?${params}`, { method: 'GET' });
-  if (result.ok && !isValidRequestInboxResponse(result.value)) {
-    return { ok: false, code: 'INVALID_RESPONSE', message: 'Sunucu yanıtı geçersiz.' };
-  }
-  return result;
+  return validateRead(result, isValidRequestInboxResponse);
 }

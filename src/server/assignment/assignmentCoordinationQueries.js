@@ -71,14 +71,6 @@ const DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
 const NOTIFICATION_DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
   OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
 /**
- * Katılım ALICI satırından ya da GÜNCEL karar yetkisinden türetilir.
- *
- * Talep edilen kişi yalnızca atama yürürlüğe girdiğinde alıcı olur; onay
- * beklerken kaydı görmez. Sistem yöneticiliği bilinçli olarak DIŞARIDADIR:
- * yönetici her kaydı karara bağlayabilir ama zili sistemdeki bütün kayıtlarla
- * dolmaz (bkz. bindCoordinationScope · boş `@fullProjectIds`).
- */
-/**
  * Açıkça bildirim/karar rolü verilmiş alıcılar (yönetici veya onaylı sorumlu).
  *
  * Geçici tam proje erişimi olan bir kullanıcının geçmiş kaydı açıp okundu
@@ -90,6 +82,14 @@ const NOTIFICATION_DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSys
 const EXPLICIT_RECIPIENT = `EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
   WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil
     AND r.RecipientRole IN ('MANAGER','ASSIGNEE'))`;
+/**
+ * Katılım ALICI satırından ya da GÜNCEL karar yetkisinden türetilir.
+ *
+ * Talep edilen kişi yalnızca atama yürürlüğe girdiğinde alıcı olur; onay
+ * beklerken kaydı görmez. Sistem yöneticiliği bilinçli olarak DIŞARIDADIR:
+ * yönetici her kaydı karara bağlayabilir ama zili sistemdeki bütün kayıtlarla
+ * dolmaz (bkz. bindCoordinationScope · boş `@fullProjectIds`).
+ */
 const PARTICIPANT = `(c.RequesterSicil = @sicil
   OR ${EXPLICIT_RECIPIENT}
   OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS})`;
@@ -103,10 +103,11 @@ const DECISION_ACTIONABLE = `(${TASK_AVAILABLE} AND (
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
 const UNREAD = '(n.ReadVersion IS NULL OR n.ReadVersion <> c.RowVersion)';
 const VISIBLE = `(${ACTIONABLE} OR n.DismissedVersion IS NULL OR n.DismissedVersion <> c.RowVersion)`;
+const DISPLAYED_PROJECT_ID = 'COALESCE(c.ProjectIdSnapshot, t.ProjectId)';
 const fieldsFor = (actionable) => `c.*, ${IS_MANAGER} AS IsManager,
   CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsActionable,
   COALESCE(c.TaskTitleSnapshot, t.Title) AS TaskTitle,
-  COALESCE(c.ProjectIdSnapshot, t.ProjectId) AS ProjectId,
+  ${DISPLAYED_PROJECT_ID} AS ProjectId,
   COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
   COALESCE(c.ProjectCodeSnapshot, p.ProjectCode) AS ProjectCode,
   requester.DisplayName AS RequesterName,
@@ -126,7 +127,7 @@ const ORDER = orderFor(ACTIONABLE);
  * ikinci bir kural tanımlamaz (bkz. server/notifications/requestInboxQueries.js).
  */
 export const COORDINATION_SQL = Object.freeze({
-  SOURCE, COUNT_SOURCE, PARTICIPANT, ACTIONABLE, UNREAD, VISIBLE, TASK_AVAILABLE, FIELDS
+  SOURCE, COUNT_SOURCE, PARTICIPANT, ACTIONABLE, UNREAD, VISIBLE, TASK_AVAILABLE, DISPLAYED_PROJECT_ID, FIELDS
 });
 
 /**
@@ -389,8 +390,13 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
 }
 
 export async function queryAssignmentCoordinations(input) {
-  return withSqlTransaction(async (executor) =>
-    readCoordinationPage(executor, await loadAuthorizationContext(executor), input));
+  const coordinationId = input?.coordinationId == null ? null : canonicalActualId(input.coordinationId);
+  if (input?.coordinationId != null && !coordinationId) invalid('Koordinasyon kimliği geçersiz.');
+  return withSqlTransaction(async (executor) => {
+    const actor = await loadAuthorizationContext(executor);
+    if (coordinationId) return { record: await readCoordination(executor, actor, coordinationId) };
+    return readCoordinationPage(executor, actor, input);
+  });
 }
 
 /** Tek kaydın güncel künyesi (karar sonrası yanıt ve açılan pencere için). */

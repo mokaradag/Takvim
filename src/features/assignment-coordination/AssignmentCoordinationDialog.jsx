@@ -1,5 +1,6 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { fetchAssignmentCoordination } from '../../data/api/assignmentCoordinationClient.js';
 import { Icons } from '../../components/icons.jsx';
 import {
   COORDINATION_DECISIONS,
@@ -32,7 +33,8 @@ export function AssignmentCoordinationDialog({
   onClose,
   onDecide,
   onOpenTask,
-  restoreFocusRef
+  restoreFocusRef,
+  loadRecord = fetchAssignmentCoordination
 }) {
   const [message, setMessage] = useState('');
   const [suggested, setSuggested] = useState(null);
@@ -46,9 +48,39 @@ export function AssignmentCoordinationDialog({
   // Sonucu doğrulanamayan ağ/zaman aşımı yanıtında, aynı eski sürüm üzerinden
   // yinelenen karar verilmesini engelleyen kilit.
   const [unconfirmed, setUnconfirmed] = useState(null);
-  const record = committedState && String(committedState.record.id) === String(recordProp.id)
-    ? selectFresherRecord(recordProp, committedState.record, { supersededVersion: committedState.baseVersion })
-    : recordProp;
+  const [verification, setVerification] = useState(null);
+  const [revision, setRevision] = useState(0);
+  const lookupGeneration = useRef(0);
+  const { id, mode } = recordProp;
+  // Canlı yetki, koordinasyon satırının sürümü değişmeden de değişebilir.
+  const permissionKey = JSON.stringify([recordProp.taskAvailable !== false, recordProp.allowedDecisions ?? []]);
+  const shouldVerify = mode !== COORDINATION_MODES.NOTICE || Boolean(recordProp.allowedDecisions?.length);
+  useEffect(() => {
+    if (!shouldVerify) return undefined;
+    const generation = ++lookupGeneration.current;
+    async function verify() {
+      try {
+        const result = await loadRecord(id);
+        if (generation !== lookupGeneration.current) return;
+        const record = result.ok ? result.value.record : null;
+        const message = result.message || 'Koordinasyon kaydı artık görüntülenemiyor.';
+        setVerification({ id, revision, permissionKey, record, error: record ? null : message });
+      } catch {
+        if (generation === lookupGeneration.current) {
+          setVerification({ id, revision, permissionKey, record: null, error: 'Koordinasyon kaydı yenilenemedi.' });
+        }
+      }
+    }
+    verify();
+    return () => { if (generation === lookupGeneration.current) lookupGeneration.current += 1; };
+  }, [id, loadRecord, permissionKey, revision, shouldVerify]);
+
+  const verified = verification?.id === id && verification.revision === revision
+    && verification.permissionKey === permissionKey ? verification : null;
+  const latest = verified?.record ? selectFresherRecord(verified.record, recordProp) : recordProp;
+  const record = committedState?.record.id === id
+    ? selectFresherRecord(latest, committedState.record, { supersededVersion: committedState.baseVersion })
+    : latest;
   const outcomeUnconfirmed = Boolean(
     unconfirmed
     && String(unconfirmed.id) === String(record.id)
@@ -58,10 +90,11 @@ export function AssignmentCoordinationDialog({
   const dialogRef = useRef(null);
   useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: closeRef, restoreFocusRef, onClose, blocked: busy });
 
-  const decisions = useMemo(
-    () => (outcomeUnconfirmed ? [] : (record.allowedDecisions || [])),
-    [outcomeUnconfirmed, record.allowedDecisions]
-  );
+  const verifying = shouldVerify && !verified;
+  const verificationError = shouldVerify ? verified?.error : null;
+  const hideDetails = verificationError || (verifying && !(verification?.id === id && verification.record));
+  const decisions = outcomeUnconfirmed || verifying || verificationError ? [] : (record.allowedDecisions || []);
+  const verifyAgain = () => setRevision((value) => value + 1);
   const canSuggest = decisions.includes(COORDINATION_DECISIONS.REQUEST_CHANGE);
   // Etiket yanıt notunu "değişiklik isteğinde zorunlu" diye bildirir; düğme de
   // aynı kuralı uygular. Uygulanmadığında boş notlu istek gidiyor ve kullanıcı
@@ -70,6 +103,7 @@ export function AssignmentCoordinationDialog({
 
   const decide = async (decision) => {
     const submittedVersion = record.version;
+    const submittedLookup = lookupGeneration.current;
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -88,14 +122,19 @@ export function AssignmentCoordinationDialog({
       setBusy(false);
     }
     if (!result?.ok) {
-      if (result?.code === 'OUTCOME_UNKNOWN') {
+      if (['OUTCOME_UNKNOWN', 'CONFLICT', 'FORBIDDEN'].includes(result?.code)) {
         if (result.record) {
           setCommittedState({ record: result.record, baseVersion: submittedVersion });
+          if (lookupGeneration.current === submittedLookup) {
+            lookupGeneration.current += 1;
+            setVerification({ id, revision, permissionKey, record: result.record, error: null });
+          }
           setUnconfirmed(null);
         } else {
           setUnconfirmed({ id: record.id, version: submittedVersion });
         }
       }
+      if (result?.refreshError) setNotice(result.refreshError.message || 'Görünüm yenilenemedi.');
       setError(result?.message || result?.error?.message || 'Karar kaydedilemedi.');
       return;
     }
@@ -120,18 +159,23 @@ export function AssignmentCoordinationDialog({
       <button className="schedule-modal-backdrop" type="button" aria-label="Atama koordinasyonunu kapat" onClick={onClose} disabled={busy} />
       <section ref={dialogRef} className="schedule-modal coordination-modal" role="dialog" aria-modal="true" aria-labelledby="coordination-title" tabIndex={-1}>
         <header className="schedule-modal-head">
-          <div>
+          {hideDetails ? <h2 id="coordination-title">Atama koordinasyonu</h2> : <div>
             <span className={`schedule-status coordination-${record.status.toLowerCase()}`}>
               {COORDINATION_STATUS_LABELS[record.status] || record.status}
             </span>
             <h2 id="coordination-title">{headline(record)}</h2>
             <p>{record.projectCode ? `${record.projectCode} · ` : ''}{record.taskTitle || 'Silinen görev'}</p>
-          </div>
+          </div>}
           <button ref={closeRef} className="icon-btn" type="button" onClick={onClose} aria-label="Kapat" disabled={busy}>
             <Icons.Close size={15} />
           </button>
         </header>
 
+        {verifying && <p role="status">Güncel kayıt yükleniyor…</p>}
+        {verificationError && <p role="alert" className="schedule-modal-error">{verificationError}
+          <button type="button" className="btn ghost sm" onClick={verifyAgain}>Kaydı yenile</button>
+        </p>}
+        {!hideDetails && <>
         <dl className="coordination-facts">
           <div>
             <dt>Görevlendirilen</dt>
@@ -209,6 +253,7 @@ export function AssignmentCoordinationDialog({
 
         {error && <div className="schedule-modal-error" role="alert"><Icons.Alert size={13} /> {error}</div>}
         {notice && <div className="schedule-modal-error" role="status"><Icons.Alert size={13} /> {notice}</div>}
+        {outcomeUnconfirmed && shouldVerify && <button type="button" className="btn ghost sm" onClick={verifyAgain}>Kaydı yenile</button>}
 
         <footer className="schedule-modal-actions">
           <button className="btn" type="button" disabled={busy || record.taskAvailable === false}
@@ -238,6 +283,7 @@ export function AssignmentCoordinationDialog({
             </button>
           )) : <button className="btn primary" type="button" onClick={onClose} disabled={busy}>Tamam</button>}
         </footer>
+        </>}
       </section>
     </div>
   );

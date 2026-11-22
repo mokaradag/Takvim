@@ -1320,20 +1320,21 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
    Dört sekme de aynı yükseklik sözleşmesini kullanır (bkz.
    docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md · 2.3). `.content` kaydırılmaz;
    yükseklik sekme şeridi → panel → (koordinasyon paneli) → tablo kabuğuna
-   devredilir ve yalnızca tablo kabuğu dikey kayar. Yapışkan başlık satırı
+   devredilir. Süzgeçler taşarsa panel kayar, normalde tablo kabuğu kayar.
+   Yapışkan başlık satırı
    böylece gerçekten kaydırılan öğenin içindedir. Alt nefes payı `.content`
    alt dolgusudur (16px). Kurallar `.requests-view` altında sınırlıdır:
    paylaşılan `.detail-list-scroll` KPI penceresinde ve başka modüllerde
    olduğu gibi kalır. */
 .content-talepler { overflow: hidden; min-height: 0; padding-bottom: 16px; }
 .requests-view { height: 100%; min-height: 0; }
-.requests-view > .request-tabs { flex: 0 0 auto; }
+.requests-view > .request-tabs { flex: 0 0 auto; flex-wrap: wrap; }
 .requests-view > .requests-panel {
   flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
 }
 .requests-panel > .coordination-panel { flex: 1 1 0; min-height: 0; }
 .requests-panel > :not(.detail-list-scroll):not(.coordination-panel),

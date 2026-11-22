@@ -50,6 +50,7 @@ import { readWorkspacePreference, writeWorkspacePreference } from './workspacePr
 import { createNotificationActions } from './notificationActions.js';
 import {
   decideAssignmentCoordinationRequest,
+  fetchAssignmentCoordination,
   markNotificationItems
 } from '../data/api/assignmentCoordinationClient.js';
 import {
@@ -357,7 +358,8 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     beginInboxRead: () => ++inboxSequenceRef.current,
     getInboxSequence: () => inboxSequenceRef.current,
     markItems: markNotificationItems,
-    decideCoordination: decideAssignmentCoordinationRequest
+    decideCoordination: decideAssignmentCoordinationRequest,
+    readCoordination: fetchAssignmentCoordination
   }), [applyStateAction, persistence, reloadData]);
 
   const addTask = useCallback(async (input = null) => {

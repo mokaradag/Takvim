@@ -8,6 +8,7 @@ import {
   COORDINATION_STATUS_LABELS
 } from '../../domain/assignment/assignmentCoordination.js';
 import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
+import { useNotificationRead } from '../notifications/useNotificationRead.js';
 import { TaskTablePagination } from '../tasks/TaskTablePagination.jsx';
 import { AssignmentCoordinationDialog } from './AssignmentCoordinationDialog.jsx';
 import { useAssignmentCoordinationQuery } from './useAssignmentCoordinationQuery.js';
@@ -34,18 +35,17 @@ const INITIAL = Object.freeze({
 export function AssignmentCoordinationView({ onTotalChange } = {}) {
   const [query, setQuery] = useState(INITIAL);
   const [selected, setSelected] = useState(null);
-  const [readError, setReadError] = useState(null);
   const openerRef = useRef(null);
   const projects = useAllProjects();
   const { openTask, markNotifications, decideAssignmentCoordination } = useTaskActions();
-  const { data, loading, error, actual, refresh } = useAssignmentCoordinationQuery(query);
+  const { data, confirmedTotal, loading, error, actual, refresh } = useAssignmentCoordinationQuery(query);
+  const { markRead, markError, retryMark } = useNotificationRead(markNotifications, refresh);
   // Sekme sayacı, süzgeçlere uyan "Tüm kayıtlar" sayısıdır. Kapsam seçimi
   // (ör. Kararımı bekleyenler) onu sıfıra indirmez; karar bekleyen sayısı
   // ayrı bir anlamdır.
-  const allCount = data.counts.all;
   useEffect(() => {
-    if (!loading && typeof allCount === 'number') onTotalChange?.(allCount);
-  }, [allCount, loading, onTotalChange]);
+    if (confirmedTotal != null) onTotalChange?.(confirmedTotal);
+  }, [confirmedTotal, onTotalChange]);
 
   const projectOptions = useMemo(() => [
     { value: '', label: 'Tüm projeler' },
@@ -64,13 +64,7 @@ export function AssignmentCoordinationView({ onTotalChange } = {}) {
   const open = async (record, target) => {
     openerRef.current = target;
     setSelected(record);
-    setReadError(null);
-    if (!record.unread) return;
-    // Okundu işareti yalnızca zil kutusunu yeniler; tam anlık görüntü okunmaz.
-    const result = await markNotifications?.([record]);
-    if (result && !result.ok) setReadError(result.message || 'Bildirim güncellenemedi.');
-    else if (result?.refreshError) setReadError(result.refreshError.message || 'Bildirimler yenilenemedi.');
-    refresh();
+    await markRead(record);
   };
 
   const decide = async (coordinationId, input) => {
@@ -126,12 +120,12 @@ export function AssignmentCoordinationView({ onTotalChange } = {}) {
         <button type="button" className="btn ghost sm" onClick={() => setQuery(INITIAL)}>Filtreleri temizle</button>
       </div>
 
-      {(error || readError) && (
-        <p role="alert" className="schedule-modal-error">
-          {error || readError}
-          <button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button>
-        </p>
-      )}
+      {error && <p role="alert" className="schedule-modal-error">{error}
+        <button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button>
+      </p>}
+      {markError && <p role="alert" className="schedule-modal-error">{markError}
+        <button type="button" className="btn ghost sm" onClick={retryMark}>Okundu işaretini yinele</button>
+      </p>}
       {!actual && <p className="empty">Atama koordinasyonu Gerçek Sistem kipinde kullanılabilir.</p>}
       {loading && <p className="muted" role="status">Kayıtlar yükleniyor…</p>}
 
@@ -191,6 +185,7 @@ export function AssignmentCoordinationView({ onTotalChange } = {}) {
 
       {selected && (
         <AssignmentCoordinationDialog
+          key={selected.id}
           record={rows.find((item) => item.id === selected.id) || selected}
           restoreFocusRef={openerRef}
           onClose={() => setSelected(null)}

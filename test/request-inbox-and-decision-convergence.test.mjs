@@ -26,13 +26,16 @@ const { createDataReloadOperation, dataReloadSingleFlightOptions } = await impor
 const { appStateReducer, createInitialState } = await import('../src/state/appState.js');
 const { createNotificationActions, OUTCOME_UNKNOWN_MESSAGE, OUTCOME_UNKNOWN_UNRECONCILED_MESSAGE } = await import('../src/state/notificationActions.js');
 const { requestInboxRow, requestInboxKey, selectFresherRecord } = await import('../src/features/schedule-change/requestInboxPresentation.js');
+const { AssignmentCoordinationView } = await import('../src/features/assignment-coordination/AssignmentCoordinationView.jsx');
 const { AssignmentCoordinationDialog } = await import('../src/features/assignment-coordination/AssignmentCoordinationDialog.jsx');
 const { ScheduleRequestDetails } = await import('../src/features/schedule-change/ScheduleRequestCenter.jsx');
 const { ScheduleRequestsView } = await import('../src/features/schedule-change/ScheduleRequestsView.jsx');
+const { TaskTablePagination } = await import('../src/features/tasks/TaskTablePagination.jsx');
 const { useRequestInboxQuery } = await import('../src/features/schedule-change/useRequestInboxQuery.js');
 const { fetchRequestInbox } = await import('../src/data/api/assignmentCoordinationClient.js');
 const store = await import('../src/server/assignment/assignmentCoordinationStore.js');
 const coordinationQueries = await import('../src/server/assignment/assignmentCoordinationQueries.js');
+const { withSqlTransaction } = await import('../src/server/db/pool.js');
 const inbox = await import('../src/server/notifications/requestInboxQueries.js');
 const notificationQueries = await import('../src/server/notifications/notificationInboxQueries.js');
 
@@ -372,8 +375,8 @@ test('art arda aynı yenileme istekleri tek bekleyen okumada birleşir', async (
   assert.equal(harness.gates.length, 2, 'üçüncü istek ayrı okuma başlatmaz');
 });
 
-function actionsHarness({ decide, reload = async () => ({ ok: true }), mark } = {}) {
-  const calls = { decide: 0, reload: 0, applied: [] };
+function actionsHarness({ decide, reload = async () => ({ ok: true }), mark, readRecord = async () => ({ ok: true, value: { record: null } }) } = {}) {
+  const calls = { decide: 0, reload: 0, lookup: [], applied: [] };
   let sequence = 0;
   const actions = createNotificationActions({
     isActualMode: () => true,
@@ -383,7 +386,8 @@ function actionsHarness({ decide, reload = async () => ({ ok: true }), mark } = 
     beginInboxRead: () => ++sequence,
     getInboxSequence: () => sequence,
     markItems: mark || (async () => ({ ok: true, value: { ok: true } })),
-    decideCoordination: async (...args) => { calls.decide += 1; return decide(...args); }
+    decideCoordination: async (...args) => { calls.decide += 1; return decide(...args); },
+    readCoordination: async (id) => { calls.lookup.push(id); return readRecord(id); }
   });
   return { actions, calls, bumpSequence: () => ++sequence, getSequence: () => sequence };
 }
@@ -393,7 +397,8 @@ test('belirsiz karar sonucu yeniden gönderilmez; ön-işlem okuması kesin uzla
   const committedRecord = { id: 'c1', status: 'APPROVED', version: 'v2', allowedDecisions: [] };
   const confirmed = actionsHarness({
     decide: async () => ({ ok: false, code: 'NETWORK', message: 'Sunucuya ulaşılamadı.' }),
-    reload: async () => ({ ok: true, snapshot: { assignmentCoordinations: [committedRecord] } })
+    readRecord: async () => ({ ok: true, value: { record: committedRecord } }),
+    reload: async () => ({ ok: false, error: { message: 'Anlık görüntü alınamadı' } })
   });
   const result = await confirmed.actions.decideAssignmentCoordination('c1', { decision: 'APPROVE', version: 'v1' });
   assert.equal(result.ok, false);
@@ -402,12 +407,14 @@ test('belirsiz karar sonucu yeniden gönderilmez; ön-işlem okuması kesin uzla
   assert.deepEqual(result.record, committedRecord);
   assert.equal(result.message, OUTCOME_UNKNOWN_MESSAGE);
   assert.equal(confirmed.calls.decide, 1, 'karar isteği tekrarlanmaz');
-  assert.equal(confirmed.calls.reload, 1, 'yetkili durum yeniden okunur');
+  assert.equal(confirmed.calls.reload, 1, 'uygulama anlık görüntüsü de yenilenir');
+  assert.deepEqual(confirmed.calls.lookup, ['c1'], 'zil önizlemesinden bağımsız olarak kayıt okunur');
+  assert.equal(result.refreshError.message, 'Anlık görüntü alınamadı');
 
   // Erken okuma hâlâ karar öncesi aynı sürümü görüyorsa kesin uzlaştırma sayılmaz.
   const preCommit = actionsHarness({
     decide: async () => ({ ok: false, code: 'REQUEST_TIMEOUT', message: 'İstek zaman aşımına uğradı.' }),
-    reload: async () => ({ ok: true, snapshot: { assignmentCoordinations: [{ id: 'c1', status: 'PENDING', version: 'v1' }] } })
+    readRecord: async () => ({ ok: true, value: { record: { id: 'c1', status: 'PENDING', version: 'v1' } } })
   });
   const unconfirmed = await preCommit.actions.decideAssignmentCoordination('c1', { decision: 'APPROVE', version: 'v1' });
   assert.equal(unconfirmed.code, 'OUTCOME_UNKNOWN');
@@ -450,9 +457,15 @@ test('kaydedilen kararın uzlaştırması başarısızsa sonuç bunu başarılı
 });
 
 test('sürüm çakışmasında bayat kayıt yerine güncel durum okunur', async () => {
-  const { actions, calls } = actionsHarness({ decide: async () => ({ ok: false, code: 'CONFLICT', message: 'Koordinasyon kaydı bu sırada güncellendi.' }) });
+  const record = { id: 'c1', version: 'yeni', status: 'APPROVED' };
+  const { actions, calls } = actionsHarness({
+    decide: async () => ({ ok: false, code: 'CONFLICT', message: 'Koordinasyon kaydı bu sırada güncellendi.' }),
+    readRecord: async () => ({ ok: true, value: { record } })
+  });
   const result = await actions.decideAssignmentCoordination('c1', { decision: 'REJECT', version: 'eski' });
   assert.equal(result.code, 'CONFLICT');
+  assert.deepEqual(result.record, record);
+  assert.deepEqual(calls.lookup, ['c1']);
   assert.equal(calls.reload, 1);
 });
 
@@ -511,18 +524,44 @@ test('Talepler satırı kaynak anlamını korur ve okunmamışlığı durumla ka
   assert.notEqual(requestInboxKey({ source: 'TASK_EVENT', id: 'x' }), requestInboxKey({ source: 'SCHEDULE_REQUEST', id: 'x' }));
 });
 
-test('Atama Koordinasyonu sayacı karar bekleyen sayısından değil kayıt sayısından gelir', (t) => {
+const readResponse = (value, status = 200) => ({ ok: status < 400, status, async json() { return value; } });
+const settleRead = () => new Promise((resolve) => setImmediate(resolve));
+
+test('Atama Koordinasyonu aynı zil sayısıyla yenilenir, hatada son geçerli sayacı korur', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  globalThis[CLIENT_STATE] = { projects: [], actions: {}, session: { dataMode: 'demo' }, notificationSummary: { unreadCount: 0, pendingCount: 0 } };
-  t.after(() => { delete globalThis[CLIENT_STATE]; });
-  const view = mountComponent(ScheduleRequestsView, {});
-  t.after(() => view.unmount());
-  const source = read('src/features/schedule-change/ScheduleRequestsView.jsx');
-  assert.doesNotMatch(source, /notificationSummary\.pendingCount/);
-  assert.match(source, /<AssignmentCoordinationView onTotalChange=\{setCoordinationTotal\} \/>/);
-  const coordinationSource = read('src/features/assignment-coordination/AssignmentCoordinationView.jsx');
-  assert.match(coordinationSource, /const allCount = data\.counts\.all;/);
-  assert.match(read('src/server/assignment/assignmentCoordinationQueries.js'), /all: Number\(counts\.Total \|\| 0\)/);
+  const counts = [];
+  const responses = [40, null, 41];
+  t.mock.method(globalThis, 'fetch', async () => {
+    const all = responses.shift();
+    return all == null ? readResponse({ message: 'Bağlantı yok' }, 503)
+      : readResponse({ items: [], total: all, page: 0, pageSize: 25, counts: { all, pending: 0 } });
+  });
+  const lifecycle = { lastRefreshedAt: 'ilk' };
+  globalThis[CLIENT_STATE] = {
+    projects: [], actions: {}, session: { dataMode: 'actual' }, dataLifecycle: lifecycle,
+    notificationSummary: { unreadCount: 0, pendingCount: 0 }
+  };
+  const onTotalChange = (value) => counts.push(value);
+  const view = mountComponent(AssignmentCoordinationView, { onTotalChange });
+  t.after(() => { view.unmount(); delete globalThis[CLIENT_STATE]; });
+  async function showResponse() {
+    t.mock.timers.tick(250);
+    await settleRead();
+    view.render();
+  }
+  await showResponse();
+  assert.deepEqual(counts, [40]);
+  lifecycle.lastRefreshedAt = 'ikinci';
+  view.render();
+  await showResponse();
+  assert.ok(findElement(view.output, (node) => node.props?.role === 'alert'));
+  assert.deepEqual(counts, [40]);
+  lifecycle.lastRefreshedAt = 'üçüncü';
+  view.render();
+  await showResponse();
+  assert.equal(findElement(view.output, (node) => node.props?.role === 'alert'), null);
+  assert.deepEqual(counts, [40, 41]);
+  assert.equal(responses.length, 0);
 });
 
 test('karar penceresi yenileme hatasında açık kalır ve sunucunun döndürdüğü kaydı gösterir', async (t) => {
@@ -530,10 +569,12 @@ test('karar penceresi yenileme hatasında açık kalır ve sunucunun döndürdü
   let closed = false;
   const record = { id: 'c1', status: 'PENDING', mode: 'REQUEST', version: 'v1', allowedDecisions: ['APPROVE', 'REJECT'], taskTitle: 'Görev', assigneeName: 'Dış', requesterName: 'Talep' };
   const view = mountComponent(AssignmentCoordinationDialog, {
-    record, onClose: () => { closed = true; }, onOpenTask: async () => ({ ok: true }),
+    record, loadRecord: async () => ({ ok: true, value: { record } }), onClose: () => { closed = true; }, onOpenTask: async () => ({ ok: true }),
     onDecide: async () => ({ ok: true, value: { outcome: 'APPROVED', message: 'Atama onaylandı.', record: { ...record, status: 'APPROVED', version: 'v2', allowedDecisions: [] } }, refreshError: { message: 'Bağlantı yok' } })
   });
   t.after(() => { view.unmount(); delete globalThis.document; });
+  await settleRead();
+  view.render();
   const approve = findElement(view.output, (node) => node.type === 'button' && node.props.className?.includes('primary'));
   await approve.props.onClick();
   view.render();
@@ -573,9 +614,14 @@ test('Talepler dört sekmede tablo kabuğunu tek dikey kaydırma alanı yapar ve
   css.walkAtRules('media', (rule) => {
     if (rule.params.includes('max-height: 600px') && rule.toString().includes('.content-talepler')) fallback = rule.toString();
   });
-  assert.match(fallback || '', /var\(--app-viewport-h, 100vh\) \* \.65/);
+  assert.ok(fallback, 'dar görünüm kuralı bulunmalı');
+  assert.match(fallback, /var\(--app-viewport-h, 100vh\) \* \.65/);
   // Sabit piksel yükseklikleri yerine ölçekli görünüm değişkeni kullanılır.
-  assert.doesNotMatch(read('src/app/styles/features.css').match(/Talepler · tam yükseklikli[\s\S]*?\n}\n}/)?.[0] || '', /100vh\s*-/);
+  const start = css.nodes.findIndex((node) => node.type === 'comment' && node.text.includes('Talepler · tam yükseklikli'));
+  const end = css.nodes.findIndex((node) => node.type === 'rule' && node.selector === '.coordination-modal');
+  assert.ok(start >= 0 && end > start, 'Talepler yerleşim bölümünün iki sınırı bulunmalı');
+  assert.doesNotMatch(css.nodes.slice(start, end).map(String).join('\n'), /100vh\s*-/);
+  assert.equal(declaration('.requests-view > .requests-panel', 'overflow'), 'auto');
 });
 
 /* ── Yetki iptali, eşzamanlılık ve kenar durum regresyonları ─── */
@@ -623,6 +669,8 @@ test('geçici tam proje yetkisiyle geçmiş koordinasyonu okundu işaretlemek ye
     const afterRevokeCoord = await asUser(TEMP_MANAGER, () => coordinationQueries.queryAssignmentCoordinations({ tab: 'all' }));
     assert.equal(afterRevokeCoord.items.find((item) => item.id === created.id), undefined,
       'Atama Koordinasyonu okuması da yetki iptali sonrası kaydı gizlemelidir');
+    const detail = await asUser(TEMP_MANAGER, () => coordinationQueries.queryAssignmentCoordinations({ coordinationId: created.id }));
+    assert.equal(detail.record, null, 'tek kayıt okuması aynı katılım yetkisini gerektirir');
 
     // 5) Gerçek tarihsel alıcılar (talep eden, karar veren yönetici, onaylı sorumlu) erişimini korur.
     for (const legitimate of [ORDINARY, UNIT_MANAGER, EXTERNAL]) {
@@ -703,23 +751,28 @@ test('karar penceresi elde tutulan kopyayı daha yeni sunucu sürümüyle deği�
   const cancelled = { ...initial, status: 'CANCELLED', version: v3, allowedDecisions: [] };
 
   // 1) Karar sonrası yenileme hatasında committedRecord korunur, ama daha yeni v3 geldiğinde yerini bırakır.
-  const view = mountComponent(AssignmentCoordinationDialog, {
-    record: initial, onClose() {}, onOpenTask: async () => ({ ok: true }),
+  const props = {
+    record: initial, loadRecord: async () => ({ ok: true, value: { record: initial } }), onClose() {}, onOpenTask: async () => ({ ok: true }),
     onDecide: async () => ({ ok: true, value: { outcome: 'APPROVED', message: 'Onaylandı.', record: approved }, refreshError: { message: 'Ağ hatası' } })
-  });
+  };
+  const view = mountComponent(AssignmentCoordinationDialog, props);
+  await settleRead();
+  view.render();
   const approve = findElement(view.output, (node) => node.type === 'button' && node.props.className?.includes('primary'));
   await approve.props.onClick();
-  view.render({ record: initial });
+  view.render();
   assert.equal(findElement(view.output, (node) => node.type === 'h2').props.children, 'Atama talebi · Atandı', 'eski v1 kopyası yetkili v2 kaydını ezmez');
-  view.render({ record: cancelled });
+  view.render({ ...props, record: cancelled });
   assert.equal(findElement(view.output, (node) => node.type === 'h2').props.children, 'Atama talebi · İptal edildi', 'daha yeni sunucu sürümü v3 elde tutulan v2 kopyasının yerini alır');
 
   // 2) Doğrulanmamış OUTCOME_UNKNOWN yanıtında karar düğmeleri gizlenir; aynı sürümle ikinci karar sunulamaz.
   const unknownView = mountComponent(AssignmentCoordinationDialog, {
-    record: initial, onClose() {}, onOpenTask: async () => ({ ok: true }),
+    record: initial, loadRecord: async () => ({ ok: true, value: { record: initial } }), onClose() {}, onOpenTask: async () => ({ ok: true }),
     onDecide: async () => ({ ok: false, code: 'OUTCOME_UNKNOWN', reconciled: false, message: OUTCOME_UNKNOWN_UNRECONCILED_MESSAGE })
   });
   t.after(() => { view.unmount(); unknownView.unmount(); delete globalThis.document; });
+  await settleRead();
+  unknownView.render();
   const approve2 = findElement(unknownView.output, (node) => node.type === 'button' && node.props.className?.includes('primary'));
   await approve2.props.onClick();
   unknownView.render();
@@ -889,6 +942,254 @@ test('birleşik gelen kutusu imleçli sayfalamada araya yeni kayıt girse de yin
   }
 });
 
+function taskEvent(id, time) {
+  return {
+    NotificationId: id, RecipientSicil: EXTERNAL, Kind: 'TASK_ASSIGNED', TaskId: TASK_ID,
+    ActorSicil: ORDINARY, TaskTitleSnapshot: id, ProjectIdSnapshot: PROJECT_ID, TaskCount: 1,
+    EventKey: id, OccurredAt: time, ReadAt: null, DismissedAt: null, RowVersion: Buffer.alloc(8, 1)
+  };
+}
+
+test('0015 öncesi Gelenler okuması okunmamış tarih talebi sonucunu sayar ve listeler', async () => {
+  const requestId = '66666666-6666-4666-8666-000000000091';
+  const stack = await createActualStack(seed({
+    assignmentCoordinationSchemaMissing: true,
+    taskScheduleChangeRequests: [{
+      RequestId: requestId, TaskId: TASK_ID, RequesterSicil: ORDINARY, DecisionOwnerSicil: UNIT_MANAGER,
+      Status: 'ACCEPTED', CreatedAt: '2026-10-02T10:00:00Z', DecidedAt: '2026-10-03T10:00:00Z'
+    }]
+  }), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const incoming = await page({ tab: 'pending' });
+    assert.deepEqual(incoming.counts, { pending: 1, sent: 1, history: 1, coordination: 0 });
+    assert.deepEqual(incoming.items.map((item) => item.id), [requestId]);
+    await notificationQueries.markNotifications({ action: 'read', notifications: incoming.items });
+    assert.equal((await page({ tab: 'pending' })).total, 0);
+    assert.equal((await page({ tab: 'history' })).total, 1);
+  } finally { await stack.dispose(); }
+});
+
+test('silinmiş görevin geçmiş kanıtı açık alıcı rolünü veya gerçek talep edeni gerektirir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const record = await requestAssignment(stack);
+    await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(record.id, {
+      decision: 'APPROVE', version: record.version
+    }));
+    stack.db.tasks = [];
+    const managerRow = stack.db.assignmentCoordinationRecipients.find((row) => Number(row.Sicil) === UNIT_MANAGER);
+    assert.equal(managerRow.RecipientRole, 'MANAGER');
+    const evidence = (sicil) => withSqlTransaction((executor) =>
+      coordinationQueries.readCoordinationPage(executor, { sicil }, { tab: 'history' }, { evidenceSnapshotLimit: 8 }));
+    assert.equal((await evidence(UNIT_MANAGER)).total, 1);
+    managerRow.RecipientRole = 'REQUESTER';
+    assert.equal((await evidence(UNIT_MANAGER)).total, 0);
+    assert.equal((await evidence(ORDINARY)).total, 1);
+  } finally { await stack.dispose(); }
+});
+
+test('yedi basamaklı zaman ve GUID sırası imleç sınırında tüm satırları korur', async () => {
+  const sameTime = '2026-10-04T10:00:00.1234567Z';
+  const laterGuid = '11111111-0000-4000-8000-000000000002';
+  const earlierGuid = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const earlierTime = 'aaaaaaaa-0000-4000-8000-000000000003';
+  const stack = await createActualStack(seed({ taskNotifications: [
+    taskEvent(earlierGuid, sameTime), taskEvent(laterGuid, sameTime),
+    taskEvent(earlierTime, '2026-10-04T10:00:00.1234566Z')
+  ] }), { sicil: EXTERNAL, corporateWbsSource: false });
+  try {
+    await asUser(EXTERNAL, async () => {
+      let cursor;
+      const ids = [];
+      for (let index = 0; index < 3; index += 1) {
+        const result = await page({ tab: 'history', page: index, pageSize: 1, cursor });
+        ids.push(result.items[0]?.id);
+        cursor = result.nextCursor;
+        assert.equal(result.hasNext, index < 2);
+        if (cursor) assert.equal(JSON.parse(Buffer.from(cursor, 'base64url')).t, sameTime);
+      }
+      assert.deepEqual(ids, [laterGuid, earlierGuid, earlierTime]);
+    });
+  } finally { await stack.dispose(); }
+});
+
+test('silinen önceki satırlar devamı gizlemez ve boş kalan imleç geçerli sayfaya döner', async () => {
+  const events = [1, 2, 3, 4, 5, 6].map((index) => taskEvent(
+    `66666666-6666-4666-8666-00000000004${index}`, `2026-10-0${index}T10:00:00Z`));
+  const stack = await createActualStack(seed({ taskNotifications: events }), { sicil: EXTERNAL, corporateWbsSource: false });
+  try {
+    await asUser(EXTERNAL, async () => {
+      const first = await page({ tab: 'pending', pageSize: 2 });
+      const mark = (items) => notificationQueries.markNotifications({ action: 'read', notifications: items });
+      await mark(first.items);
+      const second = await page({ tab: 'pending', page: 1, pageSize: 2, cursor: first.nextCursor });
+      assert.equal(second.total, 4);
+      assert.deepEqual(second.items.map((item) => item.id), [events[3].NotificationId, events[2].NotificationId]);
+      assert.ok(second.nextCursor, 'sayaçtaki son sayfa görünse de imleç sonrasında iki kayıt vardır');
+      const third = await page({ tab: 'pending', page: 2, pageSize: 2, cursor: second.nextCursor });
+      assert.equal(third.page, 2);
+      assert.equal(third.hasNext, false);
+      await mark(third.items);
+      const clamped = await page({ tab: 'pending', page: 2, pageSize: 2, cursor: second.nextCursor });
+      assert.equal(clamped.page, 0);
+      assert.equal(clamped.cursorReset, true);
+      assert.deepEqual(clamped.items.map((item) => item.id), second.items.map((item) => item.id));
+    });
+  } finally { await stack.dispose(); }
+});
+
+test('zil önizlemesi dışında kalan karar doğrulanır ve okuma yetkisi oturumdan gelir', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const created = await requestAssignment(stack);
+    const decided = await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(created.id, {
+      decision: 'APPROVE', version: created.version
+    }));
+    const { actions } = actionsHarness({
+      decide: async () => ({ ok: false, code: 'NETWORK' }),
+      reload: async () => ({ ok: true, snapshot: { assignmentCoordinations: [] } }),
+      readRecord: async (id) => ({ ok: true, value: await coordinationQueries.queryAssignmentCoordinations({ coordinationId: id }) })
+    });
+    const recovered = await asUser(UNIT_MANAGER, () => actions.decideAssignmentCoordination(created.id, { version: created.version }));
+    assert.equal(recovered.reconciled, true);
+    assert.equal(recovered.record.version, decided.record.version);
+    assert.equal(recovered.record.status, 'APPROVED');
+    const outsider = await asUser(OUTSIDER, () => coordinationQueries.queryAssignmentCoordinations({ coordinationId: created.id }));
+    assert.equal(outsider.record, null);
+    await assert.rejects(() => coordinationQueries.queryAssignmentCoordinations({ coordinationId: 'hatalı' }),
+      (error) => error.status === 400);
+  } finally { await stack.dispose(); }
+});
+
+test('yetki değiştiğinde aynı kayıt sürümünden eski karar düğmeleri geri gelmez', async (t) => {
+  const record = { id: TASK_ID, mode: 'REQUEST', status: 'PENDING', version: 'v1', allowedDecisions: ['APPROVE'] };
+  const current = { ...record, allowedDecisions: [] };
+  const { actions } = actionsHarness({
+    decide: async () => ({ ok: false, code: 'FORBIDDEN', message: 'Karar yetkisi değişti.' }),
+    readRecord: async () => ({ ok: true, value: { record: current } })
+  });
+  const view = mountComponent(AssignmentCoordinationDialog, {
+    record, loadRecord: async () => ({ ok: true, value: { record } }), onClose() {},
+    onDecide: actions.decideAssignmentCoordination
+  });
+  t.after(() => view.unmount());
+  await settleRead();
+  view.render();
+  const approve = () => findElement(view.output, (node) => node.type === 'button' && node.props?.['aria-busy'] === false);
+  assert.ok(approve());
+  await approve().props.onClick();
+  view.render();
+  assert.equal(approve(), null);
+  assert.equal(findElement(view.output, (node) => node.props?.role === 'alert').props.children.at(-1), 'Karar yetkisi değişti.');
+});
+
+test('önceden okunan koordinasyon açılırken eski karar düğmeleri gösterilmez', async (t) => {
+  const record = { id: TASK_ID, mode: 'REQUEST', status: 'PENDING', version: 'v1', allowedDecisions: ['APPROVE'], unread: false };
+  const lookup = deferred();
+  const loads = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    loads.push(String(url));
+    return lookup.promise;
+  });
+  const modal = mountComponent(AssignmentCoordinationDialog, { record, onClose() {} });
+  t.after(() => modal.unmount());
+  const approve = (tree) => findElement(tree, (node) => node.type === 'button' && node.props?.['aria-busy'] === false);
+  assert.equal(approve(modal.output), null);
+  assert.equal(loads.length, 1);
+  assert.ok(loads[0].endsWith(`?coordinationId=${TASK_ID}`));
+  lookup.resolve(readResponse({ record: { ...record, status: 'REJECTED', version: 'v2', allowedDecisions: [] } }));
+  await settleRead();
+  modal.render();
+  assert.equal(findElement(modal.output, (node) => node.type === 'h2').props.children, 'Atama talebi · Reddedildi');
+  assert.equal(approve(modal.output), null);
+});
+
+test('liste yenilemesi aynı sürümde karar yetkisini kaldırınca açık pencere düğmeleri gizler', async (t) => {
+  const record = { id: TASK_ID, mode: 'REQUEST', status: 'PENDING', version: 'v1', allowedDecisions: ['APPROVE'] };
+  const refreshed = { ...record, allowedDecisions: [] };
+  const followUp = deferred();
+  let loads = 0;
+  const props = {
+    record, onClose() {}, loadRecord: async () => {
+      loads += 1;
+      return loads === 1 ? { ok: true, value: { record } } : followUp.promise;
+    }
+  };
+  const dialog = mountComponent(AssignmentCoordinationDialog, props);
+  t.after(() => dialog.unmount());
+  const approve = () => findElement(dialog.output, (node) => node.type === 'button' && node.props?.['aria-busy'] === false);
+  await settleRead();
+  dialog.render();
+  assert.ok(approve());
+  dialog.render({ ...props, record: refreshed });
+  assert.equal(approve(), null, 'aynı veri sürümündeki yeni yetkiler eski düğmeleri kapatır');
+  assert.equal(loads, 2);
+  followUp.resolve({ ok: true, value: { record: refreshed } });
+  await settleRead();
+  dialog.render();
+  assert.equal(approve(), null);
+});
+
+test('taşınan görev için birleşik Geçmiş süzgeci satırda gösterilen projeyi kullanır', async () => {
+  const secondProjectId = '66666666-6666-4666-8666-000000000006';
+  const initial = seed();
+  initial.projects.push({ ...initial.projects[0], ProjectId: secondProjectId, ProjectCode: 'P9600002', ProjectName: 'İkinci proje' });
+  const stack = await createActualStack(initial, { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const record = await requestAssignment(stack);
+    await asUser(UNIT_MANAGER, () => store.decideAssignmentCoordination(record.id, {
+      decision: 'APPROVE', version: record.version
+    }));
+    stack.db.tasks.find((row) => row.TaskId.toLowerCase() === TASK_ID).ProjectId = secondProjectId;
+    const originalProject = await page({ tab: 'history', projectId: PROJECT_ID, category: 'ASSIGNMENT_REQUEST' });
+    assert.equal(originalProject.items[0]?.id, record.id);
+    assert.equal(originalProject.items[0].projectId, PROJECT_ID);
+    assert.equal(originalProject.counts.history, 1);
+    const secondProject = await page({ tab: 'history', projectId: secondProjectId, category: 'ASSIGNMENT_REQUEST' });
+    assert.equal(secondProject.counts.history, 0);
+    assert.equal(secondProject.items.length, 0);
+  } finally { await stack.dispose(); }
+});
+
+test('Talepler gezinmesi imleçte kayıt varsa toplam küçülse de ilerler ve boşalan sınırı temizler', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const params = new URL(url, 'http://localhost').searchParams;
+    const requested = Number(params.get('page'));
+    const cursor = params.get('cursor');
+    requests.push([requested, cursor]);
+    const clamped = requested === 2;
+    const data = { items: [], total: 26, page: clamped ? 0 : requested, pageSize: 25, counts: { pending: 26 },
+      hasNext: !clamped, nextCursor: clamped ? null : `sonraki-${requested}`, cursorReset: clamped };
+    return readResponse(data);
+  });
+  globalThis[CLIENT_STATE] = { projects: [], session: { dataMode: 'actual' }, actions: {} };
+  const view = mountComponent(ScheduleRequestsView, {});
+  t.after(() => { view.unmount(); delete globalThis[CLIENT_STATE]; });
+  async function showResponse() {
+    t.mock.timers.tick(250);
+    await settleRead();
+    view.render();
+  }
+  const navigate = () => {
+    const pagination = findElement(view.output, (node) => node.type === TaskTablePagination);
+    const controls = mountComponent(TaskTablePagination, pagination.props);
+    const next = findElement(controls.output, (node) => node.props?.['aria-label'] === 'Sonraki talep sayfası');
+    assert.equal(next.props.disabled, false);
+    next.props.onClick();
+    controls.unmount();
+    view.render();
+  };
+  await showResponse();
+  navigate();
+  await showResponse();
+  navigate();
+  await showResponse();
+  await showResponse();
+  assert.deepEqual(requests, [[0, null], [1, 'sonraki-0'], [2, 'sonraki-1'], [0, null]]);
+});
+
 test('bozuk başarılı gelen kutusu yanıtı INVALID_RESPONSE olarak reddedilir ve geçici hata son geçerli veriyi silmez', async (t) => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -938,30 +1239,64 @@ test('bozuk başarılı gelen kutusu yanıtı INVALID_RESPONSE olarak reddedilir
   assert.ok(latest.error, 'hata iletisi yine gösterilir');
 });
 
-test('okundu işareti satırı Gelenler listesinden kaldırdığında pencere kapanınca odak etkin sekmeye döner', async (t) => {
-  let focusedTarget = null;
-  const activeTabButton = { isConnected: true, focus() { focusedTarget = 'active-tab'; } };
-  const removedRowButton = { isConnected: false, focus() { focusedTarget = 'removed-row'; } };
-  const restoreFocusRef = { current: removedRowButton };
-  let rafCallback = null;
+test('okundu hatası asıl işlemi yineler ve kaldırılan satır kapatıldığında odağı etkin sekmeye verir', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const item = { id: 'c1', source: 'ASSIGNMENT_COORDINATION', mode: 'NOTICE', status: 'APPROVED', unread: true, version: 'v1', taskTitle: 'Görev' };
+  let unread = true;
+  const writes = [];
+  t.mock.method(globalThis, 'fetch', async () => readResponse({
+    items: unread ? [item] : [], total: unread ? 1 : 0, page: 0, pageSize: 25,
+    hasNext: false, counts: { pending: unread ? 1 : 0, history: 1 }
+  }));
+  globalThis[CLIENT_STATE] = {
+    projects: [], session: { dataMode: 'actual' }, actions: { markNotifications: async (items) => {
+      writes.push(items);
+      if (writes.length === 1) return { ok: false, message: 'İşaret kaydedilemedi' };
+      unread = false;
+      return { ok: true };
+    } }
+  };
+  let focusedTarget;
+  const activeTab = { isConnected: true, focus() { focusedTarget = 'sekme'; } };
+  const row = { isConnected: true, focus() { focusedTarget = 'satır'; } };
+  const documentStub = { addEventListener() {}, removeEventListener() {}, activeElement: row, body: {} };
   const originalRaf = globalThis.requestAnimationFrame;
+  let rafCallback;
   globalThis.requestAnimationFrame = (fn) => { rafCallback = fn; return 1; };
-  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: removedRowButton, body: {} };
+  globalThis.document = documentStub;
   t.after(() => {
     globalThis.requestAnimationFrame = originalRaf;
     delete globalThis.document;
+    delete globalThis[CLIENT_STATE];
   });
-
-  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
-  function Modal({ onClose }) {
-    useModalFocusTrap({ containerRef: { current: null }, initialFocusRef: { current: { focus() {} } }, restoreFocusRef, onClose });
-    return null;
-  }
-  const view = mountComponent(Modal, { onClose() {} });
-  // Satır DOM'dan kalkınca ScheduleRequestsView.closeDetails yedek odağı etkin sekmeye çevirir.
-  restoreFocusRef.current = activeTabButton;
-  view.unmount();
+  const view = mountComponent(ScheduleRequestsView, {});
+  t.after(() => view.unmount());
+  t.mock.timers.tick(250);
+  await settleRead();
+  view.render();
+  const tabs = findElement(view.output, (node) => node.props?.role === 'tablist');
+  tabs.ref.current = { querySelector: () => activeTab };
+  const rowButton = findElement(view.output, (node) => node.props?.className === 'detail-task-link');
+  await rowButton.props.onClick({ currentTarget: row });
+  view.render();
+  const dialogElement = findElement(view.output, (node) => node.type === AssignmentCoordinationDialog);
+  const dialog = mountComponent(dialogElement.type, dialogElement.props);
+  const retry = findElement(view.output, (node) => node.type === 'button' && node.props?.children === 'Okundu işaretini yinele');
+  assert.ok(retry);
+  await retry.props.onClick();
+  assert.deepEqual(writes, [[item], [item]]);
+  view.render();
+  t.mock.timers.tick(250);
+  await settleRead();
+  view.render();
+  assert.equal(findElement(view.output, (node) => node.props?.role === 'alert'), null);
+  assert.equal(findElement(view.output, (node) => node.props?.className === 'detail-task-link'), null);
+  row.isConnected = false;
+  findElement(dialog.output, (node) => node.props?.['aria-label'] === 'Kapat').props.onClick();
+  view.render();
+  assert.equal(findElement(view.output, (node) => node.type === AssignmentCoordinationDialog), null);
+  dialog.unmount();
   assert.equal(typeof rafCallback, 'function');
   rafCallback();
-  assert.equal(focusedTarget, 'active-tab', 'kaldırılan satır yerine etkin sekmeye odak verilir');
+  assert.equal(focusedTarget, 'sekme');
 });

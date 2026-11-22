@@ -287,7 +287,24 @@ function taskNotificationInbox(db, params) {
  * aynen uygular. Katılım yüklemleri bu modülün ve tarih talebi ikizinin
  * mevcut karşılıklarıdır; ayrı bir kural yazılmaz.
  */
-function requestInbox(db, params, context = {}) {
+// SqlGuid sırası: son altı bayt önceliklidir, ilk üç alan ters bayt dizilimindedir.
+const sqlGuidByteOrder = [10, 11, 12, 13, 14, 15, 8, 9, 7, 6, 5, 4, 3, 2, 1, 0];
+function compareSqlGuid(left, right) {
+  const a = Buffer.from(String(left).replaceAll('-', ''), 'hex');
+  const b = Buffer.from(String(right).replaceAll('-', ''), 'hex');
+  for (const index of sqlGuidByteOrder) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return 0;
+}
+
+function cursorTimestamp(value) {
+  const text = value instanceof Date ? value.toISOString() : String(value ?? '');
+  const [second, fraction = ''] = text.replace(/Z$/, '').split('.');
+  return second + '.' + fraction.padEnd(7, '0');
+}
+
+function requestInbox(db, params, context = {}, scheduleOnly = false) {
   const sicil = Number(params.sicil);
   const lower = (value) => String(value ?? '').toLocaleLowerCase('tr-TR');
   const has = (haystack, needle) => !needle || lower(haystack).includes(lower(needle));
@@ -321,12 +338,13 @@ function requestInbox(db, params, context = {}) {
       });
     }
   }
-  if (!category || category === 'ASSIGNMENT_REQUEST' || category === 'ASSIGNMENT_NOTICE') {
+  if (!scheduleOnly && (!category || category === 'ASSIGNMENT_REQUEST' || category === 'ASSIGNMENT_NOTICE')) {
     for (const raw of db.taskAssignmentCoordinations) {
       if (!isParticipant(db, raw, params)) continue;
       if (category === 'ASSIGNMENT_REQUEST' && raw.Mode !== 'REQUEST') continue;
       if (category === 'ASSIGNMENT_NOTICE' && raw.Mode !== 'NOTICE') continue;
-      if (params.projectId && !sameGuid(recordProjectId(db, raw), params.projectId)) continue;
+      const displayedProjectId = raw.ProjectIdSnapshot ?? taskOf(db, raw.TaskId)?.ProjectId;
+      if (params.projectId && !sameGuid(displayedProjectId, params.projectId)) continue;
       if (params.status && raw.Status !== params.status) continue;
       const row = coordinationRow(db, raw, params);
       if (!inRange(raw.CreatedAt) || !requesterMatch(row.RequesterName, raw.RequesterSicil)) continue;
@@ -342,7 +360,7 @@ function requestInbox(db, params, context = {}) {
       });
     }
   }
-  if (!params.status && (!category || category === 'TASK_ASSIGNED' || category === 'TASK_UNASSIGNED')) {
+  if (!scheduleOnly && !params.status && (!category || category === 'TASK_ASSIGNED' || category === 'TASK_UNASSIGNED')) {
     for (const raw of db.taskNotifications) {
       if (Number(raw.RecipientSicil) !== sicil) continue;
       if (category && raw.Kind !== category) continue;
@@ -364,44 +382,47 @@ function requestInbox(db, params, context = {}) {
     SentCount: items.filter((item) => item.IsSent).length,
     HistoryCount: items.filter((item) => item.IsHistory).length
   };
-  const coordinationCount = db.taskAssignmentCoordinations.filter((row) => isParticipant(db, row, params)).length;
+  const coordinationCount = scheduleOnly ? 0 : db.taskAssignmentCoordinations.filter((row) => isParticipant(db, row, params)).length;
   const flag = { pending: 'IsIncoming', sent: 'IsSent', history: 'IsHistory' }[params.tab];
   const filtered = items.filter((item) => item[flag]).sort((left, right) =>
     Number(right.Actionable) - Number(left.Actionable)
-    || (time(right.SortAt) || 0) - (time(left.SortAt) || 0)
+    || cursorTimestamp(right.SortAt).localeCompare(cursorTimestamp(left.SortAt))
     || String(left.Source).localeCompare(String(right.Source))
-    || String(right.Id).toUpperCase().localeCompare(String(left.Id).toUpperCase()));
+    || compareSqlGuid(right.Id, left.Id));
   const total = filtered.length;
   const lastPage = total === 0 ? 0 : Math.floor((total - 1) / params.pageSize);
-  const page = Math.min(params.page, lastPage);
-  let slice;
+  let page = params.page;
+  let cursorUsed = false;
+  let slice = [];
   if (params.hasCursor) {
     const cursorActionable = Number(params.cursorActionable || 0);
-    const cursorSortAt = time(params.cursorSortAt) || 0;
+    const cursorSortAt = params.cursorTimestamp;
     const cursorSource = String(params.cursorSource || '');
-    const cursorId = String(params.cursorItemId || '').toUpperCase();
     slice = filtered.filter((item) => {
       const a = Number(item.Actionable);
-      const t = time(item.SortAt) || 0;
+      const t = cursorTimestamp(item.SortAt);
       const s = String(item.Source);
-      const id = String(item.Id).toUpperCase();
       if (a !== cursorActionable) return a < cursorActionable;
       if (t !== cursorSortAt) return t < cursorSortAt;
       if (s !== cursorSource) return s.localeCompare(cursorSource) > 0;
-      return id.localeCompare(cursorId) < 0;
-    }).slice(0, params.pageSize);
-  } else {
-    slice = filtered.slice(page * params.pageSize, (page + 1) * params.pageSize);
+      return compareSqlGuid(item.Id, params.cursorItemId) < 0;
+    }).slice(0, params.pageSize + 1);
+    cursorUsed = slice.length > 0;
+  }
+  if (!cursorUsed) {
+    page = Math.min(params.page, lastPage);
+    slice = filtered.slice(page * params.pageSize, (page + 1) * params.pageSize + 1);
   }
   const of = (source) => slice.filter((item) => item.Source === source).map((item) => item.row);
-  return [[counts], [{ CoordinationCount: coordinationCount }], [{ Total: total, Page: page }],
+  return [[counts], [{ CoordinationCount: coordinationCount }], [{ Total: total, Page: page, CursorUsed: cursorUsed }],
     slice.map((item, index) => ({
       Ordinal: index + 1,
       Source: item.Source,
       ItemId: item.Id,
       ItemVersion: item.row?.RowVersion ?? null,
       UnreadFlag: item.row?.IsUnread ? 1 : 0,
-      ActionableFlag: item.Actionable ? 1 : 0
+      ActionableFlag: item.Actionable ? 1 : 0,
+      CursorSortAt: cursorTimestamp(item.SortAt)
     })),
     of('SCHEDULE_REQUEST'), of('ASSIGNMENT_COORDINATION'), of('TASK_EVENT')];
 }
@@ -421,7 +442,8 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   };
   const pageRow = (row) => ({ ...coordinationRow(db, row, params), IsActionable: pageActionable(row) ? 1 : 0 });
   const matches = db.taskAssignmentCoordinations.filter((row) => {
-    const historicalParticipant = Number(row.RequesterSicil) === sicil || recipientsOf(db, row.CoordinationId).some((recipient) => Number(recipient.Sicil) === sicil);
+    const historicalParticipant = Number(row.RequesterSicil) === sicil || recipientsOf(db, row.CoordinationId).some((recipient) =>
+      Number(recipient.Sicil) === sicil && ['MANAGER', 'ASSIGNEE'].includes(recipient.RecipientRole));
     if (!pageParticipant(row) || !(disclosureAllowed(db, row, params) || (params.evidenceSnapshotLimit != null && !taskAvailable(db, row) && historicalParticipant))) return false;
     const view = pageRow(row);
     if (params.projectId && !sameGuid(recordProjectId(db, row), params.projectId)) return false;
@@ -812,8 +834,9 @@ export function runAssignmentCoordinationQuery(db, sqlText, params, context = {}
   const missing = db.assignmentCoordinationSchemaMissing === true;
 
   if (sqlText.includes('/* rota-request-inbox */')) {
-    if (missing) throw missingObject('MR_TaskAssignmentCoordinations');
-    return requestInbox(db, params, context);
+    const scheduleOnly = !sqlText.includes('FROM dbo.MR_TaskAssignmentCoordinations c');
+    if (missing && !scheduleOnly) throw missingObject('MR_TaskAssignmentCoordinations');
+    return requestInbox(db, params, context, scheduleOnly);
   }
 
   // Kurumsal dizin araması ve yönetim zinciri çözümü mevcut görünümleri okur;
