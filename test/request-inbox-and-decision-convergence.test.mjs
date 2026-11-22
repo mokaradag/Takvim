@@ -30,6 +30,7 @@ const { createNotificationActions, OUTCOME_UNKNOWN_MESSAGE, OUTCOME_UNKNOWN_UNRE
 const { requestInboxRow, requestInboxKey, selectFresherRecord } = await import('../src/features/schedule-change/requestInboxPresentation.js');
 const { AssignmentCoordinationView } = await import('../src/features/assignment-coordination/AssignmentCoordinationView.jsx');
 const { AssignmentCoordinationDialog } = await import('../src/features/assignment-coordination/AssignmentCoordinationDialog.jsx');
+const { useAssignmentCoordinationQuery } = await import('../src/features/assignment-coordination/useAssignmentCoordinationQuery.js');
 const { ScheduleRequestDetails } = await import('../src/features/schedule-change/ScheduleRequestCenter.jsx');
 const { ScheduleRequestsView } = await import('../src/features/schedule-change/ScheduleRequestsView.jsx');
 const { TaskTablePagination } = await import('../src/features/tasks/TaskTablePagination.jsx');
@@ -1817,6 +1818,50 @@ test('0007 şeması eksikse birleşik gelen kutusu üretimle aynı şema hatası
   } finally {
     await snapshotStack.dispose();
   }
+});
+
+test('proje dizisi eksik olduğunda iki sorgu da sayfalar arasında yalnızca tekil proje künyelerini saklar', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const otherId = '66666666-6666-4666-8666-000000000086';
+  const first = { id: 'ilk', taskId: TASK_ID, projectId: PROJECT_ID, projectCode: 'P1', requesterMessage: 'Talep notu' };
+  let response = { items: [first], total: 3, page: 0, pageSize: 1, counts: { all: 3 } };
+  t.mock.method(globalThis, 'fetch', async () => readResponse(response));
+  globalThis[CLIENT_STATE] = { session: { dataMode: 'actual' } };
+  let current;
+  function Probe({ query }) {
+    current = [useRequestInboxQuery(query), useAssignmentCoordinationQuery(query)];
+    return null;
+  }
+  const view = mountComponent(Probe, { query: { page: 0 } });
+  t.after(() => { view.unmount(); delete globalThis[CLIENT_STATE]; });
+  async function show(pageIndex) {
+    const props = { query: { page: pageIndex } };
+    view.render(props);
+    t.mock.timers.tick(250);
+    await settleRead();
+    view.render(props);
+  }
+
+  await show(0);
+  for (const result of current) {
+    assert.deepEqual(result.data.items, [first]);
+    assert.deepEqual(result.retainedProjects, [{ id: PROJECT_ID, name: '', code: 'P1' }]);
+  }
+
+  response = { ...response, page: 1, items: [
+    { ...first, id: 'ikinci', projectId: `project-${PROJECT_ID}`, projectName: 'Birinci proje' },
+    { id: 'üçüncü', projectId: otherId, projectName: 'İkinci proje' },
+    { id: 'toplu', source: 'TASK_EVENT', taskId: TASK_ID, projectId: null, taskCount: 2 }
+  ] };
+  await show(1);
+  for (const result of current) assert.deepEqual(result.retainedProjects, [
+    { id: PROJECT_ID, name: 'Birinci proje', code: 'P1' },
+    { id: otherId, name: 'İkinci proje', code: '' }
+  ]);
+
+  response = { ...response, page: 2, items: [], projects: [] };
+  await show(2);
+  for (const result of current) assert.deepEqual(result.retainedProjects, []);
 });
 
 test('proje listesi erişimi olmayan çapraz birim yöneticisi görmeye yetkili olduğu koordinasyon projelerini süzgeçte seçebilir', async (t) => {

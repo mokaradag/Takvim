@@ -39,6 +39,27 @@ function projectOptionKey(value) {
   return extractActualId(value) ?? String(value).trim().toLowerCase();
 }
 
+/** Proje dizisi olmayan yanıtlarda sayfalar arasında yalnızca proje künyelerini saklar. */
+export function retainRequestProjects(previous, { projects, items }) {
+  if (Array.isArray(projects)) return projects;
+  const byKey = new Map();
+  for (const project of previous) {
+    const key = projectOptionKey(project?.id);
+    if (key) byKey.set(key, project);
+  }
+  for (const item of items) {
+    const key = projectOptionKey(item?.projectId);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    byKey.set(key, {
+      id: existing?.id ?? item.projectId,
+      name: existing?.name || String(item.projectName || '').trim(),
+      code: existing?.code || String(item.projectCode || '').trim()
+    });
+  }
+  return [...byKey.values()];
+}
+
 /**
  * Talepler ve Atama Koordinasyonu proje süzgecinin seçenekleri.
  *

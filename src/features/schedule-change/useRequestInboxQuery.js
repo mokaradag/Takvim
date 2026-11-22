@@ -7,6 +7,7 @@ import {
   useScheduleRequestSummary,
   useSessionContext
 } from '../../state/hooks/index.js';
+import { retainRequestProjects } from './requestInboxPresentation.js';
 
 const EMPTY = Object.freeze({
   items: [], total: 0, page: 0, pageSize: 25,
@@ -28,7 +29,7 @@ export function useRequestInboxQuery(query, enabled = true) {
   const actual = session?.dataMode === 'actual';
   const key = JSON.stringify(query);
   const [revision, setRevision] = useState(0);
-  const [state, setState] = useState({ key: '', data: null, retainedItems: [], loading: false, error: null });
+  const [state, setState] = useState({ key: '', data: null, retainedProjects: [], loading: false, error: null });
   useEffect(() => {
     if (!actual || !enabled) return undefined;
     let cancelled = false;
@@ -40,9 +41,7 @@ export function useRequestInboxQuery(query, enabled = true) {
       setState((current) => ({
         key,
         data: result.ok ? result.value : (current.key === key ? current.data : null),
-        retainedItems: result.ok
-          ? (Array.isArray(result.value.projects) ? result.value.projects : [...current.retainedItems, ...(result.value.items || [])])
-          : current.retainedItems,
+        retainedProjects: result.ok ? retainRequestProjects(current.retainedProjects, result.value) : current.retainedProjects,
         loading: false,
         error: result.ok ? null : result.message
       }));
@@ -51,7 +50,7 @@ export function useRequestInboxQuery(query, enabled = true) {
   }, [actual, enabled, key, revision, summary, notificationSummary, lastRefreshedAt]);
   return {
     data: actual && state.key === key ? (state.data ?? EMPTY) : EMPTY,
-    retainedProjects: actual ? state.retainedItems : [],
+    retainedProjects: actual ? state.retainedProjects : [],
     loading: actual && enabled && (state.key !== key || (!state.data && state.loading)),
     error: state.key === key ? state.error : null,
     actual,

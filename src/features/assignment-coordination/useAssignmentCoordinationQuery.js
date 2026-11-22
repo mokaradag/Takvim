@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { fetchAssignmentCoordinations } from '../../data/api/assignmentCoordinationClient.js';
 import { useDataLifecycle, useNotificationSummary, useSessionContext } from '../../state/hooks/index.js';
+import { retainRequestProjects } from '../schedule-change/requestInboxPresentation.js';
 
 const EMPTY = Object.freeze({
   items: [], total: 0, page: 0, pageSize: 25,
@@ -22,7 +23,7 @@ export function useAssignmentCoordinationQuery(query, enabled = true) {
   const actual = session?.dataMode === 'actual';
   const key = JSON.stringify(query);
   const [revision, setRevision] = useState(0);
-  const [state, setState] = useState({ key: '', data: null, retainedItems: [], loading: false, error: null });
+  const [state, setState] = useState({ key: '', data: null, retainedProjects: [], loading: false, error: null });
   useEffect(() => {
     if (!actual || !enabled) return undefined;
     let cancelled = false;
@@ -34,9 +35,7 @@ export function useAssignmentCoordinationQuery(query, enabled = true) {
       setState((current) => ({
         key,
         data: result.ok ? result.value : (current.key === key ? current.data : null),
-        retainedItems: result.ok
-          ? (Array.isArray(result.value.projects) ? result.value.projects : [...current.retainedItems, ...(result.value.items || [])])
-          : current.retainedItems,
+        retainedProjects: result.ok ? retainRequestProjects(current.retainedProjects, result.value) : current.retainedProjects,
         loading: false,
         error: result.ok ? null : result.message
       }));
@@ -46,7 +45,7 @@ export function useAssignmentCoordinationQuery(query, enabled = true) {
   const confirmed = actual && state.key === key ? state.data : null;
   return {
     data: confirmed ?? EMPTY,
-    retainedProjects: actual ? state.retainedItems : [],
+    retainedProjects: actual ? state.retainedProjects : [],
     confirmedTotal: confirmed?.counts.all ?? null,
     loading: actual && enabled && (state.key !== key || (!confirmed && state.loading)),
     error: state.key === key ? state.error : null,
