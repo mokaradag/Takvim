@@ -430,7 +430,7 @@ guvenlik:
     Model yalnızca yetkili kanıtı ve anlatı için gerekli kapsam/tamlık bilgisini alır.
     Sicil, erişim kararları ve yönetim kapsamı sunucuda kalır.
   kapsam: "FULL/PARTIAL/READ, proje/görev görünürlüğü ve yönetim kapsamı aynen uygulanır; rapor kapsamı yetki vermez."
-  korunan_metin: "Görev notu ve iletiler yalnızca açık rızayla okunur; rıza başka rapora taşınmaz."
+  korunan_metin: "Görev notu, iletiler, değişiklik metinleri ve belgeler yalnızca rapor başına açık rızayla okunur; rıza başka rapora taşınmaz."
   gunluk: "Rapor, not ve belge içeriği uygulama günlüğüne yazılmaz; yalnızca içeriksiz telemetri tutulur."
   saklama: "4I'de rapor sunucuda kalıcı saklanmaz; kalıcı saklama ve teslim Aşama 4J'dir."
   yuzey: "4I-0 yeni uç, kalıcı tablo, arka plan işi ya da zamanlanmış görev eklemez."

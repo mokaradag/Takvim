@@ -64,13 +64,23 @@ export function on(element) {
   return [null, 'true', '1', 'on'].includes(value);
 }
 
-/** Parçayı yalnızca bir kez ayrıştırır ve hatalı XML'i tüketiciye bırakmaz. */
+/** Parçayı yalnızca bir kez ayrıştırır; hatalı XML ile gizli yorum/işleme yönergesi düğümlerini reddeder. */
 export function parseDocxXml(source, name) {
   assert.doesNotMatch(source, /<!DOCTYPE\b/u, name + ': DTD yasak');
   const document = new DOMParser().parseFromString(source, 'application/xml');
   assert.ok(document.documentElement && !document.getElementsByTagNameNS(
     'http://www.mozilla.org/newlayout/xml/parsererror.xml', 'parsererror'
   ).length, name + ': bozuk XML');
+  const stack = [...document.childNodes];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    assert.notEqual(node.nodeType, 8, name + ': gizli XML yorumu yasak');
+    assert.notEqual(node.nodeType, 7, name + ': XML işleme yönergesi yasak');
+    assert.notEqual(node.nodeType, 4, name + ': XML CDATA bölümü yasak');
+    if (node.childNodes?.length) {
+      for (let i = 0; i < node.childNodes.length; i += 1) stack.push(node.childNodes[i]);
+    }
+  }
   return document;
 }
 

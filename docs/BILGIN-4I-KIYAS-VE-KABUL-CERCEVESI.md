@@ -149,21 +149,21 @@ gizli kimliği kullanır, puanları insan puanlarıyla ayrı raporlanır ve insa
 | **B** | 1–5 ölçekte genel ortalama en az **4,0**; uygulanabilir hiçbir ölçütün ortalaması **3,5**'in altında değil; aday düzeyinde mekanik döküm oranı en çok **%5** (48 raporda ≤ 2); iki kör puanlayıcı, sayısal fark > 1 veya ikili bayrak uyuşmazlığında üçüncü |
 | **C** | Word'ün onarım istemeden açtığı belge oranı **%100**; standart ayrıntıda **2–3** sayfa (kapak ve ekler hariç); bütün sayfalar görsel incelenir; stil sözleşmesi sınaması geçer |
 | **D** | Rapor başına en çok **11** model çağrısı (1 yazım + 8 onarım + denetim ve yeniden sıralama için ortak 2 çağrı); standart raporda uçtan uca p95 (en yakın sıra yöntemiyle) **`rapor_yazari_otomatik` için en çok 240 sn**, **`rapor_yazari_yuksek_kalite` için en çok 600 sn**; iptal sonrası geçici veri kalmaz; mevcut Bilgin regresyonu **0** |
-| **4I-C onarım** | Onarım sonrası editoryal puan düşüşü en çok **0,3**; tekil sorunların en az **%90**'ı yerel onarımla insan incelemesine gerek kalmadan çözülür; bütün raporun hazır metne düşmesi **0** |
+| **4I-C onarım** | Onarım sonrası editoryal puan düşüşü **rapor başına (her onarılan raporda ayrı ayrı)** en çok **0,3**; tekil sorunların en az **%90**'ı yerel onarımla insan incelemesine gerek kalmadan çözülür; bütün raporun hazır metne düşmesi **0** |
 
-**Seçim kuralı (4I-B yazar nitelendirmesi):** **4I-B yazar nitelendirmesi** A eşiklerini geçen adaylar arasında
-`rapor_yazari_otomatik`, B eşiklerini geçen ve standart raporda p95 ≤ **240 sn** D süre eşiğini karşılayanların;
-`rapor_yazari_yuksek_kalite` ise B eşiklerini geçen ve standart raporda p95 ≤ **600 sn** D süre eşiğini
-karşılayanların en yüksek B ortalamalısıdır (aynı model her iki role de atanabilir). Her iki rolde de eşitlik
-bozma sırası aynıdır ve belirlenimcidir: (1) en yüksek B genel ortalaması, (2) aynı en yakın sıra yöntemiyle
-hesaplanan daha düşük standart rapor p95 süresi, (3) daha düşük ortalama rapor başı model çağrısı sayısı,
-(4) uygulanabilir E1–E9 ölçüt ortalamalarının en düşüğünün daha yüksek olması; tümü yine eşitse rol kilitlenmeden
-önce gerekçeli insan seçimi karar günlüğüne kaydedilir. 4I-B kabulü ve sonraki
-artıma geçiş için **`rapor_yazari_otomatik` rolünün doldurulması zorunludur**; `rapor_yazari_yuksek_kalite`
-isteğe bağlı ek roldür. `rapor_yazari_otomatik` için hiçbir aday A, B ve p95 ≤ 240 sn eşiklerini geçmezse
-(`rapor_yazari_yuksek_kalite` dolsa bile) rol boş kalır ve 4I-B kabulü **ENGELLİ** olur; eşikler adayı geçirmek
-için gevşetilmez. Yayımlama A kapıları (`0` yayımlanan desteksiz maddi iddia ve `%100` yayımlanan nesnel olgu
-doğruluğu) 4I-C onarım ve sonlandırma kapısında uygulanır.
+**Seçim kuralı (4I-B yazar nitelendirmesi):** **4I-B yazar nitelendirmesi** A eşiklerini ve D çağrı bütçesini
+(rapor başına en çok **11** model çağrısı) geçen adaylar arasında `rapor_yazari_otomatik`, B eşiklerini geçen ve
+standart raporda p95 ≤ **240 sn** D süre eşiğini karşılayanların; `rapor_yazari_yuksek_kalite` ise B eşiklerini
+geçen ve standart raporda p95 ≤ **600 sn** D süre eşiğini karşılayanların en yüksek B ortalamalısıdır (aynı model
+her iki role de atanabilir). Her iki rolde de eşitlik bozma sırası aynıdır ve belirlenimcidir: (1) en yüksek B
+genel ortalaması, (2) aynı en yakın sıra yöntemiyle hesaplanan daha düşük standart rapor p95 süresi, (3) daha
+düşük ortalama rapor başı model çağrısı sayısı, (4) uygulanabilir E1–E9 ölçüt ortalamalarının en düşüğünün daha
+yüksek olması; tümü yine eşitse rol kilitlenmeden önce gerekçeli insan seçimi karar günlüğüne kaydedilir. 4I-B
+kabulü ve sonraki artıma geçiş için **`rapor_yazari_otomatik` rolünün doldurulması zorunludur**;
+`rapor_yazari_yuksek_kalite` isteğe bağlı ek roldür. `rapor_yazari_otomatik` için hiçbir aday A, B, en çok
+11 çağrı ve p95 ≤ 240 sn eşiklerini geçmezse (`rapor_yazari_yuksek_kalite` dolsa bile) rol boş kalır ve 4I-B
+kabulü **ENGELLİ** olur; eşikler adayı geçirmek için gevşetilmez. Yayımlama A kapıları (`0` yayımlanan desteksiz
+maddi iddia ve `%100` yayımlanan nesnel olgu doğruluğu) 4I-C onarım ve sonlandırma kapısında uygulanır.
 
 ---
 

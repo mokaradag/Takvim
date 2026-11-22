@@ -140,11 +140,13 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 13. **Bağımlılıklar** — PR #120'nin birleştirilmiş olması (doğrulandı); F–H sözleşmeleri.
 14. **Riskler ve geri alma** — Model kimliği düzeltmesi yanlışsa (canlı katalog farklıysa) kayıt JSON'u
     (`config/ai-model-registry.onprem.json`), varsayılan kayıt (`src/server/ai/defaultModelRegistry.js`), stil
-    belirtimindeki rol aday listeleri ve `canli_dogrulama_bekleyen` kayıtları (`config/ai/bilgin_rapor_stili.yaml`)
-    ile ilgili model kimliği beklentilerini doğrulayan sınama dosyaları (`test/ai-model-registry.test.mjs` ve
-    `test/ai-executive-report-foundation.test.mjs`) birlikte geri alınır; hiçbir profil bu modellere bağlı
-    olmadığından sohbet etkilenmez. Belgeler, yapılandırma ve bu sınama dosyaları tek commit'le birlikte geri
-    alınabilir.
+    belirtimindeki rol aday listeleri ve `canli_dogrulama_bekleyen` kayıtları (`config/ai/bilgin_rapor_stili.yaml`),
+    bu model kimliklerine ve yazar adaylarına başvuran mimari/platform/kabul belgeleri
+    (`docs/BILGIN-4I-YONETICI-RAPORU-MIMARISI.md`, `docs/YAPAY-ZEKA-PLATFORMU.md`,
+    `docs/BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md`) ile ilgili model kimliği beklentilerini doğrulayan sınama
+    dosyaları (`test/ai-model-registry.test.mjs` ve `test/ai-executive-report-foundation.test.mjs`) birlikte geri
+    alınır; hiçbir profil bu modellere bağlı olmadığından sohbet etkilenmez. Belgeler, yapılandırma ve bu sınama
+    dosyaları tek commit'le birlikte geri alınabilir.
 15. **Kapsam dışı** — Rapor motoru, kanıt paketi kurucusu, yazar, doğrulayıcı, DOCX üreticisi, Stüdyo, yükleme,
     kalıcı saklama, model seçici arayüzü, canlı model nitelendirmesi.
 16. **Durum ve doğrulama kanıtı** — **Durum: DOĞRULANDI** (belirlenimci kapılar ve şablonun bütün sayfalarının

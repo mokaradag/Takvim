@@ -116,6 +116,7 @@
   },
   "onarim_4I_C": {
    "onarim_sonrasi_editoryal_dusus_en_fazla": 0.3,
+   "onarim_sonrasi_editoryal_dusus_birimi": "rapor_basina",
    "yerel_onarimla_cozulen_tekil_sorun_orani_en_az": 0.9,
    "butun_raporun_hazir_metne_dusmesi": 0
   }
@@ -1006,7 +1007,12 @@
    "destekleyici_belgeler": "yok",
    "gorseller": "temel",
    "durum": "Üretim sırasında bir projenin erişimi kaldırılıyor.",
-   "sinanan": "İlk ve sonraki önizlemeler, sonlandırma ve her indirme öncesinde yeniden yetki denetimi; yetkisi kalkan içeriğin çıkarılması veya erişimin reddi.",
+   "sinanan": "4I-B yazar nitelendirmesinde yetki kaldırıldıktan sonra dondurulmuş yetkili kanıt paketinden yetkisi kalkan proje veya göreve atıf yapmadan tutarlı taslak üretilmesi (toptan ret geçmez); 4I-E Stüdyo kabulünde ilk ve sonraki önizlemeler, sonlandırma ve her indirme öncesinde yeniden yetki denetimi.",
+   "yazar_puanlama_4I_B": {
+    "girdi": "yetki_kaldirma_sonrasi_dondurulmus_yetkili_paket",
+    "toptan_ret_gecerli_mi": false,
+    "yetkisiz_atif_siniri": 0
+   },
    "yetki_kaldirma_noktalari": [
     "ilk_onizleme",
     "sonraki_onizleme",
@@ -1260,7 +1266,14 @@
        "E1",
        "E2",
        "E5"
-      ]
+      ],
+      "alt_kume_iliskisi": {
+       "toplam_kanit": "E1",
+       "ayrik_alt_kume_kanitlari": [
+        "E2",
+        "E5"
+       ]
+      }
      },
      {
       "sinif": "nesnel_olgu",

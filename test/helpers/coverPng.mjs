@@ -49,6 +49,7 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
   assert.ok(png.subarray(0, 8).equals(SIGNATURE), 'PNG imzası geçersiz');
   const imageData = [];
   const seenAncillary = new Set();
+  let gammaValue = null;
   let width = 0;
   let height = 0;
   let bpp = 0;
@@ -87,12 +88,16 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
       const validLength = expectedLength === null ? length === bpp : length === expectedLength;
       assert.ok(validLength, `PNG yardımcı parça uzunluğu geçersiz: ${type}`);
       validateAncillaryPayload(type, data);
+      if (type === 'gAMA') gammaValue = data.readUInt32BE(0);
     } else {
       assert.fail('PNG parça sırası veya türü geçersiz: ' + type);
     }
     offset = end + 4;
   }
   assert.ok(endSeen && imageData.length > 0, 'PNG görüntü verisi veya bitişi eksik');
+  if (seenAncillary.has('sRGB') && gammaValue !== null) {
+    assert.equal(gammaValue, 45455, 'PNG sRGB ile birlikte gAMA değeri 45455 olmalıdır: ' + gammaValue);
+  }
   const compressed = Buffer.concat(imageData);
   const size = rowBytes * height;
   const { buffer, engine } = inflateSync(compressed, { maxOutputLength: size, info: true });

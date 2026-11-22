@@ -127,8 +127,13 @@ test('kıyas: özel karşılaştırma iki geçerli tarih ve eşit uzunlukta bitm
   ]) {
     assert.throws(() => checkComparison({ ...example, karsilastirma_donemi: range }, benchmark.kiyas_gunu), reason);
   }
-  // K20/S48 yetki değişimi ilk/sonraki önizleme, sonlandırma ve her indirme sınırlarını kapsamalıdır.
+  // K20/S48 yetki değişimi 4I-B yazar puanlamasını 4I-E Stüdyo yetki denetimlerinden ayırmalıdır.
   const revocation = scenarios.find((scenario) => scenario.id === 'S48');
+  assert.deepEqual(revocation.yazar_puanlama_4I_B, {
+    girdi: 'yetki_kaldirma_sonrasi_dondurulmus_yetkili_paket',
+    toptan_ret_gecerli_mi: false,
+    yetkisiz_atif_siniri: 0
+  }, 'S48 4I-B yazar puanlaması dondurulmuş yetkili paketten tutarlı taslak bekler; toptan ret geçmez');
   assert.deepEqual(revocation.yetki_kaldirma_noktalari, ['ilk_onizleme', 'sonraki_onizleme', 'sonlandirma', 'indirme'],
     'S48 bütün önizleme, sonlandırma ve indirme sınırlarını kapsar');
   // K15 (S36–S38) ve K19 (S47) belge girişi gerektirir; S39 ise yönetici ek bilgi metni kökenlidir.
@@ -163,12 +168,24 @@ const TURKISH_MONTHS = {
   Temmuz: '07', Ağustos: '08', Eylül: '09', Ekim: '10', Kasım: '11', Aralık: '12'
 };
 
-/** Saat dilimi bilgisi taşıyan ISO-8601 zaman damgasını doğrular ve milisaniye/gün bilgisini döndürür. */
+const REPORTING_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/** Raporlama saat dilimindeki (+03:00) takvim gününü UTC gece yarısı milisaniyesi olarak döndürür. */
+function reportingDayFromMs(ms) {
+  return calendarDate(new Date(ms + REPORTING_OFFSET_MS).toISOString().slice(0, 10));
+}
+
+/** Raporlama saat diliminde (+03:00) verilen takvim gününün ertesi gün başlangıcını (00:00:00+03:00, dışlayıcı üst sınır) döndürür. */
+function reportingNextDayStartMs(isoDate) {
+  return calendarDate(isoDate) + 24 * 60 * 60 * 1000 - REPORTING_OFFSET_MS;
+}
+
+/** Saat dilimi bilgisi taşıyan ISO-8601 zaman damgasını doğrular; gerçek anı ve +03:00 raporlama gününü döndürür. */
 function parseIsoTimestamp(value, label, message) {
   assert.match(value ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u, `${label}: ${message}`);
   const ms = Date.parse(value);
   assert.ok(Number.isFinite(ms), `${label}: ${message}`);
-  const day = calendarDate(value.slice(0, 10));
+  const day = reportingDayFromMs(ms);
   return { ms, day };
 }
 
@@ -186,18 +203,18 @@ function resolvePackageCutOff(item, asOf) {
     assert.equal(parsed.ms, reqParsed.ms, `${item.id}: istek veri_ani paket kökündeki veri_ani ile eşleşmelidir`);
   }
   const periodEndMs = reportingDayEndMs(item.istek.donem.bitis);
-  const asOfDay = calendarDate(asOf);
+  const asOfLimitMs = reportingNextDayStartMs(asOf);
   assert.ok(parsed.ms >= periodEndMs,
     `${item.id}: paket veri_ani kesiti rapor döneminin son gününü tam kapsamalıdır`);
-  assert.ok(parsed.day <= asOfDay, `${item.id}: paket veri_ani kıyas gününü aşamaz`);
+  assert.ok(parsed.ms < asOfLimitMs, `${item.id}: paket veri_ani kıyas gününü aşamaz`);
   return parsed;
 }
 
 /** Anlık ölçülerin veri_ani zaman damgasını paket kökündeki kanonik kesit ve kıyas günü üst sınırıyla doğrular. */
 function checkSnapshotTimestamp(veriAni, cutOff, asOf, label) {
   const parsed = parseIsoTimestamp(veriAni, label, 'anlık durum ölçüsü geçerli veri_ani taşımalıdır');
-  const asOfDay = calendarDate(asOf);
-  assert.ok(parsed.day <= asOfDay, `${label}: anlık ölçünün veri_ani kıyas gününü aşamaz`);
+  const asOfLimitMs = reportingNextDayStartMs(asOf);
+  assert.ok(parsed.ms < asOfLimitMs, `${label}: anlık ölçünün veri_ani kıyas gününü aşamaz`);
   assert.equal(parsed.ms, cutOff.ms, `${label}: anlık ölçünün veri_ani paket veri_ani kesitiyle eşleşmelidir`);
 }
 
@@ -277,10 +294,11 @@ function checkRepresentativeCase(item, scenario, roster, asOf = benchmark.kiyas_
   assert.equal(scenario.kategori, item.kategori, item.id);
   assert.ok(spec.ozellestirme.serbest.notlar.includes(item.istek.notlar), `${item.id}: istek.notlar değeri geçersiz`);
   const { baslangic, bitis } = item.istek.donem;
+  const periodStart = calendarDate(baslangic);
   const periodEnd = calendarDate(bitis);
-  assert.ok(calendarDate(baslangic) <= periodEnd, `${item.id}: dönem tarih sırası geçersiz`);
+  assert.ok(periodStart <= periodEnd, `${item.id}: dönem tarih sırası geçersiz`);
   const cutOff = resolvePackageCutOff(item, asOf);
-  const asOfDay = calendarDate(asOf);
+  const asOfLimitMs = reportingNextDayStartMs(asOf);
   const evidence = new Map(item.kanitlar.map((entry) => [entry.id, entry]));
   assert.equal(evidence.size, item.kanitlar.length, `${item.id}: kanıt kimliği benzersiz`);
   for (const entry of item.kanitlar) {
@@ -296,7 +314,7 @@ function checkRepresentativeCase(item, scenario, roster, asOf = benchmark.kiyas_
     }
     if (entry.tur === 'not' || entry.kayit_zamani !== undefined) {
       const recorded = parseIsoTimestamp(entry.kayit_zamani, label, 'not kanıtı geçerli kayıt zamanı ISO damgası taşımalıdır');
-      assert.ok(recorded.ms <= cutOff.ms && recorded.day <= asOfDay, `${label}: not kayıt zamanı veri kesitini aşamaz`);
+      assert.ok(recorded.ms <= cutOff.ms && recorded.ms < asOfLimitMs, `${label}: not kayıt zamanı veri kesitini aşamaz`);
     }
     if (entry.tur === 'olcu') {
       checkMetricEvidence(entry, item, cutOff, asOf, label);
@@ -305,6 +323,8 @@ function checkRepresentativeCase(item, scenario, roster, asOf = benchmark.kiyas_
       assert.ok(EVIDENCE_SOURCES[entry.tur].has(entry.kaynak), `${label}: kanıt türü ile kaynak uyuşmuyor (${entry.kaynak})`);
       if (entry.tur === 'gorev' && entry.gerceklesen_bitis != null) {
         const completionDay = calendarDate(entry.gerceklesen_bitis);
+        assert.ok(completionDay >= periodStart,
+          `${label}: gerçekleşen bitiş tarihi rapor dönemi başlangıcından önce olamaz`);
         assert.ok(completionDay <= periodEnd && completionDay <= cutOff.day,
           `${label}: gerçekleşen bitiş tarihi rapor dönemini veya veri kesitini aşamaz`);
       }
@@ -370,7 +390,7 @@ function checkRepresentativeCase(item, scenario, roster, asOf = benchmark.kiyas_
         `${item.id}: tarihsiz tamamlanma ifadesi history.undatedDone ölçüsünü işaret etmelidir`);
     }
   }
-  // K12 (R7): değişiklik yok iddiası tam kayıt kapsamlı ve 0 değerli hareket ölçüsüne dayanmalıdır.
+  // K12 (R7): değişiklik yok iddiası tam kayıt kapsamlı ve 0 değerli hareket ölçüsüne; açık görev sayısı acik anlık ölçüsüne dayanmalıdır.
   if (item.kategori === 'K12') {
     const noChangeClaims = supported.filter((claim) => /değişiklik bulunmuyor/iu.test(claim.ifade));
     assert.ok(noChangeClaims.length > 0, `${item.id}: değişiklik yok ifadesi zorunludur`);
@@ -380,6 +400,15 @@ function checkRepresentativeCase(item, scenario, roster, asOf = benchmark.kiyas_
         .find((entry) => entry?.tur === 'olcu' && entry.olcu === 'hareket' && entry.kayit_kapsami === 'complete' && entry.deger === 0);
       assert.ok(zeroCompleteActivity,
         `${item.id}: değişiklik yok iddiası kayit_kapsami complete ve değeri 0 olan hareket ölçüsüne dayanmalıdır`);
+      const openSentences = sentences(claim.ifade).filter((sentence) => /açık\s+görev/iu.test(sentence));
+      if (openSentences.length > 0) {
+        const openSnapshot = claim.kanitlar
+          .map((id) => evidence.get(id))
+          .find((entry) => entry?.tur === 'olcu' && entry.olcu === 'acik');
+        assert.ok(openSnapshot, `${item.id}: açık görev ifadesi acik anlık ölçüsüne dayanmalıdır`);
+        assert.ok(openSentences.every((sentence) => matchesCountToken(sentence, openSnapshot.deger)),
+          `${item.id}: açık görev ifadesindeki sayı acik anlık ölçüsüyle eşleşmelidir (${openSnapshot.deger})`);
+      }
     }
   }
   for (const claim of item.beklenen.yasak_ifadeler || []) {
@@ -586,6 +615,33 @@ test('kıyas: temsili vakalar senaryolarla bire bir eşleşir; kanıt göndergel
   assert.throws(() => checkRepresentativeCase(r3EarlyPeriodCutOff, scenarios.get(r3EarlyPeriodCutOff.senaryo), benchmark.sentetik_kadro),
     /rapor döneminin son gününü tam kapsamalıdır/);
 
+  // Farklı saat dilimi yazımları aynı gerçek an üzerinden +03:00 raporlama gününe çevrilmelidir.
+  const r1Minus12Overflow = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R1'));
+  r1Minus12Overflow.veri_ani = '2026-11-09T23:59:59-12:00';
+  assert.throws(() => checkRepresentativeCase(r1Minus12Overflow, scenarios.get(r1Minus12Overflow.senaryo), benchmark.sentetik_kadro),
+    /paket veri_ani kıyas gününü aşamaz/);
+  const r1UtcOverflow = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R1'));
+  r1UtcOverflow.veri_ani = '2026-11-09T23:30:00Z';
+  assert.throws(() => checkRepresentativeCase(r1UtcOverflow, scenarios.get(r1UtcOverflow.senaryo), benchmark.sentetik_kadro),
+    /paket veri_ani kıyas gününü aşamaz/);
+  const r2UtcEquivalent = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R2'));
+  r2UtcEquivalent.veri_ani = '2026-11-08T21:30:00Z';
+  r2UtcEquivalent.kanitlar.find((entry) => entry.id === 'E4').hedef_bitis = '2026-11-08';
+  checkRepresentativeCase(r2UtcEquivalent, scenarios.get(r2UtcEquivalent.senaryo), benchmark.sentetik_kadro, benchmark.kiyas_gunu);
+
+  // Dönem başlangıcından önceki tamamlanma kanıtı güncel dönem tamamlanması olarak kabul edilmez.
+  const r1PrePeriodCompletion = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R1'));
+  r1PrePeriodCompletion.kanitlar.find((entry) => entry.id === 'E1').gerceklesen_bitis = '2026-10-15';
+  r1PrePeriodCompletion.beklenen.desteklenen_ifadeler[1].ifade = 'Montaj görevinin kayıtlı gerçekleşen bitiş tarihi 15 Ekim 2026.';
+  assert.throws(() => checkRepresentativeCase(r1PrePeriodCompletion, scenarios.get(r1PrePeriodCompletion.senaryo), benchmark.sentetik_kadro),
+    /gerçekleşen bitiş tarihi rapor dönemi başlangıcından önce olamaz/);
+
+  // R7 açık görev sayısı acik anlık ölçüsüyle uyuşmadığında reddedilmelidir.
+  const r7WrongOpenCount = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R7'));
+  r7WrongOpenCount.kanitlar.find((entry) => entry.id === 'E2').deger = 5;
+  assert.throws(() => checkRepresentativeCase(r7WrongOpenCount, scenarios.get(r7WrongOpenCount.senaryo), benchmark.sentetik_kadro),
+    /açık görev ifadesindeki sayı acik anlık ölçüsüyle eşleşmelidir/);
+
   // R8 isteği kadrodaki başka bir ekibe çevrildiğinde eski ekibin kanıtları reddedilmelidir.
   const r8OtherTeam = structuredClone(benchmark.temsili_vakalar.find((item) => item.id === 'R8'));
   r8OtherTeam.istek.kapsam.kimlikler = ['Entegrasyon ve Arayüz Ekibi'];
@@ -624,6 +680,20 @@ test('kıyas: tek desteksiz iddia yerel onarılır — geri kalan düzyazı koru
   const wrongR2Total = structuredClone(repair);
   wrongR2Total.kanitlar.find((entry) => entry.id === 'E1').deger = 19;
   assert.throws(() => checkSingleRepair(wrongR2Total, benchmark.kiyas_gunu), /R2 korunan sayısal ifade ve taslak ölçü kanıtlarıyla eşleşmelidir/);
+  const swappedProjectCounts = structuredClone(repair);
+  swappedProjectCounts.taslak[0] =
+    'Kuzey, Ufuk ve Pusula projelerinde hafta boyunca toplam 18 görev tamamlandı. Bu toplamın beşi Ufuk, altısı Pusula projesine aitti.';
+  assert.throws(() => checkSingleRepair(swappedProjectCounts, benchmark.kiyas_gunu), /proje bazlı sayı eşleşmelidir/);
+  const narrowedTotalScope = structuredClone(repair);
+  narrowedTotalScope.kanitlar.find((entry) => entry.id === 'E1').kapsam = ['PRJ-KUZEY'];
+  assert.throws(() => checkSingleRepair(narrowedTotalScope, benchmark.kiyas_gunu), /toplam ölçü kanıtı istenen tüm projeleri kapsamalıdır/);
+  const inconsistentSubsets = structuredClone(repair);
+  inconsistentSubsets.kanitlar.find((entry) => entry.id === 'E2').deger = 20;
+  inconsistentSubsets.beklenen.desteklenen_ifadeler[0].ifade =
+    'Üç projede toplam 18 görev tamamlandı. Toplamın 20’si Ufuk’a, 5’i Pusula’ya ait.';
+  inconsistentSubsets.taslak[0] =
+    'Kuzey, Ufuk ve Pusula projelerinde hafta boyunca toplam 18 görev tamamlandı. Bu toplamın 20’si Ufuk, beşi Pusula projesine aitti.';
+  assert.throws(() => checkSingleRepair(inconsistentSubsets, benchmark.kiyas_gunu), /ayrık alt küme sayımları genel toplamı aşamaz/);
   const wrongR2Deadline = structuredClone(repair);
   wrongR2Deadline.kanitlar.find((entry) => entry.id === 'E4').hedef_bitis = '2026-11-10';
   assert.throws(() => checkSingleRepair(wrongR2Deadline, benchmark.kiyas_gunu), /R2 gecikmiş onay kanıtının hedef tarihi veri kesitinden önce olmalıdır/);
@@ -638,7 +708,17 @@ function matchesCountToken(text, value) {
   return Boolean(stem && new RegExp(`(?<![\\p{L}\\d+\\-])${stem}(?:s[ıiuü]|y[ıiuü]|i|ı|u|ü)?(?![\\p{L}\\d])`, 'iu').test(text));
 }
 
-function checkSingleRepair(repair, asOf = benchmark.kiyas_gunu) {
+/** Verilen metinde tekil proje adına ait bir tümcecikte beklenen sayının başka proje adıyla karışmadan geçtiğini doğrular. */
+function hasProjectCountClause(text, projectName, otherProjectNames, value) {
+  const clauses = text.split(/[,.;!?]+/u).map((part) => part.trim()).filter(Boolean);
+  return clauses.some((clause) => (
+    clause.includes(projectName)
+    && otherProjectNames.every((other) => !clause.includes(other))
+    && matchesCountToken(clause, value)
+  ));
+}
+
+function checkSingleRepair(repair, asOf = benchmark.kiyas_gunu, roster = benchmark.sentetik_kadro) {
   const { sorunlar: issues, yasak_ifadeler: forbidden, korunan_paragraflar: protectedParagraphs } = repair.beklenen;
   assert.equal(repair.beklenen.butun_rapor_reddi, false);
   assert.equal(repair.beklenen.hazir_metne_dusme, false);
@@ -655,7 +735,8 @@ function checkSingleRepair(repair, asOf = benchmark.kiyas_gunu) {
   assert.deepEqual(protectedParagraphs, repair.taslak.map((_paragraph, index) => index + 1)
     .filter((index) => index !== issue.paragraf));
 
-  // R2 korunan sayısal iddiaları ve korunan taslak paragrafları E1/E2/E5 ölçü kanıtlarıyla tutarlı olmalıdır.
+  // R2 korunan sayısal iddiaları ve korunan taslak paragrafları E1/E2/E5 ölçü kanıtları, kapsamı ve alt küme ilişkisiyle tutarlı olmalıdır.
+  const scope = validateCanonicalScope(repair);
   const cutOff = resolvePackageCutOff(repair, asOf);
   const metrics = repair.kanitlar.filter((entry) => entry.tur === 'olcu' && entry.olcu === 'tamamlanan');
   const metricById = new Map(metrics.map((entry) => [entry.id, entry]));
@@ -670,6 +751,38 @@ function checkSingleRepair(repair, asOf = benchmark.kiyas_gunu) {
       `R2 korunan sayısal ifade ve taslak ölçü kanıtlarıyla eşleşmelidir (${id}=${metric.deger})`
     );
   }
+  const subsetContract = numericClaim.alt_kume_iliskisi;
+  assert.ok(subsetContract && subsetContract.toplam_kanit && Array.isArray(subsetContract.ayrik_alt_kume_kanitlari),
+    'R2 sayısal iddiası toplam ve ayrık alt küme kanıt ilişkisini tanımlamalıdır');
+  assert.ok(numericClaim.kanitlar.includes(subsetContract.toplam_kanit), 'R2 toplam kanıtı iddia kanıtları içinde olmalıdır');
+  const totalMetric = metricById.get(subsetContract.toplam_kanit);
+  assert.ok(totalMetric, 'R2 toplam ölçü kanıtı bulunmalıdır');
+  assert.deepEqual([...(totalMetric.kapsam ?? [])].sort(), [...scope.kimlikler].sort(),
+    'R2 toplam ölçü kanıtı istenen tüm projeleri kapsamalıdır');
+  const totalProjectSet = new Set(totalMetric.kapsam);
+  const coveredSubsetProjects = new Set();
+  const requestedProjectNames = scope.kimlikler.map((code) => roster.projeler[code]).filter(Boolean);
+  let subsetSum = 0;
+  for (const subId of subsetContract.ayrik_alt_kume_kanitlari) {
+    assert.ok(numericClaim.kanitlar.includes(subId), `R2 alt küme kanıtı iddia kanıtlarında olmalıdır (${subId})`);
+    const subMetric = metricById.get(subId);
+    assert.ok(subMetric && Array.isArray(subMetric.kapsam) && subMetric.kapsam.length === 1,
+      `R2 alt küme kanıtı tekil proje kapsamı taşımalıdır (${subId})`);
+    const [projectCode] = subMetric.kapsam;
+    assert.ok(totalProjectSet.has(projectCode), `R2 alt küme projesi genel toplam kapsamı içinde olmalıdır (${projectCode})`);
+    assert.equal(coveredSubsetProjects.has(projectCode), false, `R2 ayrık alt küme projeleri çakışamaz (${projectCode})`);
+    coveredSubsetProjects.add(projectCode);
+    subsetSum += subMetric.deger;
+    const projectName = roster.projeler[projectCode];
+    const otherNames = requestedProjectNames.filter((name) => name !== projectName);
+    assert.ok(
+      hasProjectCountClause(numericClaim.ifade, projectName, otherNames, subMetric.deger)
+      && hasProjectCountClause(preservedText, projectName, otherNames, subMetric.deger),
+      `R2 korunan ifade ve taslakta proje bazlı sayı eşleşmelidir (${projectName}=${subMetric.deger})`
+    );
+  }
+  assert.ok(subsetSum <= totalMetric.deger,
+    `R2 ayrık alt küme sayımları genel toplamı aşamaz (${subsetSum} > ${totalMetric.deger})`);
   // R2 gecikmiş onay iddiası (E4) kanonik veri_ani kesitine göre gerçekten hedef tarihini aşmış olmalıdır.
   const overdueTasks = repair.kanitlar.filter((entry) => entry.tur === 'gorev' && entry.hedef_bitis);
   assert.ok(overdueTasks.length > 0, 'R2 gecikmiş onay görev kanıtı taşımalıdır');
@@ -824,7 +937,7 @@ function checkInjectionRisk(injection) {
   }
 }
 
-/** R4 çelişen notların aynı göreve ait olduğunu ve zaman sırasıyla dizildiğini doğrular. */
+/** R4 çelişen notların aynı göreve ait olduğunu, zaman sıralı olduğunu ve gerçek plan değişikliğini gösterdiğini doğrular. */
 function checkContradictionCase(contradiction) {
   const contradictionNotes = contradiction.kanitlar.filter((entry) => entry.tur === 'not');
   assert.ok(contradictionNotes.length >= 2, 'çelişki vakası en az iki not taşımalıdır');
@@ -836,7 +949,20 @@ function checkContradictionCase(contradiction) {
     'R4 çelişen notlar aynı göreve ait olmalıdır');
   const times = contradictionNotes.map((entry) => Date.parse(entry.kayit_zamani));
   assert.ok(times[0] < times[1], 'çelişen notlar zaman sırasıyla');
-  assert.match(contradiction.beklenen.desteklenen_ifadeler[0].ifade, /not/iu, 'R4 not kaynaklı ertelemeyi nota atfetmelidir');
+  const earlierText = (contradictionNotes[0].metin ?? '').trim();
+  const laterText = (contradictionNotes[1].metin ?? '').trim();
+  assert.notEqual(laterText, earlierText, 'R4 sonraki not önceki planı aynen tekrarlayamaz');
+  const planDateMatch = /(\d{1,2}\s+(?:Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık))/iu.exec(earlierText);
+  assert.ok(planDateMatch && /planlandı/iu.test(earlierText),
+    'R4 önceki not ilk plan tarihini açıkça bildirmelidir');
+  assert.ok(/ertelendi|iptal\s+edildi|değişti|kaydırıldı/iu.test(laterText),
+    'R4 sonraki not önceki planı geçersiz kılan erteleme veya değişiklik bildirmelidir');
+  const primaryClaim = contradiction.beklenen.desteklenen_ifadeler[0];
+  assert.ok(primaryClaim.kanitlar.includes(contradictionNotes[0].id) && primaryClaim.kanitlar.includes(contradictionNotes[1].id),
+    'R4 beklenen çelişki ifadesi her iki not kanıtına da dayanmalıdır');
+  assert.match(primaryClaim.ifade, /not/iu, 'R4 not kaynaklı ertelemeyi nota atfetmelidir');
+  assert.ok(primaryClaim.ifade.includes(planDateMatch[1]) && /ertelend/iu.test(primaryClaim.ifade),
+    'R4 beklenen ifade önceki plan tarihini ve sonraki ertelemeyi birlikte yansıtmalıdır');
 }
 
 function checkMechanicalCalibration(mechanical, asOf = benchmark.kiyas_gunu) {
@@ -844,21 +970,29 @@ function checkMechanicalCalibration(mechanical, asOf = benchmark.kiyas_gunu) {
   const scope = validateCanonicalScope(mechanical);
   assert.equal(scope.tur, 'projeler');
   const cutOff = resolvePackageCutOff(mechanical, asOf);
-  const draft = mechanical.taslak.join(' ');
-  // İşaret dâhil tam sayı belirteci eşleştirilir (-18 gibi negatif sayılar 18 ile eşleşemez).
+  const draftSentences = mechanical.taslak.flatMap(sentences);
+  // Sabit kalibrasyon örneğindeki her olgusal cümle bire bir doğrulanmış bir ölçü kanıtına karşılık gelmelidir.
   const expectedMetrics = {
-    tamamlanan: (value) => new RegExp(`(?<![\\d+\\-])${value}\\s+görev\\s+tamamlanmıştır`, 'u'),
-    acik: (value) => new RegExp(`(?<![\\d+\\-])${value}\\s+görev\\s+açıktır`, 'u'),
-    geciken: (value) => new RegExp(`(?<![\\d+\\-])${value}\\s+görev\\s+gecikmiştir`, 'u'),
-    yaklasan_7_gun: (value) => new RegExp(`(?:önümüzdeki|gelecek)\\s+7\\s+günde[^.!?]*(?<![\\d+\\-])${value}\\s+görevin\\s+termini`, 'iu')
+    tamamlanan: (value) => new RegExp(`^Bu\\s+dönemde\\s+toplam\\s+(?<![\\d+\\-])${value}\\s+görev\\s+tamamlanmıştır\\.$`, 'u'),
+    acik: (value) => new RegExp(`^Toplam\\s+(?<![\\d+\\-])${value}\\s+görev\\s+açıktır\\.$`, 'u'),
+    geciken: (value) => new RegExp(`^Toplam\\s+(?<![\\d+\\-])${value}\\s+görev\\s+gecikmiştir\\.$`, 'u'),
+    yaklasan_7_gun: (value) => new RegExp(`^(?:Önümüzdeki|Gelecek)\\s+7\\s+günde\\s+toplam\\s+(?<![\\d+\\-])${value}\\s+görevin\\s+termini\\s+vardır\\.$`, 'u')
   };
+  assert.equal(draftSentences.length, Object.keys(expectedMetrics).length,
+    'R3 kalibrasyon taslağı desteklenmeyen ek olgusal cümle içeremez');
+  const matchedSentenceIndices = new Set();
   for (const [metric, matcher] of Object.entries(expectedMetrics)) {
     const entry = mechanical.kanitlar.find((item) => item.tur === 'olcu' && item.olcu === metric);
     assert.ok(entry, 'R3 eksik ölçü kanıtı: ' + metric);
     assert.deepEqual(entry.kapsam, scope.kimlikler, 'R3 ölçü kapsamı istekle eşleşmelidir: ' + metric);
     checkMetricEvidence(entry, mechanical, cutOff, asOf, 'R3/' + metric);
-    assert.match(draft, matcher(entry.deger), `R3 taslağındaki ${metric} sayısı ve zaman ufku kanıtla eşleşmelidir`);
+    const pattern = matcher(entry.deger);
+    const matchIndex = draftSentences.findIndex((sentence) => pattern.test(sentence));
+    assert.ok(matchIndex >= 0, `R3 taslağındaki ${metric} sayısı ve zaman ufku kanıtla eşleşmelidir`);
+    matchedSentenceIndices.add(matchIndex);
   }
+  assert.equal(matchedSentenceIndices.size, draftSentences.length,
+    'R3 kalibrasyon taslağındaki her cümle kanıtlı bir ölçüyle bire bir eşleşmelidir');
 }
 
 test('kıyas: parçalı not, mekanik taslak, çelişki ve gömülü yönerge vakaları sözleşmenin zor noktalarını taşır', () => {
@@ -878,6 +1012,9 @@ test('kıyas: parçalı not, mekanik taslak, çelişki ve gömülü yönerge vak
   const wrongHorizon = structuredClone(mechanical);
   wrongHorizon.taslak[0] = wrongHorizon.taslak[0].replace('7 günde', '30 günde');
   assert.throws(() => checkMechanicalCalibration(wrongHorizon, benchmark.kiyas_gunu), /zaman ufku kanıtla eşleşmelidir/);
+  const extraUnsupportedClaim = structuredClone(mechanical);
+  extraUnsupportedClaim.taslak[0] += ' On görev daha tamamlandı.';
+  assert.throws(() => checkMechanicalCalibration(extraUnsupportedClaim, benchmark.kiyas_gunu), /desteklenmeyen ek olgusal cümle içeremez/);
   const futureMechanical = structuredClone(mechanical);
   futureMechanical.kanitlar.find((entry) => entry.id === 'E2').veri_ani = '2027-01-01T12:00:00+03:00';
   assert.throws(() => checkMechanicalCalibration(futureMechanical, benchmark.kiyas_gunu), /veri_ani kıyas gününü aşamaz/);
@@ -890,6 +1027,14 @@ test('kıyas: parçalı not, mekanik taslak, çelişki ve gömülü yönerge vak
   const differentTaskContradiction = structuredClone(contradiction);
   differentTaskContradiction.kanitlar.find((entry) => entry.id === 'E2').gorev = 'T-MLT-99';
   assert.throws(() => checkContradictionCase(differentTaskContradiction), /aynı göreve ait olmalıdır/);
+  const identicalNotesContradiction = structuredClone(contradiction);
+  identicalNotesContradiction.kanitlar.find((entry) => entry.id === 'E2').metin =
+    identicalNotesContradiction.kanitlar.find((entry) => entry.id === 'E1').metin;
+  assert.throws(() => checkContradictionCase(identicalNotesContradiction), /önceki planı aynen tekrarlayamaz/);
+  const agreeingNotesContradiction = structuredClone(contradiction);
+  agreeingNotesContradiction.kanitlar.find((entry) => entry.id === 'E2').metin =
+    'Entegrasyon testi hâlâ 12 Kasım’a planlı.';
+  assert.throws(() => checkContradictionCase(agreeingNotesContradiction), /erteleme veya değişiklik bildirmelidir/);
 
   const injection = byCategory('K19');
   checkInjectionRisk(injection);
@@ -973,6 +1118,8 @@ function checkThresholds(esikler) {
   const repairGate = esikler.onarim_4I_C;
   assert.equal(repairGate.onarim_sonrasi_editoryal_dusus_en_fazla, 0.3,
     'onarım sonrası editoryal düşüş en fazla 0,3 olmalıdır');
+  assert.equal(repairGate.onarim_sonrasi_editoryal_dusus_birimi, 'rapor_basina',
+    'onarım sonrası editoryal düşüş birimi rapor_basina olmalıdır');
   assert.equal(repairGate.yerel_onarimla_cozulen_tekil_sorun_orani_en_az, 0.9,
     'tekil sorunlarda yerel onarım başarısı en az 0,9 olmalıdır');
   assert.equal(repairGate.butun_raporun_hazir_metne_dusmesi, 0);
@@ -1037,20 +1184,27 @@ test('kıyas: eşikler deneylerden önce tanımlıdır ve hiçbir gerçek model 
   const weakerEditorialDrop = structuredClone(benchmark.esikler);
   weakerEditorialDrop.onarim_4I_C.onarim_sonrasi_editoryal_dusus_en_fazla = 1;
   assert.throws(() => checkThresholds(weakerEditorialDrop), /editoryal düşüş en fazla 0,3 olmalıdır/);
+  const pooledEditorialDropUnit = structuredClone(benchmark.esikler);
+  pooledEditorialDropUnit.onarim_4I_C.onarim_sonrasi_editoryal_dusus_birimi = 'aday_ortalamasi';
+  assert.throws(() => checkThresholds(pooledEditorialDropUnit), /editoryal düşüş birimi rapor_basina olmalıdır/);
   const weakerLocalRepair = structuredClone(benchmark.esikler);
   weakerLocalRepair.onarim_4I_C.yerel_onarimla_cozulen_tekil_sorun_orani_en_az = 0.5;
   assert.throws(() => checkThresholds(weakerLocalRepair), /yerel onarım başarısı en az 0,9 olmalıdır/);
 });
 
-function checkCallBudget(maximum) {
-  const { deneme_butcesi, denetim_ve_yeniden_siralama_cagri_tavani: verification } = spec.onarim;
+function checkCallBudget(maximum, repairPolicy = spec.onarim) {
+  const { deneme_butcesi, denetim_ve_yeniden_siralama_cagri_tavani: verification } = repairPolicy;
+  assert.equal(deneme_butcesi.rapor_basina, 8, 'rapor başına onarım deneme bütçesi 8 olmalıdır');
   assert.equal(verification, 2, 'ilk ve onarım sonrası denetime ortak bütçede yer vardır');
+  assert.equal(maximum, 11, 'rapor başına toplam model çağrısı tavanı 11 olmalıdır');
   assert.equal(maximum, 1 + deneme_butcesi.rapor_basina + verification, 'toplam model çağrısı bütçesi');
-  assert.ok(maximum <= 11, 'işletim bütçesi üst sınırı');
 }
 
 test('kıyas: bütçe yazım, onarım, bağımsız denetim ve yeniden sıralamanın tümünü kapsar', () => {
   checkCallBudget(benchmark.esikler.D_isletim_kalitesi.rapor_basina_model_cagrisi_en_fazla);
-  assert.throws(() => checkCallBudget(9), /toplam model çağrısı bütçesi/);
-  assert.throws(() => checkCallBudget(12), /toplam model çağrısı bütçesi/);
+  assert.throws(() => checkCallBudget(9), /toplam model çağrısı tavanı 11 olmalıdır/);
+  assert.throws(() => checkCallBudget(12), /toplam model çağrısı tavanı 11 olmalıdır/);
+  const weakenedRepair = structuredClone(spec.onarim);
+  weakenedRepair.deneme_butcesi.rapor_basina = 7;
+  assert.throws(() => checkCallBudget(10, weakenedRepair), /onarım deneme bütçesi 8 olmalıdır/);
 });
