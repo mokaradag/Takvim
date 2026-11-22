@@ -80,9 +80,7 @@ export function AssignmentCoordinationDialog({
   const verified = verification?.id === id && verification.revision === revision
     && verification.permissionKey === permissionKey ? verification : null;
   const latest = verified?.record ? selectFresherRecord(verified.record, recordProp) : recordProp;
-  const record = committedState?.record.id === id
-    ? selectFresherRecord(latest, committedState.record, { supersededVersion: committedState.baseVersion })
-    : latest;
+  const record = selectFresherRecord(latest, committedState?.record, { supersededVersion: committedState?.baseVersion });
   const outcomeUnconfirmed = Boolean(
     unconfirmed
     && String(unconfirmed.id) === String(record.id)

@@ -855,8 +855,8 @@ test('karar penceresi elde tutulan kopyayı daha yeni sunucu sürümüyle deği�
   const v1 = Buffer.from([0, 0, 0, 0, 0, 0, 0, 1]).toString('base64');
   const v2 = Buffer.from([0, 0, 0, 0, 0, 0, 0, 2]).toString('base64');
   const v3 = Buffer.from([0, 0, 0, 0, 0, 0, 0, 3]).toString('base64');
-  const initial = { id: 'c1', status: 'PENDING', mode: 'REQUEST', version: v1, allowedDecisions: ['APPROVE', 'REJECT'], taskTitle: 'Görev', assigneeName: 'Dış', requesterName: 'Talep' };
-  const approved = { ...initial, status: 'APPROVED', version: v2, allowedDecisions: ['REQUEST_CANCELLATION'] };
+  const initial = { id: 'abcdef12-1234-4abc-8abc-000000000001', status: 'PENDING', mode: 'REQUEST', version: v1, allowedDecisions: ['APPROVE', 'REJECT'], taskTitle: 'Görev', assigneeName: 'Dış', requesterName: 'Talep' };
+  const approved = { ...initial, id: `coordination-${initial.id.toUpperCase()}`, status: 'APPROVED', version: v2, allowedDecisions: ['REQUEST_CANCELLATION'] };
   const cancelled = { ...initial, status: 'CANCELLED', version: v3, allowedDecisions: [] };
 
   // 1) Karar sonrası yenileme hatasında committedRecord korunur, ama daha yeni v3 geldiğinde yerini bırakır.
@@ -892,8 +892,8 @@ test('karar penceresi elde tutulan kopyayı daha yeni sunucu sürümüyle deği�
 test('tarih talebi ayrıntı penceresi yenileme hatasında kapanmaz ve yetkili kaydı bayat listeden korur', async (t) => {
   globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
   let closed = false;
-  const req = { id: 'r1', status: 'PENDING', isDecisionOwner: true, taskAvailable: true, taskTitle: 'Görev', requesterName: 'A', version: 'v1' };
-  const resolved = { ...req, status: 'ACCEPTED', version: 'v2', decidedAt: '2026-10-02T10:00:00Z' };
+  const req = { id: 'abcdef12-1234-4abc-8abc-000000000002', status: 'PENDING', isDecisionOwner: true, taskAvailable: true, taskTitle: 'Görev', requesterName: 'A', version: 'v1' };
+  const resolved = { ...req, id: req.id.toUpperCase(), status: 'ACCEPTED', version: 'v2', decidedAt: '2026-10-02T10:00:00Z' };
   const view = mountComponent(ScheduleRequestDetails, {
     request: req, onClose: () => { closed = true; }, onOpenTask: async () => ({ ok: true }),
     onDecide: async () => ({ ok: true, value: { outcome: 'ACCEPTED', request: resolved }, refreshError: { message: 'Sunucu geçici erişilemez' } })
@@ -905,7 +905,10 @@ test('tarih talebi ayrıntı penceresi yenileme hatasında kapanmaz ve yetkili k
   assert.equal(closed, false, 'yenileme hatasında pencere sessizce kapanmaz');
   const status = findElement(view.output, (node) => node.props?.role === 'status');
   assert.match(JSON.stringify(status.props.children), /görünüm yenilenemedi/);
+  assert.ok(findElement(view.output, (node) => node.props?.className === 'schedule-status accepted'));
   assert.equal(selectFresherRecord(req, resolved).status, 'ACCEPTED', 'bayat PENDING satırı yetkili karar yanıtını ezmez');
+  assert.equal(requestInboxKey(req), requestInboxKey(resolved));
+  assert.equal(selectFresherRecord(req, { ...resolved, source: 'ASSIGNMENT_COORDINATION' }), req);
 });
 
 test('prototip anahtarı taşıyan bildirim kaynağı 500 yerine 400 ile reddedilir', async () => {

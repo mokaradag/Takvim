@@ -35,9 +35,7 @@ export function ScheduleRequestDetails({ request: requestProp, onClose, onDecide
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [committedState, setCommittedState] = useState(null);
-  const request = committedState && String(committedState.record.id) === String(requestProp.id)
-    ? selectFresherRecord(requestProp, committedState.record, { supersededVersion: committedState.baseVersion })
-    : requestProp;
+  const request = selectFresherRecord(requestProp, committedState?.record, { supersededVersion: committedState?.baseVersion });
   const decisionAvailable = request.isDecisionOwner && request.status === 'PENDING' && request.taskAvailable !== false;
   const current = requestDates(request, 'original');
   const proposed = requestDates(request, 'proposed');

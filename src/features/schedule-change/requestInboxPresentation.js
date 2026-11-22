@@ -115,7 +115,8 @@ export function buildRequestProjectOptions(projects = [], ...recordLists) {
 
 /** Kaynak + kimlik: üç tabloda kimlikler çakışabilir, satır anahtarı ikisini taşır. */
 export function requestInboxKey(item) {
-  return `${item?.source || NOTIFICATION_SOURCES.SCHEDULE_REQUEST}:${item?.id}`;
+  const id = extractActualId(item?.id) ?? item?.id;
+  return `${item?.source || NOTIFICATION_SOURCES.SCHEDULE_REQUEST}:${id}`;
 }
 
 export function sameRequestInboxItem(left, right) {
@@ -153,7 +154,7 @@ function decodeRowVersionBigInt(value) {
  */
 export function selectFresherRecord(incoming, retained, { supersededVersion = null } = {}) {
   if (!retained) return incoming;
-  if (!incoming || String(incoming.id) !== String(retained.id)) return incoming || retained;
+  if (!sameRequestInboxItem(incoming, retained)) return incoming || retained;
   const incomingVersion = incoming.version ?? null;
   const retainedVersion = retained.version ?? null;
   if (incomingVersion && retainedVersion) {
