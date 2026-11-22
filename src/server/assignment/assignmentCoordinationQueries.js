@@ -95,6 +95,7 @@ const PARTICIPANT = `(c.RequesterSicil = @sicil
   OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS})`;
 const IS_MANAGER = `CASE WHEN ${DECISION_AUTHORITY} THEN 1 ELSE 0 END`;
 const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
+const PENDING_ACTIONABLE = `(${TASK_AVAILABLE} AND ${NOTIFICATION_DECISION_AUTHORITY})`;
 const ACTIONABLE = `(${TASK_AVAILABLE} AND (
   (c.Status = 'PENDING' AND ${NOTIFICATION_DECISION_AUTHORITY})
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
@@ -127,7 +128,7 @@ const ORDER = orderFor(ACTIONABLE);
  * ikinci bir kural tanımlamaz (bkz. server/notifications/requestInboxQueries.js).
  */
 export const COORDINATION_SQL = Object.freeze({
-  SOURCE, COUNT_SOURCE, PARTICIPANT, ACTIONABLE, UNREAD, VISIBLE, TASK_AVAILABLE, DISPLAYED_PROJECT_ID, FIELDS
+  SOURCE, COUNT_SOURCE, PARTICIPANT, PENDING_ACTIONABLE, ACTIONABLE, UNREAD, VISIBLE, TASK_AVAILABLE, DISPLAYED_PROJECT_ID, FIELDS
 });
 
 /**
@@ -371,11 +372,18 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
     SELECT @total AS Total, @safePage AS Page;
     SELECT ${fields} ${SOURCE} WHERE ${filters} AND ${tabFilter}
     ORDER BY ${order} OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+    SELECT DISTINCT
+      ${DISPLAYED_PROJECT_ID} AS ProjectId,
+      COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
+      COALESCE(c.ProjectCodeSnapshot, p.ProjectCode) AS ProjectCode
+    ${COUNT_SOURCE}
+    WHERE ${participant} AND ${DISPLAYED_PROJECT_ID} IS NOT NULL;
   `);
   const counts = result.recordsets?.[0]?.[0] || {};
   const pagination = result.recordsets?.[1]?.[0] || {};
+  const items = (result.recordsets?.[2] || []).map((row) => mapCoordination(row, actor.sicil));
   return {
-    items: (result.recordsets?.[2] || []).map((row) => mapCoordination(row, actor.sicil)),
+    items,
     total: Number(pagination.Total || 0),
     page: Number(pagination.Page || 0),
     pageSize: query.pageSize,
@@ -385,8 +393,30 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
       pending: Number(counts.PendingCount || 0),
       sent: Number(counts.SentCount || 0),
       history: Number(counts.HistoryCount || 0)
+    },
+    ...(evidenceSnapshotLimit == null ? { projects: mapAuthorizedProjects(result.recordsets?.[3], items) } : {})
+  };
+}
+
+/** Kullanıcının görmeye yetkili olduğu kayıtlarda temsil edilen tekil projeler. */
+export function mapAuthorizedProjects(rows = [], fallbackItems = []) {
+  const byId = new Map();
+  const add = (rawId, rawName, rawCode) => {
+    const id = canonicalActualId(rawId);
+    if (!id) return;
+    const name = String(rawName || '').trim();
+    const code = String(rawCode || '').trim();
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, { id, name, code });
+    } else {
+      if (!existing.name && name) existing.name = name;
+      if (!existing.code && code) existing.code = code;
     }
   };
+  for (const row of rows || []) add(row?.ProjectId ?? row?.projectId, row?.ProjectName ?? row?.projectName, row?.ProjectCode ?? row?.projectCode);
+  for (const item of fallbackItems || []) add(item?.projectId, item?.projectName, item?.projectCode);
+  return [...byId.values()];
 }
 
 export async function queryAssignmentCoordinations(input) {

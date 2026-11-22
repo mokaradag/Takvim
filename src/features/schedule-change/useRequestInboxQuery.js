@@ -1,7 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { fetchRequestInbox } from '../../data/api/assignmentCoordinationClient.js';
-import { useNotificationSummary, useScheduleRequestSummary, useSessionContext } from '../../state/hooks/index.js';
+import {
+  useDataLifecycle,
+  useNotificationSummary,
+  useScheduleRequestSummary,
+  useSessionContext
+} from '../../state/hooks/index.js';
 
 const EMPTY = Object.freeze({
   items: [], total: 0, page: 0, pageSize: 25,
@@ -19,10 +24,11 @@ export function useRequestInboxQuery(query, enabled = true) {
   const session = useSessionContext();
   const summary = useScheduleRequestSummary();
   const notificationSummary = useNotificationSummary();
+  const { lastRefreshedAt } = useDataLifecycle();
   const actual = session?.dataMode === 'actual';
   const key = JSON.stringify(query);
   const [revision, setRevision] = useState(0);
-  const [state, setState] = useState({ key: '', data: EMPTY, loading: false, error: null });
+  const [state, setState] = useState({ key: '', data: EMPTY, retainedItems: [], loading: false, error: null });
   useEffect(() => {
     if (!actual || !enabled) return undefined;
     let cancelled = false;
@@ -33,13 +39,21 @@ export function useRequestInboxQuery(query, enabled = true) {
       setState((current) => ({
         key,
         data: result.ok ? result.value : (current.key === key ? current.data : EMPTY),
+        retainedItems: result.ok
+          ? (Array.isArray(result.value.projects) ? result.value.projects : [...current.retainedItems, ...(result.value.items || [])])
+          : current.retainedItems,
         loading: false,
         error: result.ok ? null : result.message
       }));
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [actual, enabled, key, revision, summary, notificationSummary]);
-  return { data: actual && state.key === key ? state.data : EMPTY,
-    loading: actual && enabled && (state.loading || state.key !== key), error: state.key === key ? state.error : null,
-    actual, refresh: () => setRevision((value) => value + 1) };
+  }, [actual, enabled, key, revision, summary, notificationSummary, lastRefreshedAt]);
+  return {
+    data: actual && state.key === key ? state.data : EMPTY,
+    retainedProjects: actual ? state.retainedItems : [],
+    loading: actual && enabled && (state.loading || state.key !== key),
+    error: state.key === key ? state.error : null,
+    actual,
+    refresh: () => setRevision((value) => value + 1)
+  };
 }

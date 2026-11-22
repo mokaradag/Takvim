@@ -48,6 +48,8 @@ export function AssignmentCoordinationDialog({
   // Sonucu doğrulanamayan ağ/zaman aşımı yanıtında, aynı eski sürüm üzerinden
   // yinelenen karar verilmesini engelleyen kilit.
   const [unconfirmed, setUnconfirmed] = useState(null);
+  // Kesin yetki/çakışma reddinde yeni doğrulama tamamlanana dek bayat düğmeleri gizleyen kilit.
+  const [rejected, setRejected] = useState(null);
   const [verification, setVerification] = useState(null);
   const [revision, setRevision] = useState(0);
   const lookupGeneration = useRef(0);
@@ -86,6 +88,18 @@ export function AssignmentCoordinationDialog({
     && String(unconfirmed.id) === String(record.id)
     && (!record.version || unconfirmed.version === record.version)
   );
+  const recoveredFromRejection = Boolean(
+    rejected
+    && verified?.record?.allowedDecisions?.length
+    && (verified.revision !== rejected.revision || verified.permissionKey !== rejected.permissionKey)
+  );
+  const definiteRejectionLocked = Boolean(
+    rejected
+    && !recoveredFromRejection
+    && String(rejected.id) === String(record.id)
+    && (!record.version || rejected.version === record.version)
+  );
+  const decisionsLocked = outcomeUnconfirmed || definiteRejectionLocked;
   const closeRef = useRef(null);
   const dialogRef = useRef(null);
   useModalFocusTrap({ containerRef: dialogRef, initialFocusRef: closeRef, restoreFocusRef, onClose, blocked: busy });
@@ -93,8 +107,8 @@ export function AssignmentCoordinationDialog({
   const verifying = shouldVerify && !verified;
   const verificationError = shouldVerify ? verified?.error : null;
   const hideDetails = verificationError || (verifying && !(verification?.id === id && verification.record));
-  const decisions = outcomeUnconfirmed || verifying || verificationError ? [] : (record.allowedDecisions || []);
-  const verifyAgain = () => setRevision((value) => value + 1);
+  const decisions = decisionsLocked || verifying || verificationError ? [] : (record.allowedDecisions || []);
+  const verifyAgain = () => { setError(null); setRevision((value) => value + 1); };
   const canSuggest = decisions.includes(COORDINATION_DECISIONS.REQUEST_CHANGE);
   // Etiket yanıt notunu "değişiklik isteğinde zorunlu" diye bildirir; düğme de
   // aynı kuralı uygular. Uygulanmadığında boş notlu istek gidiyor ve kullanıcı
@@ -130,8 +144,11 @@ export function AssignmentCoordinationDialog({
             setVerification({ id, revision, permissionKey, record: result.record, error: null });
           }
           setUnconfirmed(null);
-        } else {
+          setRejected(null);
+        } else if (result?.code === 'OUTCOME_UNKNOWN') {
           setUnconfirmed({ id: record.id, version: submittedVersion });
+        } else {
+          setRejected({ id: record.id, version: submittedVersion, revision, permissionKey });
         }
       }
       if (result?.refreshError) setNotice(result.refreshError.message || 'Görünüm yenilenemedi.');
@@ -139,6 +156,7 @@ export function AssignmentCoordinationDialog({
       return;
     }
     setUnconfirmed(null);
+    setRejected(null);
     if (result.value?.record) setCommittedState({ record: result.value.record, baseVersion: submittedVersion });
     if (result.value?.outcome === 'STALE') {
       setError(result.value.message);
@@ -253,7 +271,7 @@ export function AssignmentCoordinationDialog({
 
         {error && <div className="schedule-modal-error" role="alert"><Icons.Alert size={13} /> {error}</div>}
         {notice && <div className="schedule-modal-error" role="status"><Icons.Alert size={13} /> {notice}</div>}
-        {outcomeUnconfirmed && shouldVerify && <button type="button" className="btn ghost sm" onClick={verifyAgain}>Kaydı yenile</button>}
+        {decisionsLocked && shouldVerify && <button type="button" className="btn ghost sm" onClick={verifyAgain}>Kaydı yenile</button>}
 
         <footer className="schedule-modal-actions">
           <button className="btn" type="button" disabled={busy || record.taskAvailable === false}

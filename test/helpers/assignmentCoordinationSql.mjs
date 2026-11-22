@@ -83,9 +83,14 @@ function projectOf(db, projectId) {
   return db.projects.find((project) => sameGuid(project.ProjectId, projectId)) || null;
 }
 
+/** Turkish_100_CI_AI yaklaşımı: Türkçe I/ı ve İ/i ayrımını koruyarak aksan duyarsız katlama. */
+function fold(value) {
+  return String(value ?? '').toLocaleLowerCase('tr-TR').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 function contains(haystack, needle) {
   if (!needle) return true;
-  return String(haystack ?? '').toLocaleLowerCase('tr-TR').includes(String(needle).toLocaleLowerCase('tr-TR'));
+  return fold(haystack).includes(fold(needle));
 }
 
 function recipientsOf(db, coordinationId) {
@@ -306,7 +311,7 @@ function cursorTimestamp(value) {
 
 function requestInbox(db, params, context = {}, scheduleOnly = false) {
   const sicil = Number(params.sicil);
-  const lower = (value) => String(value ?? '').toLocaleLowerCase('tr-TR');
+  const lower = fold;
   const has = (haystack, needle) => !needle || lower(haystack).includes(lower(needle));
   const time = (value) => (value ? new Date(value).getTime() : null);
   const inRange = (value) => {
@@ -318,10 +323,18 @@ function requestInbox(db, params, context = {}, scheduleOnly = false) {
   const category = params.category || null;
   const items = [];
   const push = (Source, row, flags) => items.push({ Source, row, ...flags });
+  const allScheduleRows = context.scheduleRows ? context.scheduleRows(sicil) : [];
+  const allCoordinationRows = scheduleOnly ? [] : db.taskAssignmentCoordinations.filter((raw) => isParticipant(db, raw, params));
+  const useSessionOrder = Boolean(params.hasCursor) && Boolean(params.hasCursorSession)
+    && params.tab !== 'history' && Boolean(params.cursorSessionCreated);
 
   if (!category || category === 'SCHEDULE_REQUEST') {
-    for (const row of context.scheduleRows ? context.scheduleRows(sicil) : []) {
+    for (const row of allScheduleRows) {
       const actionableRow = row.Status === 'PENDING' && Number(row.DecisionOwnerSicil) === sicil && row.TaskAvailable;
+      const decidedAfter = useSessionOrder && cursorTimestamp(row.CreatedAt) <= params.cursorSessionCreated
+        && Boolean(row.DecidedAt) && (!params.cursorSessionDecided || cursorTimestamp(row.DecidedAt) > params.cursorSessionDecided);
+      const orderActionable = actionableRow || (decidedAfter && Number(row.DecisionOwnerSicil) === sicil && row.TaskAvailable);
+      const orderSortAt = decidedAfter ? row.CreatedAt : (row.DecidedAt || row.CreatedAt);
       const state = (db.scheduleNotifications || []).find((entry) => sameGuid(entry.RequestId, row.RequestId) && Number(entry.Sicil) === sicil);
       const visible = actionableRow || !(Buffer.isBuffer(state?.DismissedVersion) && state.DismissedVersion.equals(row.RowVersion));
       const projectId = row.ProjectIdSnapshot ?? row.LiveProjectId ?? null;
@@ -330,7 +343,7 @@ function requestInbox(db, params, context = {}, scheduleOnly = false) {
       if (!inRange(row.CreatedAt) || !requesterMatch(row.RequesterName, row.RequesterSicil)) continue;
       if (!has([row.TaskTitle, row.ProjectName, row.ProjectCode, row.RequesterName, row.RequesterMessage].join(' '), params.search)) continue;
       push('SCHEDULE_REQUEST', row, {
-        Id: row.RequestId, SortAt: row.DecidedAt || row.CreatedAt, Actionable: actionableRow,
+        Id: row.RequestId, SortAt: orderSortAt, Actionable: orderActionable, LiveActionable: actionableRow,
         IsIncoming: actionableRow || (row.IsUnread && visible && row.TaskAvailable
           && !(Number(row.RequesterSicil) === sicil && row.Status === 'PENDING')),
         IsSent: Number(row.RequesterSicil) === sicil,
@@ -339,8 +352,7 @@ function requestInbox(db, params, context = {}, scheduleOnly = false) {
     }
   }
   if (!scheduleOnly && (!category || category === 'ASSIGNMENT_REQUEST' || category === 'ASSIGNMENT_NOTICE')) {
-    for (const raw of db.taskAssignmentCoordinations) {
-      if (!isParticipant(db, raw, params)) continue;
+    for (const raw of allCoordinationRows) {
       if (category === 'ASSIGNMENT_REQUEST' && raw.Mode !== 'REQUEST') continue;
       if (category === 'ASSIGNMENT_NOTICE' && raw.Mode !== 'NOTICE') continue;
       const displayedProjectId = raw.ProjectIdSnapshot ?? taskOf(db, raw.TaskId)?.ProjectId;
@@ -351,8 +363,14 @@ function requestInbox(db, params, context = {}, scheduleOnly = false) {
       if (!has([row.TaskTitle, row.ProjectName, row.ProjectCode, row.RequesterName, row.AssigneeName, raw.RequesterMessage].join(' '), params.search)) continue;
       const actionableRow = actionable(db, raw, params);
       const available = taskAvailable(db, raw);
+      const decidedAfter = useSessionOrder && raw.Mode === 'REQUEST'
+        && cursorTimestamp(raw.CreatedAt) <= params.cursorSessionCreated
+        && Boolean(raw.DecidedAt) && (!params.cursorSessionDecided || cursorTimestamp(raw.DecidedAt) > params.cursorSessionDecided);
+      const orderActionable = actionableRow || (decidedAfter && raw.Status !== 'CANCELLATION_REQUESTED'
+        && available && notificationDecisionAuthority(db, raw, params));
+      const orderSortAt = decidedAfter ? raw.CreatedAt : (raw.DecidedAt || raw.CreatedAt);
       push('ASSIGNMENT_COORDINATION', row, {
-        Id: raw.CoordinationId, SortAt: raw.DecidedAt || raw.CreatedAt, Actionable: actionableRow,
+        Id: raw.CoordinationId, SortAt: orderSortAt, Actionable: orderActionable, LiveActionable: actionableRow,
         IsIncoming: actionableRow || (isUnread(db, raw, sicil) && isVisible(db, raw, params) && available
           && !(Number(raw.RequesterSicil) === sicil && raw.Status === 'PENDING')),
         IsSent: Number(raw.RequesterSicil) === sicil && raw.Mode === 'REQUEST',
@@ -370,7 +388,7 @@ function requestInbox(db, params, context = {}, scheduleOnly = false) {
       if (!inRange(raw.OccurredAt) || !requesterMatch(row.ActorName, raw.ActorSicil)) continue;
       if (!has([raw.TaskTitleSnapshot, raw.ProjectNameSnapshot, raw.ProjectCodeSnapshot, row.ActorName].join(' '), params.search)) continue;
       push('TASK_EVENT', row, {
-        Id: raw.NotificationId, SortAt: raw.OccurredAt, Actionable: false,
+        Id: raw.NotificationId, SortAt: raw.OccurredAt, Actionable: false, LiveActionable: false,
         IsIncoming: row.IsUnread === 1 && !raw.DismissedAt && row.TaskAvailable === 1,
         IsSent: false,
         IsHistory: true
@@ -382,13 +400,19 @@ function requestInbox(db, params, context = {}, scheduleOnly = false) {
     SentCount: items.filter((item) => item.IsSent).length,
     HistoryCount: items.filter((item) => item.IsHistory).length
   };
-  const coordinationCount = scheduleOnly ? 0 : db.taskAssignmentCoordinations.filter((row) => isParticipant(db, row, params)).length;
+  const coordinationCount = scheduleOnly ? 0 : allCoordinationRows.length;
   const flag = { pending: 'IsIncoming', sent: 'IsSent', history: 'IsHistory' }[params.tab];
-  const filtered = items.filter((item) => item[flag]).sort((left, right) =>
-    Number(right.Actionable) - Number(left.Actionable)
-    || cursorTimestamp(right.SortAt).localeCompare(cursorTimestamp(left.SortAt))
-    || String(left.Source).localeCompare(String(right.Source))
-    || compareSqlGuid(right.Id, left.Id));
+  const sortWith = (useOrderKey) => [...items.filter((item) => item[flag])].sort((left, right) => {
+    const leftAct = useOrderKey ? left.Actionable : left.LiveActionable;
+    const rightAct = useOrderKey ? right.Actionable : right.LiveActionable;
+    const leftSort = useOrderKey ? left.SortAt : (left.row?.DecidedAt || left.row?.CreatedAt || left.row?.OccurredAt || left.SortAt);
+    const rightSort = useOrderKey ? right.SortAt : (right.row?.DecidedAt || right.row?.CreatedAt || right.row?.OccurredAt || right.SortAt);
+    return Number(rightAct) - Number(leftAct)
+      || cursorTimestamp(rightSort).localeCompare(cursorTimestamp(leftSort))
+      || String(left.Source).localeCompare(String(right.Source))
+      || compareSqlGuid(right.Id, left.Id);
+  });
+  let filtered = sortWith(true);
   const total = filtered.length;
   const lastPage = total === 0 ? 0 : Math.floor((total - 1) / params.pageSize);
   let page = params.page;
@@ -402,6 +426,7 @@ function requestInbox(db, params, context = {}, scheduleOnly = false) {
       const a = Number(item.Actionable);
       const t = cursorTimestamp(item.SortAt);
       const s = String(item.Source);
+      if (s === cursorSource && sameGuid(item.Id, params.cursorItemId)) return false;
       if (a !== cursorActionable) return a < cursorActionable;
       if (t !== cursorSortAt) return t < cursorSortAt;
       if (s !== cursorSource) return s.localeCompare(cursorSource) > 0;
@@ -410,21 +435,57 @@ function requestInbox(db, params, context = {}, scheduleOnly = false) {
     cursorUsed = slice.length > 0;
   }
   if (!cursorUsed) {
+    filtered = sortWith(false);
     page = Math.min(params.page, lastPage);
     slice = filtered.slice(page * params.pageSize, (page + 1) * params.pageSize + 1);
   }
-  const of = (source) => slice.filter((item) => item.Source === source).map((item) => item.row);
-  return [[counts], [{ CoordinationCount: coordinationCount }], [{ Total: total, Page: page, CursorUsed: cursorUsed }],
-    slice.map((item, index) => ({
-      Ordinal: index + 1,
-      Source: item.Source,
-      ItemId: item.Id,
-      ItemVersion: item.row?.RowVersion ?? null,
-      UnreadFlag: item.row?.IsUnread ? 1 : 0,
-      ActionableFlag: item.Actionable ? 1 : 0,
-      CursorSortAt: cursorTimestamp(item.SortAt)
+  let sessionCreatedAt = params.cursorSessionCreated ?? null;
+  let sessionDecidedAt = params.cursorSessionDecided ?? null;
+  if (!cursorUsed || !params.hasCursorSession) {
+    const sessionRows = [...allScheduleRows, ...allCoordinationRows];
+    const createdTimestamps = sessionRows.map((row) => row.CreatedAt).filter(Boolean).map(cursorTimestamp).sort();
+    const decidedTimestamps = sessionRows.map((row) => row.DecidedAt).filter(Boolean).map(cursorTimestamp).sort();
+    sessionCreatedAt = createdTimestamps.at(-1) ?? null;
+    sessionDecidedAt = decidedTimestamps.at(-1) ?? null;
+  }
+  const authorizedProjects = [
+    ...allScheduleRows.map((row) => ({
+      ProjectId: row.ProjectIdSnapshot ?? row.LiveProjectId ?? null,
+      ProjectName: row.ProjectName ?? '',
+      ProjectCode: row.ProjectCode ?? ''
     })),
-    of('SCHEDULE_REQUEST'), of('ASSIGNMENT_COORDINATION'), of('TASK_EVENT')];
+    ...allCoordinationRows.map((raw) => {
+      const row = coordinationRow(db, raw, params);
+      return { ProjectId: row.ProjectId, ProjectName: row.ProjectName, ProjectCode: row.ProjectCode };
+    }),
+    ...(scheduleOnly ? [] : db.taskNotifications
+      .filter((raw) => Number(raw.RecipientSicil) === sicil && (raw.ProjectIdSnapshot != null || Number(raw.TaskCount || 1) <= 1))
+      .map((raw) => {
+        const task = taskOf(db, raw.TaskId);
+        const project = task ? projectOf(db, task.ProjectId) : null;
+        return {
+          ProjectId: raw.ProjectIdSnapshot ?? task?.ProjectId ?? null,
+          ProjectName: raw.ProjectNameSnapshot ?? project?.ProjectName ?? '',
+          ProjectCode: raw.ProjectCodeSnapshot ?? project?.ProjectCode ?? ''
+        };
+      }))
+  ].filter((project) => project.ProjectId != null);
+  const of = (source) => slice.filter((item) => item.Source === source).map((item) => item.row);
+  const paginationRow = { Total: total, Page: page, CursorUsed: cursorUsed, SessionCreatedAt: sessionCreatedAt, SessionDecidedAt: sessionDecidedAt };
+  const orderRows = slice.map((item, index) => ({
+    Ordinal: index + 1,
+    Source: item.Source,
+    ItemId: item.Id,
+    ItemVersion: item.row?.RowVersion ?? null,
+    UnreadFlag: item.row?.IsUnread ? 1 : 0,
+    ActionableFlag: (cursorUsed ? item.Actionable : item.LiveActionable) ? 1 : 0,
+    LiveActionableFlag: item.LiveActionable ? 1 : 0,
+    CursorSortAt: cursorTimestamp(cursorUsed ? item.SortAt : (item.row?.DecidedAt || item.row?.CreatedAt || item.row?.OccurredAt || item.SortAt))
+  }));
+  return scheduleOnly
+    ? [[counts], [{ CoordinationCount: 0 }], [paginationRow], orderRows, of('SCHEDULE_REQUEST'), authorizedProjects]
+    : [[counts], [{ CoordinationCount: coordinationCount }], [paginationRow], orderRows,
+      of('SCHEDULE_REQUEST'), of('ASSIGNMENT_COORDINATION'), of('TASK_EVENT'), authorizedProjects];
 }
 
 function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
@@ -441,6 +502,13 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
     return row.Status === 'CANCELLATION_REQUESTED' && Number(row.RequesterSicil) === sicil;
   };
   const pageRow = (row) => ({ ...coordinationRow(db, row, params), IsActionable: pageActionable(row) ? 1 : 0 });
+  const authorizedProjects = db.taskAssignmentCoordinations
+    .filter(pageParticipant)
+    .map((row) => {
+      const view = pageRow(row);
+      return { ProjectId: view.ProjectId, ProjectName: view.ProjectName, ProjectCode: view.ProjectCode };
+    })
+    .filter((project) => project.ProjectId != null);
   const matches = db.taskAssignmentCoordinations.filter((row) => {
     const historicalParticipant = Number(row.RequesterSicil) === sicil || recipientsOf(db, row.CoordinationId).some((recipient) =>
       Number(recipient.Sicil) === sicil && ['MANAGER', 'ASSIGNEE'].includes(recipient.RecipientRole));
@@ -499,7 +567,9 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
     })
     .slice(page * pageSize, page * pageSize + pageSize)
     .map((row) => (params.evidenceSnapshotLimit == null ? pageRow(row) : { ...pageRow(row), CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null }));
-  return [[counts], [{ Total: tabbed.length, Page: page }], items];
+  return params.evidenceSnapshotLimit == null
+    ? [[counts], [{ Total: tabbed.length, Page: page }], items, authorizedProjects]
+    : [[counts], [{ Total: tabbed.length, Page: page }], items];
 }
 
 /* ── Yazmalar ───────────────────────────────────────────────── */

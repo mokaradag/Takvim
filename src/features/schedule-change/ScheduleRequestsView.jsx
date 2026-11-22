@@ -1,6 +1,12 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
+import {
+  useAllProjects,
+  useAssignmentCoordinations,
+  useScheduleRequests,
+  useTaskActions,
+  useTaskNotifications
+} from '../../state/hooks/index.js';
 import { DateInput } from '../../components/DateInput.jsx';
 import { Icons } from '../../components/icons.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
@@ -13,6 +19,7 @@ import { ScheduleRequestDetails } from './ScheduleRequestCenter.jsx';
 import {
   REQUEST_CATEGORY_FILTER_OPTIONS,
   REQUEST_STATUS_FILTER_OPTIONS,
+  buildRequestProjectOptions,
   requestInboxRow,
   sameRequestInboxItem,
   selectFresherRecord
@@ -48,20 +55,24 @@ export function ScheduleRequestsView() {
   const [selected, setSelected] = useState(null);
   const [coordinationTotal, setCoordinationTotal] = useState(null);
   const projects = useAllProjects();
-  const projectOptions = useMemo(() => [
-    { value: '', label: 'Tüm projeler' },
-    ...projects
-      .map((project) => ({
-        value: project.id,
-        label: project.name || project.projectName || project.code || 'Adsız proje',
-        description: project.code || '',
-        keywords: [project.code, project.name, project.projectName].filter(Boolean)
-      }))
-      .sort((left, right) => left.label.localeCompare(right.label, 'tr'))
-  ], [projects]);
+  const bellRequests = useScheduleRequests();
+  const bellCoordinations = useAssignmentCoordinations();
+  const bellNotifications = useTaskNotifications();
   const { decideScheduleChange, openTask, markNotifications, decideAssignmentCoordination } = useTaskActions();
   const coordinationActive = activeTab === COORDINATION_TAB;
-  const { data, loading, error, actual, refresh } = useRequestInboxQuery(query, !coordinationActive);
+  const { data, retainedProjects, loading, error, actual, refresh } = useRequestInboxQuery(query, !coordinationActive);
+  const projectOptions = useMemo(
+    () => buildRequestProjectOptions(
+      projects,
+      bellRequests,
+      bellCoordinations,
+      bellNotifications,
+      retainedProjects,
+      data.projects,
+      data.items
+    ),
+    [bellCoordinations, bellNotifications, bellRequests, data.items, data.projects, projects, retainedProjects]
+  );
   const openerRef = useRef(null);
   const tabsRef = useRef(null);
   const [taskError, setTaskError] = useState(null);
@@ -81,6 +92,7 @@ export function ScheduleRequestsView() {
     setQuery((current) => ({ ...current, [key]: value, page: 0, cursor: '' }));
   };
   const selectTab = (id) => {
+    if (id === activeTab) return;
     setActiveTab(id);
     // Sekme değişimi açık talep ayrıntısını KAPATIR. Seçim korunduğunda,
     // Atama Koordinasyonu'na geçip geri dönen kullanıcının önüne çekmece

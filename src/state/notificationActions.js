@@ -115,11 +115,11 @@ export function createNotificationActions({
     if (!result?.ok) {
       const ambiguous = AMBIGUOUS_OUTCOME_CODES.has(result?.code);
       if (ambiguous || result?.code === 'CONFLICT' || result?.code === 'FORBIDDEN') {
-        // Zil önizlemesi sınırlıdır. Kaydı kendi yetki yüklemiyle kimliğinden oku.
-        const [lookup, reload] = await Promise.all([
-          readCoordination(coordinationId),
-          refreshAfterWrite()
-        ]);
+        // Zil önizlemesi sınırlıdır. Önce kaydı kendi yetki yüklemiyle kimliğinden
+        // oku; ardından anlık görüntüyü yenile ki uzlaştırılan kayıttan daha eski
+        // bir görev sorumlusu görünümü kalmasın.
+        const lookup = await readCoordination(coordinationId);
+        const reload = await refreshAfterWrite();
         const observed = lookup?.ok ? lookup.value?.record : null;
         // Aynı sürüm, kararın henüz işlenmediği anlamına da gelebilir.
         const advanced = Boolean(observed?.version && input?.version && observed.version !== input.version);

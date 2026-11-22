@@ -7,8 +7,9 @@ import {
   COORDINATION_MODES,
   COORDINATION_STATUS_LABELS
 } from '../../domain/assignment/assignmentCoordination.js';
-import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
+import { useAllProjects, useAssignmentCoordinations, useTaskActions } from '../../state/hooks/index.js';
 import { useNotificationRead } from '../notifications/useNotificationRead.js';
+import { buildRequestProjectOptions } from '../schedule-change/requestInboxPresentation.js';
 import { TaskTablePagination } from '../tasks/TaskTablePagination.jsx';
 import { AssignmentCoordinationDialog } from './AssignmentCoordinationDialog.jsx';
 import { useAssignmentCoordinationQuery } from './useAssignmentCoordinationQuery.js';
@@ -37,8 +38,9 @@ export function AssignmentCoordinationView({ onTotalChange } = {}) {
   const [selected, setSelected] = useState(null);
   const openerRef = useRef(null);
   const projects = useAllProjects();
+  const bellCoordinations = useAssignmentCoordinations();
   const { openTask, markNotifications, decideAssignmentCoordination } = useTaskActions();
-  const { data, confirmedTotal, loading, error, actual, refresh } = useAssignmentCoordinationQuery(query);
+  const { data, retainedProjects, confirmedTotal, loading, error, actual, refresh } = useAssignmentCoordinationQuery(query);
   const { markRead, markError, retryMark } = useNotificationRead(markNotifications, refresh);
   // Sekme sayacı, süzgeçlere uyan "Tüm kayıtlar" sayısıdır. Kapsam seçimi
   // (ör. Kararımı bekleyenler) onu sıfıra indirmez; karar bekleyen sayısı
@@ -47,17 +49,10 @@ export function AssignmentCoordinationView({ onTotalChange } = {}) {
     if (confirmedTotal != null) onTotalChange?.(confirmedTotal);
   }, [confirmedTotal, onTotalChange]);
 
-  const projectOptions = useMemo(() => [
-    { value: '', label: 'Tüm projeler' },
-    ...projects
-      .map((project) => ({
-        value: project.id,
-        label: project.name || project.projectName || project.code || 'Adsız proje',
-        description: project.code || '',
-        keywords: [project.code, project.name, project.projectName].filter(Boolean)
-      }))
-      .sort((left, right) => left.label.localeCompare(right.label, 'tr'))
-  ], [projects]);
+  const projectOptions = useMemo(
+    () => buildRequestProjectOptions(projects, bellCoordinations, retainedProjects, data.projects, data.items),
+    [bellCoordinations, data.items, data.projects, projects, retainedProjects]
+  );
 
   const change = (key, value) => setQuery((current) => ({ ...current, [key]: value, page: 0 }));
 

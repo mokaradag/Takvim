@@ -3,7 +3,7 @@ import { COORDINATION_STATUSES } from '../../domain/assignment/assignmentCoordin
 import { canonicalActualId, extractActualId } from '../../domain/identity/actualId.js';
 import { NOTIFICATION_SOURCES } from '../../domain/notifications/notificationInbox.js';
 import { REQUEST_INBOX_CATEGORIES, REQUEST_INBOX_TABS } from '../../domain/notifications/requestInbox.js';
-import { COORDINATION_SQL, bindCoordinationScope } from '../assignment/assignmentCoordinationQueries.js';
+import { COORDINATION_SQL, bindCoordinationScope, mapAuthorizedProjects } from '../assignment/assignmentCoordinationQueries.js';
 import { mapCoordination } from '../assignment/assignmentCoordinationMapping.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
@@ -89,19 +89,27 @@ function normalizeCursorTimestamp(value) {
 }
 
 /** Sonraki sayfa geçişi için belirlenimci sıralama sınırını kodlar. */
-export function encodeRequestInboxCursor(item, orderKey = null) {
+export function encodeRequestInboxCursor(item, orderKey = null, session = null) {
   if (!item) return null;
   const source = item.source;
   const id = canonicalActualId(item.id);
   if (!CURSOR_SOURCES.has(source) || !id) return null;
   const timestamp = normalizeCursorTimestamp(orderKey?.CursorSortAt ?? item.sortAt ?? item.decidedAt ?? item.createdAt ?? item.occurredAt);
   if (!timestamp) return null;
-  return Buffer.from(JSON.stringify({
+  const payload = {
     a: (orderKey ? Boolean(orderKey.ActionableFlag) : isInboxItemActionable(item)) ? 1 : 0,
     t: timestamp + 'Z',
     s: source,
     i: id
-  }), 'utf8').toString('base64url');
+  };
+  if (session && (session.SessionCreatedAt !== undefined || session.SessionDecidedAt !== undefined
+    || session.sessionCreatedAt !== undefined || session.sessionDecidedAt !== undefined)) {
+    const createdAt = normalizeCursorTimestamp(session.SessionCreatedAt ?? session.sessionCreatedAt);
+    const decidedAt = normalizeCursorTimestamp(session.SessionDecidedAt ?? session.sessionDecidedAt);
+    payload.c = createdAt ? createdAt + 'Z' : null;
+    payload.d = decidedAt ? decidedAt + 'Z' : null;
+  }
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
 function decodeRequestInboxCursor(value) {
@@ -118,8 +126,14 @@ function decodeRequestInboxCursor(value) {
   const source = CURSOR_SOURCES.has(parsed.s) ? parsed.s : null;
   const id = canonicalActualId(parsed.i);
   const sortAt = normalizeCursorTimestamp(parsed.t);
-  if (actionable == null || !source || !id || !sortAt) invalid('Sayfalama imleci geçersiz.');
-  return { actionable, sortAt, source, id, legacy: !/\.\d{7}Z$/.test(parsed.t) };
+  const hasSession = Object.prototype.hasOwnProperty.call(parsed, 'c') || Object.prototype.hasOwnProperty.call(parsed, 'd');
+  const sessionCreatedAt = parsed.c == null ? null : normalizeCursorTimestamp(parsed.c);
+  const sessionDecidedAt = parsed.d == null ? null : normalizeCursorTimestamp(parsed.d);
+  if (actionable == null || !source || !id || !sortAt
+    || (parsed.c != null && !sessionCreatedAt) || (parsed.d != null && !sessionDecidedAt)) {
+    invalid('Sayfalama imleci geçersiz.');
+  }
+  return { actionable, sortAt, source, id, hasSession, sessionCreatedAt, sessionDecidedAt, legacy: !/\.\d{7}Z$/.test(parsed.t) };
 }
 
 export function normalizeRequestInboxQuery(input = {}) {
@@ -159,6 +173,15 @@ const S_SENT = '(r.RequesterSicil = @sicil)';
 const S_HISTORY = `(r.Status <> 'PENDING' OR NOT ${SCHEDULE_AVAILABLE})`;
 const S_SORT_AT = 'COALESCE(r.DecidedAt, r.CreatedAt)';
 const S_ACTIONABLE_BIT = `CASE WHEN ${S.ACTIONABLE} THEN 1 ELSE 0 END`;
+const S_PENDING_ACTIONABLE = `(r.DecisionOwnerSicil = @sicil AND ${SCHEDULE_AVAILABLE})`;
+// İmleç oturumu başladıktan sonra başka bir oturumda karara bağlanan talep,
+// aynı imleç gezintisi boyunca ilk sayfadaki sıra konumunu korur.
+const S_DECIDED_AFTER_CURSOR = `(@useCursor = 1 AND @hasCursorSession = 1 AND @tab <> 'history'
+  AND @sessionCreatedAt IS NOT NULL AND r.CreatedAt <= @sessionCreatedAt
+  AND r.DecidedAt IS NOT NULL AND (@sessionDecidedAt IS NULL OR r.DecidedAt > @sessionDecidedAt))`;
+const S_ORDER_SORT_AT = `CASE WHEN ${S_DECIDED_AFTER_CURSOR} THEN r.CreatedAt ELSE ${S_SORT_AT} END`;
+const S_ORDER_ACTIONABLE_BIT = `CASE WHEN ${S.ACTIONABLE}
+  OR (${S_DECIDED_AFTER_CURSOR} AND ${S_PENDING_ACTIONABLE}) THEN 1 ELSE 0 END`;
 const S_FILTERS = `(@projectId IS NULL OR COALESCE(r.ProjectIdSnapshot, t.ProjectId) = @projectId)
   AND (@status IS NULL OR r.Status = @status)
   AND (@fromUtc IS NULL OR r.CreatedAt >= @fromUtc)
@@ -175,6 +198,12 @@ const C_SENT = "(c.RequesterSicil = @sicil AND c.Mode = 'REQUEST')";
 const C_HISTORY = `(c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${C.TASK_AVAILABLE})`;
 const C_SORT_AT = 'COALESCE(c.DecidedAt, c.CreatedAt)';
 const C_ACTIONABLE_BIT = `CASE WHEN ${C.ACTIONABLE} THEN 1 ELSE 0 END`;
+const C_DECIDED_AFTER_CURSOR = `(@useCursor = 1 AND @hasCursorSession = 1 AND @tab <> 'history'
+  AND c.Mode = 'REQUEST' AND @sessionCreatedAt IS NOT NULL AND c.CreatedAt <= @sessionCreatedAt
+  AND c.DecidedAt IS NOT NULL AND (@sessionDecidedAt IS NULL OR c.DecidedAt > @sessionDecidedAt))`;
+const C_ORDER_SORT_AT = `CASE WHEN ${C_DECIDED_AFTER_CURSOR} THEN c.CreatedAt ELSE ${C_SORT_AT} END`;
+const C_ORDER_ACTIONABLE_BIT = `CASE WHEN ${C.ACTIONABLE}
+  OR (${C_DECIDED_AFTER_CURSOR} AND c.Status <> 'CANCELLATION_REQUESTED' AND ${C.PENDING_ACTIONABLE}) THEN 1 ELSE 0 END`;
 const C_FILTERS = `(@category IS NULL OR (@category = 'ASSIGNMENT_REQUEST' AND c.Mode = 'REQUEST')
     OR (@category = 'ASSIGNMENT_NOTICE' AND c.Mode = 'NOTICE'))
   AND (@projectId IS NULL OR ${C.DISPLAYED_PROJECT_ID} = @projectId)
@@ -204,10 +233,12 @@ const N_FILTERS = `(@category IS NULL OR n.Kind = @category)
 
 function cursorAfter(actionableExpr, sortAtExpr, sourceLiteral, idExpr) {
   return `(@useCursor = 0
-    OR ${actionableExpr} < @cursorActionable
-    OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} < @cursorSortAt)
-    OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} = @cursorSortAt AND '${sourceLiteral}' > @cursorSource)
-    OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} = @cursorSortAt AND '${sourceLiteral}' = @cursorSource AND ${idExpr} < @cursorItemId))`;
+    OR ((
+      ${actionableExpr} < @cursorActionable
+      OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} < @cursorSortAt)
+      OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} = @cursorSortAt AND '${sourceLiteral}' > @cursorSource)
+      OR (${actionableExpr} = @cursorActionable AND ${sortAtExpr} = @cursorSortAt AND '${sourceLiteral}' = @cursorSource AND ${idExpr} < @cursorItemId)
+    ) AND NOT ('${sourceLiteral}' = @cursorSource AND ${idExpr} = @cursorItemId)))`;
 }
 
 /**
@@ -273,9 +304,11 @@ const requestInboxSql = (scheduleOnly) => `
   DECLARE @safePage int = @page, @useCursor bit = @hasCursor;
   DECLARE @windowSize int, @pageAttempt int = 0;
   DECLARE @cursorSortAt datetime2(7) = CONVERT(datetime2(7), @cursorTimestamp, 126);
+  DECLARE @sessionCreatedAt datetime2(7) = CONVERT(datetime2(7), @cursorSessionCreated, 126);
+  DECLARE @sessionDecidedAt datetime2(7) = CONVERT(datetime2(7), @cursorSessionDecided, 126);
   DECLARE @pageCandidates TABLE (
     Source varchar(30) NOT NULL, ItemId uniqueidentifier NOT NULL, SortAt datetime2(7) NOT NULL,
-    Actionable bit NOT NULL, ItemVersion binary(8) NULL, UnreadFlag bit NOT NULL,
+    Actionable bit NOT NULL, LiveActionable bit NOT NULL, ItemVersion binary(8) NULL, UnreadFlag bit NOT NULL,
     PRIMARY KEY (Source, ItemId));
 
   -- İmleç sonrasında kayıt kaldığında toplam değişse de konumu koru.
@@ -287,29 +320,29 @@ const requestInboxSql = (scheduleOnly) => `
     SET @windowSize = CASE WHEN @useCursor = 1 THEN @pageSize + 1 ELSE (@safePage + 1) * @pageSize + 1 END;
     IF @category IS NULL OR @category = 'SCHEDULE_REQUEST'
     INSERT @pageCandidates
-    SELECT TOP (@windowSize) 'SCHEDULE_REQUEST', r.RequestId, ${S_SORT_AT},
-      ${S_ACTIONABLE_BIT}, r.RowVersion, CASE WHEN ${S.UNREAD} THEN 1 ELSE 0 END
+    SELECT TOP (@windowSize) 'SCHEDULE_REQUEST', r.RequestId, ${S_ORDER_SORT_AT},
+      ${S_ORDER_ACTIONABLE_BIT}, ${S_ACTIONABLE_BIT}, r.RowVersion, CASE WHEN ${S.UNREAD} THEN 1 ELSE 0 END
     ${S.SOURCE}
     WHERE ${S.PARTICIPANT} AND ${S_FILTERS}
       AND ((@tab = 'pending' AND ${S_INCOMING}) OR (@tab = 'sent' AND ${S_SENT}) OR (@tab = 'history' AND ${S_HISTORY}))
-      AND ${cursorAfter(S_ACTIONABLE_BIT, S_SORT_AT, 'SCHEDULE_REQUEST', 'r.RequestId')}
-    ORDER BY ${S_ACTIONABLE_BIT} DESC, ${S_SORT_AT} DESC, r.RequestId DESC;
+      AND ${cursorAfter(S_ORDER_ACTIONABLE_BIT, S_ORDER_SORT_AT, 'SCHEDULE_REQUEST', 'r.RequestId')}
+    ORDER BY ${S_ORDER_ACTIONABLE_BIT} DESC, ${S_ORDER_SORT_AT} DESC, r.RequestId DESC;
 
     ${scheduleOnly ? '' : `
     IF @category IS NULL OR @category IN ('ASSIGNMENT_REQUEST', 'ASSIGNMENT_NOTICE')
     INSERT @pageCandidates
-    SELECT TOP (@windowSize) 'ASSIGNMENT_COORDINATION', c.CoordinationId, ${C_SORT_AT},
-      ${C_ACTIONABLE_BIT}, c.RowVersion, CASE WHEN ${C.UNREAD} THEN 1 ELSE 0 END
+    SELECT TOP (@windowSize) 'ASSIGNMENT_COORDINATION', c.CoordinationId, ${C_ORDER_SORT_AT},
+      ${C_ORDER_ACTIONABLE_BIT}, ${C_ACTIONABLE_BIT}, c.RowVersion, CASE WHEN ${C.UNREAD} THEN 1 ELSE 0 END
     ${C.SOURCE}
     WHERE ${C.PARTICIPANT} AND ${C_FILTERS}
       AND ((@tab = 'pending' AND ${C_INCOMING}) OR (@tab = 'sent' AND ${C_SENT}) OR (@tab = 'history' AND ${C_HISTORY}))
-      AND ${cursorAfter(C_ACTIONABLE_BIT, C_SORT_AT, 'ASSIGNMENT_COORDINATION', 'c.CoordinationId')}
-    ORDER BY ${C_ACTIONABLE_BIT} DESC, ${C_SORT_AT} DESC, c.CoordinationId DESC;
+      AND ${cursorAfter(C_ORDER_ACTIONABLE_BIT, C_ORDER_SORT_AT, 'ASSIGNMENT_COORDINATION', 'c.CoordinationId')}
+    ORDER BY ${C_ORDER_ACTIONABLE_BIT} DESC, ${C_ORDER_SORT_AT} DESC, c.CoordinationId DESC;
 
     IF @status IS NULL AND @tab <> 'sent' AND (@category IS NULL OR @category IN ('TASK_ASSIGNED', 'TASK_UNASSIGNED'))
     INSERT @pageCandidates
     SELECT TOP (@windowSize) 'TASK_EVENT', n.NotificationId, n.OccurredAt,
-      0, n.RowVersion, CASE WHEN ${N.UNREAD} THEN 1 ELSE 0 END
+      0, 0, n.RowVersion, CASE WHEN ${N.UNREAD} THEN 1 ELSE 0 END
     ${N.SOURCE}
     WHERE ${N.OWNED} AND ${N_FILTERS}
       AND ((@tab = 'pending' AND ${N_INCOMING}) OR @tab = 'history')
@@ -320,21 +353,39 @@ const requestInboxSql = (scheduleOnly) => `
     IF @useCursor = 0 OR EXISTS (SELECT 1 FROM @pageCandidates) BREAK;
     SET @useCursor = 0;
   END;
-  SELECT @total AS Total, @safePage AS Page, @useCursor AS CursorUsed;
+  IF @useCursor = 0 OR @hasCursorSession = 0
+  BEGIN
+    SET @sessionCreatedAt = NULL;
+    SET @sessionDecidedAt = NULL;
+    SELECT
+      @sessionCreatedAt = MAX(CreatedAt),
+      @sessionDecidedAt = MAX(DecidedAt)
+    FROM (
+      SELECT r.CreatedAt, r.DecidedAt ${S.SOURCE} WHERE ${S.PARTICIPANT}
+      ${scheduleOnly ? '' : `
+      UNION ALL
+      SELECT c.CreatedAt, c.DecidedAt ${C.COUNT_SOURCE} WHERE ${C.PARTICIPANT}
+      `}
+    ) AS session_bounds;
+  END;
+  SELECT @total AS Total, @safePage AS Page, @useCursor AS CursorUsed,
+    CONVERT(varchar(27), @sessionCreatedAt, 126) AS SessionCreatedAt,
+    CONVERT(varchar(27), @sessionDecidedAt, 126) AS SessionDecidedAt;
 
   DECLARE @pageItems TABLE (
     Ordinal int NOT NULL PRIMARY KEY, Source varchar(30) NOT NULL, ItemId uniqueidentifier NOT NULL,
-    SortAt datetime2(7) NOT NULL, ItemVersion binary(8) NULL, UnreadFlag bit NOT NULL, ActionableFlag bit NOT NULL);
+    SortAt datetime2(7) NOT NULL, ItemVersion binary(8) NULL, UnreadFlag bit NOT NULL,
+    ActionableFlag bit NOT NULL, LiveActionableFlag bit NOT NULL);
   -- Bir ek aday, sayaçlar değişse de bir sonraki sayfanın varlığını gösterir.
   DECLARE @offset int = CASE WHEN @useCursor = 1 THEN 0 ELSE @safePage * @pageSize END;
-  INSERT @pageItems(Ordinal, Source, ItemId, SortAt, ItemVersion, UnreadFlag, ActionableFlag)
+  INSERT @pageItems(Ordinal, Source, ItemId, SortAt, ItemVersion, UnreadFlag, ActionableFlag, LiveActionableFlag)
   SELECT ROW_NUMBER() OVER (ORDER BY Actionable DESC, SortAt DESC, Source, ItemId DESC),
-    Source, ItemId, SortAt, ItemVersion, UnreadFlag, Actionable
+    Source, ItemId, SortAt, ItemVersion, UnreadFlag, Actionable, LiveActionable
   FROM @pageCandidates
   ORDER BY Actionable DESC, SortAt DESC, Source, ItemId DESC
   OFFSET @offset ROWS FETCH NEXT (@pageSize + 1) ROWS ONLY;
 
-  SELECT Ordinal, Source, ItemId, ItemVersion, UnreadFlag, ActionableFlag,
+  SELECT Ordinal, Source, ItemId, ItemVersion, UnreadFlag, ActionableFlag, LiveActionableFlag,
     CONVERT(varchar(27), SortAt, 126) AS CursorSortAt
   FROM @pageItems ORDER BY Ordinal;
 
@@ -346,6 +397,29 @@ const requestInboxSql = (scheduleOnly) => `
   SELECT ${N.FIELDS} ${N.SOURCE}
   WHERE n.NotificationId IN (SELECT ItemId FROM @pageItems WHERE Source = 'TASK_EVENT') AND ${N.OWNED};
   `}
+  SELECT DISTINCT ProjectId, ProjectName, ProjectCode
+  FROM (
+    SELECT
+      COALESCE(r.ProjectIdSnapshot, t.ProjectId) AS ProjectId,
+      COALESCE(r.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
+      COALESCE(r.ProjectCodeSnapshot, p.ProjectCode) AS ProjectCode
+    ${S.SOURCE} WHERE ${S.PARTICIPANT}
+    ${scheduleOnly ? '' : `
+    UNION
+    SELECT
+      ${C.DISPLAYED_PROJECT_ID} AS ProjectId,
+      COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
+      COALESCE(c.ProjectCodeSnapshot, p.ProjectCode) AS ProjectCode
+    ${C.COUNT_SOURCE} WHERE ${C.PARTICIPANT}
+    UNION
+    SELECT
+      COALESCE(n.ProjectIdSnapshot, t.ProjectId) AS ProjectId,
+      COALESCE(n.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
+      COALESCE(n.ProjectCodeSnapshot, p.ProjectCode) AS ProjectCode
+    ${N.SOURCE} WHERE ${N.OWNED} AND (n.ProjectIdSnapshot IS NOT NULL OR n.TaskCount <= 1)
+    `}
+  ) AS authorized_projects
+  WHERE ProjectId IS NOT NULL;
 `;
 
 const REQUEST_INBOX_SQL = requestInboxSql(false);
@@ -394,7 +468,8 @@ function hasPageSnapshotDrift(order, details, tab, actorSicil) {
       if (detail.version && expectedVersion && detail.version !== expectedVersion) return true;
     }
     if (entry.UnreadFlag != null && Boolean(detail.unread) !== Boolean(entry.UnreadFlag)) return true;
-    if (entry.ActionableFlag != null && isInboxItemActionable(detail) !== Boolean(entry.ActionableFlag)) return true;
+    const expectedActionable = entry.LiveActionableFlag ?? entry.ActionableFlag;
+    if (expectedActionable != null && isInboxItemActionable(detail) !== Boolean(expectedActionable)) return true;
   }
   return false;
 }
@@ -421,6 +496,9 @@ export async function readRequestInboxPage(executor, actor, input = {}, attempt 
   request.input('cursorTimestamp', sql.VarChar(27), query.cursor?.sortAt ?? null);
   request.input('cursorSource', sql.VarChar(30), query.cursor ? query.cursor.source : '');
   request.input('cursorItemId', sql.UniqueIdentifier, query.cursor ? query.cursor.id : null);
+  request.input('hasCursorSession', sql.Bit, query.cursor?.hasSession ? 1 : 0);
+  request.input('cursorSessionCreated', sql.VarChar(27), query.cursor?.sessionCreatedAt ?? null);
+  request.input('cursorSessionDecided', sql.VarChar(27), query.cursor?.sessionDecidedAt ?? null);
   let result;
   try {
     result = await request.query(scheduleOnly ? SCHEDULE_ONLY_INBOX_SQL : REQUEST_INBOX_SQL);
@@ -437,8 +515,8 @@ export async function readRequestInboxPage(executor, actor, input = {}, attempt 
   const order = sets[3] || [];
   const details = new Map();
   for (const row of sets[4] || []) details.set(`${NOTIFICATION_SOURCES.SCHEDULE_REQUEST}:${idKey(row.RequestId)}`, scheduleItem(row, actor.sicil));
-  for (const row of sets[5] || []) details.set(`${NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION}:${idKey(row.CoordinationId)}`, mapCoordination(row, actor.sicil));
-  for (const row of sets[6] || []) details.set(`${NOTIFICATION_SOURCES.TASK_EVENT}:${idKey(row.NotificationId)}`, mapTaskNotification(row));
+  for (const row of (scheduleOnly ? [] : sets[5] || [])) details.set(`${NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION}:${idKey(row.CoordinationId)}`, mapCoordination(row, actor.sicil));
+  for (const row of (scheduleOnly ? [] : sets[6] || [])) details.set(`${NOTIFICATION_SOURCES.TASK_EVENT}:${idKey(row.NotificationId)}`, mapTaskNotification(row));
   // Sayfa üyeliği ile ayrıntı okuması arasında eşzamanlı bir yazma satırı
   // değiştirdiyse tutarlı bir okuma için sınırlı olarak bir kez yinelenir.
   if (attempt === 0 && (hasPageSnapshotDrift(order, details, query.tab, actor.sicil)
@@ -458,14 +536,15 @@ export async function readRequestInboxPage(executor, actor, input = {}, attempt 
     page,
     pageSize: query.pageSize,
     hasNext: matched.length > query.pageSize,
-    nextCursor: matched.length > query.pageSize ? encodeRequestInboxCursor(boundary.item, boundary.entry) : null,
+    nextCursor: matched.length > query.pageSize ? encodeRequestInboxCursor(boundary.item, boundary.entry, pagination) : null,
     cursorReset: Boolean(query.cursor && !pagination.CursorUsed),
     counts: {
       pending: Number(counts.IncomingCount || 0),
       sent: Number(counts.SentCount || 0),
       history: Number(counts.HistoryCount || 0),
       coordination: Number(coordination.CoordinationCount || 0)
-    }
+    },
+    projects: mapAuthorizedProjects(sets[scheduleOnly ? 5 : 7], items)
   };
 }
 

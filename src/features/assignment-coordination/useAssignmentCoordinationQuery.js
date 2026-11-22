@@ -22,7 +22,7 @@ export function useAssignmentCoordinationQuery(query, enabled = true) {
   const actual = session?.dataMode === 'actual';
   const key = JSON.stringify(query);
   const [revision, setRevision] = useState(0);
-  const [state, setState] = useState({ key: '', data: null, loading: false, error: null });
+  const [state, setState] = useState({ key: '', data: null, retainedItems: [], loading: false, error: null });
   useEffect(() => {
     if (!actual || !enabled) return undefined;
     let cancelled = false;
@@ -33,6 +33,9 @@ export function useAssignmentCoordinationQuery(query, enabled = true) {
       setState((current) => ({
         key,
         data: result.ok ? result.value : (current.key === key ? current.data : null),
+        retainedItems: result.ok
+          ? (Array.isArray(result.value.projects) ? result.value.projects : [...current.retainedItems, ...(result.value.items || [])])
+          : current.retainedItems,
         loading: false,
         error: result.ok ? null : result.message
       }));
@@ -42,6 +45,7 @@ export function useAssignmentCoordinationQuery(query, enabled = true) {
   const confirmed = actual && state.key === key ? state.data : null;
   return {
     data: confirmed ?? EMPTY,
+    retainedProjects: actual ? state.retainedItems : [],
     confirmedTotal: confirmed?.counts.all ?? null,
     loading: actual && enabled && (state.loading || state.key !== key),
     error: state.key === key ? state.error : null,

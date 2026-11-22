@@ -2,6 +2,7 @@ import {
   COORDINATION_MODES,
   COORDINATION_STATUS_LABELS
 } from '../../domain/assignment/assignmentCoordination.js';
+import { extractActualId } from '../../domain/identity/actualId.js';
 import { NOTIFICATION_SOURCES, TASK_NOTIFICATION_KINDS } from '../../domain/notifications/notificationInbox.js';
 import {
   REQUEST_INBOX_CATEGORIES,
@@ -32,6 +33,64 @@ export const REQUEST_STATUS_FILTER_OPTIONS = Object.freeze([
 export const REQUEST_CATEGORY_FILTER_OPTIONS = Object.freeze(
   Object.values(REQUEST_INBOX_CATEGORIES).map((value) => ({ value, label: REQUEST_INBOX_CATEGORY_LABELS[value] }))
 );
+
+function projectOptionKey(value) {
+  if (value == null || value === '') return '';
+  return extractActualId(value) ?? String(value).trim().toLowerCase();
+}
+
+/**
+ * Talepler ve Atama Koordinasyonu proje süzgecinin seçenekleri.
+ *
+ * Kullanıcının olağan proje listesine ek olarak, görmeye yetkili olduğu
+ * talep/koordinasyon kayıtlarında temsil edilen projeleri de içerir; yetkisiz
+ * projeleri açmaz.
+ */
+export function buildRequestProjectOptions(projects = [], ...recordLists) {
+  const byKey = new Map();
+  const upsert = (rawId, rawName, rawCode) => {
+    const key = projectOptionKey(rawId);
+    if (!key) return;
+    const name = String(rawName || '').trim();
+    const code = String(rawCode || '').trim();
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, {
+        value: String(rawId),
+        label: name || code || 'Adsız proje',
+        description: code,
+        keywords: [code, name].filter(Boolean)
+      });
+      return;
+    }
+    if ((!existing.label || existing.label === 'Adsız proje' || existing.label === existing.description) && name) {
+      existing.label = name;
+    }
+    if (!existing.description && code) existing.description = code;
+    for (const kw of [code, name]) {
+      if (kw && !existing.keywords.includes(kw)) existing.keywords.push(kw);
+    }
+  };
+  for (const project of projects || []) {
+    if (!project) continue;
+    upsert(project.id ?? project.projectId, project.name || project.projectName, project.code || project.projectCode);
+  }
+  for (const list of recordLists) {
+    for (const entry of list || []) {
+      if (!entry) continue;
+      if (entry.source === NOTIFICATION_SOURCES.TASK_EVENT && !entry.projectId && Number(entry.taskCount || 1) > 1) continue;
+      const isProjectOption = entry.projectId === undefined && entry.taskId === undefined && entry.source === undefined;
+      const id = isProjectOption ? entry.id : entry.projectId;
+      const name = isProjectOption ? (entry.name ?? entry.projectName) : entry.projectName;
+      const code = isProjectOption ? (entry.code ?? entry.projectCode) : entry.projectCode;
+      upsert(id, name, code);
+    }
+  }
+  return [
+    { value: '', label: 'Tüm projeler' },
+    ...[...byKey.values()].sort((left, right) => left.label.localeCompare(right.label, 'tr'))
+  ];
+}
 
 /** Kaynak + kimlik: üç tabloda kimlikler çakışabilir, satır anahtarı ikisini taşır. */
 export function requestInboxKey(item) {
