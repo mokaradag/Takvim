@@ -408,7 +408,10 @@ export function detectNoteDuplicatesAndContradictions({
   // 1. Farklı görevlerde veya sürümlerde birebir yinelenen not metinlerini işaretle.
   const byText = new Map();
   for (const entry of noteEntries) {
-    const key = duplicateKey(entry.metin);
+    // Kırpılmış notlar yalnızca doğrulanmış tam metin SHA-256 özetiyle yinelenmiş sayılır; ortak 1600 karakterlik önek yeterli değildir.
+    const key = entry.kirpildi
+      ? (typeof entry._versionIdentity === 'string' && entry._versionIdentity.startsWith('hash:') ? entry._versionIdentity : null)
+      : duplicateKey(entry.metin);
     if (!key) continue;
     if (!byText.has(key)) byText.set(key, []);
     byText.get(key).push(entry);
@@ -623,22 +626,37 @@ export async function collectReportNotes({
     }
   }
 
-  // Belirlenimci önceliklendirme: görev önceliği → dönem içi not → kronoloji (aynı görevde eskiden yeniye).
+  // Seçim sıralaması: görev önceliği → dönem içi not → güncel sürüm → en yeni sürüm (bütçe en yeni ve dönem içi sürümleri korur).
   allVersions.sort((left, right) => {
-    if (left.taskId === right.taskId) {
-      return left.surum_sira - right.surum_sira;
-    }
     if (left._taskPriorityRank !== right._taskPriorityRank) {
       return left._taskPriorityRank - right._taskPriorityRank;
     }
     if (left.donem_ici !== right.donem_ici) {
       return left.donem_ici ? -1 : 1;
     }
+    const leftCurrent = left.surum_tipi === 'guncel';
+    const rightCurrent = right.surum_tipi === 'guncel';
+    if (leftCurrent !== rightCurrent) {
+      return leftCurrent ? -1 : 1;
+    }
+    if (left.taskId === right.taskId) {
+      return right.surum_sira - left.surum_sira;
+    }
     return left.taskId.localeCompare(right.taskId);
   });
 
   const maxSelectedNotes = limits.maxSelectedNotes ?? REPORT_EVIDENCE_LIMITS.maxSelectedNotes;
   const selected = allVersions.slice(0, maxSelectedNotes);
+  // Sunum sıralaması: görev önceliği korunarak aynı görevdeki sürümler kronolojik (eskiden yeniye) sıralanır.
+  selected.sort((left, right) => {
+    if (left._taskPriorityRank !== right._taskPriorityRank) {
+      return left._taskPriorityRank - right._taskPriorityRank;
+    }
+    if (left.taskId === right.taskId) {
+      return left.surum_sira - right.surum_sira;
+    }
+    return left.taskId.localeCompare(right.taskId);
+  });
   const omittedCount = Math.max(0, allVersions.length - selected.length);
   const clippedCount = selected.filter((item) => item.kirpildi).length;
   const historyIncomplete = Boolean(auditResult.truncated || currentResult.truncated || (auditResult.corruptedCount || 0) > 0);

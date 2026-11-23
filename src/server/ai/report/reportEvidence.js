@@ -497,7 +497,7 @@ function finalizeBoundedPackage({
       if (_metricKey) metricIdByKey.set(_metricKey, id);
       if (item.tur === 'gorev' && _taskId) taskEvidenceIdByTaskId.set(_taskId, id);
       if (item.tur === 'not') {
-        internalNotes.push({ ...item, _taskId, _projectId });
+        internalNotes.push({ ...item, _taskId, _projectId, _versionIdentity });
       }
       publicItems.push(item);
     }
@@ -872,9 +872,11 @@ export async function buildExecutiveReportEvidence({
       : 'complete';
 
     // 7. Dönemde tamamlanan görev kimlikleri: dönemdeki gerçekleşen bitiş + sonradan yeniden açılmış olsa da denetimdeki tamamlama geçişi.
+    // Veri kesiti sonrası değiştirilen satırın canlı Status/ActualFinish bilgisine güvenilmez; yalnızca kesit öncesi denetim geçişi sayılır.
     const completedInPeriodIds = new Set();
     for (const task of visibleTasks) {
-      const doneByActualFinish = task.status === 'done'
+      const doneByActualFinish = !task._postCutoffModified
+        && task.status === 'done'
         && Boolean(task.actualFinish)
         && task.actualFinish >= normalizedRequest.donem.baslangic
         && task.actualFinish <= normalizedRequest.donem.bitis;
@@ -914,8 +916,8 @@ export async function buildExecutiveReportEvidence({
 
     const rosterTruncated = taskFactsResult.roster?.truncated === true;
     const factsComplete = !taskFactsResult.truncated && !rosterTruncated;
-    const metricCompleteness = effectiveScopeSummary.completeProjectView && factsComplete ? 'complete' : 'partial';
-    const snapshotCompleteness = metricCompleteness === 'complete' && snapshotConsistent ? 'complete' : 'partial';
+    const metricCompleteness = effectiveScopeSummary.completeProjectView && factsComplete && snapshotConsistent ? 'complete' : 'partial';
+    const snapshotCompleteness = metricCompleteness;
     const activityCoverage = !effectiveScopeSummary.completeProjectView
       ? 'partial'
       : 'complete';
@@ -1013,7 +1015,8 @@ export async function buildExecutiveReportEvidence({
       const comp = normalizedRequest.karsilastirma_donemi;
       const comparisonCompletedIds = new Set();
       for (const task of visibleTasks) {
-        const doneByActualFinish = task.status === 'done'
+        const doneByActualFinish = !task._postCutoffModified
+          && task.status === 'done'
           && Boolean(task.actualFinish)
           && task.actualFinish >= comp.baslangic
           && task.actualFinish <= comp.bitis;
@@ -1041,7 +1044,9 @@ export async function buildExecutiveReportEvidence({
       for (const project of sortedProjects) {
         const projCompleted = completedInPeriodTasks.filter((task) => task.projectId === project.projectId).length;
         const projAccess = projectAccess(scope, project.projectId);
-        const projComplete = Boolean(scope.isAdmin || projAccess?.accessLevel === 'FULL' || projAccess?.readGrant) && factsComplete;
+        const projComplete = Boolean(scope.isAdmin || projAccess?.accessLevel === 'FULL' || projAccess?.readGrant)
+          && factsComplete
+          && snapshotConsistent;
         secondaryMetrics.push({
           _metricKey: `project_completed:${project.projectId}`,
           tur: 'olcu',
@@ -1114,6 +1119,7 @@ export async function buildExecutiveReportEvidence({
       return {
         _taskId: version.taskId,
         _projectId: version.projectId,
+        _versionIdentity: version._versionIdentity ?? null,
         tur: 'not',
         kaynak: version.kaynak,
         gorev: version.taskId,
@@ -1138,8 +1144,8 @@ export async function buildExecutiveReportEvidence({
     });
 
     // 12. Sunucu türetimleri (F#) kurucusu — yalnızca tam ve geçerli paydalardan oran hesaplar.
-    const completePopulation = effectiveScopeSummary.completeProjectView && factsComplete;
-    const snapshotCompletePopulation = completePopulation && snapshotConsistent;
+    const completePopulation = effectiveScopeSummary.completeProjectView && factsComplete && snapshotConsistent;
+    const snapshotCompletePopulation = completePopulation;
     const buildDerivedFindings = ({ metricIdByKey }) => {
       const findings = [];
       const curCompId = metricIdByKey.get('period_completed');

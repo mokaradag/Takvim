@@ -2357,4 +2357,147 @@ test('not kronolojisi birim kuralları: silme/geri yükleme, harf duyarlılığ�
     'kayıt zamanı bilinmeyen "risk yok" notu gecikmiş görevle yanlış çelişki üretmemelidir');
 });
 
+test('not yineleme kimliği, dönem içi sürüm önceliği ve kesit sonrası geriye dönük tamamlama koruması', async () => {
+  const baseSeed = executiveReportBenchmarkSeed();
+  const sharedLongPrefix = 'Ortak uzun saha raporu başlangıcı. '.repeat(60); // > 2000 karakter (> 1600 kırpma sınırı)
+  const clippedAId = '61000000-0000-4000-8000-000000006001';
+  const clippedBId = '61000000-0000-4000-8000-000000006002';
+  const clippedCId = '61000000-0000-4000-8000-000000006003';
+  const manyVersionsTaskId = '61000000-0000-4000-8000-000000006004';
+  const backdatedDoneId = '61000000-0000-4000-8000-000000006005';
+
+  // 1. Aynı 1600 karakterlik öneki paylaşıp farklı sonla biten kırpılmış notlar yinelenmiş sayılmaz;
+  //    tam metni özdeş kırpılmış notlar ise aynı SHA-256 özetiyle gruplanır.
+  await withReportStack({
+    tasks: [
+      ...baseSeed.tasks,
+      {
+        TaskId: clippedAId, ProjectId: P.KUZEY, Title: 'Kırpılmış not A', Status: 'in-progress', Priority: 'high',
+        TargetFinish: '2026-11-18', CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T07:00:00.000Z', UpdatedAt: '2026-11-05T08:00:00.000Z',
+        Description: `${sharedLongPrefix}SONUC_BASARILI`
+      },
+      {
+        TaskId: clippedBId, ProjectId: P.KUZEY, Title: 'Kırpılmış not B', Status: 'in-progress', Priority: 'high',
+        TargetFinish: '2026-11-18', CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T07:00:00.000Z', UpdatedAt: '2026-11-05T08:00:00.000Z',
+        Description: `${sharedLongPrefix}SONUC_BASARISIZ`
+      },
+      {
+        TaskId: clippedCId, ProjectId: P.KUZEY, Title: 'Kırpılmış not C (A ile birebir aynı)', Status: 'in-progress', Priority: 'high',
+        TargetFinish: '2026-11-18', CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T07:00:00.000Z', UpdatedAt: '2026-11-05T08:00:00.000Z',
+        Description: `${sharedLongPrefix}SONUC_BASARILI`
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        notlar: 'dahil'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    const noteA = evidencePackage.kanitlar.find((e) => e.tur === 'not' && e.gorev === clippedAId);
+    const noteB = evidencePackage.kanitlar.find((e) => e.tur === 'not' && e.gorev === clippedBId);
+    const noteC = evidencePackage.kanitlar.find((e) => e.tur === 'not' && e.gorev === clippedCId);
+    assert.ok(noteA && noteB && noteC);
+    assert.equal(noteB.yineleme_grubu, undefined, 'farklı sonla biten kırpılmış not ortak önek yüzünden yinelenmiş sayılamaz');
+    assert.ok(noteA.yineleme_grubu && noteA.yineleme_grubu === noteC.yineleme_grubu,
+      'tam metin SHA-256 özeti özdeş olan iki kırpılmış not aynı yineleme grubunda toplanmalıdır');
+  });
+
+  // 2. 41 dönem öncesi sürümden sonra dönem içi güncel sürüm eklenen görevde maxSelectedNotes=40 sınırı dönem içi güncel sürümü korur.
+  const prePeriodAudits = Array.from({ length: 41 }, (_, idx) => ({
+    AuditId: 6100 + idx,
+    OccurredAt: `2026-10-${String(1 + Math.floor(idx / 2)).padStart(2, '0')}T${idx % 2 === 0 ? '08' : '12'}:00:00.000Z`,
+    ActorSicil: U.YONETICI,
+    ActorDisplayName: 'Selin Karahan',
+    ActionCode: 'UPDATE',
+    EntityType: 'TASK',
+    EntityId: manyVersionsTaskId,
+    ProjectId: P.MELTEM,
+    BeforeJson: JSON.stringify({ Description: idx === 0 ? null : `Dönem öncesi sürüm ${idx}` }),
+    AfterJson: JSON.stringify({ Description: `Dönem öncesi sürüm ${idx + 1}` })
+  }));
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: manyVersionsTaskId, ProjectId: P.MELTEM, Title: 'Çok sürümlü görev', Status: 'in-progress', Priority: 'critical',
+        TargetFinish: '2026-11-12', CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T07:00:00.000Z', UpdatedAt: '2026-11-06T09:00:00.000Z',
+        Description: 'Dönem içi en güncel kritik güncelleme.'
+      }
+    ],
+    auditLog: [
+      ...prePeriodAudits,
+      {
+        AuditId: 6199, OccurredAt: '2026-11-06T09:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: manyVersionsTaskId, ProjectId: P.MELTEM,
+        BeforeJson: JSON.stringify({ Description: 'Dönem öncesi sürüm 41' }),
+        AfterJson: JSON.stringify({ Description: 'Dönem içi en güncel kritik güncelleme.' })
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-MELTEM'] },
+        notlar: 'dahil'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    const notes = evidencePackage.kanitlar.filter((e) => e.tur === 'not' && e.gorev === manyVersionsTaskId);
+    assert.equal(notes.length, 40);
+    assert.equal(notes.at(-1).metin, 'Dönem içi en güncel kritik güncelleme.',
+      'not bütçesi dönem içi ve güncel sürümü korumalı ve sunumda kronolojik olarak sona yerleştirmelidir');
+    assert.equal(notes.at(-1).surum_tipi, 'guncel');
+    for (let i = 1; i < notes.length; i += 1) {
+      assert.ok(notes[i - 1].surum_sira < notes[i].surum_sira, 'korunan sürümler kronolojik sırada sunulmalıdır');
+    }
+  });
+
+  // 3. Kesit sonrasında tamamlanıp ActualFinish değeri döneme geri tarihlenen görev dönem tamamlaması sayılmaz ve dönem ölçüsü kısmi işaretlenir.
+  await withReportStack({
+    tasks: [
+      ...baseSeed.tasks,
+      {
+        TaskId: backdatedDoneId, ProjectId: P.MELTEM, Title: 'Kesit sonrası geri tarihli tamamlanan görev',
+        Status: 'done', Priority: 'high', ActualFinish: '2026-11-05',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-15T07:00:00.000Z', UpdatedAt: '2026-11-09T06:00:00.000Z'
+      }
+    ],
+    auditLog: [
+      ...baseSeed.auditLog,
+      {
+        AuditId: 6201, OccurredAt: '2026-11-09T06:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: backdatedDoneId, ProjectId: P.MELTEM,
+        BeforeJson: JSON.stringify({ Status: 'in-progress' }),
+        AfterJson: JSON.stringify({ Status: 'done', ActualFinish: '2026-11-05' })
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-MELTEM'] },
+        notlar: 'haric',
+        karsilastirma: 'onceki_donem'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    const doneMetric = evidencePackage.kanitlar.find((e) => e.tur === 'olcu' && e.olcu === 'tamamlanan' && e.donem?.baslangic === '2026-11-02');
+    assert.equal(doneMetric.deger, 0, 'kesit sonrası geri tarihli tamamlama kesit öncesi dönem tamamlaması sayılmamalıdır');
+    assert.equal(doneMetric.tamlik, 'partial', 'kesit sonrası değiştirilen görev varsa dönem ölçüsü kısmi işaretlenmelidir');
+    assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
+    const comp = evidencePackage.turetilmis.find((f) => f.tur === 'karsilastirma');
+    assert.equal(comp.deger.yuzde_degisim, null);
+    assert.equal(comp.deger.yuzde_nedeni, 'kismi_gorunurluk');
+  });
+});
+
+
 
