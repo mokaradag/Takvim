@@ -68,9 +68,9 @@ const ALLOWED_RANGE_FIELDS = new Set(['baslangic', 'bitis']);
 const ALLOWED_SCOPE_FIELDS = new Set(['tur', 'kimlikler']);
 const ORG_SCOPE_TYPES = new Set(['birim', 'mudurluk', 'direktorluk']);
 // Kurumsal hiyerarşi yol anahtarları 0x1F ayırıcısını kullanır; diğer denetim karakterleri yasaktır.
-// eslint-disable-next-line no-control-regex
+// eslint-disable-next-line no-control-regex -- genel kapsam kimliklerinde yasak denetim karakterleri bilinçli olarak eşleştirilir
 const FORBIDDEN_GENERAL_CONTROL = /[\u0000-\u001F\u007F]/u;
-// eslint-disable-next-line no-control-regex
+// eslint-disable-next-line no-control-regex -- kurumsal yol anahtarı 0x1F ayırıcısını koruyarak diğer denetim karakterlerini reddeder
 const FORBIDDEN_ORG_CONTROL = /[\u0000-\u001E\u007F]/u;
 
 const ISTANBUL_PARTS = new Intl.DateTimeFormat('en-GB', {
@@ -138,7 +138,10 @@ export function formatIstanbulTimestamp(value = new Date()) {
   const absMinutes = Math.abs(offsetMinutes);
   const offH = String(Math.floor(absMinutes / 60)).padStart(2, '0');
   const offM = String(absMinutes % 60).padStart(2, '0');
-  return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}${sign}${offH}:${offM}`;
+  // Kesirli milisaniyeler sıfırdan farklıysa yayımlanan veri kesitinde korunur; tam saniyelerde eski biçim değişmez.
+  const ms = ((date.getTime() % 1000) + 1000) % 1000;
+  const fraction = ms === 0 ? '' : `.${String(ms).padStart(3, '0')}`;
+  return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}${fraction}${sign}${offH}:${offM}`;
 }
 
 /** Dönem aralığı nesnesini doğrular ve `dateFrom`/`dateTo` çiftine çevirir. */
@@ -479,7 +482,7 @@ export function validateExecutiveReportRequest(input, { now = new Date(), today 
   });
 }
 
-const PROTECTED_TEXT_KEYS = Object.freeze(['degisiklik_metni', 'once_metin', 'sonra_metin', 'not_metni']);
+const PROTECTED_TEXT_KEYS = Object.freeze(['degisiklik_metni', 'once_metin', 'sonra_metin', 'not_metni', 'metin']);
 const ALLOWED_EVIDENCE_TYPES = new Set(['olcu', 'gorev', 'not', 'hareket', 'belge']);
 const ALLOWED_SOURCES_BY_TYPE = Object.freeze({
   olcu: new Set(['rota_task_analytics', 'rota_activity_search']),
@@ -488,6 +491,28 @@ const ALLOWED_SOURCES_BY_TYPE = Object.freeze({
   hareket: new Set(['rota_activity_search']),
   belge: new Set(['gecici_yukleme'])
 });
+const PERIOD_MEASURE_NAMES = new Set(['tamamlanan', 'hareket']);
+const SNAPSHOT_MEASURE_NAMES = new Set(['acik', 'geciken', 'yaklasan_7_gun', 'history.undatedDone']);
+const ISO_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|([+-])(\d{2}):(\d{2}))$/u;
+
+/** Geçerli takvim günü, saat ve saat dilimi farkı taşıyan ISO-8601 zaman damgasını doğrular. */
+export function isValidIsoTimestamp(value) {
+  if (typeof value !== 'string') return false;
+  const match = ISO_TIMESTAMP_RE.exec(value);
+  if (!match) return false;
+  const [, datePart, hourStr, minStr, secStr, tzPart, , offHStr, offMStr] = match;
+  if (!isIsoDay(datePart)) return false;
+  const hour = Number(hourStr);
+  const minute = Number(minStr);
+  const second = Number(secStr);
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  if (tzPart !== 'Z') {
+    const offH = Number(offHStr);
+    const offM = Number(offMStr);
+    if (offH > 23 || offM > 59) return false;
+  }
+  return Number.isFinite(Date.parse(value));
+}
 
 /**
  * Kurulmuş bir `4i-kanit-1` kanıt paketinin yapısal bütünlüğünü, kimlik tutarlılığını,
@@ -500,25 +525,66 @@ export function validateEvidencePackageContract(pkg) {
   const problems = [];
   if (!isPlainObject(pkg)) return { ok: false, problems: ['paket:nesne_degil'], serializedChars: 0 };
   if (pkg.sema !== REPORT_EVIDENCE_SCHEMA) problems.push('sema:gecersiz');
-  if (!isPlainObject(pkg.istek)) problems.push('istek:eksik');
-  if (typeof pkg.veri_ani !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u.test(pkg.veri_ani)) {
+
+  // İstek üstverisinin temel alanları ve kanonik kapsam yapısı doğrulanır.
+  if (!isPlainObject(pkg.istek)) {
+    problems.push('istek:eksik');
+  } else {
+    if (!isPlainObject(pkg.istek.donem) || !isIsoDay(pkg.istek.donem.baslangic) || !isIsoDay(pkg.istek.donem.bitis)
+      || pkg.istek.donem.baslangic > pkg.istek.donem.bitis) {
+      problems.push('istek:donem_gecersiz');
+    }
+    const scopeObj = pkg.istek.kapsam;
+    if (!isPlainObject(scopeObj)
+      || typeof scopeObj.tur !== 'string'
+      || !REPORT_SCOPE_TYPES.includes(scopeObj.tur)
+      || !Array.isArray(scopeObj.kimlikler)
+      || scopeObj.kimlikler.length === 0
+      || scopeObj.kimlikler.some((id) => typeof id !== 'string' || !id.trim())) {
+      problems.push('istek:kapsam_gecersiz');
+    }
+    if (typeof pkg.istek.notlar !== 'string' || !REPORT_NOTE_CONSENT.includes(pkg.istek.notlar)) {
+      problems.push('istek:notlar_gecersiz');
+    }
+  }
+
+  const validVeriAni = isValidIsoTimestamp(pkg.veri_ani);
+  if (!validVeriAni) {
     problems.push('veri_ani:gecersiz');
   }
-  if (!Array.isArray(pkg.kanitlar)) problems.push('kanitlar:dizi_degil');
-  if (!Array.isArray(pkg.turetilmis)) problems.push('turetilmis:dizi_degil');
+
+  const kanitlar = Array.isArray(pkg.kanitlar) ? pkg.kanitlar : null;
+  const turetilmis = Array.isArray(pkg.turetilmis) ? pkg.turetilmis : null;
+  const celiskiler = Array.isArray(pkg.celiskiler) ? pkg.celiskiler : null;
+  if (!kanitlar) problems.push('kanitlar:dizi_degil');
+  if (!turetilmis) problems.push('turetilmis:dizi_degil');
   if (!isPlainObject(pkg.tamlik)) problems.push('tamlik:eksik');
-  if (!Array.isArray(pkg.celiskiler)) problems.push('celiskiler:dizi_degil');
+  if (!celiskiler) problems.push('celiskiler:dizi_degil');
   if (!isPlainObject(pkg.sinirlar)) problems.push('sinirlar:eksik');
 
-  const maxItems = pkg.sinirlar?.kanit_sayisi_en_fazla ?? REPORT_EVIDENCE_LIMITS.maxEvidenceItems;
-  const maxChars = pkg.sinirlar?.karakter_en_fazla ?? REPORT_EVIDENCE_LIMITS.maxPackageChars;
-  const maxNoteChars = pkg.sinirlar?.not_karakter_en_fazla ?? REPORT_EVIDENCE_LIMITS.maxNoteChars;
+  // Paket sınırları negatif olmayan güvenli tam sayı olmalı ve şema tavanını aşamamalıdır.
+  const resolveBoundLimit = (rawValue, ceiling, keyName) => {
+    if (rawValue === undefined) return ceiling;
+    if (!Number.isSafeInteger(rawValue) || rawValue < 0) {
+      problems.push(`sinirlar:gecersiz:${keyName}`);
+      return ceiling;
+    }
+    if (rawValue > ceiling) {
+      problems.push(`sinirlar:tavan_asildi:${keyName}`);
+      return ceiling;
+    }
+    return rawValue;
+  };
+  const limitsObj = isPlainObject(pkg.sinirlar) ? pkg.sinirlar : {};
+  const maxItems = resolveBoundLimit(limitsObj.kanit_sayisi_en_fazla, REPORT_EVIDENCE_LIMITS.maxEvidenceItems, 'kanit_sayisi_en_fazla');
+  const maxChars = resolveBoundLimit(limitsObj.karakter_en_fazla, REPORT_EVIDENCE_LIMITS.maxPackageChars, 'karakter_en_fazla');
+  const maxNoteChars = resolveBoundLimit(limitsObj.not_karakter_en_fazla, REPORT_EVIDENCE_LIMITS.maxNoteChars, 'not_karakter_en_fazla');
 
   const evidenceIds = new Set();
   const consentEnabled = pkg.istek?.notlar === 'dahil';
-  const cutOffMs = typeof pkg.veri_ani === 'string' ? Date.parse(pkg.veri_ani) : Number.NaN;
+  const cutOffMs = validVeriAni ? Date.parse(pkg.veri_ani) : Number.NaN;
 
-  for (const item of pkg.kanitlar || []) {
+  for (const item of kanitlar || []) {
     if (!isPlainObject(item) || typeof item.id !== 'string' || !/^E[1-9]\d*$/u.test(item.id)) {
       problems.push('kanit:kimlik_gecersiz');
       continue;
@@ -541,6 +607,25 @@ export function validateEvidencePackageContract(pkg) {
       }
     }
 
+    // Ölçülerde dönem ve anlık kesit zaman kökenleri birbirine karışamaz.
+    if (item.tur === 'olcu') {
+      const hasDonem = Object.hasOwn(item, 'donem') && item.donem !== undefined;
+      const hasVeriAni = Object.hasOwn(item, 'veri_ani') && item.veri_ani !== undefined;
+      if (hasDonem && hasVeriAni) {
+        problems.push(`olcu:zaman_kokeni_celiskili:${item.id}`);
+      }
+      if (PERIOD_MEASURE_NAMES.has(item.olcu)) {
+        if (hasVeriAni || !isPlainObject(item.donem) || !isIsoDay(item.donem.baslangic) || !isIsoDay(item.donem.bitis)
+          || item.donem.baslangic > item.donem.bitis) {
+          problems.push(`olcu:donem_gecersiz:${item.id}`);
+        }
+      } else if (SNAPSHOT_MEASURE_NAMES.has(item.olcu)) {
+        if (hasDonem || !isValidIsoTimestamp(item.veri_ani)) {
+          problems.push(`olcu:veri_ani_gecersiz:${item.id}`);
+        }
+      }
+    }
+
     if (item.tur === 'not') {
       if (item.guvenilmez_veri !== true) problems.push(`not:guvenilmez_veri_eksik:${item.id}`);
       if (typeof item.metin !== 'string' || !item.metin.trim()) {
@@ -551,20 +636,30 @@ export function validateEvidencePackageContract(pkg) {
       if (item.kaynak === 'MR_Tasks' && (item.kayit_zamani !== null || item.kayit_zamani_durumu !== 'bilinmiyor')) {
         problems.push(`not:mr_tasks_kayit_zamani_uydurulmus:${item.id}`);
       }
-      if (item.kayit_zamani === null && item.kayit_zamani_durumu !== 'bilinmiyor') {
-        problems.push(`not:bilinmiyor_durumu_eksik:${item.id}`);
-      }
-      if (typeof item.kayit_zamani === 'string') {
-        const ts = Date.parse(item.kayit_zamani);
-        if (!Number.isFinite(ts) || (Number.isFinite(cutOffMs) && ts > cutOffMs)) {
-          problems.push(`not:kayit_zamani_kesiti_asiyor:${item.id}`);
+      if (item.kayit_zamani === null) {
+        if (item.kayit_zamani_durumu !== 'bilinmiyor') {
+          problems.push(`not:bilinmiyor_durumu_eksik:${item.id}`);
         }
+      } else if (typeof item.kayit_zamani === 'string') {
+        if (item.kayit_zamani_durumu !== 'biliniyor') {
+          problems.push(`not:biliniyor_durumu_uyumsuz:${item.id}`);
+        }
+        if (!isValidIsoTimestamp(item.kayit_zamani)) {
+          problems.push(`not:kayit_zamani_gecersiz:${item.id}`);
+        } else {
+          const ts = Date.parse(item.kayit_zamani);
+          if (Number.isFinite(cutOffMs) && ts > cutOffMs) {
+            problems.push(`not:kayit_zamani_kesiti_asiyor:${item.id}`);
+          }
+        }
+      } else {
+        problems.push(`not:kayit_zamani_gecersiz:${item.id}`);
       }
     }
   }
 
   const findingIds = new Set();
-  for (const finding of pkg.turetilmis || []) {
+  for (const finding of turetilmis || []) {
     if (!isPlainObject(finding) || typeof finding.id !== 'string' || !/^F[1-9]\d*$/u.test(finding.id)) {
       problems.push('turetilmis:kimlik_gecersiz');
       continue;
@@ -576,14 +671,15 @@ export function validateEvidencePackageContract(pkg) {
     }
   }
 
-  for (const conflict of pkg.celiskiler || []) {
+  for (const conflict of celiskiler || []) {
     if (!isPlainObject(conflict) || !Array.isArray(conflict.kanitlar) || conflict.kanitlar.length < 2
+      || new Set(conflict.kanitlar).size < 2
       || conflict.kanitlar.some((ref) => !evidenceIds.has(ref))) {
       problems.push('celiski:gecersiz_kanit_gondergesi');
     }
   }
 
-  if ((pkg.kanitlar || []).length > maxItems) problems.push('sinir:kanit_sayisi_asildi');
+  if ((kanitlar || []).length > maxItems) problems.push('sinir:kanit_sayisi_asildi');
   const serializedChars = JSON.stringify(pkg).length;
   if (serializedChars > maxChars) problems.push('sinir:karakter_sayisi_asildi');
 

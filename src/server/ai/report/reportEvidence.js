@@ -16,11 +16,12 @@ import { TOOL_ERROR_CODES, ToolError } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { describeTaskScope, projectAccess } from '../tools/rota/rotaScope.js';
 import {
-  readDependencies,
-  readProjectSearch,
+  readReportActivitySummary,
+  readReportDependencies,
+  readReportProjectsBySelectors,
   readReportScopeRoster,
-  readReportTaskActivity,
   readTaskFacts,
+  readVisibleTasks,
   TEAM_ROSTER_LIMIT
 } from '../tools/rota/rotaToolStore.js';
 import { dataText, projectIndex } from '../tools/rota/rotaToolSupport.js';
@@ -42,8 +43,8 @@ import { collectReportNotes, detectNoteDuplicatesAndContradictions } from './rep
  *   - Yetki kapsamı (FULL / PARTIAL / READ, yönetim kapsamı, silinmiş/taşınmış görev gizliliği)
  *     mevcut Rota yetki yükleyicisi ve Görev Hareketleri kurallarıyla bire bir uygulanır.
  *   - Yetkisiz kapsam seçimi sessizce boş başarılı rapora çevrilmez; kapalı reddedilir.
- *   - Toplama başında ve sonunda yetki dönemi parmak izi (`authorizationEpoch`) karşılaştırılır;
- *     toplama sırasında yetki değiştiyse bayat paket asla döndürülmez.
+ *   - Toplama başında ve sonunda yetki dönemi parmak izi (`authorizationEpoch`) ve görev görünürlük/proje
+ *     bağı doğrulanır; toplama sırasında yetki veya proje bağı değiştiyse bayat paket asla döndürülmez.
  *   - Rapor düzeyi not rızası (`notlar: dahil`) yoksa korunan not ve değişiklik metinleri hiç okunmaz.
  *   - Dönem ölçüleri ile anlık durum ölçüleri (`veri_ani`) kesin olarak ayrılır; bilinmeyen değerler
  *     `null` olarak korunur; kısmi görünürlükten tam nüfus yüzdesi hesaplanmaz.
@@ -63,9 +64,9 @@ const PRIORITY_IMPORTANCE = Object.freeze({
 });
 
 const ORG_LEVEL_META = Object.freeze({
-  birim: Object.freeze({ field: 'unit', orgLevel: 'unit', teamLevel: 'unit', sqlTeamLevel: TEAM_LEVELS.unit }),
-  mudurluk: Object.freeze({ field: 'department', orgLevel: 'department', teamLevel: 'department', sqlTeamLevel: TEAM_LEVELS.department }),
-  direktorluk: Object.freeze({ field: 'directorate', orgLevel: 'directorate', teamLevel: 'directorate', sqlTeamLevel: TEAM_LEVELS.directorate })
+  birim: Object.freeze({ field: 'unit', orgLevel: 'unit', rosterMode: 'org_unit', teamLevel: 'unit', sqlTeamLevel: TEAM_LEVELS.unit }),
+  mudurluk: Object.freeze({ field: 'department', orgLevel: 'department', rosterMode: 'org_department', teamLevel: 'department', sqlTeamLevel: TEAM_LEVELS.department }),
+  direktorluk: Object.freeze({ field: 'directorate', orgLevel: 'directorate', rosterMode: 'org_directorate', teamLevel: 'directorate', sqlTeamLevel: TEAM_LEVELS.directorate })
 });
 
 const TEAM_LEVEL_ALIASES = Object.freeze({
@@ -79,7 +80,10 @@ const TEAM_LEVEL_ALIASES = Object.freeze({
   'direktörlük': TEAM_LEVELS.directorate
 });
 
-const FULL_TEAM_ALIASES = new Set(['ekibim', 'tum_ekip', 'tüm ekip', 'team']);
+// `foldText` Türkçe diakritikleri kaldırdığından tam ekip takma adları normalleştirilmiş biçimde tutulur.
+const FULL_TEAM_ALIASES = new Set(['ekibim', 'tum_ekip', 'tum ekip', 'team']);
+const REPORT_SCOPE_ROSTER_MAX_ROWS = 500;
+const REPORT_DEPENDENCIES_MAX_ROWS = 1000;
 
 function roundPercent(numerator, denominator) {
   if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return null;
@@ -102,37 +106,49 @@ function formatOrgMemberForHierarchy(member) {
 
 /**
  * İstek kapsamını güvenilir oturumun yetkili sınırları içinde çözer.
- * Yetkisiz proje, kişi, ekip veya örgüt birimi seçimini kapalı reddeder.
+ * Yetkisiz, kesik veya belirsiz proje, kişi, ekip ya da örgüt birimi seçimini kapalı reddeder.
  */
 async function resolveAuthorizedScope({ turn, auth, scope, signal, normalizedRequest }) {
   const { tur, kimlikler } = normalizedRequest.kapsam;
 
   if (tur === 'proje' || tur === 'projeler') {
+    signal.throwIfAborted();
+    // 1–25 proje seçicisi tek sınırlı SQL sorgusuyla çözülür; seri sorgu patlaması oluşmaz.
+    const candidateRows = await turn.sql(signal, (executor) => readReportProjectsBySelectors(executor, scope, kimlikler));
+    const bySelectorIndex = new Map();
+    for (const row of candidateRows) {
+      const idx = Number(row.SelectorIndex);
+      if (!bySelectorIndex.has(idx)) bySelectorIndex.set(idx, []);
+      bySelectorIndex.get(idx).push(row);
+    }
+
     const resolvedProjects = [];
     const seenIds = new Set();
-    for (const rawId of kimlikler) {
-      signal.throwIfAborted();
+    for (let index = 0; index < kimlikler.length; index += 1) {
+      const rawId = kimlikler[index];
+      const matches = bySelectorIndex.get(index) || [];
       const guid = canonicalActualId(rawId);
       let matched = null;
       if (guid) {
-        const res = await turn.sql(signal, (executor) => readProjectSearch(executor, scope, {
-          projectIds: [guid],
-          text: '',
-          limit: 2
-        }));
-        matched = res.rows.find((row) => canonicalActualId(row.ProjectId) === guid) || null;
+        matched = matches.find((row) => canonicalActualId(row.ProjectId) === guid) || null;
       } else {
-        const res = await turn.sql(signal, (executor) => readProjectSearch(executor, scope, {
-          text: rawId,
-          limit: 25
-        }));
         const folded = foldText(rawId);
-        const exactCode = res.rows.filter((row) => row.ProjectCode && foldText(row.ProjectCode) === folded);
+        const exactCode = matches.filter((row) => row.ProjectCode && foldText(row.ProjectCode) === folded);
         if (exactCode.length === 1) {
           matched = exactCode[0];
-        } else if (exactCode.length === 0) {
-          const exactName = res.rows.filter((row) => row.ProjectName && foldText(row.ProjectName) === folded);
-          if (exactName.length === 1) matched = exactName[0];
+        } else if (exactCode.length > 1) {
+          throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, {
+            message: 'Seçilen proje kodu birden fazla yetkili projeyle eşleşiyor; kesin proje kimliği belirtilmelidir.'
+          });
+        } else {
+          const exactName = matches.filter((row) => row.ProjectName && foldText(row.ProjectName) === folded);
+          if (exactName.length === 1) {
+            matched = exactName[0];
+          } else if (exactName.length > 1) {
+            throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, {
+              message: 'Seçilen proje adı birden fazla yetkili projeyle eşleşiyor; proje kodu veya kimliği belirtilmelidir.'
+            });
+          }
         }
       }
       if (!matched) {
@@ -160,9 +176,6 @@ async function resolveAuthorizedScope({ turn, auth, scope, signal, normalizedReq
       personSicil: null,
       teamLevel: null,
       allowedAssigneeSicils: null,
-      activityScope: 'visible',
-      activityPerson: null,
-      activityOrgFilter: {},
       scopeSummary,
       labelById: new Map(resolvedProjects.map((row) => [
         canonicalActualId(row.ProjectId),
@@ -175,23 +188,71 @@ async function resolveAuthorizedScope({ turn, auth, scope, signal, normalizedReq
     };
   }
 
-  // Kişi, ekip ve örgütsel birim kapsamları yetkili kadro üzerinden doğrulanır.
-  const rosterResult = await turn.sql(signal, (executor) => readReportScopeRoster(executor, scope, { maxRows: 500 }));
+  // Yetki ön denetimi: ekip ve kurumsal kapsamlar yetkili olmayan kullanıcılar için kadro okumadan reddedilir.
+  if (tur === 'ekip' && !auth.isExecutive) {
+    throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
+      message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.'
+    });
+  }
+  if (ORG_LEVEL_META[tur] && !auth.isExecutive && !auth.isSystemAdmin) {
+    throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
+      message: 'Kurumsal birim, müdürlük ve direktörlük raporları yalnızca yetkili yöneticilere açıktır.'
+    });
+  }
+
+  const requested = kimlikler[0];
+  const folded = foldText(requested);
+  const rosterQuery = (() => {
+    if (tur === 'kisi') {
+      const numericMatch = /^\d{1,10}$/u.test(requested) ? Number(requested) : null;
+      return numericMatch != null
+        ? { mode: 'person_sicil', includeSelf: true, rosterSicil: numericMatch }
+        : { mode: 'person_name', includeSelf: true, text: requested };
+    }
+    if (tur === 'ekip') {
+      const requestedLevel = TEAM_LEVEL_ALIASES[folded] || null;
+      if (requestedLevel) return { mode: 'team_level', includeSelf: false, scopeType: requestedLevel };
+      if (FULL_TEAM_ALIASES.has(folded)) return { mode: 'all', includeSelf: false };
+      return { mode: 'team_name', includeSelf: false, text: requested };
+    }
+    const meta = ORG_LEVEL_META[tur];
+    const isCanonicalPath = requested.includes('\u001F');
+    return {
+      mode: meta.rosterMode,
+      includeSelf: Boolean(auth.isSystemAdmin),
+      text: isCanonicalPath ? '' : requested,
+      hierarchyKey: isCanonicalPath ? requested : ''
+    };
+  })();
+
+  // Seçici süzgeci satır sınırından ÖNCE SQL'de uygulanır; kesik kadro üzerinden kapsam çözülmez (kapalı ret).
+  const rosterResult = await turn.sql(signal, (executor) => readReportScopeRoster(executor, scope, {
+    maxRows: REPORT_SCOPE_ROSTER_MAX_ROWS,
+    ...rosterQuery
+  }));
+  if (rosterResult.truncated) {
+    throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE, {
+      message: 'Seçilen kapsamdaki yetkili kadro desteklenen analiz sınırını aşıyor.'
+    });
+  }
   const members = rosterResult.members;
 
   if (tur === 'kisi') {
-    const requested = kimlikler[0];
     const numericMatch = /^\d{1,10}$/u.test(requested) ? Number(requested) : null;
     let target = null;
     if (numericMatch != null) {
       target = members.find((member) => member.sicil === numericMatch) || null;
     } else {
-      const folded = foldText(requested);
       const uniqueMatches = [...new Map(
         members
           .filter((member) => member.name && foldText(member.name) === folded)
           .map((member) => [member.sicil, member])
       ).values()];
+      if (uniqueMatches.length > 1) {
+        throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, {
+          message: 'Seçilen kişi adı yetkili kapsamda birden fazla çalışanla eşleşiyor; benzersiz seçici belirtilmelidir.'
+        });
+      }
       if (uniqueMatches.length === 1) target = uniqueMatches[0];
     }
     if (!target) {
@@ -209,33 +270,30 @@ async function resolveAuthorizedScope({ turn, auth, scope, signal, normalizedReq
       teamLevel: null,
       allowedAssigneeSicils: new Set([target.sicil]),
       targetPerson: target,
-      activityScope: isSelf ? 'mine' : (auth.isSystemAdmin && !auth.isExecutive ? 'visible' : 'team'),
-      activityPerson: target.sicil,
-      activityOrgFilter: {},
       scopeSummary: null
     };
   }
 
   if (tur === 'ekip') {
-    if (!auth.isExecutive) {
-      throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
-        message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.'
-      });
-    }
-    const requested = kimlikler[0];
-    const folded = foldText(requested);
     const managed = members.filter((member) => member.sicil !== Number(auth.sicil) && member.scopeType !== 'SELF');
     const requestedLevel = TEAM_LEVEL_ALIASES[folded] || null;
     let matchedMembers;
-    if (requestedLevel) {
-      matchedMembers = managed.filter((member) => member.scopeType === requestedLevel);
-    } else if (FULL_TEAM_ALIASES.has(folded)) {
+    if (requestedLevel || FULL_TEAM_ALIASES.has(folded)) {
       matchedMembers = managed;
     } else {
-      matchedMembers = managed.filter((member) => (
-        (member.team && foldText(member.team) === folded)
-        || (member.unit && foldText(member.unit) === folded)
-      ));
+      const teamMatches = managed.filter((member) => member.team && foldText(member.team) === folded);
+      const unitMatches = managed.filter((member) => member.unit && foldText(member.unit) === folded);
+      if (teamMatches.length > 0) {
+        matchedMembers = teamMatches;
+      } else {
+        const distinctUnitKeys = new Set(unitMatches.map((member) => orgKeyFor(formatOrgMemberForHierarchy(member), 'unit')));
+        if (distinctUnitKeys.size > 1) {
+          throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, {
+            message: 'Seçilen ekip/birim adı birden fazla hiyerarşik dal ile eşleşiyor; tam kurumsal yol anahtarı belirtilmelidir.'
+          });
+        }
+        matchedMembers = unitMatches;
+      }
     }
     const allowedSicils = new Set(matchedMembers.map((member) => member.sicil));
     if (allowedSicils.size === 0) {
@@ -243,7 +301,6 @@ async function resolveAuthorizedScope({ turn, auth, scope, signal, normalizedReq
         message: 'Seçilen ekip yetkili yönetim kapsamınızda bulunamadı.'
       });
     }
-    const allManagedSicils = new Set(managed.map((member) => member.sicil));
     return {
       tur,
       projectIds: [],
@@ -252,30 +309,21 @@ async function resolveAuthorizedScope({ turn, auth, scope, signal, normalizedReq
       personSicil: null,
       teamLevel: requestedLevel,
       allowedAssigneeSicils: allowedSicils,
-      restrictActivityToAllowedSicils: !requestedLevel && allowedSicils.size < allManagedSicils.size,
       teamLabel: requested,
-      activityScope: 'team',
-      activityPerson: null,
-      activityOrgFilter: {},
       scopeSummary: null
     };
   }
 
   // Kurumsal kapsamlar: birim, mudurluk, direktorluk
-  if (!auth.isExecutive && !auth.isSystemAdmin) {
-    throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
-      message: 'Kurumsal birim, müdürlük ve direktörlük raporları yalnızca yetkili yöneticilere açıktır.'
-    });
-  }
   const meta = ORG_LEVEL_META[tur];
-  const requested = kimlikler[0];
-  const folded = foldText(requested);
   const candidatePool = auth.isSystemAdmin
     ? members
     : members.filter((member) => member.sicil !== Number(auth.sicil) && member.scopeType !== 'SELF');
 
+  const isCanonicalPath = requested.includes('\u001F');
   const matchedMembers = candidatePool.filter((member) => {
     const hierarchyKey = orgKeyFor(formatOrgMemberForHierarchy(member), meta.orgLevel);
+    if (isCanonicalPath) return hierarchyKey === requested;
     const plainValue = member[meta.field] || '';
     return hierarchyKey === requested || (plainValue && foldText(plainValue) === folded);
   });
@@ -286,11 +334,13 @@ async function resolveAuthorizedScope({ turn, auth, scope, signal, normalizedReq
     });
   }
 
-  // Aynı birime/müdürlüğe ait yetkili çalışanların ortak hiyerarşi yolunu hareket raporu süzgecine geçir.
-  const firstKey = orgKeyFor(formatOrgMemberForHierarchy(matchedMembers[0]), meta.orgLevel);
-  const singleHierarchyKey = matchedMembers.every((member) => orgKeyFor(formatOrgMemberForHierarchy(member), meta.orgLevel) === firstKey)
-    ? firstKey
-    : '';
+  // Aynı ada sahip farklı hiyerarşik dallar sessizce birleştirilmez; belirsizlik kapalı reddedilir.
+  const distinctKeys = new Set(matchedMembers.map((member) => orgKeyFor(formatOrgMemberForHierarchy(member), meta.orgLevel)));
+  if (distinctKeys.size > 1) {
+    throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, {
+      message: 'Seçilen kurumsal birim adı birden fazla hiyerarşik dal ile eşleşiyor; tam yol anahtarı belirtilmelidir.'
+    });
+  }
 
   return {
     tur,
@@ -300,11 +350,7 @@ async function resolveAuthorizedScope({ turn, auth, scope, signal, normalizedReq
     personSicil: null,
     teamLevel: null,
     allowedAssigneeSicils: allowedSicils,
-    restrictActivityToAllowedSicils: !singleHierarchyKey,
     orgUnitLabel: requested,
-    activityScope: auth.isSystemAdmin ? 'visible' : 'team',
-    activityPerson: null,
-    activityOrgFilter: singleHierarchyKey ? { [meta.orgLevel]: singleHierarchyKey } : {},
     scopeSummary: null
   };
 }
@@ -321,26 +367,26 @@ function prioritizeTasks({
   period,
   today,
   activeTaskIds,
+  activeTaskLastDay = new Map(),
+  completedInPeriodIds = new Set(),
   dependencyMap
 }) {
   const scored = tasks.map((task) => {
-    const completedInPeriod = task.status === 'done'
-      && Boolean(task.actualFinish)
-      && task.actualFinish >= period.baslangic
-      && task.actualFinish <= period.bitis;
+    const completedInPeriod = completedInPeriodIds.has(task.id);
     const undatedDone = task.status === 'done' && !task.actualFinish;
     const activeInPeriod = activeTaskIds.has(task.id);
+    const openCritical = task.status !== 'done' && task.priority === 'critical';
     const overdue = isOverdue(task, today);
     const dueSoon = isDueWithin(task, today, 7);
     const deps = dependencyMap.get(task.id);
     const hasDependencies = Boolean(deps && (deps.oncul.length > 0 || deps.ardil.length > 0));
 
-    // Katman 1: Dönem ilgisi (0..3)
+    // Katman 1: Dönem ilgisi (0..3) — açık kritik görevler belgelenmiş 1. kademede yer alır.
     const periodRelevance = completedInPeriod
       ? 3
       : (task.status !== 'done' && activeInPeriod)
         ? 2
-        : (undatedDone || overdue || dueSoon || task.milestone || activeInPeriod)
+        : (undatedDone || openCritical || overdue || dueSoon || task.milestone || activeInPeriod)
           ? 1
           : 0;
 
@@ -353,10 +399,10 @@ function prioritizeTasks({
     if (dueSoon) managementImportance += 10;
     if (undatedDone) managementImportance += 12;
 
-    // Katman 3: Yenilik (tamamlanma tarihi veya termin yakınlığı)
+    // Katman 3: Yenilik (tamamlanma tarihi veya görevin kendi son nitelikli dönem hareket günü)
     const recencyDay = completedInPeriod
-      ? task.actualFinish
-      : (activeInPeriod ? period.bitis : (task.targetFinish || '0000-00-00'));
+      ? (task.actualFinish || activeTaskLastDay.get(task.id) || period.bitis)
+      : (activeInPeriod ? (activeTaskLastDay.get(task.id) || period.bitis) : (task.targetFinish || '0000-00-00'));
 
     return {
       ...task,
@@ -396,14 +442,19 @@ function finalizeBoundedPackage({
   noteCandidates,
   taskById,
   today,
+  period,
   limits,
   buildDerivedFindings,
   noteCompleteness,
   scopeSummary,
   activityCoverage,
+  dependencyCoverage = 'complete',
+  dependencyTruncated = false,
   undatedDoneCount,
   totalEligibleTasks,
-  taskReadTruncated = false
+  taskReadTruncated = false,
+  rosterTruncated = false,
+  snapshotConsistent = true
 }) {
   const maxItems = limits.maxEvidenceItems ?? REPORT_EVIDENCE_LIMITS.maxEvidenceItems;
   const maxChars = limits.maxPackageChars ?? REPORT_EVIDENCE_LIMITS.maxPackageChars;
@@ -413,17 +464,25 @@ function finalizeBoundedPackage({
     ...coreMetrics,
     ...(activitySummaryItem ? [activitySummaryItem] : [])
   ];
+  if (fixed.length > maxItems) {
+    throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED, {
+      message: 'Yapılandırılan kanıt sayısı sınırı zorunlu çekirdek ölçüleri barındırmaya yetmiyor.'
+    });
+  }
+
   const droppable = [
     ...secondaryMetrics,
     ...taskCandidates,
     ...noteCandidates
   ];
+  // Paket kurulumundan önce görev seçim sınırıyla dışarıda bırakılan görevler çift sayılmadan toplama eklenir.
+  const preAssemblyOmittedTasks = Math.max(0, totalEligibleTasks - taskCandidates.length);
 
   const initialAllowedDroppable = Math.max(0, maxItems - fixed.length);
   const retainedDroppable = droppable.slice(0, initialAllowedDroppable);
-  let droppedByBudget = Math.max(0, droppable.length - retainedDroppable.length);
+  const droppedByItemCap = Math.max(0, droppable.length - retainedDroppable.length);
 
-  const assemble = (activeDroppable, omittedExtra) => {
+  const assemble = (activeDroppable, omittedBudgetCount) => {
     const rawItems = [...fixed, ...activeDroppable];
     const taskEvidenceIdByTaskId = new Map();
     const metricIdByKey = new Map();
@@ -433,12 +492,12 @@ function finalizeBoundedPackage({
     for (let index = 0; index < rawItems.length; index += 1) {
       const id = `E${index + 1}`;
       const raw = rawItems[index];
-      const { _kind, _metricKey, _taskId, _auditId, _dedupeKey, _taskPriorityRank, ...clean } = raw;
+      const { _kind, _metricKey, _taskId, _projectId, _auditId, _dedupeKey, _versionIdentity, _taskPriorityRank, ...clean } = raw;
       const item = { id, ...clean };
       if (_metricKey) metricIdByKey.set(_metricKey, id);
       if (item.tur === 'gorev' && _taskId) taskEvidenceIdByTaskId.set(_taskId, id);
       if (item.tur === 'not') {
-        internalNotes.push({ ...item, _taskId });
+        internalNotes.push({ ...item, _taskId, _projectId });
       }
       publicItems.push(item);
     }
@@ -448,7 +507,8 @@ function finalizeBoundedPackage({
       noteEntries: internalNotes,
       taskById,
       taskEvidenceIdByTaskId,
-      today
+      today,
+      period
     });
 
     // Yineleme alanlarını ilgili publicItems girdilerine yansıt.
@@ -478,8 +538,10 @@ function finalizeBoundedPackage({
     const omittedNotes = noteCompleteness.riza
       ? Math.max(0, (noteCompleteness.dahil + noteCompleteness.disarida_kalan) - includedNotes)
       : 0;
-    const totalOmitted = omittedExtra + noteCompleteness.disarida_kalan;
-    const truncated = omittedExtra > 0 || omittedTasks > 0 || omittedNotes > 0 || noteCompleteness.denetim_kesik || taskReadTruncated;
+    const totalOmitted = omittedBudgetCount + preAssemblyOmittedTasks + noteCompleteness.disarida_kalan;
+    const factsComplete = !taskReadTruncated && !rosterTruncated;
+    const truncated = omittedBudgetCount > 0 || omittedTasks > 0 || omittedNotes > 0
+      || noteCompleteness.denetim_kesik || !factsComplete || dependencyTruncated;
 
     const pkg = {
       sema: REPORT_EVIDENCE_SCHEMA,
@@ -488,7 +550,7 @@ function finalizeBoundedPackage({
       kanitlar: publicItems,
       turetilmis: derived,
       tamlik: {
-        kapsam_gorunurlugu: scopeSummary.completeProjectView && !taskReadTruncated ? 'complete' : 'partial',
+        kapsam_gorunurlugu: scopeSummary.completeProjectView && factsComplete && snapshotConsistent ? 'complete' : 'partial',
         projeler: {
           tam: scopeSummary.projects.full,
           okuma: scopeSummary.projects.read,
@@ -498,11 +560,11 @@ function finalizeBoundedPackage({
           toplam_uygun: totalEligibleTasks,
           dahil: includedTasks,
           disarida_kalan: omittedTasks,
-          kesildi: omittedTasks > 0 || taskReadTruncated
+          kesildi: omittedTasks > 0 || !factsComplete
         },
         notlar: noteCompleteness.riza
           ? (omittedNotes > 0
-            ? `ilk ${includedNotes} not (${omittedNotes} not sınır nedeniyle dışarıda)${noteCompleteness.notsuz_gorev ? `; ${noteCompleteness.notsuz_gorev} görev notsuz` : ''}`
+            ? `ilk ${includedNotes} not (${omittedNotes} not sınır nedeniyle dışarıda)${noteCompleteness.notsuz_gorev != null && noteCompleteness.notsuz_gorev > 0 ? `; ${noteCompleteness.notsuz_gorev} görev notsuz` : ''}${noteCompleteness.denetim_kesik ? '; denetim/not okuması kesik veya eksik' : ''}`
             : noteCompleteness.metin)
           : 'hariç (rıza yok)',
         not_ozeti: {
@@ -514,6 +576,8 @@ function finalizeBoundedPackage({
           denetim_kesik: noteCompleteness.denetim_kesik
         },
         hareket: activityCoverage,
+        bagimliliklar: dependencyCoverage,
+        ...(snapshotConsistent ? {} : { kesit_tutarli: false }),
         tarihsiz_tamamlanan: undatedDoneCount,
         paket_kesildi: truncated,
         disarida_kalan_kanit: totalOmitted,
@@ -527,28 +591,53 @@ function finalizeBoundedPackage({
       }
     };
 
-    // Gerçek serileştirilmiş uzunluğu iki adımda yakınsa (karakter_sayisi alanı dâhil).
+    // Gerçek serileştirilmiş uzunluğu basamak artışı dâhil sabit noktaya yakınsa.
     let serialized = JSON.stringify(pkg);
-    pkg.tamlik.karakter_sayisi = serialized.length;
-    serialized = JSON.stringify(pkg);
-    if (pkg.tamlik.karakter_sayisi !== serialized.length) {
+    for (let attempt = 0; attempt < 8 && pkg.tamlik.karakter_sayisi !== serialized.length; attempt += 1) {
       pkg.tamlik.karakter_sayisi = serialized.length;
       serialized = JSON.stringify(pkg);
+    }
+    if (pkg.tamlik.karakter_sayisi !== serialized.length) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Kanıt paketi serileştirilmiş karakter sayısı tutarlılaştırılamadı.');
     }
     return { pkg, serializedLength: serialized.length };
   };
 
-  let currentDroppable = [...retainedDroppable];
-  let built = assemble(currentDroppable, droppedByBudget);
+  const buildForPrefix = (keepCount) => assemble(
+    retainedDroppable.slice(0, keepCount),
+    droppedByItemCap + (retainedDroppable.length - keepCount)
+  );
 
-  // Serileştirilmiş boyut karakter sınırını aşıyorsa en düşük öncelikli sondaki kanıtları sırayla çıkar.
-  while (built.serializedLength > maxChars && currentDroppable.length > 0) {
-    // Büyük taşmalarda adımı güvenli biçimde hızlandır (en fazla yarısının altına inmeden).
-    const excess = built.serializedLength - maxChars;
-    const step = excess > 10000 && currentDroppable.length > 4 ? Math.min(currentDroppable.length, Math.max(1, Math.floor(excess / 1500))) : 1;
-    currentDroppable.splice(currentDroppable.length - step, step);
-    droppedByBudget += step;
-    built = assemble(currentDroppable, droppedByBudget);
+  let built = buildForPrefix(retainedDroppable.length);
+
+  // Serileştirilmiş boyut karakter sınırını aşıyorsa sığan EN UZUN öncelikli öneki ikili aramayla bul.
+  if (built.serializedLength > maxChars) {
+    const emptyBuilt = buildForPrefix(0);
+    if (emptyBuilt.serializedLength > maxChars) {
+      throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED, {
+        message: 'Yapılandırılan karakter sınırı zorunlu çekirdek kanıt paketini barındırmaya yetmiyor.'
+      });
+    }
+    let low = 0;
+    let high = retainedDroppable.length;
+    let best = emptyBuilt;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      const candidate = buildForPrefix(mid);
+      if (candidate.serializedLength <= maxChars) {
+        low = mid;
+        best = candidate;
+      } else {
+        high = mid - 1;
+      }
+    }
+    built = best;
+  }
+
+  if (built.pkg.kanitlar.length > maxItems || built.serializedLength > maxChars) {
+    throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED, {
+      message: 'Kanıt paketi yapılandırılan boyut sınırlarına sığdırılamadı.'
+    });
   }
 
   return built.pkg;
@@ -590,8 +679,9 @@ export async function buildExecutiveReportEvidence({
     throw new ServerPersistenceError('UNAUTHORIZED', 'Geçerli oturum kimliği doğrulanamadı.');
   }
 
+  const effectiveToolLimits = { ...TOOL_LIMITS, ...toolLimits };
   const deadline = createAiDeadline({
-    timeoutMs: toolLimits.maxToolPhaseMs ?? TOOL_LIMITS.maxToolPhaseMs,
+    timeoutMs: effectiveToolLimits.maxToolPhaseMs,
     parentSignal: signal,
     now: clock
   });
@@ -600,7 +690,7 @@ export async function buildExecutiveReportEvidence({
   const turn = createToolTurnContext({
     sicil: trustedSicil,
     now,
-    limits: toolLimits,
+    limits: effectiveToolLimits,
     clock,
     ...(getPool ? { getPool } : {}),
     ...(loadAuthorization ? { loadAuthorization } : {}),
@@ -627,23 +717,31 @@ export async function buildExecutiveReportEvidence({
     });
     effectiveSignal.throwIfAborted();
 
-    // 4. Kapsamdaki yetkili görev olgularını tek sınırlı sorguyla oku.
+    // 4. Kapsamdaki yetkili görev olgularını seçili sorumlu kümesi SQL sınırından ÖNCE uygulanarak oku.
     const needsAssignees = resolvedScope.allowedAssigneeSicils != null || ['kisi', 'ekip', 'birim', 'mudurluk', 'direktorluk'].includes(resolvedScope.tur);
+    const selectedAssigneeList = resolvedScope.allowedAssigneeSicils ? [...resolvedScope.allowedAssigneeSicils] : [];
+    const teamRosterLimit = resolvedScope.assigneeMode === 'team'
+      ? Math.min(REPORT_SCOPE_ROSTER_MAX_ROWS, Math.max(TEAM_ROSTER_LIMIT, selectedAssigneeList.length + 1))
+      : 0;
     taskFactsResult = await turn.sql(effectiveSignal, (executor) => readTaskFacts(executor, scope, {
       projectId: resolvedScope.projectIds.length === 1 ? resolvedScope.projectIds[0] : null,
       projectIds: resolvedScope.projectIds.length > 1 ? resolvedScope.projectIds : [],
       assigneeMode: resolvedScope.assigneeMode,
       personSicil: resolvedScope.personSicil,
       teamLevel: resolvedScope.teamLevel,
+      assigneeSicils: selectedAssigneeList,
+      // `notlar: haric` iken MR_Tasks.Description üzerinde PATINDEX taraması çalıştırılmaz.
+      includeHasDescription: consentAtStart === 'dahil',
       withAssignees: needsAssignees,
-      rosterRows: resolvedScope.assigneeMode === 'team' ? TEAM_ROSTER_LIMIT : 0,
+      rosterRows: teamRosterLimit,
       today: resolvedToday,
-      maxRows: toolLimits.maxAnalyzedTasks ?? TOOL_LIMITS.maxAnalyzedTasks
+      maxRows: effectiveToolLimits.maxAnalyzedTasks
     }));
     effectiveSignal.throwIfAborted();
 
-    // Veri kesiti (veri_ani) sonrasındaki kayıtları dışla; ekip/örgütsel kapsamda tekil görev kimliğiyle çift sayımı önle.
+    // Veri kesiti (veri_ani) sonrasındaki oluşturmaları dışla; kesit sonrası güncellenen satırları işaretle.
     const dedupedTasks = new Map();
+    let postCutoffModifiedCount = 0;
     for (const fact of taskFactsResult.facts) {
       if (fact.createdAt && Date.parse(fact.createdAt) > cutOffMs) continue;
       if (resolvedScope.allowedAssigneeSicils) {
@@ -656,20 +754,27 @@ export async function buildExecutiveReportEvidence({
         if (!hasAuthorizedMember) continue;
       }
       if (!dedupedTasks.has(fact.id)) {
-        // Kesit sonrası gerçekleşen bitiş tarihi henüz gerçekleşmemiş sayılır.
-        const effectiveActualFinish = fact.actualFinish && fact.actualFinish <= resolvedToday ? fact.actualFinish : null;
+        const modifiedAfterCutoff = Boolean(fact.updatedAt && Date.parse(fact.updatedAt) > cutOffMs);
+        if (modifiedAfterCutoff) postCutoffModifiedCount += 1;
+        // Kesit sonrası gerçekleşen bitiş tarihi veya kesit sonrası güncelleme canlı anlık görüntüyü kesin kılamaz.
+        const effectiveActualFinish = fact.actualFinish && fact.actualFinish <= resolvedToday
+          && !(modifiedAfterCutoff && fact.actualFinish === resolvedToday)
+          ? fact.actualFinish
+          : null;
         dedupedTasks.set(fact.id, {
           ...fact,
-          actualFinish: effectiveActualFinish
+          actualFinish: effectiveActualFinish,
+          _postCutoffModified: modifiedAfterCutoff
         });
       }
     }
     const visibleTasks = [...dedupedTasks.values()];
     const taskById = new Map(visibleTasks.map((task) => [task.id, task]));
+    const snapshotConsistent = postCutoffModifiedCount === 0;
 
-    // Proje dışı kapsamlarda (kişi/ekip/birim/müdürlük/direktörlük) proje kümesi yalnızca kapsama giren görevlerin projeleridir.
+    // Açık proje seçiminde görevsiz yetkili projeler de korunur; proje dışı kapsamlarda yalnızca görev projeleri alınır.
     const relevantProjectRows = resolvedScope.projectIds.length > 0
-      ? taskFactsResult.projects
+      ? resolvedScope.resolvedProjects
       : (() => {
         const taskProjectIds = new Set(visibleTasks.map((task) => task.projectId));
         return taskFactsResult.projects.filter((row) => taskProjectIds.has(canonicalActualId(row.ProjectId)));
@@ -678,109 +783,80 @@ export async function buildExecutiveReportEvidence({
     const effectiveScopeSummary = resolvedScope.scopeSummary
       || describeTaskScope(relevantProjectRows, { emptyComplete: scope.isAdmin || [...scope.projects.values()].every((entry) => entry.accessLevel === 'FULL' || entry.readGrant) });
 
-    // 5. Dönem hareket geçmişini Görev Hareketleri gizlilik kuralıyla oku (rıza yoksa değişiklik metni okunmaz!).
-    const readActivitySlice = async ({ projectId = null, person = null } = {}) => turn.sql(effectiveSignal, (executor) => readReportTaskActivity(
+    // 5. Dönem hareket özetini tek sınırlı toplu sorguyla oku (ham not/JSON metni dönmez; silinen görevler dâhil tekilleştirilir).
+    const periodActivityAgg = await turn.sql(effectiveSignal, (executor) => readReportActivitySummary(
       executor,
-      auth,
+      scope,
       {
-        period: 'custom',
         from: normalizedRequest.donem.baslangic,
         to: normalizedRequest.donem.bitis,
-        scope: resolvedScope.activityScope,
-        projectId,
-        person,
-        ...resolvedScope.activityOrgFilter,
-        page: 0,
-        pageSize: 1
-      },
-      now,
-      {
-        includeStructuredChanges: false,
-        includeChangeText: false,
-        analyzedActivityLimit: toolLimits.maxAnalyzedActivities ?? TOOL_LIMITS.maxAnalyzedActivities,
-        aggregate: true,
-        teamLevel: resolvedScope.teamLevel
+        projectIds: resolvedScope.projectIds,
+        assigneeSicils: selectedAssigneeList,
+        cutOffUtc: now,
+        analyzedActivityLimit: effectiveToolLimits.maxAnalyzedActivities
       }
     ));
+    effectiveSignal.throwIfAborted();
 
     const activeTaskIds = new Set();
-    let periodActivitySummary;
-    const sumActivitySlices = (slices) => {
-      const aggTotals = { events: 0, tasks: new Set(), completed: 0, created: 0, deleted: 0, reopened: 0, updatedOnly: 0 };
-      for (const slice of slices) {
-        aggTotals.events += slice.total;
-        aggTotals.completed += slice.summary.completed;
-        aggTotals.created += slice.aggregate?.created || 0;
-        aggTotals.deleted += slice.aggregate?.deleted || 0;
-        aggTotals.reopened += slice.aggregate?.reopened || 0;
-        aggTotals.updatedOnly += slice.aggregate?.updatedOnly || 0;
-        for (const ref of slice.aggregate?.population || []) {
-          if (ref?.taskId) {
-            aggTotals.tasks.add(ref.taskId);
-            if (taskById.has(ref.taskId)) activeTaskIds.add(ref.taskId);
-          }
-        }
+    const activeTaskLastDay = new Map();
+    const auditCompletedInPeriodIds = new Set();
+    for (const ref of periodActivityAgg.liveTasks || []) {
+      if (!ref?.taskId || !taskById.has(ref.taskId)) continue;
+      activeTaskIds.add(ref.taskId);
+      if (ref.lastActivityDay) {
+        const prev = activeTaskLastDay.get(ref.taskId);
+        if (!prev || ref.lastActivityDay > prev) activeTaskLastDay.set(ref.taskId, ref.lastActivityDay);
       }
-      return {
-        events: aggTotals.events,
-        tasks: Math.max(aggTotals.tasks.size, slices.reduce((max, slice) => Math.max(max, slice.summary.tasks || 0), 0)),
-        completed: aggTotals.completed,
-        created: aggTotals.created,
-        deleted: aggTotals.deleted,
-        reopened: aggTotals.reopened,
-        updatedOnly: aggTotals.updatedOnly
-      };
-    };
-
-    if (resolvedScope.projectIds.length > 1) {
-      // Çok projeli istekte her yetkili proje için daraltılmış tekil okuma yapılır (fazladan genel okuma yapılmaz).
-      const slices = [];
-      for (const projectId of resolvedScope.projectIds) {
-        effectiveSignal.throwIfAborted();
-        slices.push(await readActivitySlice({ projectId }));
-      }
-      periodActivitySummary = sumActivitySlices(slices);
-    } else if (resolvedScope.restrictActivityToAllowedSicils && resolvedScope.allowedAssigneeSicils && resolvedScope.allowedAssigneeSicils.size <= 15) {
-      // Daraltılmış ekip/örgüt alt kümesinde başka ekibin hareketlerini karıştırmamak için yalnızca seçili yetkili Siciller okunur.
-      const slices = [];
-      for (const memberSicil of [...resolvedScope.allowedAssigneeSicils].sort((a, b) => a - b)) {
-        effectiveSignal.throwIfAborted();
-        slices.push(await readActivitySlice({ person: memberSicil }));
-      }
-      periodActivitySummary = sumActivitySlices(slices);
-    } else {
-      const singleProjectId = resolvedScope.projectIds.length === 1 ? resolvedScope.projectIds[0] : null;
-      const periodActivityAgg = await readActivitySlice({
-        projectId: singleProjectId,
-        person: resolvedScope.activityPerson
-      });
-      effectiveSignal.throwIfAborted();
-      for (const ref of periodActivityAgg.aggregate?.population || []) {
-        if (ref?.taskId && taskById.has(ref.taskId)) activeTaskIds.add(ref.taskId);
-      }
-      periodActivitySummary = {
-        events: periodActivityAgg.total,
-        tasks: periodActivityAgg.summary.tasks,
-        completed: periodActivityAgg.summary.completed,
-        created: periodActivityAgg.aggregate?.created || 0,
-        deleted: periodActivityAgg.aggregate?.deleted || 0,
-        reopened: periodActivityAgg.aggregate?.reopened || 0,
-        updatedOnly: periodActivityAgg.aggregate?.updatedOnly || 0
-      };
+      if (ref.completedInPeriod) auditCompletedInPeriodIds.add(ref.taskId);
     }
 
-    // 6. Bağımlılıkları YALNIZCA FULL erişimli projeler için oku (READ ve PARTIAL projelerde asla okunmaz).
+    const periodActivitySummary = {
+      events: periodActivityAgg.events,
+      tasks: periodActivityAgg.tasks,
+      completed: periodActivityAgg.completed,
+      created: periodActivityAgg.created,
+      deleted: periodActivityAgg.deleted,
+      reopened: periodActivityAgg.reopened,
+      updatedOnly: periodActivityAgg.updatedOnly
+    };
+
+    // Karşılaştırma dönemi istendiyse yeniden açılmış tarihsel tamamlamaları yakalamak için karşılaştırma hareket özeti de okunur.
+    const auditCompletedInComparisonIds = new Set();
+    if (normalizedRequest.karsilastirma !== 'yok' && normalizedRequest.karsilastirma_donemi) {
+      const compActivityAgg = await turn.sql(effectiveSignal, (executor) => readReportActivitySummary(
+        executor,
+        scope,
+        {
+          from: normalizedRequest.karsilastirma_donemi.baslangic,
+          to: normalizedRequest.karsilastirma_donemi.bitis,
+          projectIds: resolvedScope.projectIds,
+          assigneeSicils: selectedAssigneeList,
+          cutOffUtc: now,
+          analyzedActivityLimit: effectiveToolLimits.maxAnalyzedActivities
+        }
+      ));
+      effectiveSignal.throwIfAborted();
+      for (const ref of compActivityAgg.liveTasks || []) {
+        if (ref?.taskId && taskById.has(ref.taskId) && ref.completedInPeriod) {
+          auditCompletedInComparisonIds.add(ref.taskId);
+        }
+      }
+    }
+
+    // 6. Bağımlılıkları YALNIZCA FULL erişimli projeler için tek toplu sorguda oku (READ ve PARTIAL projelerde asla okunmaz).
     const dependencyMap = new Map();
     const fullProjectIds = [...projects.values()]
       .filter((project) => project.accessLevel === 'FULL')
-      .map((project) => project.projectId)
-      .slice(0, 10);
-    for (const projectId of fullProjectIds) {
+      .map((project) => project.projectId);
+    let dependencyTruncated = false;
+    if (fullProjectIds.length > 0) {
       effectiveSignal.throwIfAborted();
-      const depResult = await turn.sql(effectiveSignal, (executor) => readDependencies(executor, scope, {
-        projectId,
-        maxRows: 200
+      const depResult = await turn.sql(effectiveSignal, (executor) => readReportDependencies(executor, scope, {
+        projectIds: fullProjectIds,
+        maxRows: REPORT_DEPENDENCIES_MAX_ROWS
       }));
+      dependencyTruncated = Boolean(depResult.truncated);
       for (const row of depResult.dependencies || []) {
         const taskId = canonicalActualId(row.TaskId);
         const predId = canonicalActualId(row.PredecessorTaskId);
@@ -791,13 +867,30 @@ export async function buildExecutiveReportEvidence({
         dependencyMap.get(predId).ardil.push(taskId);
       }
     }
+    const dependencyCoverage = (dependencyTruncated || fullProjectIds.length < projects.size || !effectiveScopeSummary.completeProjectView)
+      ? 'partial'
+      : 'complete';
 
-    // 7. Görevleri 3 katmanlı belirlenimci öncelik sırasıyla sırala.
+    // 7. Dönemde tamamlanan görev kimlikleri: dönemdeki gerçekleşen bitiş + sonradan yeniden açılmış olsa da denetimdeki tamamlama geçişi.
+    const completedInPeriodIds = new Set();
+    for (const task of visibleTasks) {
+      const doneByActualFinish = task.status === 'done'
+        && Boolean(task.actualFinish)
+        && task.actualFinish >= normalizedRequest.donem.baslangic
+        && task.actualFinish <= normalizedRequest.donem.bitis;
+      if (doneByActualFinish || auditCompletedInPeriodIds.has(task.id)) {
+        completedInPeriodIds.add(task.id);
+      }
+    }
+
+    // Görevleri 3 katmanlı belirlenimci öncelik sırasıyla sırala.
     const prioritizedTasks = prioritizeTasks({
       tasks: visibleTasks,
       period: normalizedRequest.donem,
       today: resolvedToday,
       activeTaskIds,
+      activeTaskLastDay,
+      completedInPeriodIds,
       dependencyMap
     });
 
@@ -814,26 +907,26 @@ export async function buildExecutiveReportEvidence({
     });
     effectiveSignal.throwIfAborted();
 
-    // 9. Dönem ve anlık ölçüleri doğru payda ve zaman kökeniyle hesapla.
+    // 9. Dönem ve anlık ölçüleri doğru payda, kesiklik ve zaman kökeniyle hesapla.
     const scopeCodes = resolvedScope.projectIds.length > 0
       ? resolvedScope.projectIds.map((id) => projectDisplayCode(projects.get(id), id))
       : [...projects.values()].map((project) => projectDisplayCode(project, project.projectId)).sort();
 
-    const completedInPeriodTasks = visibleTasks.filter((task) => task.status === 'done'
-      && Boolean(task.actualFinish)
-      && task.actualFinish >= normalizedRequest.donem.baslangic
-      && task.actualFinish <= normalizedRequest.donem.bitis);
-    const openTasks = visibleTasks.filter((task) => task.status !== 'done');
-    const overdueTasks = openTasks.filter((task) => isOverdue(task, resolvedToday));
-    const dueSoonTasks = openTasks.filter((task) => isDueWithin(task, resolvedToday, 7));
-    const undatedDoneCount = taskFactsResult.truncated
-      ? null
-      : visibleTasks.filter((task) => task.status === 'done' && !task.actualFinish).length;
-
-    const metricCompleteness = effectiveScopeSummary.completeProjectView && !taskFactsResult.truncated ? 'complete' : 'partial';
+    const rosterTruncated = taskFactsResult.roster?.truncated === true;
+    const factsComplete = !taskFactsResult.truncated && !rosterTruncated;
+    const metricCompleteness = effectiveScopeSummary.completeProjectView && factsComplete ? 'complete' : 'partial';
+    const snapshotCompleteness = metricCompleteness === 'complete' && snapshotConsistent ? 'complete' : 'partial';
     const activityCoverage = !effectiveScopeSummary.completeProjectView
       ? 'partial'
       : 'complete';
+
+    const completedInPeriodTasks = visibleTasks.filter((task) => completedInPeriodIds.has(task.id));
+    const openTasks = visibleTasks.filter((task) => task.status !== 'done');
+    const overdueTasks = openTasks.filter((task) => isOverdue(task, resolvedToday));
+    const dueSoonTasks = openTasks.filter((task) => isDueWithin(task, resolvedToday, 7));
+    const undatedDoneCount = (!factsComplete || !snapshotConsistent)
+      ? null
+      : visibleTasks.filter((task) => task.status === 'done' && !task.actualFinish).length;
 
     const scopeQualifier = () => {
       if (resolvedScope.tur === 'kisi' && resolvedScope.targetPerson?.name) {
@@ -879,7 +972,7 @@ export async function buildExecutiveReportEvidence({
         deger: openTasks.length,
         ...commonScopeFields,
         veri_ani: veriAni,
-        tamlik: metricCompleteness
+        tamlik: snapshotCompleteness
       },
       {
         _metricKey: 'snapshot_overdue',
@@ -889,7 +982,7 @@ export async function buildExecutiveReportEvidence({
         deger: overdueTasks.length,
         ...commonScopeFields,
         veri_ani: veriAni,
-        tamlik: metricCompleteness
+        tamlik: snapshotCompleteness
       },
       {
         _metricKey: 'snapshot_due_7',
@@ -899,7 +992,7 @@ export async function buildExecutiveReportEvidence({
         deger: dueSoonTasks.length,
         ...commonScopeFields,
         veri_ani: veriAni,
-        tamlik: metricCompleteness
+        tamlik: snapshotCompleteness
       },
       {
         _metricKey: 'snapshot_undated_done',
@@ -909,8 +1002,8 @@ export async function buildExecutiveReportEvidence({
         deger: undatedDoneCount,
         ...commonScopeFields,
         veri_ani: veriAni,
-        kayit_kapsami: undatedDoneCount === null ? 'unknown' : metricCompleteness,
-        tamlik: metricCompleteness
+        kayit_kapsami: undatedDoneCount === null ? 'unknown' : snapshotCompleteness,
+        tamlik: snapshotCompleteness
       }
     ];
 
@@ -918,10 +1011,17 @@ export async function buildExecutiveReportEvidence({
     let comparisonCompletedCount = null;
     if (normalizedRequest.karsilastirma !== 'yok' && normalizedRequest.karsilastirma_donemi) {
       const comp = normalizedRequest.karsilastirma_donemi;
-      comparisonCompletedCount = visibleTasks.filter((task) => task.status === 'done'
-        && Boolean(task.actualFinish)
-        && task.actualFinish >= comp.baslangic
-        && task.actualFinish <= comp.bitis).length;
+      const comparisonCompletedIds = new Set();
+      for (const task of visibleTasks) {
+        const doneByActualFinish = task.status === 'done'
+          && Boolean(task.actualFinish)
+          && task.actualFinish >= comp.baslangic
+          && task.actualFinish <= comp.bitis;
+        if (doneByActualFinish || auditCompletedInComparisonIds.has(task.id)) {
+          comparisonCompletedIds.add(task.id);
+        }
+      }
+      comparisonCompletedCount = comparisonCompletedIds.size;
       coreMetrics.push({
         _metricKey: 'comparison_completed',
         tur: 'olcu',
@@ -934,14 +1034,14 @@ export async function buildExecutiveReportEvidence({
       });
     }
 
-    // Çok projeli kapsamlarda proje bazlı tamamlanan kırılımı ikincil ölçü olarak eklenir.
+    // Çok projeli kapsamlarda proje bazlı tamamlanan kırılımı ikincil ölçü olarak eklenir (görevsiz seçili projeler dâhil).
     const secondaryMetrics = [];
     if (scopeCodes.length > 1) {
       const sortedProjects = [...projects.values()].sort((a, b) => a.projectId.localeCompare(b.projectId));
       for (const project of sortedProjects) {
         const projCompleted = completedInPeriodTasks.filter((task) => task.projectId === project.projectId).length;
         const projAccess = projectAccess(scope, project.projectId);
-        const projComplete = Boolean(scope.isAdmin || projAccess?.accessLevel === 'FULL' || projAccess?.readGrant);
+        const projComplete = Boolean(scope.isAdmin || projAccess?.accessLevel === 'FULL' || projAccess?.readGrant) && factsComplete;
         secondaryMetrics.push({
           _metricKey: `project_completed:${project.projectId}`,
           tur: 'olcu',
@@ -999,6 +1099,7 @@ export async function buildExecutiveReportEvidence({
         ...(task._overdue ? { geciken_gun: overdueDays(task, resolvedToday) } : {}),
         ...(task._completedInPeriod ? { donemde_tamamlandi: true } : {}),
         ...(task._activeInPeriod ? { donemde_hareketli: true } : {}),
+        ...(task._postCutoffModified ? { kesit_sonrasi_degisti: true } : {}),
         ...(deps ? { bagimliliklar: { oncul: [...deps.oncul].sort(), ardil: [...deps.ardil].sort() } } : {}),
         ...(resolvedScope.tur === 'kisi' && resolvedScope.targetPerson?.name ? { sorumlu: resolvedScope.targetPerson.name } : {}),
         ...(resolvedScope.tur === 'ekip' ? { ekip: resolvedScope.teamLabel } : {}),
@@ -1012,6 +1113,7 @@ export async function buildExecutiveReportEvidence({
       const project = projects.get(version.projectId);
       return {
         _taskId: version.taskId,
+        _projectId: version.projectId,
         tur: 'not',
         kaynak: version.kaynak,
         gorev: version.taskId,
@@ -1036,7 +1138,8 @@ export async function buildExecutiveReportEvidence({
     });
 
     // 12. Sunucu türetimleri (F#) kurucusu — yalnızca tam ve geçerli paydalardan oran hesaplar.
-    const completePopulation = effectiveScopeSummary.completeProjectView && !taskFactsResult.truncated;
+    const completePopulation = effectiveScopeSummary.completeProjectView && factsComplete;
+    const snapshotCompletePopulation = completePopulation && snapshotConsistent;
     const buildDerivedFindings = ({ metricIdByKey }) => {
       const findings = [];
       const curCompId = metricIdByKey.get('period_completed');
@@ -1064,7 +1167,7 @@ export async function buildExecutiveReportEvidence({
         });
       }
 
-      if (completePopulation && openTasks.length > 0 && overdueTasks.length > 0 && openId && overdueId) {
+      if (snapshotCompletePopulation && openTasks.length > 0 && overdueTasks.length > 0 && openId && overdueId) {
         findings.push({
           tur: 'gecikme_payi',
           girdiler: [overdueId, openId],
@@ -1104,17 +1207,19 @@ export async function buildExecutiveReportEvidence({
             toplam: milestoneTasks.length,
             acik: milestoneTasks.filter((task) => task.status !== 'done').length,
             geciken: milestoneTasks.filter((task) => isOverdue(task, resolvedToday)).length,
-            donemde_tamamlanan: milestoneTasks.filter((task) => task.status === 'done'
-              && Boolean(task.actualFinish)
-              && task.actualFinish >= normalizedRequest.donem.baslangic
-              && task.actualFinish <= normalizedRequest.donem.bitis).length
+            donemde_tamamlanan: milestoneTasks.filter((task) => completedInPeriodIds.has(task.id)).length
           },
-          kosul: completePopulation ? 'tam yetkili kapsam' : 'yetkili görünür görev alt kümesi'
+          kosul: snapshotCompletePopulation ? 'tam yetkili kapsam' : 'yetkili görünür görev alt kümesi'
         });
       }
 
       return findings;
     };
+
+    // Sayısal Sicil seçicisi model paketine sızmaz; kişi kapsamında güvenli görünen ad veya rapor-içi etiket yayımlanır.
+    const modelSafeScopeIds = resolvedScope.tur === 'kisi'
+      ? [resolvedScope.targetPerson?.name || 'secili_kisi']
+      : [...normalizedRequest.kapsam.kimlikler];
 
     // 13. Kanonik paketi sınırlar içinde oluştur.
     const evidencePackage = finalizeBoundedPackage({
@@ -1128,7 +1233,7 @@ export async function buildExecutiveReportEvidence({
           },
           kapsam: {
             tur: normalizedRequest.kapsam.tur,
-            kimlikler: [...normalizedRequest.kapsam.kimlikler]
+            kimlikler: modelSafeScopeIds
           },
           ayrinti: normalizedRequest.ayrinti,
           odak: normalizedRequest.odak,
@@ -1153,24 +1258,51 @@ export async function buildExecutiveReportEvidence({
       noteCandidates,
       taskById,
       today: resolvedToday,
+      period: normalizedRequest.donem,
       limits,
       buildDerivedFindings,
       noteCompleteness: noteCollection.completeness,
       scopeSummary: effectiveScopeSummary,
       activityCoverage,
+      dependencyCoverage,
+      dependencyTruncated,
       undatedDoneCount,
       totalEligibleTasks: prioritizedTasks.length,
-      taskReadTruncated: Boolean(taskFactsResult.truncated)
+      taskReadTruncated: Boolean(taskFactsResult.truncated),
+      rosterTruncated,
+      snapshotConsistent
     });
 
-    // 14. Son yetki sınırı: toplama sırasında yetki değiştiyse bayat paketi reddet (kapalı ret).
+    // 14. Son yetki ve görev görünürlüğü sınırı: yetki dönemi veya taşınmış görev proje bağı değiştiyse paketi reddet (kapalı ret).
     effectiveSignal.throwIfAborted();
-    await turn.revalidateAuthorization(effectiveSignal);
+    const { scope: latestScope } = await turn.revalidateAuthorization(effectiveSignal);
     if (turn.authorizationEpoch() !== initialEpoch) {
       throw new ServerPersistenceError(
         'AUTHORIZATION_CHANGED',
         'Kanıt toplama sırasında yetki kapsamı değiştiği için kanıt paketi geçersiz kılındı.'
       );
+    }
+    if (visibleTasks.length > 0) {
+      const visibleTaskIds = visibleTasks.map((task) => task.id);
+      const currentVisible = new Map();
+      const chunkSize = 2000;
+      for (let offset = 0; offset < visibleTaskIds.length; offset += chunkSize) {
+        effectiveSignal.throwIfAborted();
+        const chunk = visibleTaskIds.slice(offset, offset + chunkSize);
+        const found = await turn.sql(effectiveSignal, (executor) => readVisibleTasks(executor, latestScope, chunk));
+        for (const [taskId, info] of found.entries()) {
+          currentVisible.set(taskId, info);
+        }
+      }
+      for (const task of visibleTasks) {
+        const current = currentVisible.get(task.id);
+        if (!current || current.projectId !== task.projectId) {
+          throw new ServerPersistenceError(
+            'AUTHORIZATION_CHANGED',
+            'Kanıt toplama sırasında görev görünürlüğü veya proje bağı değiştiği için kanıt paketi geçersiz kılındı.'
+          );
+        }
+      }
     }
 
     // Sunucuya ait yetki ve ölçüm bağlamı model girdisinden ayrı döndürülür (Mimari §5).

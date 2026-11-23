@@ -8,12 +8,18 @@ import { validateEvidencePackageContract } from './reportRequest.js';
  * kaynak ve kayıt zamanı bağlamıyla birlikte gösterir.
  */
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function sanitizePackageForPreview(pkg, { includeRawText = false } = {}) {
+  if (!isPlainObject(pkg)) return pkg;
   if (includeRawText) return pkg;
+  const rawEntries = Array.isArray(pkg.kanitlar) ? pkg.kanitlar : [];
   return {
     ...pkg,
-    kanitlar: (pkg.kanitlar || []).map((entry) => {
-      if (entry?.tur !== 'not') return entry;
+    kanitlar: rawEntries.map((entry) => {
+      if (!isPlainObject(entry) || entry.tur !== 'not') return entry;
       const { metin, ...rest } = entry;
       return {
         ...rest,
@@ -37,29 +43,45 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
   const validation = validateEvidencePackageContract(evidencePackage);
   const safePackage = sanitizePackageForPreview(evidencePackage, { includeRawText: allowRawText });
 
+  const pkgObj = isPlainObject(evidencePackage) ? evidencePackage : {};
+  const safeObj = isPlainObject(safePackage) ? safePackage : {};
+  const req = isPlainObject(pkgObj.istek) ? pkgObj.istek : {};
+  const reqDonem = isPlainObject(req.donem) ? req.donem : {};
+  const reqKapsam = isPlainObject(req.kapsam) ? req.kapsam : {};
+  const scopeIds = Array.isArray(reqKapsam.kimlikler) ? reqKapsam.kimlikler : [];
+  const rawKanitlar = Array.isArray(pkgObj.kanitlar) ? pkgObj.kanitlar : [];
+  const safeKanitlar = Array.isArray(safeObj.kanitlar) ? safeObj.kanitlar : [];
+  const safeTuretilmis = Array.isArray(safeObj.turetilmis) ? safeObj.turetilmis : [];
+  const safeCeliskiler = Array.isArray(safeObj.celiskiler) ? safeObj.celiskiler : [];
+  const sinirlar = isPlainObject(pkgObj.sinirlar) ? pkgObj.sinirlar : {};
+
   const lines = [];
-  const req = evidencePackage?.istek || {};
-  lines.push(`=== Bilgin Yönetici Kanıt Paketi Önizlemesi (${evidencePackage?.sema || 'bilinmiyor'}) ===`);
+  lines.push(`=== Bilgin Yönetici Kanıt Paketi Önizlemesi (${pkgObj.sema || 'bilinmiyor'}) ===`);
   lines.push(`Doğrulama: ${validation.ok ? 'GEÇERLİ' : `SORUNLU (${validation.problems.join(', ')})`}`);
   lines.push(`Rapor Türü: ${req.rapor_turu || '-'} | Ayrıntı: ${req.ayrinti || '-'} | Odak: ${req.odak || '-'}`);
-  lines.push(`Dönem: ${req.donem?.baslangic || '-'} .. ${req.donem?.bitis || '-'} (${req.donem?.ad || '-'})`);
+  lines.push(`Dönem: ${reqDonem.baslangic || '-'} .. ${reqDonem.bitis || '-'} (${reqDonem.ad || '-'})`);
   if (req.karsilastirma && req.karsilastirma !== 'yok') {
-    const comp = req.karsilastirma_donemi;
-    lines.push(`Karşılaştırma (${req.karsilastirma}): ${comp?.baslangic || '-'} .. ${comp?.bitis || '-'} (${comp?.ad || '-'})`);
+    const comp = isPlainObject(req.karsilastirma_donemi) ? req.karsilastirma_donemi : {};
+    lines.push(`Karşılaştırma (${req.karsilastirma}): ${comp.baslangic || '-'} .. ${comp.bitis || '-'} (${comp.ad || '-'})`);
   }
-  lines.push(`Kapsam: ${req.kapsam?.tur || '-'} → [${(req.kapsam?.kimlikler || []).join(', ')}]`);
-  lines.push(`Not Rızası: ${req.notlar || 'haric'} | Veri Anı: ${evidencePackage?.veri_ani || '-'}`);
-  lines.push(`Boyut: ${(evidencePackage?.kanitlar || []).length}/${evidencePackage?.sinirlar?.kanit_sayisi_en_fazla ?? '-'} kanıt | ${validation.serializedChars}/${evidencePackage?.sinirlar?.karakter_en_fazla ?? '-'} karakter`);
+  lines.push(`Kapsam: ${reqKapsam.tur || '-'} → [${scopeIds.join(', ')}]`);
+  lines.push(`Not Rızası: ${req.notlar || 'haric'} | Veri Anı: ${pkgObj.veri_ani || '-'}`);
+  lines.push(`Boyut: ${rawKanitlar.length}/${sinirlar.kanit_sayisi_en_fazla ?? '-'} kanıt | ${validation.serializedChars}/${sinirlar.karakter_en_fazla ?? '-'} karakter`);
 
-  const tamlik = evidencePackage?.tamlik || {};
+  const tamlik = isPlainObject(pkgObj.tamlik) ? pkgObj.tamlik : {};
   lines.push(`Tamlık: kapsam=${tamlik.kapsam_gorunurlugu || '-'}, hareket=${tamlik.hareket || '-'}, tarihsiz_tamamlanan=${tamlik.tarihsiz_tamamlanan === null ? 'bilinmiyor' : (tamlik.tarihsiz_tamamlanan ?? '-')}, kesildi=${Boolean(tamlik.paket_kesildi)}, dışarıda_kalan=${tamlik.disarida_kalan_kanit ?? 0}`);
   if (tamlik.notlar) lines.push(`Not Tamlığı: ${tamlik.notlar}`);
 
   lines.push('');
-  lines.push(`--- Kanıtlar (${(safePackage.kanitlar || []).length}) ---`);
-  for (const entry of safePackage.kanitlar || []) {
-    const timeTag = entry.donem
-      ? `dönem=${entry.donem.baslangic}..${entry.donem.bitis}`
+  lines.push(`--- Kanıtlar (${safeKanitlar.length}) ---`);
+  const byType = {};
+  for (const entry of safeKanitlar) {
+    // Bozuk veya boş kanıt girdileri önizlemeyi düşürmez; doğrulama sorunları korunur.
+    if (!isPlainObject(entry)) continue;
+    byType[entry.tur] = (byType[entry.tur] || 0) + 1;
+    const entryDonem = isPlainObject(entry.donem) ? entry.donem : null;
+    const timeTag = entryDonem
+      ? `dönem=${entryDonem.baslangic || '-'}..${entryDonem.bitis || '-'}`
       : entry.veri_ani
         ? `veri_ani=${entry.veri_ani}`
         : entry.kayit_zamani
@@ -79,8 +101,8 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
         entry.guvenilmez_yonerge_iceriyor ? 'GUVENILMEZ_YONERGE' : null
       ].filter(Boolean).join(', ');
       const previewText = allowRawText
-        ? ` | metin="${entry.metin}"`
-        : ` | metin=<gizlendi:${entry.metin_karakter_sayisi} krk>`;
+        ? ` | metin="${entry.metin ?? ''}"`
+        : ` | metin=<gizlendi:${entry.metin_karakter_sayisi ?? 0} krk>`;
       lines.push(`[${entry.id}] NOT | kaynak=${entry.kaynak} | gorev=${entry.gorev} | ${timeTag}${flags ? ` | [${flags}]` : ''}${previewText}`);
     } else if (entry.tur === 'hareket') {
       lines.push(`[${entry.id}] HAREKET | kaynak=${entry.kaynak} | ${timeTag} | kayit_kapsami=${entry.kayit_kapsami || '-'} | ozet=${JSON.stringify(entry.donem_ozeti || {})}`);
@@ -89,25 +111,24 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
     }
   }
 
-  if ((safePackage.turetilmis || []).length > 0) {
+  if (safeTuretilmis.length > 0) {
     lines.push('');
-    lines.push(`--- Sunucu Türetimleri (${safePackage.turetilmis.length}) ---`);
-    for (const finding of safePackage.turetilmis) {
-      lines.push(`[${finding.id}] ${finding.tur} | girdiler=[${(finding.girdiler || []).join(', ')}] | deger=${JSON.stringify(finding.deger)}${finding.kosul ? ` | kosul=${finding.kosul}` : ''}`);
+    lines.push(`--- Sunucu Türetimleri (${safeTuretilmis.length}) ---`);
+    for (const finding of safeTuretilmis) {
+      if (!isPlainObject(finding)) continue;
+      const refs = Array.isArray(finding.girdiler) ? finding.girdiler : [];
+      lines.push(`[${finding.id}] ${finding.tur} | girdiler=[${refs.join(', ')}] | deger=${JSON.stringify(finding.deger)}${finding.kosul ? ` | kosul=${finding.kosul}` : ''}`);
     }
   }
 
-  if ((safePackage.celiskiler || []).length > 0) {
+  if (safeCeliskiler.length > 0) {
     lines.push('');
-    lines.push(`--- Çelişkiler (${safePackage.celiskiler.length}) ---`);
-    for (const conflict of safePackage.celiskiler) {
-      lines.push(`! ${conflict.tur} | kanitlar=[${(conflict.kanitlar || []).join(', ')}] | ${conflict.aciklama || ''}`);
+    lines.push(`--- Çelişkiler (${safeCeliskiler.length}) ---`);
+    for (const conflict of safeCeliskiler) {
+      if (!isPlainObject(conflict)) continue;
+      const refs = Array.isArray(conflict.kanitlar) ? conflict.kanitlar : [];
+      lines.push(`! ${conflict.tur} | kanitlar=[${refs.join(', ')}] | ${conflict.aciklama || ''}`);
     }
-  }
-
-  const byType = {};
-  for (const entry of safePackage.kanitlar || []) {
-    byType[entry.tur] = (byType[entry.tur] || 0) + 1;
   }
 
   return {
@@ -117,8 +138,8 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
     paketJson: JSON.stringify(safePackage, null, 2),
     secimTanisi: {
       kanitSayilari: byType,
-      turetimSayisi: (safePackage.turetilmis || []).length,
-      celiskiSayisi: (safePackage.celiskiler || []).length,
+      turetimSayisi: safeTuretilmis.filter(isPlainObject).length,
+      celiskiSayisi: safeCeliskiler.filter(isPlainObject).length,
       paketKesildi: Boolean(tamlik.paket_kesildi),
       disaridaKalanKanit: tamlik.disarida_kalan_kanit ?? 0,
       karakterSayisi: validation.serializedChars,

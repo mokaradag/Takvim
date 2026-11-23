@@ -276,9 +276,9 @@ export function executiveReportBenchmarkSeed(overrides = {}) {
     // R4: PRJ-MELTEM iki çelişkili not sürümü (3 Kasım 09:15+03 → 7 Kasım 15:30+03)
     {
       AuditId: 3, OccurredAt: '2026-11-03T06:15:00.000Z', ActorSicil: U.MERT, ActorDisplayName: 'Mert Yalçıner',
-      ActionCode: 'CREATE', EntityType: 'TASK', EntityId: T.MLT_ENTEGRASYON, ProjectId: P.MELTEM,
+      ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: T.MLT_ENTEGRASYON, ProjectId: P.MELTEM,
       CorrelationId: '65000000-0000-4000-8000-000000000003',
-      BeforeJson: null,
+      BeforeJson: JSON.stringify({ Status: 'in-progress', Description: null }),
       AfterJson: JSON.stringify({ Status: 'in-progress', Description: 'Entegrasyon testi 12 Kasım’a planlandı.' })
     },
     {

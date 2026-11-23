@@ -19,7 +19,10 @@ import {
   AI_TOOL_TASK_NOTES_SQL,
   AI_TOOL_REPORT_TASK_NOTES_SQL,
   AI_TOOL_REPORT_NOTE_AUDIT_SQL,
-  AI_TOOL_REPORT_SCOPE_ROSTER_SQL
+  AI_TOOL_REPORT_SCOPE_ROSTER_SQL,
+  AI_TOOL_REPORT_PROJECT_SELECTORS_SQL,
+  AI_TOOL_REPORT_DEPENDENCIES_SQL,
+  AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL
 } from './rotaToolQueries.js';
 import { readTaskActivityReport } from '../../../reports/taskActivityReport.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
@@ -52,7 +55,7 @@ function scoped(executor, scope, options) {
     }
   };
   request.input('sourceFilter', sql.VarChar(12), options?.source || 'all');
-  request.input('projectSearchText', sql.NVarChar(120), options?.projectSearchText || '');
+  request.input('projectSearchText', sql.NVarChar(160), options?.projectSearchText || '');
   request.input('analysisMaxRows', sql.Int, TOOL_LIMITS.maxAnalyzedTasks + 1);
   request.input('analysisAssignmentRows', sql.Int, TOOL_LIMITS.maxAnalyzedAssignments + 1);
   return request;
@@ -74,7 +77,8 @@ export async function readTaskFacts(executor, scope, {
   openOnly = false, targetFrom = null, targetTo = null, createdByMe = false, hasDescription = false, includeUndated = false,
   statuses = [], priorities = [], milestone = null, deadline = null,
   dateField = null, dateFrom = null, dateTo = null, today = null,
-  assigneeMode = 'any', personSicil = null, teamLevel = null, withAssignees = false, maxRows, rosterRows = 0
+  assigneeMode = 'any', personSicil = null, teamLevel = null, assigneeSicils = [], includeHasDescription = true,
+  withAssignees = false, maxRows, rosterRows = 0
 }) {
   const request = scoped(executor, scope, { projectId, projectIds, taskIds });
   request.input('maxRows', sql.Int, maxRows + 1);
@@ -99,6 +103,9 @@ export async function readTaskFacts(executor, scope, {
   request.input('assigneeMode', sql.VarChar(12), assigneeMode);
   request.input('personSicil', sql.Int, personSicil);
   request.input('teamLevel', sql.VarChar(20), teamLevel || '');
+  const safeAssigneeSicils = [...new Set((assigneeSicils || []).map(Number).filter((s) => Number.isSafeInteger(s) && s > 0))];
+  request.input('assigneeSicils', sql.NVarChar(sql.MAX), safeAssigneeSicils.join(','));
+  request.input('includeHasDescription', sql.Bit, includeHasDescription ? 1 : 0);
   request.input('withAssignees', sql.Bit, withAssignees ? 1 : 0);
   // Aşama G: ekip kadrosu yalnızca istenirse ve ekip süzgeciyle aynı toplu işte okunur (`rosterRows` + 1 kesikliği gösterir).
   const withRoster = rosterRows > 0 && assigneeMode === 'team';
@@ -164,7 +171,7 @@ export async function readTaskDetail(executor, scope, taskId) {
 
 export async function readProjectSearch(executor, scope, { text, limit, projectId = null, projectIds = [] }) {
   const request = scoped(executor, scope, { projectId, projectIds, projectSearchText: text });
-  request.input('text', sql.NVarChar(120), text);
+  request.input('text', sql.NVarChar(160), text);
   request.input('limit', sql.Int, limit);
   const [[count] = [], rows = [], population = []] = recordsets(await request.query(AI_TOOL_PROJECT_SEARCH_SQL));
   return { total: Number(count?.Total || 0), exactCount: Number(count?.ExactCount || 0), rows, projectIds: population.map((row) => canonicalActualId(row.ProjectId)) };
@@ -281,13 +288,14 @@ export async function readOutlook(executor, scope, { taskIds = [], maxRows }) {
 export const REPORT_TASK_NOTE_CHARS = 1600;
 
 /**
- * Yönetici raporu için görünür görevlerin güncel açıklamalarını (en çok 1600 kod noktası) okur.
+ * Yönetici raporu için görünür görevlerin güncel açıklamalarını (en çok 1600 kod noktası) ve tam metin özetini okur.
  * Yalnızca rapor düzeyinde açık `notlar: dahil` rızası doğrulandıktan sonra çağrılmalıdır.
  */
-export async function readReportTaskNotes(executor, scope, taskIds, { maxRows = 60 } = {}) {
+export async function readReportTaskNotes(executor, scope, taskIds, { maxRows = 60, cutOffUtc = null } = {}) {
   if (!taskIds.length) return { notes: new Map(), truncated: false };
   const request = scoped(executor, scope, { taskIds });
   request.input('maxNoteRows', sql.Int, maxRows + 1);
+  request.input('cutOffUtc', sql.DateTime2, cutOffUtc ? (cutOffUtc instanceof Date ? cutOffUtc : new Date(cutOffUtc)) : null);
   const [noteRows = []] = recordsets(await request.query(AI_TOOL_REPORT_TASK_NOTES_SQL));
   const { rows, truncated } = capped(noteRows, maxRows);
   const notes = new Map(rows.map((row) => {
@@ -295,44 +303,109 @@ export async function readReportTaskNotes(executor, scope, taskIds, { maxRows = 
     return [canonicalActualId(row.TaskId), {
       projectId: canonicalActualId(row.ProjectId),
       text: characters.slice(0, REPORT_TASK_NOTE_CHARS).join(''),
-      clipped: characters.length > REPORT_TASK_NOTE_CHARS
+      clipped: characters.length > REPORT_TASK_NOTE_CHARS,
+      fullHash: row.DescriptionHash ? String(row.DescriptionHash) : null
     }];
   }));
   return { notes, truncated };
 }
 
 /**
- * Yönetici raporu için görünür görevlerin yetkili `MR_AuditLog` açıklama sürümlerini veri kesitine kadar okur.
+ * Yönetici raporu için görünür görevlerin yetkili `MR_AuditLog` açıklama geçişlerini veri kesitine kadar okur.
  * Yalnızca rapor düzeyinde açık `notlar: dahil` rızası doğrulandıktan sonra çağrılmalıdır.
  */
 export async function readReportNoteAuditHistory(executor, scope, taskIds, { cutOffUtc, maxRows = 250 } = {}) {
-  if (!taskIds.length) return { events: [], truncated: false };
+  if (!taskIds.length) return { events: [], truncated: false, corruptedCount: 0 };
   const request = scoped(executor, scope, { taskIds });
   request.input('cutOffUtc', sql.DateTime2, cutOffUtc instanceof Date ? cutOffUtc : new Date(cutOffUtc));
   request.input('maxAuditRows', sql.Int, maxRows + 1);
   const [auditRows = []] = recordsets(await request.query(AI_TOOL_REPORT_NOTE_AUDIT_SQL));
   const { rows, truncated } = capped(auditRows, maxRows);
-  return {
-    events: rows.map((row) => ({
+  const clipDesc = (raw) => {
+    if (raw == null) return { text: null, clipped: false };
+    const characters = Array.from(String(raw));
+    return {
+      text: characters.slice(0, REPORT_TASK_NOTE_CHARS).join(''),
+      clipped: characters.length > REPORT_TASK_NOTE_CHARS
+    };
+  };
+  let corruptedCount = 0;
+  const events = rows.map((row) => {
+    const malformed = Boolean(row.SnapshotMalformed);
+    if (malformed) corruptedCount += 1;
+    const before = clipDesc(row.BeforeDescription);
+    const after = clipDesc(row.AfterDescription);
+    return {
       auditId: Number(row.AuditId),
       occurredAt: row.OccurredAt ? new Date(row.OccurredAt).toISOString() : null,
       actionCode: String(row.ActionCode || ''),
       taskId: canonicalActualId(row.TaskId),
       projectId: canonicalActualId(row.ProjectId),
-      beforeJson: row.BeforeJson ?? null,
-      afterJson: row.AfterJson ?? null,
-      detailJsonClipped: Boolean(row.DetailJsonClipped)
-    })),
-    truncated
-  };
+      beforeDescription: before.text,
+      afterDescription: after.text,
+      beforeClipped: before.clipped,
+      afterClipped: after.clipped,
+      beforeHash: row.BeforeDescHash ? String(row.BeforeDescHash) : null,
+      afterHash: row.AfterDescHash ? String(row.AfterDescHash) : null,
+      beforeReadable: row.BeforeReadable !== undefined ? Boolean(row.BeforeReadable) : true,
+      afterReadable: row.AfterReadable !== undefined ? Boolean(row.AfterReadable) : true,
+      beforeOriginUnauthorized: Boolean(row.BeforeOriginUnauthorized),
+      snapshotMalformed: malformed
+    };
+  });
+  return { events, truncated, corruptedCount };
+}
+
+const ISTANBUL_CLOCK = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Istanbul',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23'
+});
+
+function istanbulMidnightUtc(isoDay, offsetDays = 0) {
+  const wallTime = Date.parse(`${isoDay}T00:00:00Z`) + offsetDays * 86400000;
+  let instant = wallTime;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = Object.fromEntries(
+      ISTANBUL_CLOCK.formatToParts(new Date(instant))
+        .filter((part) => part.type !== 'literal')
+        .map(({ type, value }) => [type, value])
+    );
+    const local = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+    instant = wallTime - (local - instant);
+  }
+  return new Date(instant);
 }
 
 /**
  * Yönetici raporu kişi, ekip ve kurumsal birim kapsamını yetkili sınırlar içinde doğrulamak için kadro okur.
+ * Proje analiz sınırından bağımsızdır ve seçici süzgecini satır sınırından önce uygular.
  */
-export async function readReportScopeRoster(executor, scope, { maxRows = 500 } = {}) {
-  const request = scoped(executor, scope, {});
+export async function readReportScopeRoster(executor, scope, {
+  maxRows = 500,
+  mode = 'all',
+  includeSelf = true,
+  rosterSicil = null,
+  text = '',
+  hierarchyKey = '',
+  scopeType = ''
+} = {}) {
+  const request = executor.request();
+  request.input('sicil', sql.Int, scope.sicil);
+  request.input('isAdmin', sql.Bit, scope.isAdmin ? 1 : 0);
+  request.input('scopeProjects', sql.NVarChar(sql.MAX), scope.projectTokens);
   request.input('maxRosterRows', sql.Int, maxRows + 1);
+  request.input('rosterIncludeSelf', sql.Bit, includeSelf ? 1 : 0);
+  request.input('rosterMode', sql.VarChar(20), mode);
+  request.input('rosterSicil', sql.Int, rosterSicil);
+  request.input('rosterText', sql.NVarChar(160), text || '');
+  request.input('rosterHierarchyKey', sql.NVarChar(500), hierarchyKey || '');
+  request.input('rosterScopeType', sql.VarChar(20), scopeType || '');
   const [rosterRows = []] = recordsets(await request.query(AI_TOOL_REPORT_SCOPE_ROSTER_SQL));
   const { rows, truncated } = capped(rosterRows, maxRows);
   return {
@@ -346,6 +419,88 @@ export async function readReportScopeRoster(executor, scope, { maxRows = 500 } =
       scopeType: String(row.ScopeType || '')
     })).filter((member) => Number.isSafeInteger(member.sicil) && member.sicil > 0),
     truncated
+  };
+}
+
+/**
+ * Çok projeli rapor seçicilerini (1–25 proje) tek sınırlı SQL sorgusuyla yetkili projeler içinde çözer.
+ */
+export async function readReportProjectsBySelectors(executor, scope, selectors = []) {
+  if (!selectors.length) return [];
+  const payload = selectors.map((raw, index) => ({
+    index,
+    raw: String(raw),
+    guid: canonicalActualId(raw) || null
+  }));
+  const allGuids = payload.every((item) => Boolean(item.guid)) ? payload.map((item) => item.guid) : [];
+  const request = scoped(executor, scope, { projectIds: allGuids });
+  request.input('selectorJson', sql.NVarChar(sql.MAX), JSON.stringify(payload));
+  const [rows = []] = recordsets(await request.query(AI_TOOL_REPORT_PROJECT_SELECTORS_SQL));
+  return rows;
+}
+
+/**
+ * Seçili FULL erişimli projelerin bağımlılıklarını tek sınırlı SQL sorgusuyla okur.
+ */
+export async function readReportDependencies(executor, scope, { projectIds = [], maxRows = 1000 } = {}) {
+  if (!projectIds.length) return { dependencies: [], truncated: false };
+  const request = scoped(executor, scope, { projectIds });
+  request.input('maxRows', sql.Int, maxRows + 1);
+  const [dependencyRows = []] = recordsets(await request.query(AI_TOOL_REPORT_DEPENDENCIES_SQL));
+  const { rows, truncated } = capped(dependencyRows, maxRows);
+  return { dependencies: rows, truncated };
+}
+
+/**
+ * Yönetici raporu için dönem hareket özetini tek sınırlı sorguda (ham not/JSON metni olmadan) okur.
+ */
+export async function readReportActivitySummary(executor, scope, {
+  from,
+  to,
+  projectIds = [],
+  assigneeSicils = [],
+  cutOffUtc = null,
+  analyzedActivityLimit = TOOL_LIMITS.maxAnalyzedActivities
+}) {
+  const startUtc = istanbulMidnightUtc(from, 0);
+  const endUtc = istanbulMidnightUtc(to, 1);
+  const request = executor.request();
+  const safeProjectIds = [...new Set((projectIds || []).map(canonicalActualId).filter(Boolean))];
+  const safeAssigneeSicils = [...new Set((assigneeSicils || []).map(Number).filter((s) => Number.isSafeInteger(s) && s > 0))];
+  request.input('sicil', sql.Int, scope.sicil);
+  request.input('isAdmin', sql.Bit, scope.isAdmin ? 1 : 0);
+  request.input('scopeProjects', sql.NVarChar(sql.MAX), scope.projectTokens);
+  request.input('scopeTasks', sql.NVarChar(sql.MAX), scope.scopedTaskIds);
+  request.input('projectIds', sql.NVarChar(sql.MAX), safeProjectIds.join(','));
+  request.input('assigneeSicils', sql.NVarChar(sql.MAX), safeAssigneeSicils.join(','));
+  request.input('startUtc', sql.DateTime2, startUtc);
+  request.input('endUtc', sql.DateTime2, endUtc);
+  request.input('cutOffUtc', sql.DateTime2, cutOffUtc ? (cutOffUtc instanceof Date ? cutOffUtc : new Date(cutOffUtc)) : null);
+  request.input('activityProbeRows', sql.Int, analyzedActivityLimit + 1);
+  let result;
+  try {
+    result = await request.query(AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL);
+  } catch (error) {
+    const number = error?.number ?? error?.originalError?.info?.number;
+    if (number === 51001) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+    throw error;
+  }
+  const [[counts = {}] = [], taskRows = []] = recordsets(result);
+  return {
+    events: Number(counts.Total || 0),
+    tasks: Number(counts.TaskCount || 0),
+    people: Number(counts.ActorCount || 0),
+    completed: Number(counts.CompletedCount || 0),
+    created: Number(counts.CreatedCount || 0),
+    deleted: Number(counts.DeletedCount || 0),
+    reopened: Number(counts.ReopenedCount || 0),
+    updatedOnly: Number(counts.UpdatedOnlyCount || 0),
+    liveTasks: taskRows.map((row) => ({
+      taskId: canonicalActualId(row.TaskId),
+      projectId: canonicalActualId(row.CurrentProjectId),
+      lastActivityDay: row.LastActivityDay ? String(row.LastActivityDay).slice(0, 10) : null,
+      completedInPeriod: Boolean(row.CompletedInPeriod)
+    })).filter((row) => row.taskId)
   };
 }
 

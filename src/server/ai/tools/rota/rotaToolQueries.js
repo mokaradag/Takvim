@@ -30,7 +30,7 @@ const DESCRIPTION_PRESENT_SQL = `${DESCRIPTION_TEXT_START_SQL} > 0`;
  * kurduğu bütün geçici tablolar düşürülür, henüz kurulmamış olanlar atlanır.
  */
 const RESULT_TOO_LARGE = `BEGIN
-    DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTaskIds, #AiScopeTasks, #AiTaskFilter, #AiProjectFilter, #AiTasks,
+    DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTaskIds, #AiScopeTasks, #AiTaskFilter, #AiProjectFilter, #AiAssigneeFilter, #AiTasks,
       #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts,
       #AiProjectMatches, #AiWbsFocus, #AiRequiredWbs, #AiDependencies, #AiRosterStart, #AiRosterEnd;
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
@@ -317,13 +317,13 @@ const TEAM_ROSTER = `
   END
 `;
 
-const taskFactColumns = (teamTask) => `
+const taskFactColumns = (teamTask, { conditionalDescription = false } = {}) => `
     t.TaskId, t.ProjectId, t.WbsId, t.Title, t.Keyword, t.Status, t.Priority, t.IsMilestone,
     t.PlannedStart, t.PlannedFinish, t.PlannedDurationDays, t.TargetFinish, t.ActualStart, t.ActualFinish,
     t.Progress, t.PlannedHours, t.ActualHours, CONVERT(varchar(40), t.Budget) AS Budget, CONVERT(varchar(40), t.Spent) AS Spent,
     t.RecurrenceRule, t.RecurrenceParentTaskId, t.RecurrenceOccurrenceDate,
     t.CreatedAt, t.UpdatedAt, visible.AccessLevel, visible.IdentityBase,
-    CAST(CASE WHEN NOT (${DESCRIPTION_PRESENT_SQL}) THEN 0 ELSE 1 END AS bit) AS HasDescription,
+    CAST(CASE WHEN ${conditionalDescription ? '@includeHasDescription = 1 AND (' : 'NOT ('}${conditionalDescription ? `${DESCRIPTION_PRESENT_SQL}) THEN 1 ELSE 0` : `${DESCRIPTION_PRESENT_SQL}) THEN 0 ELSE 1`} END AS bit) AS HasDescription,
     CAST(CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END AS bit) AS IsCreator,
     CAST(COALESCE(assignment.IsOwnAssignee, 0) AS bit) AS IsOwnAssignee,
     COALESCE(assignment.DisclosedAssigneeCount, 0) AS DisclosedAssigneeCount,
@@ -393,6 +393,12 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
         WHEN 'createdAt' THEN CONVERT(date, t.CreatedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time') END IS NOT NULL))
     AND (@hasDescription = 0 OR ${DESCRIPTION_PRESENT_SQL})
     AND (@createdByMe = 0 OR t.CreatedBySicil = @sicil)
+    AND (LEN(@assigneeSicils) = 0 OR EXISTS (
+      SELECT 1 FROM dbo.MR_TaskAssignees selectedMember
+      JOIN #AiAssigneeFilter af ON af.Sicil = selectedMember.Sicil
+      WHERE selectedMember.TaskId = t.TaskId
+        AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR t.CreatedBySicil = @sicil OR selectedMember.Sicil = @sicil
+          OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = selectedMember.Sicil))))
     AND (@assigneeMode = 'any'
       OR (@assigneeMode = 'me' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil))
       OR (@assigneeMode = 'person' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees person
@@ -408,12 +414,19 @@ export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
   IF @assigneeMode = 'team' AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
     WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))
     THROW 51002, 'AI_TOOL_SCOPE_UNAVAILABLE', 1;
+  DROP TABLE IF EXISTS #AiAssigneeFilter;
+  CREATE TABLE #AiAssigneeFilter(Sicil int NOT NULL PRIMARY KEY);
+  IF LEN(@assigneeSicils) > 0
+    INSERT #AiAssigneeFilter(Sicil)
+    SELECT DISTINCT TRY_CONVERT(int, LTRIM(RTRIM(value)))
+    FROM STRING_SPLIT(@assigneeSicils, ',')
+    WHERE TRY_CONVERT(int, LTRIM(RTRIM(value))) > 0;
 ${TEAM_ROSTER_START}
 ${SCOPE_PROJECTS}
 ${visibleTasks(TASK_ROW_FILTER)}
 ${ASSIGNMENT_FACTS}
   DROP TABLE IF EXISTS #AiFacts;
-  SELECT TOP (@maxRows) ${taskFactColumns(ROSTER_TEAM_TASK)}
+  SELECT TOP (@maxRows) ${taskFactColumns(ROSTER_TEAM_TASK, { conditionalDescription: true })}
   INTO #AiFacts
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
@@ -440,7 +453,7 @@ ${ASSIGNMENT_FACTS}
   WHERE @projectId IS NOT NULL OR EXISTS (SELECT 1 FROM #AiFacts f WHERE f.ProjectId = v.ProjectId);
 ${assigneeRows(ROSTER_TEAM_MEMBER)}
 ${TEAM_ROSTER}
-  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects, #AiRosterStart, #AiRosterEnd;`;
+  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiAssigneeFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects, #AiRosterStart, #AiRosterEnd;`;
 
 /**
  * Kanıt nüfusunun güncel görünürlüğü: verilen görevlerden kullanıcının ŞU AN
@@ -939,36 +952,110 @@ ${visibleTasks()}
 /**
  * Aşama 4I-A — Yönetici raporu görev notları (yalnızca rapor düzeyinde açık `notlar: dahil` rızasıyla çağrılır).
  * Sohbetin 400 karakterlik `AI_TOOL_TASK_NOTES_SQL` sorgusunu ve sınırını değiştirmez; görünür görevlerin
- * güncel açıklamasını ilk boşluk olmayan karakterden itibaren en fazla 1600 kod noktası (+1 kesiklik sınırı) okur.
+ * güncel açıklamasını proje bağı ve veri kesiti (`@cutOffUtc`) doğrulanarak en fazla 1600 kod noktası (+1 kesiklik
+ * sınırı) ve tam metin özetiyle okur.
  */
 export const AI_TOOL_REPORT_TASK_NOTES_SQL = `/* rota-ai-tool:report-task-notes */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
   SELECT TOP (@maxNoteRows) visible.TaskId, visible.ProjectId,
-    SUBSTRING(t.Description COLLATE Latin1_General_100_CI_AS_SC, ${DESCRIPTION_TEXT_START_SQL}, 1601) AS Description
+    SUBSTRING(t.Description COLLATE Latin1_General_100_CI_AS_SC, ${DESCRIPTION_TEXT_START_SQL}, 1601) AS Description,
+    CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(LTRIM(RTRIM(t.Description)) AS nvarchar(max))), 2) AS DescriptionHash
   FROM #AiTasks visible
-  JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
+  JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId AND t.ProjectId = visible.ProjectId
   WHERE ${DESCRIPTION_PRESENT_SQL}
+    AND (@cutOffUtc IS NULL OR t.UpdatedAt IS NULL OR t.UpdatedAt <= @cutOffUtc)
   ORDER BY visible.TaskId;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
+const COMPLETED_AUDIT_STATUSES_SQL = Object.entries(PERSISTED_TASK_STATUSES)
+  .filter(([, status]) => status === 'done')
+  .map(([alias]) => `'${alias}'`)
+  .join(', ');
+
+const TRIM_START_EXPR = (expr) => `PATINDEX(N'%[^' + ${[9, 10, 11, 12, 13, 32, 160, 5760,
+  8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279]
+  .map((code) => `NCHAR(${code})`).join(' + ')} + N']%', COALESCE(${expr}, N'') COLLATE Latin1_General_100_BIN2)`;
+
 /**
  * Aşama 4I-A — Yönetici raporu görev açıklaması denetim tarihçesi (yalnızca açık `notlar: dahil` rızasıyla çağrılır).
- * Görev Hareketleri gizlilik kuralını korur: görev güncel projesinde görünür olmalı, tarihsel denetim satırının
- * projesi etkin ve kullanıcıya FULL/READ düzeyinde açık ya da görevin güncel projesiyle aynı olmalıdır.
- * Veri kesiti (`@cutOffUtc`) sonrası kayıtlar okunmaz.
+ *
+ * Güvenlik ve veri bütünlüğü kuralları:
+ *   - `ISJSON` denetimiyle bozuk JSON satırları sorguyu düşürmez; okunamayan anlık görüntüler açıkça işaretlenir.
+ *   - `OPENJSON` tam `nvarchar(max)` değerini kırpmadan çıkarır; 8192 karakteri aşan açıklamalar kaybolmaz.
+ *   - Açıklamayı değiştirmeyen güncellemeler `TOP (@maxAuditRows)` sınırından ÖNCE elenir.
+ *   - Taşınmış görevde `BeforeJson.ProjectId` yetkisiz kaynak projeye aitse eski açıklama SQL katmanında gizlenir.
  */
 export const AI_TOOL_REPORT_NOTE_AUDIT_SQL = `/* rota-ai-tool:report-note-audit */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
-  SELECT TOP (@maxAuditRows) a.AuditId, a.OccurredAt, a.ActionCode,
-    a.EntityId AS TaskId, a.ProjectId,
-    LEFT(a.BeforeJson, 8192) AS BeforeJson,
-    LEFT(a.AfterJson, 8192) AS AfterJson,
-    CASE WHEN DATALENGTH(a.BeforeJson) > 16384 OR DATALENGTH(a.AfterJson) > 16384 THEN 1 ELSE 0 END AS DetailJsonClipped
+  SELECT TOP (@maxAuditRows)
+    a.AuditId,
+    a.OccurredAt,
+    a.ActionCode,
+    a.EntityId AS TaskId,
+    a.ProjectId,
+    CASE
+      WHEN parsed.BeforeMalformed = 1 OR parsed.BeforeOriginUnauthorized = 1 OR parsed.BeforeStart = 0 THEN NULL
+      ELSE SUBSTRING(parsed.BeforeRaw COLLATE Latin1_General_100_CI_AS_SC, parsed.BeforeStart, 1601)
+    END AS BeforeDescription,
+    CASE
+      WHEN parsed.AfterMalformed = 1 OR parsed.AfterStart = 0 THEN NULL
+      ELSE SUBSTRING(parsed.AfterRaw COLLATE Latin1_General_100_CI_AS_SC, parsed.AfterStart, 1601)
+    END AS AfterDescription,
+    CASE
+      WHEN parsed.BeforeMalformed = 1 OR parsed.BeforeOriginUnauthorized = 1 OR parsed.BeforeStart = 0 THEN NULL
+      ELSE CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(LTRIM(RTRIM(parsed.BeforeRaw)) AS nvarchar(max))), 2)
+    END AS BeforeDescHash,
+    CASE
+      WHEN parsed.AfterMalformed = 1 OR parsed.AfterStart = 0 THEN NULL
+      ELSE CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(LTRIM(RTRIM(parsed.AfterRaw)) AS nvarchar(max))), 2)
+    END AS AfterDescHash,
+    CAST(CASE WHEN parsed.BeforeMalformed = 0 AND parsed.BeforeOriginUnauthorized = 0 THEN 1 ELSE 0 END AS bit) AS BeforeReadable,
+    CAST(CASE WHEN parsed.AfterMalformed = 0 THEN 1 ELSE 0 END AS bit) AS AfterReadable,
+    CAST(parsed.BeforeOriginUnauthorized AS bit) AS BeforeOriginUnauthorized,
+    CAST(CASE WHEN parsed.BeforeMalformed = 1 OR parsed.AfterMalformed = 1 THEN 1 ELSE 0 END AS bit) AS SnapshotMalformed
   FROM dbo.MR_AuditLog a
   JOIN #AiTasks visible ON visible.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)
   JOIN dbo.MR_Projects p ON p.ProjectId = a.ProjectId
+  OUTER APPLY (
+    SELECT
+      MAX(CASE WHEN j.[key] COLLATE Latin1_General_100_BIN2 = N'Description' THEN j.[value] END) AS DescUpper,
+      MAX(CASE WHEN j.[key] COLLATE Latin1_General_100_BIN2 = N'description' THEN j.[value] END) AS DescLower,
+      MAX(CASE WHEN j.[key] COLLATE Latin1_General_100_BIN2 IN (N'ProjectId', N'projectId') THEN j.[value] END) AS SnapProjectId
+    FROM OPENJSON(CASE WHEN a.BeforeJson IS NOT NULL AND ISJSON(a.BeforeJson) = 1 THEN a.BeforeJson END) j
+    WHERE j.[key] COLLATE Latin1_General_100_BIN2 IN (N'Description', N'description', N'ProjectId', N'projectId')
+  ) b
+  OUTER APPLY (
+    SELECT
+      MAX(CASE WHEN j.[key] COLLATE Latin1_General_100_BIN2 = N'Description' THEN j.[value] END) AS DescUpper,
+      MAX(CASE WHEN j.[key] COLLATE Latin1_General_100_BIN2 = N'description' THEN j.[value] END) AS DescLower
+    FROM OPENJSON(CASE WHEN a.AfterJson IS NOT NULL AND ISJSON(a.AfterJson) = 1 THEN a.AfterJson END) j
+    WHERE j.[key] COLLATE Latin1_General_100_BIN2 IN (N'Description', N'description')
+  ) af
+  CROSS APPLY (
+    SELECT
+      CASE WHEN a.BeforeJson IS NOT NULL AND ISJSON(a.BeforeJson) <> 1 THEN 1 ELSE 0 END AS BeforeMalformed,
+      CASE WHEN a.AfterJson IS NOT NULL AND ISJSON(a.AfterJson) <> 1 THEN 1 ELSE 0 END AS AfterMalformed,
+      COALESCE(b.DescUpper, b.DescLower) AS BeforeRaw,
+      COALESCE(af.DescUpper, af.DescLower) AS AfterRaw,
+      ${TRIM_START_EXPR('COALESCE(b.DescUpper, b.DescLower)')} AS BeforeStart,
+      ${TRIM_START_EXPR('COALESCE(af.DescUpper, af.DescLower)')} AS AfterStart,
+      CASE
+        WHEN @isAdmin = 1 THEN 0
+        WHEN TRY_CONVERT(uniqueidentifier, b.SnapProjectId) IS NULL THEN 0
+        WHEN TRY_CONVERT(uniqueidentifier, b.SnapProjectId) = a.ProjectId THEN 0
+        WHEN EXISTS (
+          SELECT 1
+          FROM dbo.MR_Projects bp
+          JOIN STRING_SPLIT(@scopeProjects, ',') bgrants ON LEN(bgrants.value) = 40
+            AND TRY_CONVERT(uniqueidentifier, LEFT(bgrants.value, 36)) = bp.ProjectId
+            AND (SUBSTRING(bgrants.value, 38, 1) = 'F' OR SUBSTRING(bgrants.value, 39, 1) = '1')
+          WHERE bp.ProjectId = TRY_CONVERT(uniqueidentifier, b.SnapProjectId) AND bp.IsActive = 1
+        ) THEN 0
+        ELSE 1
+      END AS BeforeOriginUnauthorized
+  ) parsed
   WHERE a.EntityType = 'TASK'
     AND a.ActionCode IN ('CREATE', 'UPDATE')
     AND a.OccurredAt <= @cutOffUtc
@@ -983,28 +1070,63 @@ ${visibleTasks()}
       )
     )))
     AND (
-      JSON_VALUE(a.BeforeJson, '$.Description') IS NOT NULL
-      OR JSON_VALUE(a.BeforeJson, '$.description') IS NOT NULL
-      OR JSON_VALUE(a.AfterJson, '$.Description') IS NOT NULL
-      OR JSON_VALUE(a.AfterJson, '$.description') IS NOT NULL
-      OR CHARINDEX(N'"Description"', COALESCE(a.BeforeJson, N'')) > 0
-      OR CHARINDEX(N'"description"', COALESCE(a.BeforeJson, N'')) > 0
-      OR CHARINDEX(N'"Description"', COALESCE(a.AfterJson, N'')) > 0
-      OR CHARINDEX(N'"description"', COALESCE(a.AfterJson, N'')) > 0
+      parsed.BeforeMalformed = 1
+      OR parsed.AfterMalformed = 1
+      OR (a.ActionCode = 'CREATE' AND parsed.AfterStart > 0)
+      OR (a.ActionCode = 'UPDATE' AND (
+        (parsed.BeforeStart > 0 AND parsed.AfterStart = 0)
+        OR (parsed.BeforeStart = 0 AND parsed.AfterStart > 0)
+        OR (parsed.BeforeStart > 0 AND parsed.AfterStart > 0
+          AND COALESCE(LTRIM(RTRIM(parsed.BeforeRaw)), N'') COLLATE Latin1_General_100_BIN2
+            <> COALESCE(LTRIM(RTRIM(parsed.AfterRaw)), N'') COLLATE Latin1_General_100_BIN2)
+      ))
     )
   ORDER BY a.OccurredAt DESC, a.AuditId DESC;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
+ * Rapor kadrosu ve hareket özeti için proje analiz sınırı (`@analysisMaxRows`) uygulamadan
+ * oturum proje kapsamını anahtarlı `#AiScopeProjects` tablosuna bir kez yazar.
+ */
+const REPORT_SCOPE_PROJECTS_UNBOUNDED = `
+  SET NOCOUNT ON;
+  DROP TABLE IF EXISTS #AiScopeProjects;
+  CREATE TABLE #AiScopeProjects(
+    ProjectId uniqueidentifier NOT NULL PRIMARY KEY,
+    AccessLevel varchar(10) NOT NULL,
+    HasReadGrant bit NOT NULL,
+    IsTaskScoped bit NOT NULL
+  );
+  IF @isAdmin = 1
+    INSERT #AiScopeProjects(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped)
+    SELECT p.ProjectId, 'FULL', 0, 0
+    FROM dbo.MR_Projects p
+    WHERE p.IsActive = 1;
+  ELSE
+    INSERT #AiScopeProjects(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped)
+    SELECT p.ProjectId, grants.AccessLevel, grants.HasReadGrant, grants.IsTaskScoped
+    FROM (
+      SELECT TRY_CONVERT(uniqueidentifier, LEFT(value, 36)) AS ProjectId,
+        CASE WHEN SUBSTRING(value, 38, 1) = 'F' THEN 'FULL' ELSE 'PARTIAL' END AS AccessLevel,
+        CASE WHEN SUBSTRING(value, 39, 1) = '1' THEN 1 ELSE 0 END AS HasReadGrant,
+        CASE WHEN SUBSTRING(value, 40, 1) = '1' THEN 1 ELSE 0 END AS IsTaskScoped
+      FROM STRING_SPLIT(@scopeProjects, ',')
+      WHERE LEN(value) = 40
+    ) grants
+    JOIN dbo.MR_Projects p ON p.ProjectId = grants.ProjectId
+    WHERE p.IsActive = 1;
+`;
+
+/**
  * Aşama 4I-A — Yönetici raporu örgütsel ve kişi kapsamı kadrosu.
- * Olağan ve yönetici kullanıcılarda yalnızca kullanıcının kendisi ve kendi `MR_V_ExecutiveScope` kapsamındaki
- * çalışanlar okunur; başka yöneticinin kapsamı ya da ilgisiz dizin kayıtları açılmaz.
+ * Proje analiz sınırından (`@analysisMaxRows`) bağımsızdır; seçici süzgecini `TOP (@maxRosterRows)` sınırından
+ * ÖNCE uygular ve çok düzeyli `MR_V_ExecutiveScope` kayıtlarını Sicil başına tekilleştirir.
  */
 export const AI_TOOL_REPORT_SCOPE_ROSTER_SQL = `/* rota-ai-tool:report-scope-roster */
-${SCOPE_PROJECTS}
-  SELECT TOP (@maxRosterRows) roster.Sicil, roster.DisplayName, roster.Team, roster.Unit, roster.Department, roster.Directorate, roster.ScopeType
-  FROM (
-    SELECT pd.Sicil, NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
+${REPORT_SCOPE_PROJECTS_UNBOUNDED}
+  ;WITH RawRoster AS (
+    SELECT pd.Sicil,
+      NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
       NULLIF(LTRIM(RTRIM(pd.Team)), N'') AS Team,
       NULLIF(LTRIM(RTRIM(pd.Unit)), N'') AS Unit,
       NULLIF(LTRIM(RTRIM(pd.Department)), N'') AS Department,
@@ -1013,7 +1135,8 @@ ${SCOPE_PROJECTS}
     FROM dbo.MR_V_PeopleDirectory pd
     WHERE pd.Sicil = @sicil
     UNION ALL
-    SELECT pd.Sicil, NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
+    SELECT pd.Sicil,
+      NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
       NULLIF(LTRIM(RTRIM(pd.Team)), N'') AS Team,
       NULLIF(LTRIM(RTRIM(pd.Unit)), N'') AS Unit,
       NULLIF(LTRIM(RTRIM(pd.Department)), N'') AS Department,
@@ -1023,7 +1146,8 @@ ${SCOPE_PROJECTS}
     JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = es.EmployeeSicil
     WHERE @isAdmin = 0 AND es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil
     UNION ALL
-    SELECT pd.Sicil, NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
+    SELECT pd.Sicil,
+      NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
       NULLIF(LTRIM(RTRIM(pd.Team)), N'') AS Team,
       NULLIF(LTRIM(RTRIM(pd.Unit)), N'') AS Unit,
       NULLIF(LTRIM(RTRIM(pd.Department)), N'') AS Department,
@@ -1031,6 +1155,233 @@ ${SCOPE_PROJECTS}
       CAST('ADMIN' AS varchar(20)) AS ScopeType
     FROM dbo.MR_V_PeopleDirectory pd
     WHERE @isAdmin = 1 AND pd.Sicil <> @sicil
-  ) roster
-  ORDER BY roster.Sicil, roster.ScopeType;
+  ),
+  FilteredRoster AS (
+    SELECT r.Sicil, r.DisplayName, r.Team, r.Unit, r.Department, r.Directorate, r.ScopeType
+    FROM RawRoster r
+    WHERE (@rosterIncludeSelf = 1 OR (r.Sicil <> @sicil AND r.ScopeType <> 'SELF'))
+      AND (LEN(@rosterScopeType) = 0 OR r.ScopeType = @rosterScopeType)
+      AND (
+        @rosterMode = 'all'
+        OR (@rosterMode = 'person_sicil' AND r.Sicil = @rosterSicil)
+        OR (@rosterMode = 'person_name' AND r.DisplayName IS NOT NULL AND r.DisplayName COLLATE Turkish_100_CI_AI = @rosterText)
+        OR (@rosterMode = 'team_level')
+        OR (@rosterMode = 'team_name' AND (
+          (r.Team IS NOT NULL AND r.Team COLLATE Turkish_100_CI_AI = @rosterText)
+          OR (r.Unit IS NOT NULL AND r.Unit COLLATE Turkish_100_CI_AI = @rosterText)
+        ))
+        OR (@rosterMode = 'org_unit' AND (
+          (LEN(@rosterHierarchyKey) > 0 AND CONCAT(COALESCE(r.Directorate, N'__unassigned__'), NCHAR(31), COALESCE(r.Department, N''), NCHAR(31), COALESCE(r.Unit, N'')) = @rosterHierarchyKey)
+          OR (LEN(@rosterHierarchyKey) = 0 AND r.Unit IS NOT NULL AND r.Unit COLLATE Turkish_100_CI_AI = @rosterText)
+        ))
+        OR (@rosterMode = 'org_department' AND (
+          (LEN(@rosterHierarchyKey) > 0 AND CONCAT(COALESCE(r.Directorate, N'__unassigned__'), NCHAR(31), COALESCE(r.Department, N'')) = @rosterHierarchyKey)
+          OR (LEN(@rosterHierarchyKey) = 0 AND r.Department IS NOT NULL AND r.Department COLLATE Turkish_100_CI_AI = @rosterText)
+        ))
+        OR (@rosterMode = 'org_directorate' AND (
+          (LEN(@rosterHierarchyKey) > 0 AND COALESCE(r.Directorate, N'__unassigned__') = @rosterHierarchyKey)
+          OR (LEN(@rosterHierarchyKey) = 0 AND r.Directorate IS NOT NULL AND r.Directorate COLLATE Turkish_100_CI_AI = @rosterText)
+        ))
+      )
+  ),
+  DedupedRoster AS (
+    SELECT
+      f.Sicil,
+      MIN(f.DisplayName) AS DisplayName,
+      MIN(f.Team) AS Team,
+      MIN(f.Unit) AS Unit,
+      MIN(f.Department) AS Department,
+      MIN(f.Directorate) AS Directorate,
+      MIN(f.ScopeType) AS ScopeType
+    FROM FilteredRoster f
+    GROUP BY f.Sicil
+  )
+  SELECT TOP (@maxRosterRows) Sicil, DisplayName, Team, Unit, Department, Directorate, ScopeType
+  FROM DedupedRoster
+  ORDER BY Sicil;
+  DROP TABLE #AiScopeProjects;`;
+
+/**
+ * Aşama 4I-A — Çok projeli rapor seçicilerini (1–25 proje: GUID, kod veya ad) tek sorguda çözer.
+ * Yetkisiz veya pasif projeler `#AiScopeProjects` üzerinden dışlanır.
+ */
+export const AI_TOOL_REPORT_PROJECT_SELECTORS_SQL = `/* rota-ai-tool:report-project-selectors */
+${SCOPE_PROJECTS}
+  SELECT
+    s.SelectorIndex,
+    p.ProjectId,
+    p.ProjectName,
+    p.ProjectCode,
+    p.SourceType,
+    p.LeadSicil,
+    v.AccessLevel,
+    v.HasReadGrant,
+    v.IsTaskScoped
+  FROM OPENJSON(@selectorJson) WITH (
+    SelectorIndex int '$.index',
+    RawText nvarchar(160) '$.raw',
+    GuidId uniqueidentifier '$.guid'
+  ) s
+  JOIN #AiScopeProjects v ON 1 = 1
+  JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
+  WHERE (s.GuidId IS NOT NULL AND p.ProjectId = s.GuidId)
+    OR (s.GuidId IS NULL AND (
+      UPPER(COALESCE(p.ProjectCode, N'')) = UPPER(s.RawText)
+      OR p.ProjectCode COLLATE Turkish_100_CI_AI = s.RawText
+      OR p.ProjectName COLLATE Turkish_100_CI_AI = s.RawText
+    ))
+  ORDER BY s.SelectorIndex, p.ProjectId;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+
+/**
+ * Aşama 4I-A — Seçili FULL erişimli projelerin bağımlılıklarını tek sınırlı sorguda okur.
+ * READ ve PARTIAL projeler hiçbir zaman bağımlılık döndürmez.
+ */
+export const AI_TOOL_REPORT_DEPENDENCIES_SQL = `/* rota-ai-tool:report-dependencies */
+${SCOPE_PROJECTS}
+  SELECT TOP (@maxRows) d.ProjectId, d.TaskId, d.PredecessorTaskId, d.DependencyType, d.LagDays, d.LagValue, d.LagUnit
+  FROM dbo.MR_TaskDependencies d
+  JOIN #AiScopeProjects v ON v.ProjectId = d.ProjectId AND v.AccessLevel = 'FULL'
+  ORDER BY d.ProjectId, d.TaskId, d.PredecessorTaskId;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+
+/**
+ * Aşama 4I-A — Yönetici raporu dönem hareket özeti (tek sınırlı toplu sorgu, ham not/JSON metni dönmez).
+ *
+ * Görev Hareketleri gizlilik ve silinmiş/taşınmış görev kurallarıyla bire bir aynıdır:
+ *   - Çok projeli (`@projectIds`) veya atama tabanlı (`@assigneeSicils`) kapsamı tek sorguda toplar;
+ *     15+ kişilik ekip/örgüt ve 25 projeli raporlarda seri fan-out veya kapsam genişletmesi oluşmaz.
+ *   - Silinmiş görevler dâhil tekil `etkilenen_gorev` ve `tamamlanan_gorev` sayımlarını SQL'de tekilleştirir.
+ *   - Canlı görevler için görev bazında son hareket gününü (`LastActivityDay`) ve dönemde tamamlama geçişini
+ *     (`CompletedInPeriod`) döndürür (daha sonra yeniden açılan görevler dâhil).
+ */
+export const AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL = `/* rota-ai-tool:report-activity-summary */
+${REPORT_SCOPE_PROJECTS_UNBOUNDED}
+  DROP TABLE IF EXISTS #AiScopeTaskIds, #ReportActivityProjects, #ReportActivityAssignees, #ReportActivityScope, #ReportActivityGroups;
+  CREATE TABLE #AiScopeTaskIds(TaskId uniqueidentifier NOT NULL PRIMARY KEY);
+  IF @isAdmin = 0 AND LEN(@scopeTasks) > 0
+    INSERT #AiScopeTaskIds(TaskId)
+    SELECT DISTINCT TRY_CONVERT(uniqueidentifier, value)
+    FROM STRING_SPLIT(@scopeTasks, ',')
+    WHERE TRY_CONVERT(uniqueidentifier, value) IS NOT NULL;
+  CREATE TABLE #ReportActivityProjects(ProjectId uniqueidentifier NOT NULL PRIMARY KEY);
+  IF LEN(@projectIds) > 0
+    INSERT #ReportActivityProjects(ProjectId)
+    SELECT DISTINCT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value)))
+    FROM STRING_SPLIT(@projectIds, ',')
+    WHERE TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value))) IS NOT NULL;
+  CREATE TABLE #ReportActivityAssignees(Sicil int NOT NULL PRIMARY KEY);
+  IF LEN(@assigneeSicils) > 0
+    INSERT #ReportActivityAssignees(Sicil)
+    SELECT DISTINCT TRY_CONVERT(int, LTRIM(RTRIM(value)))
+    FROM STRING_SPLIT(@assigneeSicils, ',')
+    WHERE TRY_CONVERT(int, LTRIM(RTRIM(value))) > 0;
+
+  SELECT TOP (@activityProbeRows)
+    a.AuditId,
+    a.OccurredAt,
+    a.ActorSicil,
+    a.ActionCode,
+    a.EntityId,
+    a.ProjectId,
+    COALESCE(CONVERT(varchar(36), a.CorrelationId), CONCAT('audit:', a.AuditId)) AS ActionGroup,
+    t.TaskId AS CurrentTaskId,
+    t.ProjectId AS CurrentProjectId,
+    CASE WHEN a.ActionCode = 'DELETE' THEN 'deleted' WHEN a.ActionCode = 'CREATE' THEN 'created'
+      WHEN a.AfterJson IS NOT NULL AND ISJSON(a.AfterJson) = 1
+        AND (a.BeforeJson IS NULL OR ISJSON(a.BeforeJson) = 1)
+        AND COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
+        AND COALESCE(CASE WHEN a.BeforeJson IS NOT NULL THEN COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status')) END, '') COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL})
+      THEN 'completed' ELSE 'updated' END AS Kind,
+    CASE WHEN a.AfterJson IS NOT NULL AND ISJSON(a.AfterJson) = 1
+      AND (a.BeforeJson IS NULL OR ISJSON(a.BeforeJson) = 1)
+      AND COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
+      AND COALESCE(CASE WHEN a.BeforeJson IS NOT NULL THEN COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status')) END, '') COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL})
+    THEN 1 ELSE 0 END AS CompletionEvent,
+    CASE WHEN a.BeforeJson IS NOT NULL AND ISJSON(a.BeforeJson) = 1
+      AND COALESCE(JSON_VALUE(a.BeforeJson, '$.Status'), JSON_VALUE(a.BeforeJson, '$.status')) COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
+      AND a.AfterJson IS NOT NULL AND ISJSON(a.AfterJson) = 1
+      AND COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) IS NOT NULL
+      AND COALESCE(JSON_VALUE(a.AfterJson, '$.Status'), JSON_VALUE(a.AfterJson, '$.status')) COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL})
+    THEN 1 ELSE 0 END AS ReopenEvent
+  INTO #ReportActivityScope
+  FROM dbo.MR_AuditLog a
+  LEFT JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)
+  LEFT JOIN dbo.MR_Projects p ON p.ProjectId = a.ProjectId
+  OUTER APPLY (
+    SELECT TOP (1) d.BeforeJson FROM dbo.MR_AuditLog d
+    WHERE t.TaskId IS NULL AND d.EntityType = 'TASK' AND d.ActionCode = 'DELETE' AND d.EntityId = a.EntityId
+      AND d.ProjectId = a.ProjectId ORDER BY d.OccurredAt DESC, d.AuditId DESC
+  ) deleted
+  WHERE a.EntityType = 'TASK' AND a.ActionCode IN ('CREATE', 'UPDATE', 'DELETE')
+    AND a.OccurredAt >= @startUtc AND a.OccurredAt < @endUtc
+    AND (@cutOffUtc IS NULL OR a.OccurredAt <= @cutOffUtc)
+    AND (LEN(@projectIds) = 0 OR EXISTS (SELECT 1 FROM #ReportActivityProjects sp WHERE sp.ProjectId = a.ProjectId))
+    AND (@isAdmin = 1 OR (p.IsActive = 1 AND (
+      (EXISTS (SELECT 1 FROM #AiScopeProjects f WHERE f.ProjectId = a.ProjectId AND (f.AccessLevel = 'FULL' OR f.HasReadGrant = 1))
+        AND (t.TaskId IS NULL
+          OR EXISTS (SELECT 1 FROM #AiScopeProjects f WHERE f.ProjectId = t.ProjectId AND (f.AccessLevel = 'FULL' OR f.HasReadGrant = 1))
+          OR EXISTS (SELECT 1 FROM #AiScopeTaskIds v WHERE v.TaskId = t.TaskId)))
+      OR (t.ProjectId = a.ProjectId AND EXISTS (SELECT 1 FROM #AiScopeTaskIds v WHERE v.TaskId = t.TaskId))
+      OR (t.TaskId IS NULL AND deleted.BeforeJson IS NOT NULL AND ISJSON(deleted.BeforeJson) = 1 AND (
+        TRY_CONVERT(int, JSON_VALUE(deleted.BeforeJson, '$.CreatedBySicil')) = @sicil
+        OR EXISTS (SELECT 1 FROM OPENJSON(deleted.BeforeJson, '$.assigneeIds') member
+          WHERE TRY_CONVERT(int, member.value) = @sicil OR EXISTS (
+            SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = TRY_CONVERT(int, member.value)))
+      ))
+    )))
+    AND (LEN(@assigneeSicils) = 0 OR (
+      (t.TaskId IS NOT NULL AND EXISTS (
+        SELECT 1 FROM dbo.MR_TaskAssignees ta
+        JOIN #ReportActivityAssignees af ON af.Sicil = ta.Sicil
+        WHERE ta.TaskId = t.TaskId
+          AND (@isAdmin = 1 OR t.CreatedBySicil = @sicil OR ta.Sicil = @sicil
+            OR EXISTS (SELECT 1 FROM #AiScopeProjects f WHERE f.ProjectId = t.ProjectId AND (f.AccessLevel = 'FULL' OR f.HasReadGrant = 1))
+            OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil))
+      ))
+      OR (t.TaskId IS NULL AND deleted.BeforeJson IS NOT NULL AND ISJSON(deleted.BeforeJson) = 1 AND EXISTS (
+        SELECT 1 FROM OPENJSON(deleted.BeforeJson, '$.assigneeIds') member
+        JOIN #ReportActivityAssignees af ON af.Sicil = TRY_CONVERT(int, member.value)
+      ))
+    ));
+
+  IF (SELECT COUNT(*) FROM #ReportActivityScope) >= @activityProbeRows
+  BEGIN
+    DROP TABLE IF EXISTS #ReportActivityGroups, #ReportActivityScope, #ReportActivityAssignees, #ReportActivityProjects, #AiScopeTaskIds, #AiScopeProjects;
+    THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
+  END
+
+  SELECT ActionGroup, EntityId, ActorSicil, ProjectId,
+    MAX(OccurredAt) AS OccurredAt,
+    MAX(CompletionEvent) AS Completed,
+    MAX(ReopenEvent) AS Reopened,
+    MAX(CASE WHEN Kind = 'deleted' THEN 1 ELSE 0 END) AS Deleted,
+    MAX(CASE WHEN Kind = 'created' THEN 1 ELSE 0 END) AS Created
+  INTO #ReportActivityGroups
+  FROM #ReportActivityScope
+  GROUP BY ActionGroup, EntityId, ActorSicil, ProjectId;
+
+  SELECT
+    COUNT(*) AS Total,
+    COUNT(DISTINCT EntityId) AS TaskCount,
+    COUNT(DISTINCT ActorSicil) AS ActorCount,
+    COUNT(DISTINCT CASE WHEN Completed = 1 THEN EntityId END) AS CompletedCount,
+    COUNT(DISTINCT CASE WHEN Created = 1 THEN EntityId END) AS CreatedCount,
+    COUNT(DISTINCT CASE WHEN Deleted = 1 THEN EntityId END) AS DeletedCount,
+    COUNT(DISTINCT CASE WHEN Reopened = 1 THEN EntityId END) AS ReopenedCount,
+    (SELECT COUNT(*) FROM (
+      SELECT EntityId FROM #ReportActivityGroups GROUP BY EntityId
+      HAVING MAX(Created) = 0 AND MAX(Deleted) = 0 AND MAX(Completed) = 0 AND MAX(Reopened) = 0
+    ) updatedOnly) AS UpdatedOnlyCount
+  FROM #ReportActivityGroups;
+
+  SELECT
+    t.TaskId,
+    t.ProjectId AS CurrentProjectId,
+    CONVERT(char(10), MAX(CONVERT(date, g.OccurredAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time')), 23) AS LastActivityDay,
+    MAX(g.Completed) AS CompletedInPeriod
+  FROM #ReportActivityGroups g
+  JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, g.EntityId)
+  GROUP BY t.TaskId, t.ProjectId;
+
+  DROP TABLE #ReportActivityGroups, #ReportActivityScope, #ReportActivityAssignees, #ReportActivityProjects, #AiScopeTaskIds, #AiScopeProjects;`;

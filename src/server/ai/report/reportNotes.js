@@ -19,7 +19,7 @@ import { readReportNoteAuditHistory, readReportTaskNotes } from '../tools/rota/r
  */
 
 // Denetim karakterlerini temizler; sekme ve satır sonlarını tek boşluğa indirger (teknik bağlam korunur).
-// eslint-disable-next-line no-control-regex
+// eslint-disable-next-line no-control-regex -- not metnindeki geçersiz denetim karakterleri bilinçli olarak temizlenir
 const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu;
 
 /**
@@ -36,22 +36,31 @@ const PROMPT_INJECTION_PATTERNS = Object.freeze([
   /(?:system\s+prompt|you\s+are\s+now|act\s+as\s+(?:system|admin)|new\s+instructions?\s*:)/iu
 ]);
 
-const COMPLETED_CLAIM_RE = /(?:^|[.!?;]\s*)(?:görev\s+|iş\s+)?(?:tamamen\s+)?(?:tamamland[ıi]|bitti|kapand[ıi])(?:\s*[.!?]?\s*$)/iu;
+// Açık tamamlama tümcesini ardından gelen nesnel tümceler olsa da yakalar; koşullu ifadeler PENDING_QUALIFIER_RE ile elenir.
+const COMPLETED_CLAIM_RE = /(?:^|[.!?;]\s*)(?:görev\s+|iş\s+)?(?:tamamen\s+)?(?:tamamland[ıi]|bitti|kapand[ıi])(?=\s*(?:[.!?;]|$))/iu;
 const PENDING_QUALIFIER_RE = /(?:bekleniyor|bekliyor|haftaya|ertelendi|sürüyor|devam\s+ediyor|eksik|yok|başlamad[ıi]|kesin\s+değil|planland[ıi])/iu;
 const BLOCKED_OR_NOT_DONE_RE = /(?:henüz\s+başlamad[ıi]|ertelendi|durduruldu|iptal\s+edildi|tamamlanmad[ıi]|hazır\s+değil)/iu;
-const SCHEDULED_DATE_RE = /(?:planland[ıi]|hedeflendi|belirlendi|hazır(?![\p{L}])|risk\s+yok|gecikme\s+yok)/iu;
-const POSTPONED_OR_NEGATED_RE = /(?:ertelendi|iptal|gecikme|hazır\s+değil|yeni\s+tarih\s+(?:ilan\s+edilmedi|belirsiz|yok)|risk\s+var)/iu;
+const SCHEDULED_DATE_RE = /(?:planland[ıi]|hedeflendi|belirlendi|hazır(?![\p{L}])(?!\s+değil)|risk\s+yok|gecikme\s+yok)/iu;
+// "gecikme yok / bulunmuyor / beklenmiyor / olmadı" gibi olumsuzlanmış gecikme ifadeleri erteleme sayılmaz.
+const POSTPONED_OR_NEGATED_RE = /(?:ertelendi|iptal|gecikme(?!\s+(?:yok|bulunmuyor|beklenmiyor|olmad[ıi]))|hazır\s+değil|yeni\s+tarih\s+(?:ilan\s+edilmedi|belirsiz|yok)|risk\s+var)/iu;
 const NO_RISK_CLAIM_RE = /(?:risk\s+yok|gecikme\s+yok|sorun\s+yok)/iu;
-const READY_POSITIVE_RE = /(?:test\s+ortam[ıi]\s+hazır(?!\s+değil)|ortam\s+hazır(?!\s+değil))/iu;
+// Türkçe harf sınırı "hazırlanmaya" gibi türevlerin "hazır" olarak yanlış eşleşmesini engeller.
+const READY_POSITIVE_RE = /(?:test\s+ortam[ıi]\s+hazır(?![\p{L}])(?!\s+değil)|ortam\s+hazır(?![\p{L}])(?!\s+değil))/iu;
 const READY_NEGATIVE_RE = /(?:test\s+ortam[ıi]\s+hazır\s+değil|ortam\s+hazır\s+değil)/iu;
+const READINESS_SUBJECT_RE = /(?:^|[.!?;,\n]\s*)(?:([\p{L}\d_-]+)\s+)?(?:test\s+)?ortam[ıi]\s+hazır(?![\p{L}])/iu;
+const GENERIC_SUBJECT_WORDS = new Set(['bu', 'şu', 'mevcut', 'ilgili', 'tüm', 'bütün', 'genel', 'ortak']);
 
-function safeJsonObject(raw) {
-  if (!raw) return {};
+/** JSON anlık görüntüsünü ayrıştırır; okunamayan veya kesilmiş metinlerde `readable: false` döner. */
+function parseJsonSnapshot(raw) {
+  if (raw == null) return { readable: true, obj: {} };
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { readable: true, obj: parsed };
+    }
+    return { readable: false, obj: {} };
   } catch {
-    return {};
+    return { readable: false, obj: {} };
   }
 }
 
@@ -90,6 +99,15 @@ function duplicateKey(text) {
     .trim();
 }
 
+/** Hazırlık bildirimindeki ortam öznesini çıkarır (farklı ortamların yanlış eşleşmesini önlemek için). */
+function extractReadinessSubject(lowerText) {
+  const match = READINESS_SUBJECT_RE.exec(lowerText);
+  if (!match) return null;
+  const qualifier = (match[1] || '').trim();
+  if (!qualifier || GENERIC_SUBJECT_WORDS.has(qualifier)) return '';
+  return qualifier;
+}
+
 /** Not içinde yapay zekâya yönelik gömülü yönerge (istem enjeksiyonu) bulunup bulunmadığını belirler. */
 export function containsUntrustedInstruction(text) {
   if (typeof text !== 'string' || !text.trim()) return false;
@@ -104,6 +122,51 @@ function isWithinPeriod(isoTimestamp, period) {
 }
 
 /**
+ * Sürüm kimliğini kırpma öncesi tam metin veya sunucu SHA-256 özeti üzerinden hesaplar.
+ * Yalnızca kırpılmış alıntı varsa doğrulanabilir tam kimlik üretmez (`null`).
+ */
+function buildVersionIdentity({ fullText, sourceClipped = false, fullHash = null }) {
+  if (!fullText) return null;
+  if (fullHash) return `hash:${fullHash}`;
+  if (!sourceClipped) return `exact:${fullText}`;
+  return null;
+}
+
+function sameVersionIdentity(left, right) {
+  const leftId = typeof left === 'string' ? left : left?._versionIdentity;
+  const rightId = typeof right === 'string' ? right : right?._versionIdentity;
+  return Boolean(leftId && rightId && leftId === rightId);
+}
+
+/** Denetim olayından öncesi/sonrası açıklama metni, okunabilirlik ve tam kimlik bilgilerini çıkarır. */
+function extractAuditSide(event, side) {
+  const isBefore = side === 'before';
+  const hasExtracted = Object.hasOwn(event, isBefore ? 'beforeDescription' : 'afterDescription')
+    || Object.hasOwn(event, isBefore ? 'beforeReadable' : 'afterReadable');
+
+  if (hasExtracted) {
+    const readable = isBefore ? event.beforeReadable !== false : event.afterReadable !== false;
+    const rawDesc = isBefore ? event.beforeDescription : event.afterDescription;
+    const sourceClipped = Boolean(isBefore ? event.beforeClipped : event.afterClipped);
+    const fullHash = isBefore ? (event.beforeHash || null) : (event.afterHash || null);
+    const text = readable ? normalizeNoteText(rawDesc) : null;
+    const identity = readable ? buildVersionIdentity({ fullText: text, sourceClipped, fullHash }) : null;
+    return { readable, text, sourceClipped, fullHash, identity };
+  }
+
+  const rawJson = isBefore ? event.beforeJson : event.afterJson;
+  const parsed = parseJsonSnapshot(rawJson);
+  if (!parsed.readable) {
+    return { readable: false, text: null, sourceClipped: Boolean(event.detailJsonClipped), fullHash: null, identity: null };
+  }
+  const rawDesc = extractDescriptionField(parsed.obj);
+  const text = normalizeNoteText(rawDesc);
+  const sourceClipped = Boolean(event.detailJsonClipped);
+  const identity = buildVersionIdentity({ fullText: text, sourceClipped, fullHash: null });
+  return { readable: true, text, sourceClipped, fullHash: null, identity };
+}
+
+/**
  * Tek bir görevin yetkili `MR_AuditLog` açıklama olaylarından ve güncel `MR_Tasks.Description` değerinden
  * kronolojik, zaman kökeni doğru not sürümlerini kurar.
  *
@@ -115,6 +178,7 @@ export function reconstructTaskNoteChronology({
   currentNote = null,
   auditEvents = [],
   period,
+  cutOffMs = null,
   maxNoteChars = REPORT_EVIDENCE_LIMITS.maxNoteChars
 }) {
   const sortedEvents = [...auditEvents].sort((left, right) => {
@@ -124,22 +188,12 @@ export function reconstructTaskNoteChronology({
   });
 
   const versions = [];
+  let activeVersion = null;
+
   const pushVersion = (entry) => {
     const { text, clipped } = clipNoteText(entry.rawText, maxNoteChars);
-    const dedupe = duplicateKey(text);
-    const previous = versions.at(-1);
-    // Ardışık özdeş metinleri yinelemeyiz; varsa bilinen en erken gerçek kayıt zamanı korunur.
-    if (previous && previous._dedupeKey === dedupe) {
-      if (previous.kayit_zamani === null && entry.kayit_zamani !== null) {
-        previous.kayit_zamani = entry.kayit_zamani;
-        previous.kayit_zamani_durumu = 'biliniyor';
-        previous.donem_ici = isWithinPeriod(entry.kayit_zamani, period);
-      }
-      if (entry.auditId != null) previous._auditId = entry.auditId;
-      return;
-    }
     const injection = containsUntrustedInstruction(text);
-    versions.push({
+    const version = {
       taskId: task.id,
       projectId: entry.projectId || task.projectId,
       kaynak: entry.kaynak,
@@ -154,83 +208,169 @@ export function reconstructTaskNoteChronology({
       ...(injection ? { guvenilmez_yonerge_iceriyor: true } : {}),
       ...(entry.sonraki_degisiklik_zamani ? { sonraki_degisiklik_zamani: entry.sonraki_degisiklik_zamani } : {}),
       _auditId: entry.auditId ?? null,
-      _dedupeKey: dedupe
-    });
+      _dedupeKey: duplicateKey(text),
+      _versionIdentity: entry.identity ?? null
+    };
+    versions.push(version);
+    return version;
   };
 
   for (const event of sortedEvents) {
-    const beforeSnapshot = safeJsonObject(event.beforeJson);
-    const afterSnapshot = safeJsonObject(event.afterJson);
-    const beforeRaw = extractDescriptionField(beforeSnapshot);
-    const afterRaw = extractDescriptionField(afterSnapshot);
-    const beforeText = normalizeNoteText(beforeRaw);
-    const afterText = normalizeNoteText(afterRaw);
+    const before = extractAuditSide(event, 'before');
+    const after = extractAuditSide(event, 'after');
     const occurredIstanbul = event.occurredAt ? formatIstanbulTimestamp(event.occurredAt) : null;
 
     if (event.actionCode === 'CREATE') {
-      if (afterText) {
-        pushVersion({
-          rawText: afterText,
+      if (after.readable && after.text) {
+        activeVersion = pushVersion({
+          rawText: after.text,
           kaynak: 'MR_AuditLog',
           kayit_zamani: occurredIstanbul,
           surum_tipi: 'tarihsel',
           projectId: event.projectId,
           auditId: event.auditId,
-          sourceClipped: event.detailJsonClipped
+          sourceClipped: after.sourceClipped,
+          identity: after.identity
+        });
+      } else {
+        activeVersion = null;
+      }
+      continue;
+    }
+
+    // Okunamayan veya gizlenen `before` anlık görüntüsü değişim kanıtı sayılamaz; kayıt zamanı uydurulmaz.
+    if (!before.readable) {
+      if (!after.readable || !after.text) {
+        activeVersion = null;
+      } else if (!sameVersionIdentity(activeVersion, after.identity)) {
+        activeVersion = pushVersion({
+          rawText: after.text,
+          kaynak: 'MR_AuditLog',
+          kayit_zamani: null,
+          surum_tipi: 'tarihsel',
+          projectId: event.projectId,
+          auditId: null,
+          sourceClipped: after.sourceClipped,
+          identity: after.identity
         });
       }
       continue;
     }
 
-    // UPDATE olayında yalnızca açıklama gerçekten değiştiyse yeni kayıt zamanı atanır.
-    const unchanged = beforeText === afterText;
-    if (beforeText) {
-      const alreadyRecorded = versions.some((item) => item._dedupeKey === duplicateKey(beforeText));
-      if (!alreadyRecorded) {
-        // Önceki metne değiştirme olayının zamanı ASLA atanmaz; kayıt zamanı bilinmiyor işaretlenir.
+    // `after` okunamıyorsa değişim kanıtlanamaz; yalnızca önceki metin bilinmeyen zamanla korunur ve sınır kapanır.
+    if (!after.readable) {
+      if (before.text && !sameVersionIdentity(activeVersion, before.identity)) {
         pushVersion({
-          rawText: beforeText,
+          rawText: before.text,
+          kaynak: 'MR_AuditLog',
+          kayit_zamani: null,
+          surum_tipi: 'tarihsel_onceki',
+          projectId: event.projectId,
+          auditId: null,
+          sourceClipped: before.sourceClipped,
+          identity: before.identity
+        });
+      }
+      activeVersion = null;
+      continue;
+    }
+
+    // Her iki taraf da okunabilir: yalnızca gerçek açıklama değişikliğinde yeni zaman veya sonraki değişim zamanı atanır.
+    const bothEmpty = !before.text && !after.text;
+    const sameText = Boolean(before.text && after.text && sameVersionIdentity(before.identity, after.identity));
+    if (bothEmpty) {
+      activeVersion = null;
+      continue;
+    }
+    if (sameText) {
+      // Açıklamayı değiştirmeyen güncelleme: henüz kaydı yoksa zamanı ve sonraki değişimi belirsiz olarak tut.
+      if (!sameVersionIdentity(activeVersion, before.identity)) {
+        activeVersion = pushVersion({
+          rawText: before.text,
+          kaynak: 'MR_AuditLog',
+          kayit_zamani: null,
+          surum_tipi: 'tarihsel_onceki',
+          projectId: event.projectId,
+          auditId: null,
+          sourceClipped: before.sourceClipped,
+          identity: before.identity
+        });
+      }
+      continue;
+    }
+
+    // Gerçek değişiklik (yazma, düzenleme veya silme/temizleme):
+    if (before.text) {
+      if (sameVersionIdentity(activeVersion, before.identity)) {
+        // Değiştirilen önceki sürüm henüz sonraki değişim zamanı taşımıyorsa gerçek değişim anını işaretle.
+        if (activeVersion.kayit_zamani === null && !activeVersion.sonraki_degisiklik_zamani && occurredIstanbul) {
+          activeVersion.sonraki_degisiklik_zamani = occurredIstanbul;
+        }
+      } else {
+        // Önceki sürüm yalnızca hemen önceki etkin sürümle eşleştirilir; eşleşmiyorsa bilinmeyen zamanla ayrı sürüm olur.
+        pushVersion({
+          rawText: before.text,
           kaynak: 'MR_AuditLog',
           kayit_zamani: null,
           surum_tipi: 'tarihsel_onceki',
           projectId: event.projectId,
           auditId: null,
           sonraki_degisiklik_zamani: occurredIstanbul,
-          sourceClipped: event.detailJsonClipped
+          sourceClipped: before.sourceClipped,
+          identity: before.identity
         });
       }
     }
-    if (!unchanged && afterText) {
-      pushVersion({
-        rawText: afterText,
+
+    if (after.text) {
+      activeVersion = pushVersion({
+        rawText: after.text,
         kaynak: 'MR_AuditLog',
         kayit_zamani: occurredIstanbul,
         surum_tipi: 'tarihsel',
         projectId: event.projectId,
         auditId: event.auditId,
-        sourceClipped: event.detailJsonClipped
+        sourceClipped: after.sourceClipped,
+        identity: after.identity
       });
+    } else {
+      // Açıklama temizlendi: etkin sürüm sonlanır; sonradan aynı metin geri gelirse eski zamanı devralamaz.
+      activeVersion = null;
     }
   }
 
-  const currentText = currentNote ? normalizeNoteText(currentNote.text) : null;
+  // Canlı not yalnızca aynı proje bağı doğrulanır ve veri kesitini aşmadığı biliniyorsa kabul edilir.
+  const noteProjectMismatch = Boolean(currentNote?.projectId && task.projectId && currentNote.projectId !== task.projectId);
+  const taskModifiedAfterCutoff = Boolean(
+    cutOffMs != null
+    && Number.isFinite(cutOffMs)
+    && task.updatedAt
+    && Date.parse(task.updatedAt) > cutOffMs
+  );
+  const usableCurrentNote = (!noteProjectMismatch && !taskModifiedAfterCutoff) ? currentNote : null;
+  const currentText = usableCurrentNote ? normalizeNoteText(usableCurrentNote.text) : null;
+
   if (currentText) {
-    const { text: clippedCurrent, clipped: currentClipped } = clipNoteText(currentText, maxNoteChars);
-    const currentKey = duplicateKey(clippedCurrent);
-    const lastVersion = versions.at(-1);
-    if (lastVersion && lastVersion._dedupeKey === currentKey) {
-      lastVersion.surum_tipi = 'guncel';
-      if (currentClipped || currentNote.clipped) lastVersion.kirpildi = true;
+    const { clipped: currentClipped } = clipNoteText(currentText, maxNoteChars);
+    const currentIdentity = buildVersionIdentity({
+      fullText: currentText,
+      sourceClipped: Boolean(usableCurrentNote.clipped),
+      fullHash: usableCurrentNote.fullHash || null
+    });
+    if (activeVersion && sameVersionIdentity(activeVersion, currentIdentity)) {
+      activeVersion.surum_tipi = 'guncel';
+      if (currentClipped || usableCurrentNote.clipped) activeVersion.kirpildi = true;
     } else {
-      // Denetim kaydında eşleşmeyen güncel açıklama: MR_Tasks.UpdatedAt kayıt zamanı değildir.
+      // Denetim kaydında doğrulanamayan güncel açıklama: MR_Tasks.UpdatedAt kayıt zamanı değildir.
       pushVersion({
         rawText: currentText,
         kaynak: 'MR_Tasks',
         kayit_zamani: null,
         surum_tipi: 'guncel',
-        projectId: currentNote.projectId || task.projectId,
+        projectId: usableCurrentNote.projectId || task.projectId,
         auditId: null,
-        sourceClipped: Boolean(currentNote.clipped)
+        sourceClipped: Boolean(usableCurrentNote.clipped),
+        identity: currentIdentity
       });
     }
   }
@@ -253,7 +393,8 @@ export function detectNoteDuplicatesAndContradictions({
   noteEntries,
   taskById,
   taskEvidenceIdByTaskId,
-  today
+  today,
+  period = null
 }) {
   const contradictions = [];
   const seenConflictKeys = new Set();
@@ -303,7 +444,9 @@ export function detectNoteDuplicatesAndContradictions({
       if (earlier.guvenilmez_yonerge_iceriyor || later.guvenilmez_yonerge_iceriyor) continue;
       const earlierLower = earlier.metin.toLocaleLowerCase('tr-TR');
       const laterLower = later.metin.toLocaleLowerCase('tr-TR');
-      const scheduleReversal = SCHEDULED_DATE_RE.test(earlierLower) && POSTPONED_OR_NEGATED_RE.test(laterLower);
+      const scheduleReversal = SCHEDULED_DATE_RE.test(earlierLower)
+        && !POSTPONED_OR_NEGATED_RE.test(earlierLower)
+        && POSTPONED_OR_NEGATED_RE.test(laterLower);
       const readinessReversal = (READY_POSITIVE_RE.test(earlierLower) && READY_NEGATIVE_RE.test(laterLower))
         || (READY_NEGATIVE_RE.test(earlierLower) && READY_POSITIVE_RE.test(laterLower));
       if (scheduleReversal || readinessReversal) {
@@ -317,9 +460,10 @@ export function detectNoteDuplicatesAndContradictions({
       }
     }
 
-    // Görev durumu ile en güncel not arasında belirlenimci uyuşmazlık (S18, S24).
-    if (task && taskEvidenceId && latest && !latest.guvenilmez_yonerge_iceriyor) {
+    // Görev durumu ile yalnızca güncel olduğu doğrulanan not arasında belirlenimci uyuşmazlık (S18, S24).
+    if (task && taskEvidenceId && latest && latest.surum_tipi === 'guncel' && !latest.guvenilmez_yonerge_iceriyor) {
       const latestLower = latest.metin.toLocaleLowerCase('tr-TR');
+      const latestDay = latest.kayit_zamani ? istanbulDay(latest.kayit_zamani) : null;
       const isTaskOpen = task.status !== 'done';
       const isTaskOverdue = isTaskOpen && Boolean(task.targetFinish) && task.targetFinish < today;
       if (isTaskOpen && COMPLETED_CLAIM_RE.test(latestLower) && !PENDING_QUALIFIER_RE.test(latestLower)) {
@@ -329,35 +473,48 @@ export function detectNoteDuplicatesAndContradictions({
           gorev: task.code || taskId,
           aciklama: 'Görev kaydı açık görünürken görev notu işin tamamlandığını bildiriyor.'
         });
-      } else if (isTaskOverdue && NO_RISK_CLAIM_RE.test(latestLower) && !latest.donem_ici) {
+      } else if (isTaskOverdue && NO_RISK_CLAIM_RE.test(latestLower) && Boolean(latestDay && period?.baslangic && latestDay < period.baslangic)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
           kanitlar: [taskEvidenceId, latest.id],
           gorev: task.code || taskId,
           aciklama: 'Dönem öncesinde kaydedilen "risk/gecikme yok" notu ile güncel gecikmiş görev durumu uyuşmuyor.'
         });
-      } else if (!isTaskOpen && BLOCKED_OR_NOT_DONE_RE.test(latestLower) && latest.donem_ici) {
+      } else if (!isTaskOpen && BLOCKED_OR_NOT_DONE_RE.test(latestLower) && Boolean(latestDay && task.actualFinish && latestDay > task.actualFinish)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
           kanitlar: [taskEvidenceId, latest.id],
           gorev: task.code || taskId,
-          aciklama: 'Görev kaydı tamamlanmış görünürken dönem içi not işin tamamlanmadığını veya ertelendiğini bildiriyor.'
+          aciklama: 'Görev kaydı tamamlanmış görünürken tamamlanma sonrasında kaydedilen not işin tamamlanmadığını veya ertelendiğini bildiriyor.'
         });
       }
     }
   }
 
-  // 3. Aynı kapsamdaki farklı görev notları arasında açık karşıt bildirim (ör. test ortamı hazır / hazır değil).
-  const safeNotes = noteEntries.filter((entry) => !entry.guvenilmez_yonerge_iceriyor);
-  const readyPositive = safeNotes.filter((entry) => READY_POSITIVE_RE.test(entry.metin.toLocaleLowerCase('tr-TR')));
-  const readyNegative = safeNotes.filter((entry) => READY_NEGATIVE_RE.test(entry.metin.toLocaleLowerCase('tr-TR')));
+  // 3. Aynı projede ve aynı ortam öznesinde güncel farklı görev notları arasında açık karşıt bildirim.
+  const safeCurrentNotes = noteEntries.filter((entry) => !entry.guvenilmez_yonerge_iceriyor && entry.surum_tipi === 'guncel');
+  const readyPositive = safeCurrentNotes
+    .map((entry) => {
+      const lower = entry.metin.toLocaleLowerCase('tr-TR');
+      return READY_POSITIVE_RE.test(lower) ? { entry, subject: extractReadinessSubject(lower) } : null;
+    })
+    .filter(Boolean);
+  const readyNegative = safeCurrentNotes
+    .map((entry) => {
+      const lower = entry.metin.toLocaleLowerCase('tr-TR');
+      return READY_NEGATIVE_RE.test(lower) ? { entry, subject: extractReadinessSubject(lower) } : null;
+    })
+    .filter(Boolean);
   for (const pos of readyPositive) {
     for (const neg of readyNegative) {
-      if (pos._taskId === neg._taskId) continue;
+      if (pos.entry._taskId === neg.entry._taskId) continue;
+      // Farklı projeler veya farklı adlandırılmış ortamlar ortak özne kanıtı olmadan çelişki sayılmaz.
+      if (!pos.entry._projectId || pos.entry._projectId !== neg.entry._projectId) continue;
+      if (pos.subject === null || neg.subject === null || pos.subject !== neg.subject) continue;
       addConflict({
         tur: 'notlar_arasi_celiski',
-        kanitlar: [neg.id, pos.id],
-        aciklama: 'Farklı görev notları aynı test/ortam hazırlığı hakkında karşıt bildirim taşıyor.'
+        kanitlar: [neg.entry.id, pos.entry.id],
+        aciklama: 'Aynı projedeki farklı görev notları aynı test/ortam hazırlığı hakkında karşıt bildirim taşıyor.'
       });
     }
   }
@@ -422,10 +579,12 @@ export async function collectReportNotes({
 
   const maxNoteChars = limits.maxNoteChars ?? REPORT_EVIDENCE_LIMITS.maxNoteChars;
   const maxAuditEvents = limits.maxNoteAuditEvents ?? REPORT_EVIDENCE_LIMITS.maxNoteAuditEvents;
+  const cutOffMs = cutOffUtc ? (cutOffUtc instanceof Date ? cutOffUtc.getTime() : Date.parse(cutOffUtc)) : null;
 
-  // Güncel açıklamalar ve yetkili MR_AuditLog açıklama sürümleri sınırlı iki okuma ile alınır.
+  // Güncel açıklamalar ve yetkili MR_AuditLog açıklama geçişleri sınırlı iki okuma ile alınır.
   const currentResult = await turn.sql(signal, (executor) => readReportTaskNotes(executor, scope, candidateIds, {
-    maxRows: maxTasksForNotes
+    maxRows: maxTasksForNotes,
+    cutOffUtc
   }));
   signal?.throwIfAborted?.();
   const auditResult = await turn.sql(signal, (executor) => readReportNoteAuditHistory(executor, scope, candidateIds, {
@@ -442,17 +601,18 @@ export async function collectReportNotes({
   }
 
   const allVersions = [];
-  let tasksWithoutNotes = 0;
+  let tasksWithoutObservedNotes = 0;
   for (const task of candidateTasks) {
     const taskVersions = reconstructTaskNoteChronology({
       task,
       currentNote: currentResult.notes.get(task.id) || null,
       auditEvents: auditByTask.get(task.id) || [],
       period,
+      cutOffMs,
       maxNoteChars
     });
     if (taskVersions.length === 0) {
-      tasksWithoutNotes += 1;
+      tasksWithoutObservedNotes += 1;
       continue;
     }
     for (const version of taskVersions) {
@@ -481,18 +641,25 @@ export async function collectReportNotes({
   const selected = allVersions.slice(0, maxSelectedNotes);
   const omittedCount = Math.max(0, allVersions.length - selected.length);
   const clippedCount = selected.filter((item) => item.kirpildi).length;
+  const historyIncomplete = Boolean(auditResult.truncated || currentResult.truncated || (auditResult.corruptedCount || 0) > 0);
+  // Denetim geçmişi kesik veya bozuksa notu gözlenmeyen görevler kesin "notsuz" ilan edilmez (`null`).
+  const definitiveTasksWithoutNotes = historyIncomplete ? null : tasksWithoutObservedNotes;
 
   const summaryParts = [];
   if (selected.length === 0) {
-    summaryParts.push('not kaydı yok');
+    summaryParts.push(historyIncomplete ? 'gözlenen not kaydı yok (denetim kesik)' : 'not kaydı yok');
   } else if (omittedCount > 0) {
     summaryParts.push(`ilk ${selected.length} not (${omittedCount} not sınır nedeniyle dışarıda)`);
   } else {
     summaryParts.push(`${selected.length} not`);
   }
-  if (tasksWithoutNotes > 0) summaryParts.push(`${tasksWithoutNotes} görev notsuz`);
+  if (definitiveTasksWithoutNotes != null && definitiveTasksWithoutNotes > 0) {
+    summaryParts.push(`${definitiveTasksWithoutNotes} görev notsuz`);
+  } else if (historyIncomplete && tasksWithoutObservedNotes > 0) {
+    summaryParts.push(`${tasksWithoutObservedNotes} görevde gözlenen not yok (denetim kesik)`);
+  }
   if (clippedCount > 0) summaryParts.push(`${clippedCount} not ${maxNoteChars} karakterde kırpıldı`);
-  if (auditResult.truncated || currentResult.truncated) summaryParts.push('denetim/not okuması üst sınıra ulaştı');
+  if (historyIncomplete) summaryParts.push('denetim/not okuması kesik veya eksik');
 
   return {
     versions: selected,
@@ -501,9 +668,9 @@ export async function collectReportNotes({
       metin: summaryParts.join('; '),
       dahil: selected.length,
       disarida_kalan: omittedCount,
-      notsuz_gorev: tasksWithoutNotes,
+      notsuz_gorev: definitiveTasksWithoutNotes,
       kirpilan: clippedCount,
-      denetim_kesik: Boolean(auditResult.truncated || currentResult.truncated)
+      denetim_kesik: historyIncomplete
     }
   };
 }

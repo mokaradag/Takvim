@@ -110,34 +110,53 @@ const CASES = Object.freeze({
   }
 });
 
+const ALLOWED_FLAGS = new Set(['--json', '--ham-not']);
 const args = process.argv.slice(2);
-const showJson = args.includes('--json');
-const includeRawText = args.includes('--ham-not');
-const requested = args.find((arg) => !arg.startsWith('--')) || 'tumu';
-const targetKeys = requested === 'tumu' ? Object.keys(CASES) : [requested.toUpperCase()];
+const unknownFlags = args.filter((arg) => arg.startsWith('-') && !ALLOWED_FLAGS.has(arg));
+const positional = args.filter((arg) => !arg.startsWith('-'));
 
-const stack = await createActualStack(executiveReportBenchmarkSeed(), { sicil: REPORT_BENCH_USERS.YONETICI });
-try {
-  for (const key of targetKeys) {
-    if (!Object.hasOwn(CASES, key)) {
-      process.stderr.write(`Bilinmeyen sentetik kıyas vakası: ${key}\n`);
-      process.exitCode = 1;
-      break;
+if (unknownFlags.length > 0) {
+  process.stderr.write(`Desteklenmeyen seçenek: ${unknownFlags.join(', ')}\n`);
+  process.exitCode = 1;
+} else if (positional.length > 1) {
+  process.stderr.write(`Birden fazla kıyas vakası verilemez: ${positional.join(', ')}\n`);
+  process.exitCode = 1;
+} else {
+  const showJson = args.includes('--json');
+  const includeRawText = args.includes('--ham-not');
+  const requested = positional[0] || 'tumu';
+  const targetKeys = requested.toLowerCase() === 'tumu' ? Object.keys(CASES) : [requested.toUpperCase()];
+  const invalidKeys = targetKeys.filter((key) => !Object.hasOwn(CASES, key));
+
+  if (invalidKeys.length > 0) {
+    process.stderr.write(`Bilinmeyen sentetik kıyas vakası: ${invalidKeys.join(', ')}\n`);
+    process.exitCode = 1;
+  } else {
+    const previousDevSicil = process.env.MERGEN_ROTA_DEV_SICIL;
+    const stack = await createActualStack(executiveReportBenchmarkSeed(), { sicil: REPORT_BENCH_USERS.YONETICI });
+    try {
+      for (const key of targetKeys) {
+        const spec = CASES[key];
+        process.env.MERGEN_ROTA_DEV_SICIL = String(spec.sicil);
+        const { evidencePackage } = await buildExecutiveReportEvidence({
+          request: spec.request,
+          now: REPORT_BENCH_NOW,
+          today: REPORT_BENCH_TODAY
+        });
+        const preview = buildExecutiveEvidencePreview(evidencePackage, {
+          includeRawText,
+          syntheticContext: true
+        });
+        process.stdout.write(`\n[${key}] ${preview.ozet}\n`);
+        if (showJson) process.stdout.write(`${preview.paketJson}\n`);
+        if (!preview.gecerli) {
+          process.exitCode = 1;
+        }
+      }
+    } finally {
+      await stack.dispose();
+      if (previousDevSicil === undefined) delete process.env.MERGEN_ROTA_DEV_SICIL;
+      else process.env.MERGEN_ROTA_DEV_SICIL = previousDevSicil;
     }
-    const spec = CASES[key];
-    process.env.MERGEN_ROTA_DEV_SICIL = String(spec.sicil);
-    const { evidencePackage } = await buildExecutiveReportEvidence({
-      request: spec.request,
-      now: REPORT_BENCH_NOW,
-      today: REPORT_BENCH_TODAY
-    });
-    const preview = buildExecutiveEvidencePreview(evidencePackage, {
-      includeRawText,
-      syntheticContext: true
-    });
-    process.stdout.write(`\n[${key}] ${preview.ozet}\n`);
-    if (showJson) process.stdout.write(`${preview.paketJson}\n`);
   }
-} finally {
-  await stack.dispose();
 }
