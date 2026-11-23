@@ -74,17 +74,21 @@ for (const [source, document] of [['varsayılan', DEFAULT_AI_MODEL_REGISTRY], ['
   test(`${source}: yalnızca güncel ve desteklenen kurum içi modeller bulunur`, () => {
     const validated = validateModelRegistry(document);
     assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+    // 21.11.2026 katalog uzlaştırması: iki model ekrandaki TAM kimliğiyle kayıtlıdır. Bu ekranlarda görünmeyen
+    // Qwen3.8-27B ve Qwen3.6-35B-A3B yalnızca görünmedikleri için silinmez; canlı katalog doğrulaması bekler.
     assert.deepEqual([...validated.registry.models.keys()].sort(), [
-      'VoxCPM2', 'DeepSeek-V4.1-Flash', 'Qwen3.8-Flash-Next', 'FLUX.2-dev',
+      'VoxCPM2', 'DeepSeek-V4.1-Flash-1017', 'Qwen3.8-Flash-Next-FP8', 'FLUX.2-dev',
       'intfloat/multilingual-e5-large', 'tts-1-hd', 'whisper-large-v3',
       'openai/gpt-oss-120b', 'Qwen3-Next-80B-A3B-Instruct', 'tts-1',
       'Qwen3-Embedding-8B', 'bge-reranker-v2-m3', 'Qwen3-Reranker-8B',
       'gemma-4-31B-it', 'Qwen3.6-35B-A3B', 'Qwen3-VL-8B-Instruct', 'Qwen3.8-27B'
     ].sort());
+    // Eski, daha az belirgin kimlikler geri gelmez; yeteneği bilinmeyen özel hizmet (laya-multilingual) kayda alınmaz.
     for (const excluded of [
       'dall-e-3', 'Qwen3.5-397B-A17B-FP8', 'laya-multilingual',
       'Qwen3-30B-A3B-Instruct-2507', 'Qwen3-Coder-30B-A3B-Instruct',
-      'Qwen2.5-VL-7B-Instruct', 'Qwen3-VL-30B-A3B-Instruct'
+      'Qwen2.5-VL-7B-Instruct', 'Qwen3-VL-30B-A3B-Instruct',
+      'DeepSeek-V4.1-Flash', 'Qwen3.8-Flash-Next'
     ]) {
       assert.equal(validated.registry.models.has(excluded), false, excluded);
     }
@@ -97,8 +101,8 @@ for (const [source, document] of [['varsayılan', DEFAULT_AI_MODEL_REGISTRY], ['
   test(`${source}: yeni modeller ve güncellenen yetenekler platform kataloğuyla eşleşir`, () => {
     const { registry: parsed } = validateModelRegistry(document);
     for (const [id, capabilities, contextTokens] of [
-      ['Qwen3.8-Flash-Next', ['chat', 'tools', 'reasoning', 'vision'], 262144],
-      ['DeepSeek-V4.1-Flash', ['chat', 'tools', 'reasoning', 'vision'], 524288],
+      ['Qwen3.8-Flash-Next-FP8', ['chat', 'tools', 'reasoning', 'vision'], 262144],
+      ['DeepSeek-V4.1-Flash-1017', ['chat', 'tools', 'reasoning', 'vision'], 524288],
       ['FLUX.2-dev', ['image.generation'], null],
       ['Qwen3-Reranker-8B', ['rerank'], 32768],
       ['bge-reranker-v2-m3', ['rerank'], 8192]

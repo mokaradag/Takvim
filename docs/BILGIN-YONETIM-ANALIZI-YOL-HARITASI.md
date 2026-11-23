@@ -11,6 +11,7 @@ oturumu sohbet geçmişine dayanmadan bu belgeden devam edebilmelidir.
 | Anlamsal katman, planlayıcı, 4A–4E, nitelendirme kapıları | [AI Anlamsal Katmanı](YAPAY-ZEKA-ANLAMSAL-KATMAN.md) |
 | Yetki modeli | [Yetkilendirme Modeli](YETKILENDIRME-MODELI.md) |
 | Bu girişimin 40 soruluk kabul matrisi, Aşama G ve H kıyas kümeleri ve nitelendirme kayıtları | [Bilgin Analiz Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) |
+| Aşama I (4I-0 – 4I-F) ayrıntılı uygulama yol haritası, mimarisi ve kabul çerçevesi | [4I Uygulama Yol Haritası](BILGIN-4I-UYGULAMA-YOL-HARITASI.md), [4I Mimarisi](BILGIN-4I-YONETICI-RAPORU-MIMARISI.md), [4I Kıyas ve Kabul](BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md) |
 
 Bu belge yukarıdaki belgelerin sözleşmelerini yinelemez; onlara bağlanır. Çelişki varsa güvenlik ve yetki
 sözleşmesi o belgelerdedir; bu belge kapsam, sıra, kabul kapıları ve ilerleme kaydının sahibidir.
@@ -507,7 +508,19 @@ okunur (yanıt kapsamı adlandırır). Haiku 4.5 yalnızca vekildir; gerçek Qwe
 
 ## 8. AŞAMA I — Profesyonel yönetim raporu üretimi
 
-**Durum: PLANLANDI.**
+**Durum: SÜRÜYOR** (4I-0 temeli DOĞRULANDI; 4I-A…4I-F PLANLANDI). Güncel ve ayrıntılı plan, artım başına kapsam,
+kabul kapıları, 4J sınırı ve ilerleme kaydı **[4I Uygulama Yol Haritası](BILGIN-4I-UYGULAMA-YOL-HARITASI.md)**'ndadır;
+mimari ve sözleşmeler [4I Mimarisi](BILGIN-4I-YONETICI-RAPORU-MIMARISI.md), değerlendirme
+[4I Kıyas ve Kabul Çerçevesi](BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md)'ndedir. Artımlar: 4I-0 mimari ve kabul temeli ·
+4I-A yönetici kanıt zekâsı · 4I-B insan kalitesinde anlatı · 4I-C orantılı doğrulama ve yerel onarım · 4I-D kurumsal
+DOCX · 4I-E Yönetici Rapor Stüdyosu · 4I-F isteğe bağlı geçici belge zenginleştirme. 4I-B ve 4I-C belirleyici kalite
+kapılarıdır.
+
+Aşağıdaki maddeler **7 Kasım 2026 tarihli ilk plan** olarak tarihsel kayıttır ve yerinde bırakıldı. Ayrıntılı yol
+haritası şu noktalarda onların yerine geçer: madde 5'teki "aynı kanıt ve atıf sözleşmesi" yerine rapor, sohbetin
+kapalı yuva düzyazısını kullanmayan ayrı bir anlatı ve orantılı doğrulama sözleşmesi kullanır (dil modeli düzyazıyı
+yazar; olgular sunucunundur); madde 3'teki DOCX bağımlılık seçimi ve madde 9'daki arayüz sırasıyla 4I-D ve 4I-E'de
+kesinleşir; J sınırı değişmedi.
 
 1. **Amaç:** "Haftalık Faaliyet Raporu", aylık ve keyfî başlangıç/bitiş tarihli raporlar; kişi, proje, ekip, birim,
    bölüm, direktörlük ve diğer yetkili kapsamlar; düzenlenebilir profesyonel Microsoft Word **DOCX**; yönetici
@@ -532,7 +545,7 @@ okunur (yanıt kapsamı adlandırır). Haiku 4.5 yalnızca vekildir; gerçek Qwe
 14. **Bağımlılık:** F, G, H.
 15. **Riskler/geri alma:** bağımlılık güvenliği; özellik bayrağı ile kapatma.
 16. **Çıktılar:** rapor motoru, şablon, önizleme, belgeler, sınamalar.
-17. **Durum:** PLANLANDI. 18. **Kaynaklar:** —
+17. **Durum:** ilk planda PLANLANDI; güncel durum bölüm başındadır. 18. **Kaynaklar:** [4I Uygulama Yol Haritası](BILGIN-4I-UYGULAMA-YOL-HARITASI.md).
 
 ---
 
@@ -650,6 +663,8 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 | 2026-11-16 | Notlar yalnızca o iletinin rızasıyla ve alıntı olarak; model tema etiketlemez | Tema seçimi kanıtlanamaz sınıflandırma olurdu; not metni bildirimdir |
 | 2026-11-16 | Anlatılacak önerme kalmadıysa düzen sunucunundur (model çağrısı yok) | Zayıf model önermesiz sayfada düzen yerine açıklama yazıyordu; çağrı da tasarruf edilir |
 | 2026-11-16 | F `h05/h08/h22` ve G `x12` beklentisi "Rota dışı" yerine geçmiş dönem okuyan plan | Aşama H bu soruları yanıtlanabilir yaptı; güncel durum planı yine geçmez |
+| 2026-11-21 | Aşama I artımlara bölündü (4I-0 – 4I-F); ayrıntı ve 4I karar günlüğü ayrı belgede | Rapor girişimi çok oturumlu; kararlar oturumlar arasında kaybolmasın |
+| 2026-11-21 | Rapor düzyazısını dil modeli yazar; sohbetin kapalı yuva sözleşmesi rapor için kullanılmaz ve değiştirilmez | Sunucu cümlelerinden kurulan rapor mekanik dökümdür; sohbet güvenliği korunur |
 
 ---
 
@@ -767,3 +782,15 @@ sınıflar Kabul Matrisi §9). Durum **SÜRÜYOR**; TAMAMLANDI işaretlenmedi.
 Başlangıç commit'i `0d38c07b862b159db7595bf3b724473cf50c3aba` üzerine tek düzeltme: toplu hareket sorgusunun geçici tablo temizliği, geleceğe yazılmış bitişlerin dışlanması, sürümlü bağlam ve dönem onarımı, kapsamı koruyan anlatım, bağımsız kabul kanıtı ve doğru dönem/kova beklentileri. Dört diff dışı bulgunun üçü ortak düzeltmelerle giderildi; tarihsel çok kapsamlı kırılımın mevcut düzeltmesi regresyonla doğrulandı.
 
 Koşu kanıtı [Kabul Matrisi §9.7](BILGIN-ANALIZ-KABUL-MATRISI.md): tam paket **6494/6494**, ardından son H puanlayıcı denetimiyle dönemsel paket **264/264**; lint uyarısız ve üretim derlemesi başarılı. İlk ACL ortam hatası başarılı sayılmadı; geçici dizin değişkenleri düzeltilerek tam paket yeniden koşuldu. Eski **6386** ve **6474** toplamları bu koşunun sonucu değildir. Windows/SQL VM, canlı Haiku ve bu commit'in tarayıcı kabulü **bekliyor**; durum **SÜRÜYOR**.
+
+
+### 2026-11-21 — Aşama 4I-0 temeli
+
+PR #120 birleştirildikten sonra `166deb7` tabanında: Aşama I artımlara bölündü ve ayrıntılı
+[4I Uygulama Yol Haritası](BILGIN-4I-UYGULAMA-YOL-HARITASI.md), [4I Mimarisi](BILGIN-4I-YONETICI-RAPORU-MIMARISI.md) ve
+[4I Kıyas ve Kabul Çerçevesi](BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md) yazıldı; kanonik stil belgesi
+(`config/ai/bilgin_rapor_stili.yaml`) ve onunla belirlenimci olarak uyumlu kanonik Word şablonu eklendi; model kaydı
+yeni katalogla uzlaştırıldı (`DeepSeek-V4.1-Flash-1017`, `Qwen3.8-Flash-Next-FP8`; profil eşlemeleri değişmedi);
+48 senaryolu sentetik rapor kıyas fikstürü ve yapısal sınamalar eklendi. Rapor motoru yoktur; Aşama H durumu ve
+bekleyen VM kapıları değişmedi. Koşu sayıları ve bekleyen dış ön koşullar 4I yol haritasının oturum devrindedir.
+- **Sonraki giriş noktası:** 4I-A (yetkili yönetici kanıt paketi ve zengin not okuması).

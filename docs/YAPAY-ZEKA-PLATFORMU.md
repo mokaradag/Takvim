@@ -358,12 +358,31 @@ modeline bağlıdır. `embedding`, `intfloat/multilingual-e5-large` modelini;
 `speech.stt`, `whisper-large-v3` modelini; `speech.tts.fast` ve
 `speech.tts.quality` sırasıyla `tts-1` ve `tts-1-hd` modellerini kullanır.
 
-`Qwen3.8-Flash-Next`, 256K (262144 belirteç) bağlamla sohbet, araç kullanımı,
+`Qwen3.8-Flash-Next-FP8`, 256K (262144 belirteç) bağlamla sohbet, araç kullanımı,
 akıl yürütme ve görsel anlama yetenekleriyle katalogda bulunur; mevcut sohbet
-profilleri bu modele taşınmaz. `DeepSeek-V4.1-Flash`, 512K (524288 belirteç)
+profilleri bu modele taşınmaz. `DeepSeek-V4.1-Flash-1017`, 512K (524288 belirteç)
 bağlamla aynı dört yeteneği taşır ancak hiçbir profil onu kullanmaz. Görsel
 anlama yeteneği, platform ekranlarında bu modelin yanında
 `Qwen3-VL-8B-Instruct` ile aynı görsel girdi simgesinin bulunmasına dayanır.
+
+**21.11.2026 katalog uzlaştırması (Aşama 4I-0).** Platform model ekranının en
+üstten ve en alttan iki görüntüsü (birbiriyle örtüşen satırlarla) incelendi.
+Kayıttaki daha az belirgin `DeepSeek-V4.1-Flash` ve `Qwen3.8-Flash-Next`
+kimlikleri, ekranda kısaltılmadan görünen tam kimliklere (`DeepSeek-V4.1-Flash-1017`,
+`Qwen3.8-Flash-Next-FP8`) çevrildi; yetenekler ve bağlam değerleri aynı simge
+kuralıyla doğrulandı (beyin = `reasoning`, katman = `tools`, görsel = `vision`;
+"512K" ve "256K" depodaki ikili kuvvet geleneğiyle yazıldı). Profil eşlemeleri
+değişmedi. Bu ekranlarda görünmeyen `Qwen3.8-27B` ve `Qwen3.6-35B-A3B` yalnızca
+görünmedikleri için silinmedi; canlı katalog doğrulamasına kadar kayıtta kalır
+ve rapor rolleri için aday sayılmaz. Ekranda ayrı bir uç türüyle görünen
+`laya-multilingual` hizmetinin yeteneği kayıt sözlüğündeki hiçbir yeteneğe
+karşılık geldiği doğrulanmadığından kayda alınmadı. Kimliklerin uçtaki
+`GET /models` listesiyle canlı doğrulaması bu geliştirme ortamından yapılamadı.
+Sistem Yönetimi bağlantı testi yalnızca profillere bağlı modelleri listede
+arar; profilsiz modellerin (ör. `DeepSeek-V4.1-Flash-1017`) kimliği kurum içi
+ortamda aynı listeyle ayrıca karşılaştırılmalıdır. Bekleyen doğrulama ve rapor
+yazımı model rolleri için bkz.
+[Aşama 4I mimarisi](BILGIN-4I-YONETICI-RAPORU-MIMARISI.md) §9.
 
 `image.generation` profili `FLUX.2-dev` modeline bağlıdır. Platformun görsel
 düzenleme desteği bu kayda yeni bir yetenek veya profil eklemez. `rerank`
