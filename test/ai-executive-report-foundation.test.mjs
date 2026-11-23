@@ -2682,7 +2682,8 @@ test('belgeler: yol haritası 4I-0…4I-F artımlarını on altı başlıkla, du
     const end = index + 1 < increments.length ? starts[index + 1] : roadmap.indexOf('\n## ', starts[index] + 5);
     const section = roadmap.slice(starts[index], end);
     LABELS.forEach((label, position) => assert.ok(section.includes(`${position + 1}. **${label}**`), `${increments[index]} → ${label}`));
-    if (index > 0) assert.match(section, /\*\*Durum: PLANLANDI\.\*\*/, `${increments[index]} henüz uygulanmadı`);
+    if (index === 1) assert.match(section, /\*\*Durum: DOĞRULANDI\.\*\*/, '4I-A belirlenimci kapılarla doğrulandı');
+    if (index > 1) assert.match(section, /\*\*Durum: PLANLANDI\.\*\*/, `${increments[index]} henüz uygulanmadı`);
   }
   assert.match(roadmap, /4I-B ve 4I-C belirleyici kalite kapılarıdır/);
   const boundary = roadmap.slice(roadmap.indexOf('\n## Aşama 4J sınırı'));

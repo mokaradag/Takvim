@@ -16,8 +16,12 @@ import {
   AI_TOOL_TASK_VISIBILITY_SQL,
   AI_TOOL_WBS_SQL,
   AI_TOOL_WBS_SELECTOR_SQL,
-  AI_TOOL_TASK_NOTES_SQL
+  AI_TOOL_TASK_NOTES_SQL,
+  AI_TOOL_REPORT_TASK_NOTES_SQL,
+  AI_TOOL_REPORT_NOTE_AUDIT_SQL,
+  AI_TOOL_REPORT_SCOPE_ROSTER_SQL
 } from './rotaToolQueries.js';
+import { readTaskActivityReport } from '../../../reports/taskActivityReport.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { assigneesByTask, factFromRow } from './taskFacts.js';
 
@@ -66,13 +70,13 @@ function capped(rows = [], limit) {
 }
 
 export async function readTaskFacts(executor, scope, {
-  projectId = null, taskIds = [], wbsId = null, seriesId = null, recurringOnly = false, text = '',
+  projectId = null, projectIds = [], taskIds = [], wbsId = null, seriesId = null, recurringOnly = false, text = '',
   openOnly = false, targetFrom = null, targetTo = null, createdByMe = false, hasDescription = false, includeUndated = false,
   statuses = [], priorities = [], milestone = null, deadline = null,
   dateField = null, dateFrom = null, dateTo = null, today = null,
   assigneeMode = 'any', personSicil = null, teamLevel = null, withAssignees = false, maxRows, rosterRows = 0
 }) {
-  const request = scoped(executor, scope, { projectId, taskIds });
+  const request = scoped(executor, scope, { projectId, projectIds, taskIds });
   request.input('maxRows', sql.Int, maxRows + 1);
   request.input('wbsId', sql.UniqueIdentifier, wbsId);
   request.input('seriesId', sql.UniqueIdentifier, seriesId);
@@ -271,4 +275,83 @@ export async function readOutlook(executor, scope, { taskIds = [], maxRows }) {
     subscriptions: rows,
     truncated
   };
+}
+
+/** Yönetici raporunda tek görev notunun Unicode kod noktası sınırı (sohbet sınırı 400 değişmez). */
+export const REPORT_TASK_NOTE_CHARS = 1600;
+
+/**
+ * Yönetici raporu için görünür görevlerin güncel açıklamalarını (en çok 1600 kod noktası) okur.
+ * Yalnızca rapor düzeyinde açık `notlar: dahil` rızası doğrulandıktan sonra çağrılmalıdır.
+ */
+export async function readReportTaskNotes(executor, scope, taskIds, { maxRows = 60 } = {}) {
+  if (!taskIds.length) return { notes: new Map(), truncated: false };
+  const request = scoped(executor, scope, { taskIds });
+  request.input('maxNoteRows', sql.Int, maxRows + 1);
+  const [noteRows = []] = recordsets(await request.query(AI_TOOL_REPORT_TASK_NOTES_SQL));
+  const { rows, truncated } = capped(noteRows, maxRows);
+  const notes = new Map(rows.map((row) => {
+    const characters = Array.from(String(row.Description ?? ''));
+    return [canonicalActualId(row.TaskId), {
+      projectId: canonicalActualId(row.ProjectId),
+      text: characters.slice(0, REPORT_TASK_NOTE_CHARS).join(''),
+      clipped: characters.length > REPORT_TASK_NOTE_CHARS
+    }];
+  }));
+  return { notes, truncated };
+}
+
+/**
+ * Yönetici raporu için görünür görevlerin yetkili `MR_AuditLog` açıklama sürümlerini veri kesitine kadar okur.
+ * Yalnızca rapor düzeyinde açık `notlar: dahil` rızası doğrulandıktan sonra çağrılmalıdır.
+ */
+export async function readReportNoteAuditHistory(executor, scope, taskIds, { cutOffUtc, maxRows = 250 } = {}) {
+  if (!taskIds.length) return { events: [], truncated: false };
+  const request = scoped(executor, scope, { taskIds });
+  request.input('cutOffUtc', sql.DateTime2, cutOffUtc instanceof Date ? cutOffUtc : new Date(cutOffUtc));
+  request.input('maxAuditRows', sql.Int, maxRows + 1);
+  const [auditRows = []] = recordsets(await request.query(AI_TOOL_REPORT_NOTE_AUDIT_SQL));
+  const { rows, truncated } = capped(auditRows, maxRows);
+  return {
+    events: rows.map((row) => ({
+      auditId: Number(row.AuditId),
+      occurredAt: row.OccurredAt ? new Date(row.OccurredAt).toISOString() : null,
+      actionCode: String(row.ActionCode || ''),
+      taskId: canonicalActualId(row.TaskId),
+      projectId: canonicalActualId(row.ProjectId),
+      beforeJson: row.BeforeJson ?? null,
+      afterJson: row.AfterJson ?? null,
+      detailJsonClipped: Boolean(row.DetailJsonClipped)
+    })),
+    truncated
+  };
+}
+
+/**
+ * Yönetici raporu kişi, ekip ve kurumsal birim kapsamını yetkili sınırlar içinde doğrulamak için kadro okur.
+ */
+export async function readReportScopeRoster(executor, scope, { maxRows = 500 } = {}) {
+  const request = scoped(executor, scope, {});
+  request.input('maxRosterRows', sql.Int, maxRows + 1);
+  const [rosterRows = []] = recordsets(await request.query(AI_TOOL_REPORT_SCOPE_ROSTER_SQL));
+  const { rows, truncated } = capped(rosterRows, maxRows);
+  return {
+    members: rows.map((row) => ({
+      sicil: Number(row.Sicil),
+      name: row.DisplayName ? String(row.DisplayName).trim() : null,
+      team: row.Team ? String(row.Team).trim() : null,
+      unit: row.Unit ? String(row.Unit).trim() : null,
+      department: row.Department ? String(row.Department).trim() : null,
+      directorate: row.Directorate ? String(row.Directorate).trim() : null,
+      scopeType: String(row.ScopeType || '')
+    })).filter((member) => Number.isSafeInteger(member.sicil) && member.sicil > 0),
+    truncated
+  };
+}
+
+/**
+ * Görev Hareketleri gizlilik kurallarıyla aynı yetkili hareket okumasını yönetici raporu katmanına sunar.
+ */
+export function readReportTaskActivity(executor, auth, input, now, options) {
+  return readTaskActivityReport(executor, auth, input, now, options);
 }

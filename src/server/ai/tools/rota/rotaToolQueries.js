@@ -935,3 +935,102 @@ ${visibleTasks()}
   ORDER BY COALESCE(t.TargetFinish, t.PlannedFinish), s.TaskId;
 
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+
+/**
+ * Aşama 4I-A — Yönetici raporu görev notları (yalnızca rapor düzeyinde açık `notlar: dahil` rızasıyla çağrılır).
+ * Sohbetin 400 karakterlik `AI_TOOL_TASK_NOTES_SQL` sorgusunu ve sınırını değiştirmez; görünür görevlerin
+ * güncel açıklamasını ilk boşluk olmayan karakterden itibaren en fazla 1600 kod noktası (+1 kesiklik sınırı) okur.
+ */
+export const AI_TOOL_REPORT_TASK_NOTES_SQL = `/* rota-ai-tool:report-task-notes */
+${SCOPE_PROJECTS}
+${visibleTasks()}
+  SELECT TOP (@maxNoteRows) visible.TaskId, visible.ProjectId,
+    SUBSTRING(t.Description COLLATE Latin1_General_100_CI_AS_SC, ${DESCRIPTION_TEXT_START_SQL}, 1601) AS Description
+  FROM #AiTasks visible
+  JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
+  WHERE ${DESCRIPTION_PRESENT_SQL}
+  ORDER BY visible.TaskId;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+
+/**
+ * Aşama 4I-A — Yönetici raporu görev açıklaması denetim tarihçesi (yalnızca açık `notlar: dahil` rızasıyla çağrılır).
+ * Görev Hareketleri gizlilik kuralını korur: görev güncel projesinde görünür olmalı, tarihsel denetim satırının
+ * projesi etkin ve kullanıcıya FULL/READ düzeyinde açık ya da görevin güncel projesiyle aynı olmalıdır.
+ * Veri kesiti (`@cutOffUtc`) sonrası kayıtlar okunmaz.
+ */
+export const AI_TOOL_REPORT_NOTE_AUDIT_SQL = `/* rota-ai-tool:report-note-audit */
+${SCOPE_PROJECTS}
+${visibleTasks()}
+  SELECT TOP (@maxAuditRows) a.AuditId, a.OccurredAt, a.ActionCode,
+    a.EntityId AS TaskId, a.ProjectId,
+    LEFT(a.BeforeJson, 8192) AS BeforeJson,
+    LEFT(a.AfterJson, 8192) AS AfterJson,
+    CASE WHEN DATALENGTH(a.BeforeJson) > 16384 OR DATALENGTH(a.AfterJson) > 16384 THEN 1 ELSE 0 END AS DetailJsonClipped
+  FROM dbo.MR_AuditLog a
+  JOIN #AiTasks visible ON visible.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)
+  JOIN dbo.MR_Projects p ON p.ProjectId = a.ProjectId
+  WHERE a.EntityType = 'TASK'
+    AND a.ActionCode IN ('CREATE', 'UPDATE')
+    AND a.OccurredAt <= @cutOffUtc
+    AND (@isAdmin = 1 OR (p.IsActive = 1 AND (
+      a.ProjectId = visible.ProjectId
+      OR EXISTS (
+        SELECT 1
+        FROM STRING_SPLIT(@scopeProjects, ',') grants
+        WHERE LEN(grants.value) = 40
+          AND TRY_CONVERT(uniqueidentifier, LEFT(grants.value, 36)) = a.ProjectId
+          AND (SUBSTRING(grants.value, 38, 1) = 'F' OR SUBSTRING(grants.value, 39, 1) = '1')
+      )
+    )))
+    AND (
+      JSON_VALUE(a.BeforeJson, '$.Description') IS NOT NULL
+      OR JSON_VALUE(a.BeforeJson, '$.description') IS NOT NULL
+      OR JSON_VALUE(a.AfterJson, '$.Description') IS NOT NULL
+      OR JSON_VALUE(a.AfterJson, '$.description') IS NOT NULL
+      OR CHARINDEX(N'"Description"', COALESCE(a.BeforeJson, N'')) > 0
+      OR CHARINDEX(N'"description"', COALESCE(a.BeforeJson, N'')) > 0
+      OR CHARINDEX(N'"Description"', COALESCE(a.AfterJson, N'')) > 0
+      OR CHARINDEX(N'"description"', COALESCE(a.AfterJson, N'')) > 0
+    )
+  ORDER BY a.OccurredAt DESC, a.AuditId DESC;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+
+/**
+ * Aşama 4I-A — Yönetici raporu örgütsel ve kişi kapsamı kadrosu.
+ * Olağan ve yönetici kullanıcılarda yalnızca kullanıcının kendisi ve kendi `MR_V_ExecutiveScope` kapsamındaki
+ * çalışanlar okunur; başka yöneticinin kapsamı ya da ilgisiz dizin kayıtları açılmaz.
+ */
+export const AI_TOOL_REPORT_SCOPE_ROSTER_SQL = `/* rota-ai-tool:report-scope-roster */
+${SCOPE_PROJECTS}
+  SELECT TOP (@maxRosterRows) roster.Sicil, roster.DisplayName, roster.Team, roster.Unit, roster.Department, roster.Directorate, roster.ScopeType
+  FROM (
+    SELECT pd.Sicil, NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
+      NULLIF(LTRIM(RTRIM(pd.Team)), N'') AS Team,
+      NULLIF(LTRIM(RTRIM(pd.Unit)), N'') AS Unit,
+      NULLIF(LTRIM(RTRIM(pd.Department)), N'') AS Department,
+      NULLIF(LTRIM(RTRIM(pd.Directorate)), N'') AS Directorate,
+      CAST('SELF' AS varchar(20)) AS ScopeType
+    FROM dbo.MR_V_PeopleDirectory pd
+    WHERE pd.Sicil = @sicil
+    UNION ALL
+    SELECT pd.Sicil, NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
+      NULLIF(LTRIM(RTRIM(pd.Team)), N'') AS Team,
+      NULLIF(LTRIM(RTRIM(pd.Unit)), N'') AS Unit,
+      NULLIF(LTRIM(RTRIM(pd.Department)), N'') AS Department,
+      NULLIF(LTRIM(RTRIM(pd.Directorate)), N'') AS Directorate,
+      es.ScopeType
+    FROM dbo.MR_V_ExecutiveScope es
+    JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = es.EmployeeSicil
+    WHERE @isAdmin = 0 AND es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil
+    UNION ALL
+    SELECT pd.Sicil, NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'') AS DisplayName,
+      NULLIF(LTRIM(RTRIM(pd.Team)), N'') AS Team,
+      NULLIF(LTRIM(RTRIM(pd.Unit)), N'') AS Unit,
+      NULLIF(LTRIM(RTRIM(pd.Department)), N'') AS Department,
+      NULLIF(LTRIM(RTRIM(pd.Directorate)), N'') AS Directorate,
+      CAST('ADMIN' AS varchar(20)) AS ScopeType
+    FROM dbo.MR_V_PeopleDirectory pd
+    WHERE @isAdmin = 1 AND pd.Sicil <> @sicil
+  ) roster
+  ORDER BY roster.Sicil, roster.ScopeType;
+  DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;

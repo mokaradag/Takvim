@@ -561,12 +561,114 @@ function outlook(db, params) {
   return [visibleRows];
 }
 
+function reportTaskNotes(db, params) {
+  const scope = scopeOf(db, params);
+  const limit = Number(params.maxNoteRows || 61);
+  const rows = [...scope.visible.values()]
+    .filter(({ task }) => String(task.Description ?? '').trim())
+    .sort((a, b) => upper(a.task.TaskId).localeCompare(upper(b.task.TaskId)))
+    .slice(0, limit)
+    .map(({ task }) => ({
+      TaskId: upper(task.TaskId),
+      ProjectId: upper(task.ProjectId),
+      Description: Array.from(String(task.Description).replace(/^\s+/u, '')).slice(0, 1601).join('')
+    }));
+  return [rows];
+}
+
+function reportNoteAudit(db, params) {
+  const scope = scopeOf(db, params);
+  const limit = Number(params.maxAuditRows || 251);
+  const cutOffMs = new Date(params.cutOffUtc).getTime();
+  // `@scopeProjects` belirteçlerinden FULL veya READ yetkili proje kümesini çöz (üretim SQL ile aynı kural).
+  const fullOrReadProjects = new Set();
+  for (const token of String(params.scopeProjects || '').split(',')) {
+    if (token.length !== 40) continue;
+    const id = token.slice(0, 36);
+    if (isGuid(id) && (token[37] === 'F' || token[38] === '1')) fullOrReadProjects.add(upper(id));
+  }
+  const hasDescriptionField = (raw) => {
+    if (!raw) return false;
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return Boolean(parsed && typeof parsed === 'object'
+        && ((Object.hasOwn(parsed, 'Description') && parsed.Description != null)
+          || (Object.hasOwn(parsed, 'description') && parsed.description != null)));
+    } catch { return false; }
+  };
+  const rows = (db.auditLog || [])
+    .filter((row) => row.EntityType === 'TASK' && ['CREATE', 'UPDATE'].includes(row.ActionCode))
+    .filter((row) => new Date(row.OccurredAt).getTime() <= cutOffMs)
+    .filter((row) => {
+      const visible = scope.visible.get(upper(row.EntityId));
+      if (!visible) return false;
+      const project = projectRow(db, row.ProjectId);
+      if (!project) return false;
+      const authorizedAuditProject = scope.isAdmin || (project.IsActive && (
+        same(row.ProjectId, visible.task.ProjectId)
+        || fullOrReadProjects.has(upper(row.ProjectId))
+      ));
+      if (!authorizedAuditProject) return false;
+      return hasDescriptionField(row.BeforeJson) || hasDescriptionField(row.AfterJson);
+    })
+    .sort((a, b) => new Date(b.OccurredAt).getTime() - new Date(a.OccurredAt).getTime() || Number(b.AuditId) - Number(a.AuditId))
+    .slice(0, limit)
+    .map((row) => ({
+      AuditId: Number(row.AuditId),
+      OccurredAt: row.OccurredAt,
+      ActionCode: row.ActionCode,
+      TaskId: upper(row.EntityId),
+      ProjectId: upper(row.ProjectId),
+      BeforeJson: row.BeforeJson != null ? String(row.BeforeJson).slice(0, 8192) : null,
+      AfterJson: row.AfterJson != null ? String(row.AfterJson).slice(0, 8192) : null,
+      DetailJsonClipped: (String(row.BeforeJson || '').length > 8192 || String(row.AfterJson || '').length > 8192) ? 1 : 0
+    }));
+  return [rows];
+}
+
+function reportScopeRoster(db, params) {
+  const sicil = Number(params.sicil);
+  const isAdmin = Boolean(params.isAdmin);
+  const limit = Number(params.maxRosterRows || 501);
+  const bySicil = new Map((db.people || []).map((person) => [Number(person.Sicil), person]));
+  const rows = [];
+  const pushPerson = (person, scopeType) => {
+    if (!person) return;
+    rows.push({
+      Sicil: Number(person.Sicil),
+      DisplayName: person.DisplayName ? String(person.DisplayName).trim() : null,
+      Team: person.Team ? String(person.Team).trim() : null,
+      Unit: person.Unit ? String(person.Unit).trim() : null,
+      Department: person.Department ? String(person.Department).trim() : null,
+      Directorate: person.Directorate ? String(person.Directorate).trim() : null,
+      ScopeType: scopeType
+    });
+  };
+  pushPerson(bySicil.get(sicil), 'SELF');
+  if (isAdmin) {
+    for (const person of db.people || []) {
+      if (Number(person.Sicil) !== sicil) pushPerson(person, 'ADMIN');
+    }
+  } else {
+    for (const entry of db.executiveScope || []) {
+      if (Number(entry.ManagerSicil) === sicil && Number(entry.EmployeeSicil) !== sicil) {
+        pushPerson(bySicil.get(Number(entry.EmployeeSicil)), entry.ScopeType || 'UNIT');
+      }
+    }
+  }
+  rows.sort((a, b) => a.Sicil - b.Sicil || String(a.ScopeType).localeCompare(String(b.ScopeType)));
+  return [rows.slice(0, limit)];
+}
+
 const HANDLERS = Object.freeze({
   'task-facts': taskFacts,
   'task-visibility': taskVisibility,
   // Görünür görevlerin kesilmiş açıklamaları (SQL: SC sıralamasıyla 401 kod noktası; boş açıklama satır döndürmez).
   'task-notes': (db, params) => [[...scopeOf(db, params).visible.values()].filter(({ task }) => String(task.Description ?? '').trim())
     .map(({ task }) => ({ TaskId: upper(task.TaskId), Description: Array.from(String(task.Description).replace(/^\s+/u, '')).slice(0, 401).join('') }))],
+  'report-task-notes': reportTaskNotes,
+  'report-note-audit': reportNoteAudit,
+  'report-scope-roster': reportScopeRoster,
   'task-detail': taskDetail,
   'project-search': projectSearch,
   portfolio,
