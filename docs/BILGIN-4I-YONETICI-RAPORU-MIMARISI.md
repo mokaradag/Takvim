@@ -137,7 +137,9 @@ Kurallar:
   `mudurluk`, `direktorluk` — tek elemanlı, `projeler` türünde en az bir elemanlı benzersiz dizi; paralel
   `proje`/`projeler`/`kisi`/`ekip` alanları kullanılmaz).
 - **Köken.** Her kanıt güvenilir kaynak aracı ya da tabloyu (`kaynak`), görev/proje/ekip kimliğini ve zaman bilgisini
-  taşır; kanıt türüyle uyuşmayan kaynak kabul edilmez.
+  taşır; kanıt türüyle uyuşmayan kaynak kabul edilmez. Bireysel (kişi kapsamlı) veya genel rapora eklenen
+  destekleyici belgeler (`tur: belge`, `kaynak: gecici_yukleme`) belirli bir görev, proje ya da ekibe bağlı değilse
+  uydurma ilişki kurulmadan rapor kapsamını ve kaynak/yükleme zaman damgasını taşır.
   Dönem temelli toplu ölçüler (`tamamlanan`, `hareket` vb.) uygulanan `donem` (`baslangic`, `bitis`) aralığını,
   anlık durum ölçüleri (`acik`, `geciken`, `yaklasan_7_gun`, `history.undatedDone`) ise paket kökündeki kanonik
   `veri_ani` kesitiyle eşleşen `veri_ani` zaman damgasını taşır; karşılaştırma ve dönem cümlesi doğrulaması bu zaman
@@ -281,7 +283,8 @@ Yazar **gerçek düzyazı** üretir. Çıktı yapılandırılmıştır ama metin
 Stil belgesindeki `anlati` bölümü bağlayıcıdır: yetkin yönetici analisti tonu; bağlantılı ve dolu paragraflar
 (tipik olarak 3–7 cümle); sentez ve kanıta dayalı yorum; somutluk; yinelenen kalıp giriş ve kapanışların, veritabanı
 dökümü dilinin, suç atfının ve genel geçer değerlendirmenin yasaklığı. **Kurumsal tutarlılık aynı biçim demektir,
-aynı cümleler değil:** bölüm başlıkları sabittir; cümleler her raporda kanıta göre özgündür.
+aynı cümleler değil:** bölüm başlıkları sabittir (yalnızca stil belgesinde açıkça ilan edilen kapsam değişkenleri,
+ör. bireysel raporda `baslik_kisi`, izinli sayılır); cümleler her raporda kanıta göre özgündür.
 
 ---
 
@@ -299,8 +302,10 @@ aynı cümleler değil:** bölüm başlıkları sabittir; cümleler her raporda 
 ### 8.2 Denetim katmanları
 
 1. **Belirlenimci nesnel denetim (her zaman):** düzyazıdan sayı, yüzde, tarih/aralık, proje ve kişi adları, durum
-   sözcükleri çıkarılır; her biri kanıt defterindeki bir değere ya da türetime bağlanmalıdır. Kanıt paketinde
-   bulunmayan proje/kişi adı **kesin kapıdır** (uydurma ya da yetkisiz varlık).
+   sözcükleri çıkarılır; her biri kanıt defterindeki bir değere ya da türetime bağlanmalıdır. "Şekil 1" veya
+   "Tablo 1" gibi görsel/tablo göndermelerindeki sıra numaraları kanıt defteri yerine sunucunun belge/şekil planına
+   karşı doğrulanır (planda olmayan uydurma şekil/tablo göndermesi yine reddedilir). Kanıt paketinde bulunmayan
+   proje/kişi adı **kesin kapıdır** (uydurma ya da yetkisiz varlık).
 2. **Anlamsal destek denetimi (zorunlu):** Her maddi ifadenin yetkili kanıtla ilişkisi doğrulanır. Nitelikli
    bağımsız denetçi kullanıldığında model fiilî yazardan farklıdır. Denetçi dört iddia sınıfını ve kanıt
    göndergelerini döndürür. Sunucu bu çıktıyı doğrular ve onarım sinyali olarak kullanır. Kanıt seçimi için

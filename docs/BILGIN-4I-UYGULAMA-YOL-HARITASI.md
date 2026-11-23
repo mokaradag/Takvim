@@ -144,11 +144,11 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
     belirtimindeki rol aday listeleri ve `canli_dogrulama_bekleyen` kayıtları (`config/ai/bilgin_rapor_stili.yaml`),
     bu model kimliklerine ve yazar adaylarına başvuran mimari/platform/kabul belgeleri
     (`docs/BILGIN-4I-YONETICI-RAPORU-MIMARISI.md`, `docs/YAPAY-ZEKA-PLATFORMU.md`,
-    `docs/BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md`) ile ilgili model kimliği beklentilerini doğrulayan sınama
-    dosyaları (`test/ai-model-registry.test.mjs`, `test/ai-executive-report-foundation.test.mjs` ve yardımcıları
-    `test/helpers/docxPackage.mjs`, `test/helpers/docxXml.mjs`, `test/helpers/coverPng.mjs`) birlikte geri
-    alınır; hiçbir profil bu modellere bağlı olmadığından sohbet etkilenmez. Belgeler, yapılandırma, yardımcılar ve
-    bu sınama dosyaları tek commit'le birlikte geri alınabilir.
+    `docs/BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md`) ile `test/ai-model-registry.test.mjs` ve
+    `test/ai-executive-report-foundation.test.mjs` içindeki **yalnızca model kimliği beklentileri** geri alınır;
+    şablon, logo ve 4I-0 sınır sözleşmelerini doğrulayan `test/ai-executive-report-foundation.test.mjs` ile
+    `test/helpers/docxPackage.mjs`, `test/helpers/docxXml.mjs` ve `test/helpers/coverPng.mjs` dosyaları yerinde
+    kalır. Hiçbir sohbet profili bu modellere bağlı olmadığından sohbet etkilenmez.
 15. **Kapsam dışı** — Rapor motoru, kanıt paketi kurucusu, yazar, doğrulayıcı, DOCX üreticisi, Stüdyo, yükleme,
     kalıcı saklama, model seçici arayüzü, canlı model nitelendirmesi.
 16. **Durum ve doğrulama kanıtı** — **Durum: DOĞRULANDI** (belirlenimci kapılar ve şablonun bütün sayfalarının
@@ -428,13 +428,18 @@ Aşağıdakiler **Aşama 4J**'ye aittir ve 4I'ye sessizce taşınmaz:
 Uygulandı: bu yol haritası; mimari ve sözleşmeler; kıyas ve kabul çerçevesi; kanonik stil belgesi ve şablon;
 model kaydı uzlaştırması; sentetik kıyas fikstürü (48 senaryo, 8 temsili vaka); belirlenimci sınamalar.
 
-- **Doğrulama (bu dalda, Node 22, Linux):** tam paket `npm test -- --test-concurrency=1` **6642/6642** (başarısız,
+- **İlk temel doğrulaması (2026-11-21, ilk commit `16ba2e6`, Node 22, Linux):** tam paket `npm test -- --test-concurrency=1` **6642/6642** (başarısız,
   iptal, atlanan 0); yeni sınamalar `ai-executive-report-foundation` **21/21**, `ai-executive-report-benchmark`
   **6/6**, güncellenen `ai-model-registry` **25/25**; lint uyarısız; üretim derlemesi başarılı; `npm install
   --package-lock-only` kilit dosyasını değiştirmiyor; stil belgesi `js-yaml` ve PyYAML ile aynı veriye ayrışıyor.
   Sözleşme sınamalarının etkinliği bozma denemeleriyle doğrulandı (stil boyutu, başıboş metin, palet dışı renk ve
   uydurma ölçüm yakalandı; dosyalar bayt bayt geri yüklendi). Şablon LibreOffice ile PDF'e çizildi; kapak ve bütün
-  gövde sayfaları ile sentetik içerikle doldurulmuş kopya görsel olarak incelendi. Microsoft Word'de açılış ve
+  gövde sayfaları ile sentetik içerikle doldurulmuş kopya görsel olarak incelendi.
+- **Güncel doğrulama (2026-11-23, kök neden yakınsama koşusu, Node 22, Linux):** tam paket `npm test -- --test-concurrency=2`
+  **6653/6653** (başarısız, iptal, atlanan 0); `ai-executive-report-foundation` **26/26**, `ai-executive-report-benchmark`
+  **10/10**, `ai-model-registry` **25/25**; `npm run lint` uyarısız; `npm run build` başarılı; `npm install
+  --package-lock-only --ignore-scripts` kilit dosyasını değiştirmiyor; kanonik `.docx` şablonu ECMA-376 alt öğe
+  sırası (`checkOoxmlElementOrder`) dâhil tüm yapısal/paket denetimlerinden geçti. Microsoft Word'de açılış ve
   canlı model kataloğu doğrulaması bu ortamda yapılamadı (**bekliyor**).
 - **Bekleyen dış ön koşullar:** (1) beyaz zemin için resmî SVG logo; (2) kurum içi `GET /models` ile
   `DeepSeek-V4.1-Flash-1017`, `Qwen3.8-Flash-Next-FP8`, `Qwen3.8-27B`, `Qwen3.6-35B-A3B` kimliklerinin doğrulanması;

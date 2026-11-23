@@ -139,6 +139,7 @@ yapi:
     - { kimlik: one_cikan_gelismeler, baslik: "Dönemin Öne Çıkan Gelişmeleri", numarali: true, zorunlu: true, sahip: model, yer_tutucular: [ONE_CIKAN_GELISMELER, SEKIL_1, SEKIL_1_BASLIGI] }
     - kimlik: faaliyetler
       baslik: "Proje Faaliyetleri ve İlerleme"
+      baslik_kisi: "Faaliyetler ve İlerleme"
       numarali: true
       zorunlu: true
       sahip: model
@@ -150,7 +151,9 @@ yapi:
     - { kimlik: kaynak_ve_yontem, baslik: null, paragraf_stili: BilginKaynakNotu, zorunlu: true, sahip: sunucu, kaldirilamaz: true, yer_tutucular: [KAYNAK_VE_YONTEM_NOTU] }
     - { kimlik: ekler, baslik: "Ekler", numarali: false, zorunlu: false, sahip: sunucu, yer_tutucular: [EKLER] }
   bolum_kurallari:
-    kisi_kapsami: "Bireysel raporda 'Proje Faaliyetleri ve İlerleme' başlığı 'Faaliyetler ve İlerleme' olarak yazılabilir; sıra değişmez."
+    kisi_kapsami: >-
+      Bireysel raporda (kapsam.tur === 'kisi') faaliyetler bölümü için açıkça ilan edilen baslik_kisi
+      ('Faaliyetler ve İlerleme') başlığı kullanılır; diğer bölüm başlıkları ve bölüm sırası değişmez.
     dengeli_sunum: >-
       Kanıtta yönetim dikkati gerektiren risk ya da engel varsa, 'Riskler' bölümü kapatılsa bile en az bir anılışı
       Yönetici Değerlendirmesi'nde kalır; odak tercihi olumsuz bulguyu gizleyemez.
@@ -317,15 +320,19 @@ onarim:
   ilke: "Yerel ve orantılı: doğrulanmış düzyazı korunur, yalnızca sorunlu ifade yeniden yazılır."
   birim: paragraf
   adimlar: [tespit_et, yerini_belirle, kanitla_yeniden_yazdir, yeniden_dogrula, nitele_ya_da_cikar, inceleme_iste]
-  deneme_butcesi: { paragraf_basina: 2, rapor_basina: 8 }
+  deneme_butcesi: { paragraf_basina: 2, anlamsal_denetim_paragraf_basina: 1, rapor_basina: 8 }
   denetim_ve_yeniden_siralama_cagri_tavani: 2
   anlamsal_denetim: >-
     Maddi iddiaların kanıt desteği doğrulanır. Belirlenimci denetim her onarım denemesinden sonra çağrı harcamadan
-    çalışır; bağımsız model denetçisi ise 2 çağrılık ortak tavan içinde ilk taslak için en çok 1 çağrı ve onarılan
-    paragrafların tamamı için toplu 1 onarım sonrası çağrı kullanır. Ortak 2 çağrı tavanı dolduğunda belirlenimci
-    olarak çözülemeyen anlamsal sorunlarda yeni yeniden yazım denenmez; doğrudan nitele_ya_da_cikar (kritik sorunda
-    inceleme_iste) uygulanır. Bağımsız denetçi yoksa eşdeğer kanıta dayalı denetim veya yetkili insan incelemesi
-    gerekir; çözülemeyen kritik sorun sonlandırmayı engeller.
+    çalışır; belirlenimci olarak doğrulanabilen paragraflarda en çok 2, model tabanlı anlamsal denetim gerektiren
+    paragraflarda ise ortak 2 çağrı tavanı içinde en çok 1 yeniden yazım yapılır. Bağımsız model denetçisi 2 çağrılık
+    ortak tavan içinde ilk taslak için en çok 1 çağrı ve onarılan paragrafların tamamı için toplu 1 onarım sonrası
+    çağrı kullanır. Ortak 2 çağrı tavanı dolduğunda belirlenimci olarak çözülemeyen anlamsal sorunlarda yeni yeniden
+    yazım denenmez; doğrudan nitele_ya_da_cikar (kritik sorunda inceleme_iste) uygulanır. Bağımsız denetçi yoksa ve
+    belirlenimci denetim maddi bir iddiayı doğrulayamıyorsa eşdeğer kanıta dayalı denetim veya yetkili insan
+    incelemesi gerekir; inceleme tamamlanana kadar önizlemede doğrulanamayan maddi iddianın yerine satır içi inceleme
+    işareti gösterilir, taslağın geri kalanı görünür kalır ve iddia yalnızca doğrulama ya da kanıta dayalı niteleme
+    sonrasında gösterilir; çözülemeyen kritik sorun sonlandırmayı engeller.
   yasaklar:
     - butun_raporu_tek_ifade_icin_reddetmek
     - paragrafi_hazir_sunucu_metniyle_degistirmek

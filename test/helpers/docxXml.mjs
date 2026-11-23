@@ -97,10 +97,15 @@ function relationshipSource(name) {
   return (match[1] ?? '') + match[2];
 }
 
-function readRelationships(document, name, pkg) {
+/** OPC parça adı eşdeğerliği için ASCII büyük/küçük harf katlaması uygular. */
+function toAsciiLower(value) {
+  return value.replace(/[A-Z]/gu, (ch) => ch.toLowerCase());
+}
+
+function readRelationships(document, name, partByAsciiLower) {
   const root = assertRoot(document, REL, 'Relationships', name);
   const source = relationshipSource(name);
-  assert.ok(!source || pkg.has(source), name + ': ilişki kaynağı yok');
+  assert.ok(!source || partByAsciiLower.has(toAsciiLower(source)), name + ': ilişki kaynağı yok');
   const rows = new Map();
   for (const element of root.children) {
     assert.ok(element.namespaceURI === REL && element.localName === 'Relationship', name + ': ilişki öğesi geçersiz');
@@ -117,8 +122,9 @@ function readRelationships(document, name, pkg) {
     assert.ok(target && !/[\u0000-\u001f\\%:?#]/u.test(target) && !target.startsWith('//'),
       name + ': ilişki hedefi geçersiz');
     const resolved = target.startsWith('/') ? posix.normalize(target.slice(1)) : posix.normalize(posix.join(posix.dirname(source), target));
-    assert.ok(pkg.has(resolved), name + ': ilişki hedefi pakette yok: ' + resolved);
-    rows.set(id, { type, target: resolved });
+    const actualTarget = partByAsciiLower.get(toAsciiLower(resolved));
+    assert.ok(actualTarget, name + ': ilişki hedefi pakette yok: ' + resolved);
+    rows.set(id, { type, target: actualTarget });
   }
   return rows;
 }
@@ -136,7 +142,7 @@ function enclosingParagraph(node) {
 function checkWordFields(document, name) {
   const disallowed = [
     'w:object', 'o:OLEObject', 'w:altChunk', 'w:hyperlink', 'w:attachedTemplate', 'w:updateFields',
-    'w:instrText', 'w:delInstrText', 'w:fldChar',
+    'w:instrText', 'w:delInstrText', 'w:fldChar', 'w:sym',
     // Veri bağlantısı, gizli belge değişkeni, dış şema/çerçeve ve koşullu işaretleme dalları kanonik şablonda yasaktır.
     'w:mailMerge', 'w:docVars', 'w:docVar', 'w:dataBinding', 'w:subDoc', 'w:control',
     'w:frameset', 'w:attachedSchema', 'w:saveThroughXslt',
@@ -238,17 +244,94 @@ const REQUIRED_DOCUMENT_RELATIONS = [
   ['theme', namespaces.r + '/theme', 'application/vnd.openxmlformats-officedocument.theme+xml', namespaces.a, 'theme']
 ];
 
+/** ECMA-376 WordprocessingML karmaşık türleri için doğrudan alt öğe sırası (aynı sıra numarası yalnızca tekrarlanabilir veya karşılıklı dışlayan yuvalarda kullanılır). */
+const OOXML_CHILD_SEQUENCES = new Map([
+  ['tblPr', {
+    order: {
+      tblStyle: 0, tblpPr: 1, tblOverlap: 2, bidiVisual: 3, tblStyleRowBandSize: 4, tblStyleColBandSize: 5,
+      tblW: 6, jc: 7, tblCellSpacing: 8, tblInd: 9, tblBorders: 10, shd: 11, tblLayout: 12, tblCellMar: 13,
+      tblLook: 14, tblCaption: 15, tblDescription: 16, tblPrChange: 17
+    }
+  }],
+  ['tblBorders', {
+    order: { top: 0, left: 1, start: 1, bottom: 2, right: 3, end: 3, insideH: 4, insideV: 5 }
+  }],
+  ['tcBorders', {
+    order: { top: 0, left: 1, start: 1, bottom: 2, right: 3, end: 3, insideH: 4, insideV: 5, tl2br: 6, tr2bl: 7 }
+  }],
+  ['tblCellMar', {
+    order: { top: 0, left: 1, start: 1, bottom: 2, right: 3, end: 3 }
+  }],
+  ['tcMar', {
+    order: { top: 0, left: 1, start: 1, bottom: 2, right: 3, end: 3 }
+  }],
+  ['pPr', {
+    order: {
+      pStyle: 0, keepNext: 1, keepLines: 2, pageBreakBefore: 3, framePr: 4, widowControl: 5, numPr: 6,
+      suppressLineNumbers: 7, pBdr: 8, shd: 9, tabs: 10, suppressAutoHyphens: 11, kinsoku: 12, wordWrap: 13,
+      overflowPunct: 14, topLinePunct: 15, autoSpaceDE: 16, autoSpaceDN: 17, bidi: 18, adjustRightInd: 19,
+      snapToGrid: 20, spacing: 21, ind: 22, contextualSpacing: 23, mirrorIndents: 24, suppressOverlap: 25,
+      jc: 26, textDirection: 27, textAlignment: 28, textboxTightWrap: 29, outlineLvl: 30, divId: 31,
+      cnfStyle: 32, rPr: 33, sectPr: 34, pPrChange: 35
+    }
+  }],
+  ['rPr', {
+    order: {
+      rStyle: 0, rFonts: 1, b: 2, bCs: 3, i: 4, iCs: 5, caps: 6, smallCaps: 7, strike: 8, dstrike: 9,
+      outline: 10, shadow: 11, emboss: 12, imprint: 13, noProof: 14, snapToGrid: 15, vanish: 16,
+      webHidden: 17, color: 18, spacing: 19, w: 20, kern: 21, position: 22, sz: 23, szCs: 24, highlight: 25,
+      u: 26, effect: 27, bdr: 28, shd: 29, fitText: 30, vertAlign: 31, rtl: 32, cs: 33, em: 34, lang: 35,
+      eastAsianLayout: 36, specVanish: 37, oMath: 38, rPrChange: 39
+    }
+  }],
+  ['tcPr', {
+    order: {
+      cnfStyle: 0, tcW: 1, gridSpan: 2, hMerge: 3, vMerge: 4, tcBorders: 5, shd: 6, noWrap: 7, tcMar: 8,
+      textDirection: 9, tcFitText: 10, vAlign: 11, hideMark: 12, headers: 13, cellIns: 14, cellDel: 15,
+      cellMerge: 16, tcPrChange: 17
+    }
+  }],
+  ['sectPr', {
+    order: {
+      headerReference: 0, footerReference: 0, footnotePr: 1, endnotePr: 2, type: 3, pgSz: 4, pgMar: 5,
+      paperSrc: 6, borders: 7, lnNumType: 8, pgNumType: 9, cols: 10, formProt: 11, vAlign: 12, noEndnote: 13,
+      titlePg: 14, textDirection: 15, bidi: 16, rtlGutter: 17, docGrid: 18, printerSettings: 19, sectPrChange: 20
+    },
+    repeatable: new Set(['headerReference', 'footerReference'])
+  }]
+]);
+
+/** WordprocessingML özellik kapsayıcılarının (tblPr, tblBorders, pPr, rPr, tcPr, sectPr vb.) ECMA-376 alt öğe sırasını doğrular. */
+export function checkOoxmlElementOrder(document, name) {
+  for (const parent of document.getElementsByTagNameNS(namespaces.w, '*')) {
+    const spec = OOXML_CHILD_SEQUENCES.get(parent.localName);
+    if (!spec) continue;
+    let prevRank = -1;
+    for (const node of parent.children) {
+      if (node.namespaceURI !== namespaces.w) continue;
+      const rank = spec.order[node.localName];
+      assert.notEqual(rank, undefined, `${name}: w:${parent.localName} içinde tanınmayan alt öğe: w:${node.localName}`);
+      const allowedSameRank = rank === prevRank && Boolean(spec.repeatable?.has(node.localName));
+      assert.ok(rank > prevRank || allowedSameRank,
+        `${name}: OOXML alt öğe sırası geçersiz (w:${parent.localName} içinde w:${node.localName})`);
+      prevRank = rank;
+    }
+  }
+}
+
 /** Okunabilir XML parçalarını ve paket içi bağlantıları kanonik DOCX sözleşmesine göre denetler. */
 export function validateDocxXml(pkg) {
   const documents = new Map();
   const relations = new Map();
+  const partByAsciiLower = new Map(pkg.names.map((entryName) => [toAsciiLower(entryName), entryName]));
   for (const name of pkg.names) {
     assert.doesNotMatch(name, /vbaProject|embeddings\/|activeX|oleObject/iu, name);
     if (!/\.(xml|rels|svg)$/iu.test(name)) continue;
     const document = parseDocxXml(pkg.text(name), name);
     documents.set(name, document);
     checkWordFields(document, name);
-    if (/\.rels$/iu.test(name)) relations.set(name, readRelationships(document, name, pkg));
+    checkOoxmlElementOrder(document, name);
+    if (/\.rels$/iu.test(name)) relations.set(name, readRelationships(document, name, partByAsciiLower));
   }
 
   const xml = (name) => {

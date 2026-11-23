@@ -133,7 +133,7 @@ olgusal doğruluktan bağımsız olarak B kapısını ve 4I-B nitelendirmesini d
   testlerine geçiş için cihazın kullanılabilirliği izlenmeli. Not, testlerin 9 Kasım’da başlayan haftada
   yapılabileceğine işaret ediyor. Kesin gün belirtilmemiş."
 - *1 düzeyi (R3):* "Bu dönemde toplam 18 görev tamamlanmıştır. Toplam 52 görev açıktır. Toplam 7 görev
-  gecikmiştir. Toplam 14 görev yaklaşan görevdir."
+  gecikmiştir. Önümüzdeki 7 günde toplam 14 görevin termini vardır."
 
 Destekleyici model değerlendirmesi kullanılırsa: değerlendirici yazardan farklı bir modeldir, aynı ölçütü ve
 gizli kimliği kullanır, puanları insan puanlarıyla ayrı raporlanır ve insan puanının yerine geçmez.
@@ -145,7 +145,7 @@ gizli kimliği kullanır, puanları insan puanlarıyla ayrı raporlanır ve insa
 | Boyut | Eşik |
 | --- | --- |
 | **A** (4I-B yazar nitelendirmesi — onarım öncesi taslak) | Yetkisiz açıklama **0**; uydurma kimlik ya da tarih **0**; çelişkili/eksik kanıtın açık işlenmesi **%100**; **zorunlu olgu tamlığı kapısı:** her taslakta ayrı ayrı **%100** (`atlanan_zorunlu = 0`; isteğe bağlı olgular atlanan zorunlu olguları telafi edemez); onarım öncesi taslakta nesnel olgu doğruluğu **rapor başına (her taslakta ayrı ayrı)** en az **%95**. Her dondurulmuş kanıt paketi isteğe bağlı desteklenen olgulardan ayrı sürümlü bir **zorunlu olgular** listesi tanımlar; taslaktaki nesnel ifadeler konu/ölçü/varlık eşleştirmesiyle bu listeyle eşlenir. Zorunlu bir olgunun yanlış değerle yazılması **yalnızca bir kez `yanlis` ifade olarak sayılır**, ayrıca `atlanan_zorunlu` olarak çift sayılmaz (`atlanan_zorunlu` yalnızca taslakta hiç yer almayan zorunlu olguları sayar). Payda = `dogru + yanlis + atlanan_zorunlu`; payda `0` ise oran `Uygulanmaz (U/D)` kaydedilir ve diğer raporların paydasına katılmaz |
-| **A** (yayımlama — 4I-C onarım sonrası, sonlandırma öncesi) | Yetkisiz açıklama **0**; yayımlanan desteksiz maddi iddia **0**; uydurma kimlik ya da tarih **0**; yayımlanan nesnel olgu doğruluğu **%100**; çelişkili/eksik kanıtın açık işlenmesi **%100** |
+| **A** (yayımlama — 4I-C onarım sonrası, sonlandırma öncesi) | Yetkisiz açıklama **0**; yayımlanan desteksiz maddi iddia **0**; uydurma kimlik ya da tarih **0**; yayımlanan nesnel olgu doğruluğu **%100**; **zorunlu olgu tamlığı %100** (`atlanan_zorunlu = 0`; onarım sırasında çıkarılan cümlelerdeki zorunlu olgular dâhil, dondurulmuş paketteki bütün zorunlu olgular nihai raporda korunur); çelişkili/eksik kanıtın açık işlenmesi **%100** |
 | **B** | 1–5 ölçekte genel ortalama en az **4,0**; uygulanabilir hiçbir ölçütün ortalaması **3,5**'in altında değil; aday düzeyinde mekanik döküm oranı en çok **%5** (48 raporda ≤ 2); iki kör puanlayıcı, sayısal fark > 1 veya ikili bayrak uyuşmazlığında üçüncü |
 | **C** | Word'ün onarım istemeden açtığı belge oranı **%100**; standart ayrıntıda **2–3** sayfa (kapak ve ekler hariç); bütün sayfalar görsel incelenir; stil sözleşmesi sınaması geçer |
 | **D** | Rapor başına en çok **11** model çağrısı (1 yazım + 8 onarım + denetim ve yeniden sıralama için ortak 2 çağrı); standart raporda uçtan uca p95 (en yakın sıra yöntemiyle) **`rapor_yazari_otomatik` için en çok 240 sn**, **`rapor_yazari_yuksek_kalite` için en çok 600 sn**; iptal sonrası geçici veri kalmaz; mevcut Bilgin regresyonu **0** |

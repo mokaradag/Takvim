@@ -3,7 +3,7 @@
  * Saklanmış ve deflate girdileri desteklenir. ZIP64, şifreleme, çok parçalı
  * arşivler ve kanonik şablonun kullanmadığı veri betimleyicileri reddedilir.
  */
-import { readFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { crc32, inflateRawSync } from 'node:zlib';
 
 const EOCD_SIGNATURE = 0x06054b50;
@@ -19,12 +19,14 @@ function requireZip(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-/** ZIP ek alanındaki kayıt uzunluklarının çevreleyen ek alan sınırları içinde kaldığını doğrular. */
+/** ZIP ek alanındaki kayıt uzunluklarını ve yasak ZIP64 (0x0001) kayıtlarını doğrular. */
 function validateExtraField(buffer, start, length, label) {
   let cursor = start;
   const finish = start + length;
   while (cursor < finish) {
     requireZip(cursor + 4 <= finish, 'ZIP ek alan kaydı eksik: ' + label);
+    const headerId = buffer.readUInt16LE(cursor);
+    requireZip(headerId !== 0x0001, 'ZIP64 ek alan kaydı yasak: ' + label);
     const dataSize = buffer.readUInt16LE(cursor + 2);
     cursor += 4 + dataSize;
     requireZip(cursor <= finish, 'ZIP ek alan kayıt uzunluğu sınırı aşıyor: ' + label);
@@ -128,9 +130,31 @@ export function readZipEntries(buffer) {
   return entries;
 }
 
+/** Dosyayı belleğe almadan önce arşiv boyut sınırını uygular; en fazla MAX_ARCHIVE_BYTES + 1 bayt okur. */
+async function readBoundedArchive(file) {
+  const handle = await open(file, 'r');
+  try {
+    const limit = MAX_ARCHIVE_BYTES + 1;
+    const chunks = [];
+    let total = 0;
+    const scratch = Buffer.alloc(Math.min(64 * 1024, limit));
+    while (total < limit) {
+      const toRead = Math.min(scratch.length, limit - total);
+      const { bytesRead } = await handle.read(scratch, 0, toRead, null);
+      if (bytesRead === 0) break;
+      chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
+      total += bytesRead;
+    }
+    requireZip(total <= MAX_ARCHIVE_BYTES, 'ZIP paket boyutu sınırı aşıldı');
+    return Buffer.concat(chunks, total);
+  } finally {
+    await handle.close();
+  }
+}
+
 /** DOCX paketini okur; metin parçalarında geçersiz UTF-8 reddedilir. */
 export async function readDocxPackage(file) {
-  const entries = readZipEntries(await readFile(file));
+  const entries = readZipEntries(await readBoundedArchive(file));
   return {
     names: [...entries.keys()],
     has: (name) => entries.has(name),

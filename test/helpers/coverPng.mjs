@@ -102,12 +102,12 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
     offset = end + 4;
   }
   assert.ok(endSeen && imageData.length > 0, 'PNG görüntü verisi veya bitişi eksik');
-  if (seenAncillary.has('sRGB') && gammaValue !== null) {
-    assert.equal(gammaValue, 45455, 'PNG sRGB ile birlikte gAMA değeri 45455 olmalıdır: ' + gammaValue);
+  if (gammaValue !== null) {
+    assert.equal(gammaValue, 45455, 'PNG gAMA değeri sRGB standardıyla uyumlu (45455) olmalıdır: ' + gammaValue);
   }
-  if (seenAncillary.has('sRGB') && chrmValues !== null) {
+  if (chrmValues !== null) {
     assert.deepEqual(chrmValues, SRGB_CHRM_VALUES,
-      'PNG sRGB ile birlikte cHRM kromatiklik değerleri sRGB standardıyla uyumlu olmalıdır');
+      'PNG cHRM kromatiklik değerleri sRGB standardıyla uyumlu olmalıdır');
   }
   const compressed = Buffer.concat(imageData);
   const size = rowBytes * height;
