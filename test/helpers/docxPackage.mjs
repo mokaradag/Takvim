@@ -19,7 +19,7 @@ function requireZip(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-/** ZIP ek alanındaki kayıt uzunluklarını ve yasak ZIP64 (0x0001) kayıtlarını doğrular. */
+/** ZIP ek alanındaki kayıt uzunluklarını doğrular ve alternatif ad veya ZIP64 kayıtlarını reddeder. */
 function validateExtraField(buffer, start, length, label) {
   let cursor = start;
   const finish = start + length;
@@ -27,6 +27,7 @@ function validateExtraField(buffer, start, length, label) {
     requireZip(cursor + 4 <= finish, 'ZIP ek alan kaydı eksik: ' + label);
     const headerId = buffer.readUInt16LE(cursor);
     requireZip(headerId !== 0x0001, 'ZIP64 ek alan kaydı yasak: ' + label);
+    requireZip(headerId !== 0x7075, 'ZIP Unicode yol ek alanı yasak: ' + label);
     const dataSize = buffer.readUInt16LE(cursor + 2);
     cursor += 4 + dataSize;
     requireZip(cursor <= finish, 'ZIP ek alan kayıt uzunluğu sınırı aşıyor: ' + label);
@@ -78,6 +79,11 @@ export function readZipEntries(buffer) {
     requireZip(buffer.readUInt16LE(offset + 34) === 0, 'çok parçalı ZIP girdisi desteklenmez');
     const nameBytes = buffer.subarray(offset + 46, offset + 46 + nameLength);
     const name = utf8.decode(nameBytes);
+    const host = buffer.readUInt8(offset + 5);
+    const externalAttributes = buffer.readUInt32LE(offset + 38);
+    const unixType = (host === 3 || host === 19) ? (externalAttributes >>> 28) : 0;
+    requireZip((externalAttributes & 0x10) === 0 && (unixType === 0 || unixType === 8),
+      'ZIP parçası normal dosya olmalıdır: ' + name);
     const normalized = name.normalize('NFC').toLowerCase();
     requireZip(!/[\u0000-\u001f\\%:?#]/u.test(name)
       && name.split('/').every((segment) => segment && !/^\.+$/u.test(segment) && !segment.endsWith('.')),

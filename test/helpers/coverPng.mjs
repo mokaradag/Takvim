@@ -30,8 +30,9 @@ function validateAncillaryPayload(type, data) {
   if (type === 'pHYs') {
     const ppuX = data.readUInt32BE(0);
     const ppuY = data.readUInt32BE(4);
-    assert.ok(ppuX > 0 && ppuY > 0 && ppuX === ppuY,
+    assert.ok(ppuX > 0 && ppuX === ppuY,
       `PNG pHYs yatay ve dikey yoğunlukları eşit ve pozitif olmalıdır: ${ppuX}x${ppuY}`);
+    assert.ok(ppuX <= 0x7fffffff, 'PNG pHYs yoğunluğu 31 bit sınırını aşamaz');
     assert.ok(data[8] === 0 || data[8] === 1, 'PNG pHYs birim alanı geçersiz: ' + data[8]);
   } else if (type === 'sRGB') {
     assert.ok(data[0] <= 3, 'PNG sRGB işleme amacı geçersiz: ' + data[0]);
@@ -149,21 +150,10 @@ export function validateCoverPng(png, expected = { background: '003087', strokes
         continue;
       }
       if (alpha < 128) continue;
-      // Piksel yalnızca zeminden ve diğer çizgi renklerinden kesin olarak daha yakın olduğu hedef çizgi rengine sayılır.
-      const bgDist = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
-      let bestIndex = -1;
-      let bestDist = bgDist;
-      for (let s = 0; s < strokeTargets.length; s += 1) {
-        const [tr, tg, tb] = strokeTargets[s];
-        const dist = Math.abs(r - tr) + Math.abs(g - tg) + Math.abs(b - tb);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestIndex = s;
-        }
-      }
-      if (bestIndex >= 0 && bestDist <= 180) {
-        strokeCounts[bestIndex] += 1;
-      }
+      // Renk kotasını yalnızca onaylı çizgi renginin opak iç pikselleri karşılar.
+      if (alpha !== 255) continue;
+      const strokeIndex = strokeTargets.findIndex(([sr, sg, sb]) => r === sr && g === sg && b === sb);
+      if (strokeIndex >= 0) strokeCounts[strokeIndex] += 1;
     }
     const swap = prev;
     prev = cur;

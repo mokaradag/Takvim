@@ -119,9 +119,19 @@ function readRelationships(document, name, partByAsciiLower) {
       name + ': ilişki kimliği veya türü geçersiz'
     );
     assert.doesNotMatch(type, /vbaProject|activeX|oleObject|\/package$/iu, name + ': ilişki türü yasak');
-    assert.ok(target && !/[\u0000-\u001f\\%:?#]/u.test(target) && !target.startsWith('//'),
-      name + ': ilişki hedefi geçersiz');
-    const resolved = target.startsWith('/') ? posix.normalize(target.slice(1)) : posix.normalize(posix.join(posix.dirname(source), target));
+    assert.ok(target && !/[\u0000-\u001f\\%:?#]/u.test(target), name + ': ilişki hedefi geçersiz');
+    const segments = (target.startsWith('/') ? target.slice(1) : target).split('/');
+    assert.ok(segments.every(Boolean) && !/^\.{1,2}$/u.test(segments.at(-1)), name + ': ilişki hedefi geçersiz');
+    const path = target.startsWith('/') ? [] : source.split('/').slice(0, -1);
+    for (const segment of segments) {
+      if (segment === '..') {
+        assert.ok(path.length, name + ': ilişki hedefi paket kökünü aşıyor');
+        path.pop();
+      } else if (segment !== '.') {
+        path.push(segment);
+      }
+    }
+    const resolved = path.join('/');
     const actualTarget = partByAsciiLower.get(toAsciiLower(resolved));
     assert.ok(actualTarget, name + ': ilişki hedefi pakette yok: ' + resolved);
     rows.set(id, { type, target: actualTarget });
@@ -220,7 +230,10 @@ function checkWordFields(document, name) {
     const parts = [...paragraph.children].map((node) => {
       if (node === fields[0]) return '<PAGE>';
       if (node === fields[1]) return '<NUMPAGES>';
-      return all(node, 'w:t').map((t) => t.textContent).join('');
+      return [...node.getElementsByTagNameNS(namespaces.w, '*')].map((element) => {
+        if (['br', 'cr', 'tab'].includes(element.localName)) return '\n';
+        return element.localName === 't' ? element.textContent : '';
+      }).join('');
     }).join('');
     assert.ok(parts.includes('Sayfa <PAGE> / <NUMPAGES>'), 'alt bilgide sayfa sayaç konumu geçersiz');
   }
@@ -254,16 +267,16 @@ const OOXML_CHILD_SEQUENCES = new Map([
     }
   }],
   ['tblBorders', {
-    order: { top: 0, left: 1, start: 1, bottom: 2, right: 3, end: 3, insideH: 4, insideV: 5 }
+    order: { top: 0, start: 1, left: 2, bottom: 3, end: 4, right: 5, insideH: 6, insideV: 7 }
   }],
   ['tcBorders', {
-    order: { top: 0, left: 1, start: 1, bottom: 2, right: 3, end: 3, insideH: 4, insideV: 5, tl2br: 6, tr2bl: 7 }
+    order: { top: 0, start: 1, left: 2, bottom: 3, end: 4, right: 5, insideH: 6, insideV: 7, tl2br: 8, tr2bl: 9 }
   }],
   ['tblCellMar', {
-    order: { top: 0, left: 1, start: 1, bottom: 2, right: 3, end: 3 }
+    order: { top: 0, start: 1, left: 2, bottom: 3, end: 4, right: 5 }
   }],
   ['tcMar', {
-    order: { top: 0, left: 1, start: 1, bottom: 2, right: 3, end: 3 }
+    order: { top: 0, start: 1, left: 2, bottom: 3, end: 4, right: 5 }
   }],
   ['pPr', {
     order: {
@@ -294,7 +307,7 @@ const OOXML_CHILD_SEQUENCES = new Map([
   ['sectPr', {
     order: {
       headerReference: 0, footerReference: 0, footnotePr: 1, endnotePr: 2, type: 3, pgSz: 4, pgMar: 5,
-      paperSrc: 6, borders: 7, lnNumType: 8, pgNumType: 9, cols: 10, formProt: 11, vAlign: 12, noEndnote: 13,
+      paperSrc: 6, pgBorders: 7, lnNumType: 8, pgNumType: 9, cols: 10, formProt: 11, vAlign: 12, noEndnote: 13,
       titlePg: 14, textDirection: 15, bidi: 16, rtlGutter: 17, docGrid: 18, printerSettings: 19, sectPrChange: 20
     },
     repeatable: new Set(['headerReference', 'footerReference'])
@@ -347,15 +360,16 @@ export function validateDocxXml(pkg) {
     assert.equal(element.namespaceURI, TYPES, 'içerik türü ad alanı');
     if (element.localName === 'Override') {
       const part = attr(element, 'PartName');
-      assert.ok(part?.startsWith('/') && pkg.has(part.slice(1)) && !overrides.has(part), 'geçersiz içerik türü parçası');
-      overrides.set(part, type);
+      const key = part?.startsWith('/') ? toAsciiLower(part.slice(1)) : null;
+      assert.ok(key && partByAsciiLower.has(key) && !overrides.has(key), 'geçersiz içerik türü parçası');
+      overrides.set(key, type);
     } else {
       const extension = attr(element, 'Extension')?.toLowerCase();
       assert.ok(element.localName === 'Default' && extension && !defaults.has(extension), 'geçersiz varsayılan içerik türü');
       defaults.set(extension, type);
     }
   }
-  const contentType = (name) => overrides.get('/' + name)
+  const contentType = (name) => overrides.get(toAsciiLower(name))
     ?? (/\.rels$/iu.test(name) ? defaults.get('rels') : defaults.get(posix.extname(name).slice(1).toLowerCase()));
   for (const name of pkg.names) {
     if (name === '[Content_Types].xml') continue;
@@ -373,6 +387,9 @@ export function validateDocxXml(pkg) {
     const matches = rows.filter(({ type }) => type === relType);
     assert.equal(matches.length, 1, label + ': tekil ilişki zorunludur');
     const [{ target }] = matches;
+    if (key === 'core') {
+      assert.equal(rows.filter((relation) => relation.target === target).length, 1, 'OPC çekirdek özellik parçasına tek ilişki zorunludur');
+    }
     assert.equal(contentType(target), expectedContentType, label + ': içerik türü geçersiz');
     assertRoot(xml(target), rootNs, rootLocal, target);
     parts.set(key, target);

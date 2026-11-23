@@ -120,7 +120,8 @@ yetkili kanıtlar ve anlatı için gerekli kapsam/tamlık açıklamaları aktar�
     { "id": "E3", "tur": "not",     "kaynak": "MR_AuditLog", "gorev": "…", "kayit_zamani": "2026-11-06T16:40:00+03:00", "metin": "…", "kirpildi": false },
     { "id": "E4", "tur": "hareket", "kaynak": "rota_activity_search", "donem": { "baslangic": "2026-11-02", "bitis": "2026-11-08" },
       "donem_ozeti": { "…": "…" }, "kayit_kapsami": "partial" },
-    { "id": "E5", "tur": "belge",   "kaynak": "gecici_yukleme", "dosya_turu": "docx", "bolum": "…", "metin": "…" }   // yalnızca 4I-F
+    { "id": "E5", "tur": "belge",   "kaynak": "gecici_yukleme", "dosya_turu": "docx", "bolum": "…", "metin": "…",
+      "rapor_kapsami": { "tur": "projeler", "kimlikler": ["…"] }, "kayit_zamani": "2026-11-09T08:20:00+03:00" }   // yalnızca 4I-F
   ],
   "turetilmis": [ { "id": "F1", "tur": "karsilastirma", "girdiler": ["E1", "E7"], "deger": "…", "kosul": "eşit ve bitmiş dönem" } ],
   "tamlik": { "notlar": "ilk 40 not; 12 görev notsuz", "hareket": "partial", "tarihsiz_tamamlanan": 1 },
@@ -139,11 +140,13 @@ Kurallar:
 - **Köken.** Her kanıt güvenilir kaynak aracı ya da tabloyu (`kaynak`), görev/proje/ekip kimliğini ve zaman bilgisini
   taşır; kanıt türüyle uyuşmayan kaynak kabul edilmez. Bireysel (kişi kapsamlı) veya genel rapora eklenen
   destekleyici belgeler (`tur: belge`, `kaynak: gecici_yukleme`) belirli bir görev, proje ya da ekibe bağlı değilse
-  uydurma ilişki kurulmadan rapor kapsamını ve kaynak/yükleme zaman damgasını taşır.
+  uydurma ilişki kurulmadan `rapor_kapsami` ve yükleme zaman damgasını (`kayit_zamani`) taşır.
   Dönem temelli toplu ölçüler (`tamamlanan`, `hareket` vb.) uygulanan `donem` (`baslangic`, `bitis`) aralığını,
   anlık durum ölçüleri (`acik`, `geciken`, `yaklasan_7_gun`, `history.undatedDone`) ise paket kökündeki kanonik
   `veri_ani` kesitiyle eşleşen `veri_ani` zaman damgasını taşır; karşılaştırma ve dönem cümlesi doğrulaması bu zaman
-  kökenine dayanır. Paket kökündeki `veri_ani` rapor dönemi bitişinden önce olamaz ve gelecek zamanlı olamaz; görev
+  kökenine dayanır. Yönetici raporu yalnızca kapanmış bir raporlama dönemi için hazırlanır. `temporalWindow`
+  açık (`current`) dönem döndürürse, karşılaştırma isteği olmasa da kanıt paketi oluşturulmadan istek reddedilir.
+  Kapanmış dönemde paket kökündeki `veri_ani` son raporlama gününü tam kapsar ve gelecek zamanlı olamaz. Görev
   tamamlanma tarihleri ve not kayıt zamanları paket kesitini aşamaz.
   Not kanıtında **kayıt zamanı** (`kayit_zamani`) ile metnin andığı **olay tarihi** ayrıdır; olay tarihi
   çıkarılmaz, metinde kalır ve yazara "notun kayıt gününe göre" yorumlanması söylenir.

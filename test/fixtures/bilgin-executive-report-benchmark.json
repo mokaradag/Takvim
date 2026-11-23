@@ -85,6 +85,7 @@
    "taslak_nesnel_olgu_dogrulugu_birimi": "rapor_basina",
    "taslak_nesnel_olgu_dogrulugu_sifir_payda": "uygulanmaz",
    "taslak_zorunlu_olgu_tamligi_en_az": 1,
+   "yayimlanan_zorunlu_olgu_tamligi_en_az": 1,
    "celiskili_ya_da_eksik_kanitin_acik_islenmesi": 1
   },
   "B_editoryal_kalite": {
@@ -1914,8 +1915,8 @@
      "T-UFK-42"
     ],
     "gorunmeyen_tamamlanmis_gorevler": [
-     "T-UFK-43",
-     "T-UFK-44"
+     { "gorev": "T-UFK-43", "ekip": "Veri Akışı Ekibi", "proje": "PRJ-UFUK", "gerceklesen_bitis": "2026-11-05" },
+     { "gorev": "T-UFK-44", "ekip": "Veri Akışı Ekibi", "proje": "PRJ-UFUK", "gerceklesen_bitis": "2026-11-07" }
     ],
     "ekip": "Veri Akışı Ekibi"
    }

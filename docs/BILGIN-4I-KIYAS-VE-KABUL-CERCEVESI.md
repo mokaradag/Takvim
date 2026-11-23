@@ -96,7 +96,8 @@ gerçekçi yükte güvenilirlik; mevcut Bilgin yeteneklerinde regresyon yok.
 
 ## 4. İnsan editoryal kalite ölçütü
 
-İki bağımsız puanlayıcı, **model kimliği gizli** ve rastgele sırada, her raporu dokuz ölçütte 1–5 puanlar.
+İki bağımsız puanlayıcı, **model kimliği gizli** ve rastgele sırada, 48 senaryonun her birini dokuz ölçütte 1–5 puanlar. Sayısal B ortalamalarının evreni de aynı 48 rapordur.
+Fikstürdeki `boyutlar` etiketleri senaryonun özellikle sınadığı boyutları gösterir ve raporu bu ortalamalardan çıkarmaz.
 Her rapor ve ölçütte ilk iki puanın farkı en çok 1 ise aritmetik ortalamaları alınır. Fark 1'den büyükse
 üçüncü kör puanlayıcı aynı ölçütü puanlar ve üç puanın medyanı kullanılır. Ölçüt ortalaması, o ölçütün
 **uygulanabilir** olduğu raporlardaki nihai puanlardan; genel ortalama ise uygulanabilir ölçütlerin
@@ -129,7 +130,7 @@ olgusal doğruluktan bağımsız olarak B kapısını ve 4I-B nitelendirmesini d
 **Ayar örnekleri (sentetik):**
 
 - *5 düzeyine yakın (R1):* "Kuzey projesinde saha prototipinin mekanik montajı tamamlandı. Görev kaydında
-  gerçekleşen bitiş tarihi 5 Kasım. 6 Kasım tarihli notta test cihazının mevcut olmadığı belirtiliyor. Saha
+  gerçekleşen bitiş tarihi 5 Kasım. Görev kaydına göre saha testleri henüz başlamadı. 6 Kasım tarihli notta test cihazının mevcut olmadığı belirtiliyor. Saha
   testlerine geçiş için cihazın kullanılabilirliği izlenmeli. Not, testlerin 9 Kasım’da başlayan haftada
   yapılabileceğine işaret ediyor. Kesin gün belirtilmemiş."
 - *1 düzeyi (R3):* "Bu dönemde toplam 18 görev tamamlanmıştır. Toplam 52 görev açıktır. Toplam 7 görev
@@ -144,7 +145,7 @@ gizli kimliği kullanır, puanları insan puanlarıyla ayrı raporlanır ve insa
 
 | Boyut | Eşik |
 | --- | --- |
-| **A** (4I-B yazar nitelendirmesi — onarım öncesi taslak) | Yetkisiz açıklama **0**; uydurma kimlik ya da tarih **0**; çelişkili/eksik kanıtın açık işlenmesi **%100**; **zorunlu olgu tamlığı kapısı:** her taslakta ayrı ayrı **%100** (`atlanan_zorunlu = 0`; isteğe bağlı olgular atlanan zorunlu olguları telafi edemez); onarım öncesi taslakta nesnel olgu doğruluğu **rapor başına (her taslakta ayrı ayrı)** en az **%95**. Her dondurulmuş kanıt paketi isteğe bağlı desteklenen olgulardan ayrı sürümlü bir **zorunlu olgular** listesi tanımlar; taslaktaki nesnel ifadeler konu/ölçü/varlık eşleştirmesiyle bu listeyle eşlenir. Zorunlu bir olgunun yanlış değerle yazılması **yalnızca bir kez `yanlis` ifade olarak sayılır**, ayrıca `atlanan_zorunlu` olarak çift sayılmaz (`atlanan_zorunlu` yalnızca taslakta hiç yer almayan zorunlu olguları sayar). Payda = `dogru + yanlis + atlanan_zorunlu`; payda `0` ise oran `Uygulanmaz (U/D)` kaydedilir ve diğer raporların paydasına katılmaz |
+| **A** (4I-B yazar nitelendirmesi — onarım öncesi taslak) | Yetkisiz açıklama **0**; uydurma kimlik ya da tarih **0**; çelişkili/eksik kanıtın açık işlenmesi **%100**; **zorunlu olgu tamlığı kapısı:** her taslakta ayrı ayrı **%100** (`atlanan_zorunlu = 0`; isteğe bağlı olgular atlanan zorunlu olguları telafi edemez); onarım öncesi taslakta nesnel olgu doğruluğu **rapor başına (her taslakta ayrı ayrı)** en az **%95**. Her dondurulmuş kanıt paketi isteğe bağlı desteklenen olgulardan ayrı sürümlü bir **zorunlu olgular** listesi tanımlar; taslaktaki nesnel ifadeler konu/ölçü/varlık eşleştirmesiyle bu listeyle eşlenir. Zorunlu bir olgunun yanlış değerle yazılması **yalnızca bir kez `yanlis` ifade olarak sayılır**, ayrıca `atlanan_zorunlu` olarak çift sayılmaz (`atlanan_zorunlu` yalnızca taslakta hiç yer almayan zorunlu olguları sayar). Aynı konu, ölçü, varlık, dönem ve değerle yinelenen nesnel iddia bir kez sayılır. Çelişen değerler ayrı iddialardır ve yanlış değer doğruluk hesabında korunur. Payda = `dogru + yanlis + atlanan_zorunlu`; payda `0` ise oran `Uygulanmaz (U/D)` kaydedilir ve diğer raporların paydasına katılmaz |
 | **A** (yayımlama — 4I-C onarım sonrası, sonlandırma öncesi) | Yetkisiz açıklama **0**; yayımlanan desteksiz maddi iddia **0**; uydurma kimlik ya da tarih **0**; yayımlanan nesnel olgu doğruluğu **%100**; **zorunlu olgu tamlığı %100** (`atlanan_zorunlu = 0`; onarım sırasında çıkarılan cümlelerdeki zorunlu olgular dâhil, dondurulmuş paketteki bütün zorunlu olgular nihai raporda korunur); çelişkili/eksik kanıtın açık işlenmesi **%100** |
 | **B** | 1–5 ölçekte genel ortalama en az **4,0**; uygulanabilir hiçbir ölçütün ortalaması **3,5**'in altında değil; aday düzeyinde mekanik döküm oranı en çok **%5** (48 raporda ≤ 2); iki kör puanlayıcı, sayısal fark > 1 veya ikili bayrak uyuşmazlığında üçüncü |
 | **C** | Word'ün onarım istemeden açtığı belge oranı **%100**; standart ayrıntıda **2–3** sayfa (kapak ve ekler hariç); bütün sayfalar görsel incelenir; stil sözleşmesi sınaması geçer |
@@ -198,7 +199,7 @@ maddi iddia ve `%100` yayımlanan nesnel olgu doğruluğu) 4I-C onarım ve sonla
 5. **Bütçe:** Çağrı ve belirteç sınırları koşudan önce belirlenir. §5'teki 11 çağrıya yazım, onarım, bağımsız model
    denetimi ve yeniden sıralama dâhildir. Önce gereken denetim çağrılarının payı ayrılır. Yalnızca kalan payla
    toplu yeniden sıralama çağrılabilir. Pay kalmadığında kanıt belirlenimci olarak seçilir ve maddi iddia desteği
-   mimari §8.2'ye göre doğrulanır. Kota, kimlik veya altyapı hatasında koşu durur. Başka modele sessiz geçiş yasaktır.
+   mimari §8.2'ye göre doğrulanır. Bir adayla sınırlı süre aşımı, kota, kimlik veya model altyapısı hatası o adayın 48 senaryoluk koşusunu geçersiz kılar. Diğer adaylar aynı protokolle devam edebilir. Dondurulmuş paketi, ortak altyapıyı veya adaylar arası karşılaştırılabilirliği etkileyen hata deneyi durdurur. Başka modele sessiz geçiş yasaktır.
 6. **Ölçüm:** A için belirlenimci denetim + insan doğrulaması; B için §4; C için 4I-D'den sonra; D için çağrı,
    belirteç, süre (p50/p95), iptal ve temizlik. **Uçtan uca standart rapor süre aralığı**, dondurulmuş kanıt
    paketinin rapor motoruna verilmesinden son çıktıya kadar olan toplam süreyi kapsar: yazar üretimi (4I-B),
