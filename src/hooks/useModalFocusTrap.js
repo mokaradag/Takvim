@@ -85,7 +85,10 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       if (!shouldRestoreFocus() || focusEpochRef.current !== epoch) return;
       const focused = focusDocument.activeElement;
       if (focused?.isConnected && focused !== focusDocument.body && focused !== openedFrom && !owner?.contains?.(focused)) return;
-      const opener = openedFrom?.isConnected
+      // Açan öge pencereyle AYNI çizimde sökülebilir (ör. bildirim kartı paneliyle
+      // birlikte kapanır); odak o anda gövdeye düşer. Gövde bağlı olsa da odak
+      // alabilen bir açan değildir: yedek `restoreFocusRef` kullanılır.
+      const opener = openedFrom?.isConnected && openedFrom !== focusDocument.body
         ? openedFrom
         : (restoreFocus?.isConnected ? restoreFocus : restoreFocusRef?.current);
       if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();

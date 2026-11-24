@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Icons } from '../../components/icons.jsx';
 import { fmt } from '../../scheduling/dates/index.js';
 import {
@@ -166,6 +167,26 @@ export function ScheduleRequestDetails({ request: requestProp, onClose, onDecide
 }
 
 /**
+ * Bildirimden açılan kipli pencereler gövdeye taşınır.
+ *
+ * Zil `.topbar` içindedir; üst çubuk `isolation: isolate` ve `--z-chrome` ile
+ * KENDİ yığılma bağlamını kurar. Pencerenin `--z-modal` katmanı bu bağlamın
+ * dışına çıkamıyordu: aynı ya da daha yüksek katmandaki yapışkan çalışma alanı
+ * şeritleri (`.workspace-sticky`) ve kenar çubuğu arka perdenin ÜSTÜNE boyanıyor,
+ * bulanıklaşmıyor ve tıklanabilir kalıyordu. Gövdede pencere kök bağlamdaki
+ * katman sözleşmesine doğrudan katılır.
+ *
+ * Görünüm kaybolmaz: tema sınıfları gövdede, tema değişkenleri kökte (`html`),
+ * yazı ölçeği gövdenin `zoom` değerindedir. Rota AI paneli ve aranabilir seçim
+ * panelleri de aynı hedefi kullanır. React olayları portaldan bileşen ağacı
+ * boyunca eskisi gibi kabarır; pencereler yalnızca seçimle açıldığı için sunucu
+ * çiziminde hiç bulunmaz ve hidrasyon farkı doğmaz.
+ */
+function NotificationModalPortal({ children }) {
+  return typeof document === 'undefined' ? null : createPortal(children, document.body);
+}
+
+/**
  * BİRLEŞİK bildirim merkezi.
  *
  * Zil tektir: tarih değişikliği talebi, atama koordinasyonu ve atama olayı aynı
@@ -313,23 +334,27 @@ export function ScheduleRequestCenter({ onNavigate }) {
         )}
       </div>
       {selected && (
-        <ScheduleRequestDetails
-          request={requests.find((request) => request.id === selected.id) || selected}
-          onClose={() => setSelected(null)}
-          onDecide={decideScheduleChange}
-          onOpenTask={openTask}
-          restoreFocusRef={toggleRef}
-        />
+        <NotificationModalPortal>
+          <ScheduleRequestDetails
+            request={requests.find((request) => request.id === selected.id) || selected}
+            onClose={() => setSelected(null)}
+            onDecide={decideScheduleChange}
+            onOpenTask={openTask}
+            restoreFocusRef={toggleRef}
+          />
+        </NotificationModalPortal>
       )}
       {selectedCoordination && (
-        <AssignmentCoordinationDialog
-          key={selectedCoordination.id}
-          record={coordinations.find((item) => item.id === selectedCoordination.id) || selectedCoordination}
-          onClose={() => setSelectedCoordination(null)}
-          onOpenTask={openTask}
-          onDecide={decideAssignmentCoordination}
-          restoreFocusRef={toggleRef}
-        />
+        <NotificationModalPortal>
+          <AssignmentCoordinationDialog
+            key={selectedCoordination.id}
+            record={coordinations.find((item) => item.id === selectedCoordination.id) || selectedCoordination}
+            onClose={() => setSelectedCoordination(null)}
+            onOpenTask={openTask}
+            onDecide={decideAssignmentCoordination}
+            restoreFocusRef={toggleRef}
+          />
+        </NotificationModalPortal>
       )}
     </>
   );
