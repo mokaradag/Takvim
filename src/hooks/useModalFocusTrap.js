@@ -30,8 +30,12 @@ export function hasBlockingModal() {
  * bağlamındaki kuralı izlenir: önce katman (`priority`, yüzeyin `z-index`
  * katmanı), eşit katmanda DOM'da SONRA gelen kardeş. Böylece gövdeye taşınan
  * Bilgin sayfası, aynı katmandaki uygulama içi çekmecelerin üstünde boyandığı
- * gibi klavyenin de sahibidir. Kaplardan biri bağlı bir DOM düğümü değilse sıra
- * bilinemez (`undefined`); çağıran açılış sırasına düşer.
+ * gibi klavyenin de sahibidir. Ön koşul: eşit öncelikli yüzeyler aynı (kök)
+ * yığılma bağlamındadır; kabuk ataları bağlam kurmaz ve tuzak yüzeyleri ya
+ * uygulama ağacında ya da gövde portalındadır. Ancak o zaman DOM sırası boyama
+ * sırasıdır (`test/notification-modal-layering.test.mjs` bu ön koşulu ve
+ * önceliklerin CSS katmanlarına eşitliğini denetler). Kaplardan biri bağlı bir
+ * DOM düğümü değilse sıra bilinemez (`undefined`); çağıran açılış sırasına düşer.
  */
 function paintsAbove(upper, lower) {
   if (upper.priority !== lower.priority) return upper.priority > lower.priority;
@@ -53,6 +57,17 @@ function keyboardOwner() {
   let owner = null;
   for (const token of activeTraps) if (!owner || paintsAbove(token, owner) !== false) owner = token;
   return owner;
+}
+
+/**
+ * Klavye, verilen kabın DIŞINDAKİ açık bir tuzağa mı ait? Ertelenmiş odak veren
+ * yüzey (ör. hazırlığı sonradan gelen Bilgin yazma alanı) odağı ancak klavye
+ * sahibi kendisiyken ya da hiç tuzak yokken verir; aksi hâlde görünür pencerenin
+ * arkasına odak taşırdı. Kabı bilinmeyen yüzey hiçbir tuzağın sahibi sayılmaz.
+ */
+export function keyboardOwnedElsewhere(container) {
+  const owner = keyboardOwner();
+  return Boolean(owner) && (!container || owner.containerRef.current !== container);
 }
 
 function isDocumentRoot(element, focusDocument) {

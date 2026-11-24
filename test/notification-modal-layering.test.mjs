@@ -448,12 +448,29 @@ test('Yapışkan şeritler ve kabuk katmanları kipli pencerenin arkasında kal�
     every(values(className, 'z-index').filter(({ value }) => value !== 'auto'), (value) => layerValue(value, layers) < modal, `${label} kipli pencerenin altındadır`);
   }
 
-  // Şeritlerin ATA öğeleri pencerenin üstünde bir yığılma bağlamı kurarsa şeritler
-  // yerel katmanlarından bağımsız olarak perdenin üstüne boyanır.
-  for (const className of ['app', 'main', 'content']) {
-    for (const { at, value } of values(className, 'z-index')) {
-      if (value !== 'auto') assert.ok(layerValue(value, layers) < modal, `${at} (${value}) şerit atası pencerenin altındadır`);
-    }
+  // Kabuk ataları (`html`, `body`, `.app`, `.main`, `.content`) yığılma bağlamı
+  // KURMAZ. Böylece uygulama içi yüzeyler ve gövde portalları aynı kök bağlamda
+  // yer alır: şeritler perdenin üstüne çıkamaz ve eşit katmandaki iki tuzak
+  // yüzeyinin boyama sırası DOM sırasıdır (`useModalFocusTrap` klavye sahipliği
+  // bu ön koşula dayanır).
+  const contextProps = ['z-index', 'isolation', 'transform', 'filter', 'opacity', 'will-change', 'contain', 'backdrop-filter',
+    'mix-blend-mode', 'mask', 'mask-image', 'clip-path', 'perspective', 'container-type'];
+  const neutral = new Set(['auto', 'none', 'normal', '1', 'initial', 'unset']);
+  const shellAncestors = ['app', 'main', 'content'].map((className) => (selector) => targetsClass(selector, className))
+    .concat(['html', 'body'].map((tag) => (selector) => {
+      let flat = selector;
+      while (/\([^()]*\)/.test(flat)) flat = flat.replace(/\([^()]*\)/g, '');
+      return new RegExp(`^${tag}(?![\\w-])`).test(flat.trim().split(/\s*[\s>+~]\s*/).at(-1));
+    }));
+  for (const [path, root] of sheets) {
+    root.walkRules((rule) => {
+      if (!rule.selectors.some((selector) => shellAncestors.some((matches) => matches(selector)))) return;
+      rule.each((node) => {
+        if (node.type === 'decl' && contextProps.includes(node.prop)) {
+          assert.ok(neutral.has(node.value), `${path} · ${rule.selector} { ${node.prop}: ${node.value} } kabuk atasında yığılma bağlamı kurar`);
+        }
+      });
+    });
   }
 
   // Üst çubuk kendi yığılma bağlamını kurar ve katmanı rapor sekmelerinin
@@ -523,7 +540,10 @@ function trapPriorities(source) {
       else if (source[end] === ')') depth -= 1;
       end += 1;
     } while (depth > 0 && end < source.length);
-    const declared = source.slice(index, end).match(/\bpriority:\s*(\d+)/);
+    // Öncelik sayısal bir sabit olmalıdır: `310 + 1000` gibi bir ifade ya da
+    // değişken CSS katmanıyla karşılaştırılamaz ve sözleşmeyi sessizce aşardı.
+    const declared = source.slice(index, end).match(/\bpriority:\s*([^,}\n]+)/);
+    if (declared) assert.match(declared[1].trim(), /^\d+$/, `öncelik sayısal sabittir: priority: ${declared[1].trim()}`);
     priorities.push(declared ? Number(declared[1]) : 500);
   }
   return priorities;

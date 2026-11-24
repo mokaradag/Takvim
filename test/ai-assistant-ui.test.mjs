@@ -1609,6 +1609,34 @@ test('hazırlık veya görünüm değişimi odak isteği olmadan odağı çalmaz
   panel.unmount();
 });
 
+test('üstte açık kipli pencere varken Bilgin bekleyen odağı yazma alanına vermez', async (t) => {
+  // Etkin öge gövdede kalsa bile (ör. pencere içinde odaklanamayan bir alana
+  // tıklandı) klavyenin sahibi üstteki penceredir; yazma alanı onun arkasında
+  // odak almamalıdır. Pencere kapandıktan sonraki yeni istek odağı yine verir.
+  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+  const previous = globalThis.document;
+  const listeners = new Set();
+  globalThis.document = { activeElement: null, body: {}, addEventListener(type, fn) { listeners.add(fn); }, removeEventListener(type, fn) { listeners.delete(fn); } };
+  t.after(() => { globalThis.document = previous; });
+  const { controller } = await readyController();
+  const modal = mountComponent((props) => { useModalFocusTrap(props); return null; }, {
+    containerRef: { current: null }, initialFocusRef: { current: null }, onClose() {}
+  });
+  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} };
+  const panel = mountComponent(RotaAssistantPanel, { assistant });
+  let focused = 0;
+  findElement(panel.output, (node) => node.type === AssistantComposer).props.inputRef.current = { focus() { focused += 1; } };
+  try {
+    panel.render({ assistant: { ...assistant, focusRequest: 1 } });
+    assert.equal(focused, 0, 'kipli pencere açıkken yazma alanı odak almaz');
+    modal.unmount();
+    panel.render({ assistant: { ...assistant, focusRequest: 2 } });
+    assert.equal(focused, 1, 'pencere kapandıktan sonraki istek odağı verir');
+  } finally {
+    panel.unmount();
+  }
+});
+
 
 test('yanıt kopyası görünen metindir; geçerli URL sonları korunur', async () => {
   const { assistantMarkdownText } = await import('../src/features/ai/assistant/assistantMarkdown.js');

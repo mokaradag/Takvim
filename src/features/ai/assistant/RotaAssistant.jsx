@@ -6,7 +6,7 @@ import { useDataMode } from '../../../components/shell/DataModeContext.jsx';
 import { DATA_MODES } from '../../../data/dataMode.js';
 import { AI_CREDENTIAL_CHANGED_EVENT } from '../aiClient.js';
 import { ASSISTANT_DEFAULT_TITLE } from '../../../domain/ai/assistantContract.js';
-import { modalTrapDepth, useModalFocusTrap } from '../../../hooks/useModalFocusTrap.js';
+import { keyboardOwnedElsewhere, modalTrapDepth, useModalFocusTrap } from '../../../hooks/useModalFocusTrap.js';
 import { useReducedMotion } from '../../../hooks/useReducedMotion.js';
 import { appZoom } from '../../../lib/zoom.js';
 import { AssistantComposer } from './AssistantComposer.jsx';
@@ -299,6 +299,13 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   useEffect(() => { pendingFocusRef.current = open; }, [open, focusRequest]);
   useEffect(() => {
     if (!open || !pendingFocusRef.current) return;
+    // Üstte açık bir kipli pencere klavyenin sahibiyse (panelin kendi tuzağı
+    // değilse) bekleyen odak iptal edilir; yazma alanı o pencerenin arkasında
+    // odak almaz. Etkin öge gövdede kalsa bile sahiplik tuzaklardan okunur.
+    if (keyboardOwnedElsewhere(panelRef.current)) {
+      pendingFocusRef.current = false;
+      return;
+    }
     const focused = globalThis.document?.activeElement;
     if (focused && focused !== globalThis.document?.body && focused !== launcherRef.current
       && !panelRef.current?.contains?.(focused)) {
