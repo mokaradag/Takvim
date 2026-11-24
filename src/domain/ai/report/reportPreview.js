@@ -1,4 +1,4 @@
-import { validateEvidencePackageContract } from './reportRequest.js';
+import { PROTECTED_TEXT_KEYS, validateEvidencePackageContract } from './reportRequest.js';
 
 /**
  * Bilgin Aşama 4I-A — Geliştirici ve sınama amaçlı yönetici kanıt paketi tanı önizlemesi (saf).
@@ -8,24 +8,54 @@ import { validateEvidencePackageContract } from './reportRequest.js';
  * kaynak ve kayıt zamanı bağlamıyla birlikte gösterir.
  */
 
+const PROTECTED_TEXT_KEY_SET = new Set(PROTECTED_TEXT_KEYS);
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function redactProtectedKeysDeep(value) {
+  if (Array.isArray(value)) return value.map(redactProtectedKeysDeep);
+  if (!isPlainObject(value)) return value;
+  const cleaned = {};
+  let redactedAny = false;
+  for (const [key, val] of Object.entries(value)) {
+    if (PROTECTED_TEXT_KEY_SET.has(key)) {
+      redactedAny = true;
+      continue;
+    }
+    cleaned[key] = redactProtectedKeysDeep(val);
+  }
+  if (redactedAny) {
+    cleaned.korunan_metin_gizlendi = true;
+  }
+  return cleaned;
 }
 
 function sanitizePackageForPreview(pkg, { includeRawText = false } = {}) {
   if (!isPlainObject(pkg)) return pkg;
   if (includeRawText) return pkg;
   const rawEntries = Array.isArray(pkg.kanitlar) ? pkg.kanitlar : [];
+  const sanitizedTop = {};
+  for (const [key, val] of Object.entries(pkg)) {
+    if (key === 'kanitlar') continue;
+    if (PROTECTED_TEXT_KEY_SET.has(key)) continue;
+    sanitizedTop[key] = redactProtectedKeysDeep(val);
+  }
   return {
-    ...pkg,
+    ...sanitizedTop,
     kanitlar: rawEntries.map((entry) => {
-      if (!isPlainObject(entry) || entry.tur !== 'not') return entry;
-      const { metin, ...rest } = entry;
-      return {
-        ...rest,
-        metin_gizlendi: true,
-        metin_karakter_sayisi: typeof metin === 'string' ? Array.from(metin).length : 0
-      };
+      if (!isPlainObject(entry)) return entry;
+      if (entry.tur === 'not') {
+        const cleaned = redactProtectedKeysDeep(entry);
+        delete cleaned.korunan_metin_gizlendi;
+        return {
+          ...cleaned,
+          metin_gizlendi: true,
+          metin_karakter_sayisi: typeof entry.metin === 'string' ? Array.from(entry.metin).length : 0
+        };
+      }
+      return redactProtectedKeysDeep(entry);
     })
   };
 }

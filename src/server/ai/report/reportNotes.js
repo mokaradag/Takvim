@@ -18,37 +18,46 @@ import { readReportNoteAuditHistory, readReportTaskNotes } from '../tools/rota/r
  *   - Metin içindeki "haftaya", "dün", "gelecek hafta" gibi göreli ifadeler takvim tarihine çevrilmez.
  */
 
-// Denetim karakterlerini temizler; sekme ve satır sonlarını tek boşluğa indirger (teknik bağlam korunur).
+// C0/C1 denetim karakterleri ile görünmez biçim/yönlendirme karakterleri (\p{Cf}) temizlenir;
+// sekme, satır sonu ve satır/paragraf ayırıcıları tek boşluğa indirgenir.
 // eslint-disable-next-line no-control-regex -- not metnindeki geçersiz denetim karakterleri bilinçli olarak temizlenir
-const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu;
+const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu;
+const FORMAT_CHARS_RE = /\p{Cf}/gu;
+const LINE_AND_TAB_RE = /[\t\r\n\u2028\u2029]+/gu;
 
 /**
  * Not metninde yapay zekâya veya rapor yazarına doğrudan yönelen gömülü yönerge kalıplarını tanır.
- * Sıradan mühendislik buyruklarını ("test cihazını kontrol edin", "önce arayüzü doğrulayın")
+ * Sıradan mühendislik buyruklarını ("test cihazını kontrol edin", "tüm kurallar uygulandı")
  * engellemez ve notu sansürlemez; yalnızca yazara güvenilmez yönerge işareti taşır.
  */
 const PROMPT_INJECTION_PATTERNS = Object.freeze([
-  /(?:önceki|yukarıdaki|tüm|bütün)\s+(?:bütün\s+|tüm\s+)?(?:talimat|yönerge|kural|sistem\s+mesaj)/iu,
+  /(?:önceki|yukarıdaki|tüm|bütün)\s+(?:bütün\s+|tüm\s+)?(?:talimat\p{L}*|yönerge\p{L}*|kural\p{L}*|sistem\s+mesaj\p{L}*)\s+(?:yoksay|unut|görmezden\s+gel|devre\s+dışı\s+bırak|atla|geçersiz\s+kıl|ihmal\s+et)/iu,
   /raporu\s+yazan\s+yapay\s+zek[aâ]/iu,
   /(?:yapay\s+zek[aâ]|asistan|model)\s*[:\-]\s*(?:bu\s+görevi|riskleri|bütün|tüm)/iu,
   /(?:riskleri\s+atla|tamamland[ıi]\s+olarak\s+yaz|bütün\s+projelerin\s+görevlerini\s+listele|bütün\s+direktörlüğü\s+göster)/iu,
-  /(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|system)\s+(?:instructions?|prompts?|rules?|directives?)/iu,
+  /(?:ignore|disregard|forget|override)\s+(?:all\s+(?:of\s+)?|the\s+|everything\s+)?(?:previous|prior|above|system)\b(?:\s+(?:instructions?|prompts?|rules?|directives?))?/iu,
   /(?:system\s+prompt|you\s+are\s+now|act\s+as\s+(?:system|admin)|new\s+instructions?\s*:)/iu
 ]);
 
 // Açık tamamlama tümcesini ardından gelen nesnel tümceler olsa da yakalar; koşullu ifadeler PENDING_QUALIFIER_RE ile elenir.
 const COMPLETED_CLAIM_RE = /(?:^|[.!?;]\s*)(?:görev\s+|iş\s+)?(?:tamamen\s+)?(?:tamamland[ıi]|bitti|kapand[ıi])(?=\s*(?:[.!?;]|$))/iu;
-const PENDING_QUALIFIER_RE = /(?:bekleniyor|bekliyor|haftaya|ertelendi|sürüyor|devam\s+ediyor|eksik|yok|başlamad[ıi]|kesin\s+değil|planland[ıi])/iu;
+const NEGATED_ABSENCE_RE = /(?:engel|risk|sorun|gecikme|eksik|bloker|pürüz)\s+yok(?![\p{L}])/giu;
+const PENDING_QUALIFIER_RE = /(?:bekleniyor|bekliyor|haftaya|ertelendi|sürüyor|devam\s+ediyor|eksik(?![\p{L}])|(?<![\p{L}])yok(?![\p{L}])|başlamad[ıi]|kesin\s+değil|planland[ıi])/iu;
 const BLOCKED_OR_NOT_DONE_RE = /(?:henüz\s+başlamad[ıi]|ertelendi|durduruldu|iptal\s+edildi|tamamlanmad[ıi]|hazır\s+değil)/iu;
-const SCHEDULED_DATE_RE = /(?:planland[ıi]|hedeflendi|belirlendi|hazır(?![\p{L}])(?!\s+değil)|risk\s+yok|gecikme\s+yok)/iu;
+const SCHEDULED_DATE_RE = /(?:(?:\d{1,2}[./-]\d{1,2}|\d{4}-\d{2}-\d{2}|(?:ocak|şubat|mart|nisan|mayıs|haziran|temmuz|ağustos|eylül|ekim|kasım|aralık)|hafta|gün|tarih)[^.!?;,\n]{0,40}(?:planland[ıi]|hedeflendi|belirlendi)|(?:planland[ıi]|hedeflendi|belirlendi)(?=\s*(?:[.!?;,]|$))|risk\s+yok|gecikme\s+yok)/iu;
 // "gecikme yok / bulunmuyor / beklenmiyor / olmadı" gibi olumsuzlanmış gecikme ifadeleri erteleme sayılmaz.
-const POSTPONED_OR_NEGATED_RE = /(?:ertelendi|iptal|gecikme(?!\s+(?:yok|bulunmuyor|beklenmiyor|olmad[ıi]))|hazır\s+değil|yeni\s+tarih\s+(?:ilan\s+edilmedi|belirsiz|yok)|risk\s+var)/iu;
+const POSTPONED_OR_NEGATED_RE = /(?:ertelendi|iptal\s+edildi|gecikme(?!\s+(?:yok|bulunmuyor|beklenmiyor|olmad[ıi]))|yeni\s+tarih\s+(?:ilan\s+edilmedi|belirsiz|yok)|gecikme\s+riski\s+var)/iu;
 const NO_RISK_CLAIM_RE = /(?:risk\s+yok|gecikme\s+yok|sorun\s+yok)/iu;
-// Türkçe harf sınırı "hazırlanmaya" gibi türevlerin "hazır" olarak yanlış eşleşmesini engeller.
-const READY_POSITIVE_RE = /(?:test\s+ortam[ıi]\s+hazır(?![\p{L}])(?!\s+değil)|ortam\s+hazır(?![\p{L}])(?!\s+değil))/iu;
-const READY_NEGATIVE_RE = /(?:test\s+ortam[ıi]\s+hazır\s+değil|ortam\s+hazır\s+değil)/iu;
-const READINESS_SUBJECT_RE = /(?:^|[.!?;,\n]\s*)(?:([\p{L}\d_-]+)\s+)?(?:test\s+)?ortam[ıi]\s+hazır(?![\p{L}])/iu;
-const GENERIC_SUBJECT_WORDS = new Set(['bu', 'şu', 'mevcut', 'ilgili', 'tüm', 'bütün', 'genel', 'ortak']);
+// Her tümcedeki ortam hazırlık bildirimini ve öznesini (pozitif/negatif kutbuyla birlikte) yakalar.
+const CLAUSE_SPLIT_RE = /[.!?;,\n]+/u;
+const READINESS_CLAUSE_RE = /(?:^|\s)(?:([\p{L}\d_-]+)\s+)?(?:test\s+)?ortam(?:[ıi])?\s+hazır(?![\p{L}])(\s+değil(?![\p{L}]))?/iu;
+const GENERIC_SUBJECT_WORDS = new Set(['bu', 'şu', 'mevcut', 'ilgili', 'tüm', 'bütün', 'genel', 'ortak', 'test', 'entegrasyon']);
+
+function compareAscii(left, right) {
+  const a = String(left ?? '');
+  const b = String(right ?? '');
+  return a < b ? -1 : (a > b ? 1 : 0);
+}
 
 /** JSON anlık görüntüsünü ayrıştırır; okunamayan veya kesilmiş metinlerde `readable: false` döner. */
 function parseJsonSnapshot(raw) {
@@ -65,24 +74,43 @@ function parseJsonSnapshot(raw) {
 }
 
 function extractDescriptionField(snapshot) {
-  if (Object.hasOwn(snapshot, 'Description')) return snapshot.Description;
-  if (Object.hasOwn(snapshot, 'description')) return snapshot.description;
-  return undefined;
+  let raw;
+  if (Object.hasOwn(snapshot, 'Description') && snapshot.Description !== undefined) {
+    raw = snapshot.Description;
+  } else if (Object.hasOwn(snapshot, 'description') && snapshot.description !== undefined) {
+    raw = snapshot.description;
+  } else {
+    return { valid: true, value: null };
+  }
+  if (raw === null) {
+    // Uppercase Description: null iken lowercase description metin taşıyorsa SQL COALESCE ile aynı yedek kullanılır.
+    if (Object.hasOwn(snapshot, 'description') && typeof snapshot.description === 'string') {
+      return { valid: true, value: snapshot.description };
+    }
+    return { valid: true, value: null };
+  }
+  if (typeof raw !== 'string') {
+    return { valid: false, value: null };
+  }
+  return { valid: true, value: raw };
 }
 
-/** Ham not metnini temizler; yalnızca boşluklardan oluşan metinler `null` döner. */
+/** Ham not metnini temizler; yalnızca boşluk veya görünmez biçim karakterlerinden oluşan metinler `null` döner. */
 export function normalizeNoteText(raw) {
   if (raw == null) return null;
   const cleaned = String(raw)
+    .replace(FORMAT_CHARS_RE, '')
     .replace(CONTROL_CHARS_RE, ' ')
+    .replace(LINE_AND_TAB_RE, ' ')
     .replace(/[【】]/gu, (mark) => (mark === '【' ? '(' : ')'))
-    .replace(/\[(\s*R\d{1,3}\s*)\]/giu, '($1)')
+    .replace(/\[(\s*[REF]\d{1,3}\s*)\]/giu, '($1)')
     .trim();
   return cleaned.length > 0 ? cleaned : null;
 }
 
 /** Metni Unicode kod noktası sınırına göre kırpar (Türkçe karakterleri veya vekil çiftlerini bölmez). */
 export function clipNoteText(text, maxChars = REPORT_EVIDENCE_LIMITS.maxNoteChars) {
+  if (maxChars <= 0) return { text: '', clipped: Boolean(text) };
   const codePoints = Array.from(text);
   if (codePoints.length <= maxChars) return { text, clipped: false };
   return {
@@ -99,20 +127,49 @@ function duplicateKey(text) {
     .trim();
 }
 
-/** Hazırlık bildirimindeki ortam öznesini çıkarır (farklı ortamların yanlış eşleşmesini önlemek için). */
-function extractReadinessSubject(lowerText) {
-  const match = READINESS_SUBJECT_RE.exec(lowerText);
-  if (!match) return null;
-  const qualifier = (match[1] || '').trim();
-  if (!qualifier || GENERIC_SUBJECT_WORDS.has(qualifier)) return '';
-  return qualifier;
+/**
+ * Bir not metnindeki tüm ortam hazırlığı tümcelerini kutup (`positive`/`negative`) ve
+ * normalleştirilmiş özne anahtarıyla çıkarır.
+ */
+function extractReadinessClaims(lowerText) {
+  const claims = [];
+  for (const rawClause of String(lowerText || '').split(CLAUSE_SPLIT_RE)) {
+    const clause = rawClause.trim();
+    if (!clause) continue;
+    const match = READINESS_CLAUSE_RE.exec(clause);
+    if (!match) continue;
+    const rawQualifier = (match[1] || '').trim();
+    const subject = (!rawQualifier || GENERIC_SUBJECT_WORDS.has(rawQualifier)) ? '' : rawQualifier;
+    const polarity = match[2] ? 'negative' : 'positive';
+    claims.push({ subject, polarity });
+  }
+  return claims;
+}
+
+/** İki hazırlık iddia listesi arasında aynı özne üzerinde zıt kutuplu çift olup olmadığını döner. */
+function hasOpposingReadinessClaim(leftClaims, rightClaims) {
+  for (const left of leftClaims) {
+    for (const right of rightClaims) {
+      if (left.subject === right.subject && left.polarity !== right.polarity) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Not içinde yapay zekâya yönelik gömülü yönerge (istem enjeksiyonu) bulunup bulunmadığını belirler. */
 export function containsUntrustedInstruction(text) {
-  if (typeof text !== 'string' || !text.trim()) return false;
-  const lowerTr = text.toLocaleLowerCase('tr-TR');
-  return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(text) || pattern.test(lowerTr));
+  if (typeof text !== 'string') return false;
+  const sanitized = text
+    .replace(FORMAT_CHARS_RE, '')
+    .normalize('NFKC')
+    .replace(CONTROL_CHARS_RE, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (!sanitized) return false;
+  const lowerTr = sanitized.toLocaleLowerCase('tr-TR');
+  return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(sanitized) || pattern.test(lowerTr));
 }
 
 function isWithinPeriod(isoTimestamp, period) {
@@ -159,8 +216,11 @@ function extractAuditSide(event, side) {
   if (!parsed.readable) {
     return { readable: false, text: null, sourceClipped: Boolean(event.detailJsonClipped), fullHash: null, identity: null };
   }
-  const rawDesc = extractDescriptionField(parsed.obj);
-  const text = normalizeNoteText(rawDesc);
+  const desc = extractDescriptionField(parsed.obj);
+  if (!desc.valid) {
+    return { readable: false, text: null, sourceClipped: Boolean(event.detailJsonClipped), fullHash: null, identity: null };
+  }
+  const text = normalizeNoteText(desc.value);
   const sourceClipped = Boolean(event.detailJsonClipped);
   const identity = buildVersionIdentity({ fullText: text, sourceClipped, fullHash: null });
   return { readable: true, text, sourceClipped, fullHash: null, identity };
@@ -181,10 +241,16 @@ export function reconstructTaskNoteChronology({
   cutOffMs = null,
   maxNoteChars = REPORT_EVIDENCE_LIMITS.maxNoteChars
 }) {
+  const safeOccurredMs = (event) => {
+    if (!event?.occurredAt) return Number.POSITIVE_INFINITY;
+    const ms = Date.parse(event.occurredAt);
+    return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY;
+  };
   const sortedEvents = [...auditEvents].sort((left, right) => {
-    const leftMs = left.occurredAt ? Date.parse(left.occurredAt) : 0;
-    const rightMs = right.occurredAt ? Date.parse(right.occurredAt) : 0;
-    return leftMs - rightMs || (left.auditId || 0) - (right.auditId || 0);
+    const leftMs = safeOccurredMs(left);
+    const rightMs = safeOccurredMs(right);
+    if (leftMs !== rightMs) return leftMs - rightMs;
+    return (Number(left.auditId) || 0) - (Number(right.auditId) || 0);
   });
 
   const versions = [];
@@ -218,7 +284,9 @@ export function reconstructTaskNoteChronology({
   for (const event of sortedEvents) {
     const before = extractAuditSide(event, 'before');
     const after = extractAuditSide(event, 'after');
-    const occurredIstanbul = event.occurredAt ? formatIstanbulTimestamp(event.occurredAt) : null;
+    const occurredMs = safeOccurredMs(event);
+    const occurredIstanbul = Number.isFinite(occurredMs) ? formatIstanbulTimestamp(new Date(occurredMs)) : null;
+    const beforeProjectId = event.beforeProjectId || event.projectId;
 
     if (event.actionCode === 'CREATE') {
       if (after.readable && after.text) {
@@ -238,11 +306,12 @@ export function reconstructTaskNoteChronology({
       continue;
     }
 
-    // Okunamayan veya gizlenen `before` anlık görüntüsü değişim kanıtı sayılamaz; kayıt zamanı uydurulmaz.
+    // Okunamayan veya gizlenen `before` sınırı kronoloji sürekliliğini keser; aynı metin görülse bile
+    // önceki zaman damgası devralınmaz, yeni zamansız sürüm başlatılır.
     if (!before.readable) {
       if (!after.readable || !after.text) {
         activeVersion = null;
-      } else if (!sameVersionIdentity(activeVersion, after.identity)) {
+      } else {
         activeVersion = pushVersion({
           rawText: after.text,
           kaynak: 'MR_AuditLog',
@@ -265,7 +334,7 @@ export function reconstructTaskNoteChronology({
           kaynak: 'MR_AuditLog',
           kayit_zamani: null,
           surum_tipi: 'tarihsel_onceki',
-          projectId: event.projectId,
+          projectId: beforeProjectId,
           auditId: null,
           sourceClipped: before.sourceClipped,
           identity: before.identity
@@ -290,7 +359,7 @@ export function reconstructTaskNoteChronology({
           kaynak: 'MR_AuditLog',
           kayit_zamani: null,
           surum_tipi: 'tarihsel_onceki',
-          projectId: event.projectId,
+          projectId: beforeProjectId,
           auditId: null,
           sourceClipped: before.sourceClipped,
           identity: before.identity
@@ -307,13 +376,13 @@ export function reconstructTaskNoteChronology({
           activeVersion.sonraki_degisiklik_zamani = occurredIstanbul;
         }
       } else {
-        // Önceki sürüm yalnızca hemen önceki etkin sürümle eşleştirilir; eşleşmiyorsa bilinmeyen zamanla ayrı sürüm olur.
+        // Önceki sürüm yalnızca hemen önceki etkin sürümle eşleştirilir; eşleşmiyorsa kaynak projesiyle ayrı sürüm olur.
         pushVersion({
           rawText: before.text,
           kaynak: 'MR_AuditLog',
           kayit_zamani: null,
           surum_tipi: 'tarihsel_onceki',
-          projectId: event.projectId,
+          projectId: beforeProjectId,
           auditId: null,
           sonraki_degisiklik_zamani: occurredIstanbul,
           sourceClipped: before.sourceClipped,
@@ -359,6 +428,8 @@ export function reconstructTaskNoteChronology({
     });
     if (activeVersion && sameVersionIdentity(activeVersion, currentIdentity)) {
       activeVersion.surum_tipi = 'guncel';
+      // Görev başka projeye taşındıysa güncel sürüm güncel proje kimliğini yansıtmalıdır.
+      activeVersion.projectId = usableCurrentNote.projectId || task.projectId;
       if (currentClipped || usableCurrentNote.clipped) activeVersion.kirpildi = true;
     } else {
       // Denetim kaydında doğrulanamayan güncel açıklama: MR_Tasks.UpdatedAt kayıt zamanı değildir.
@@ -399,13 +470,13 @@ export function detectNoteDuplicatesAndContradictions({
   const contradictions = [];
   const seenConflictKeys = new Set();
   const addConflict = (conflict) => {
-    const key = `${conflict.tur}:${[...conflict.kanitlar].sort().join('|')}`;
+    const key = `${conflict.tur}:${[...conflict.kanitlar].sort(compareAscii).join('|')}`;
     if (seenConflictKeys.has(key)) return;
     seenConflictKeys.add(key);
     contradictions.push(conflict);
   };
 
-  // 1. Farklı görevlerde veya sürümlerde birebir yinelenen not metinlerini işaretle.
+  // 1. Farklı görevlerde birebir yinelenen not metinlerini işaretle (aynı görevde A→B→A geri alımı yineleme sayılmaz).
   const byText = new Map();
   for (const entry of noteEntries) {
     // Kırpılmış notlar yalnızca doğrulanmış tam metin SHA-256 özetiyle yinelenmiş sayılır; ortak 1600 karakterlik önek yeterli değildir.
@@ -418,7 +489,8 @@ export function detectNoteDuplicatesAndContradictions({
   }
   let duplicateGroupSeq = 0;
   for (const group of byText.values()) {
-    if (group.length < 2) continue;
+    const distinctTaskIds = new Set(group.map((item) => item._taskId));
+    if (distinctTaskIds.size < 2) continue;
     duplicateGroupSeq += 1;
     const groupId = `Y${duplicateGroupSeq}`;
     const ids = group.map((item) => item.id);
@@ -440,18 +512,25 @@ export function detectNoteDuplicatesAndContradictions({
     const taskEvidenceId = taskEvidenceIdByTaskId.get(taskId) || null;
     const latest = taskNotes.at(-1);
 
-    // Aynı görevde ardışık iki sürüm arasında plan ↔ erteleme / hazır ↔ hazır değil çelişkisi (R4).
+    // Aynı görevde gerçekten ardışık (surum_sira + 1) ve kırpılmamış iki sürüm arasında çelişki (R4).
     for (let i = 0; i < taskNotes.length - 1; i += 1) {
       const earlier = taskNotes[i];
       const later = taskNotes[i + 1];
       if (earlier.guvenilmez_yonerge_iceriyor || later.guvenilmez_yonerge_iceriyor) continue;
+      if (earlier.kirpildi || later.kirpildi) continue;
+      if (Number.isInteger(earlier.surum_sira) && Number.isInteger(later.surum_sira)
+        && later.surum_sira !== earlier.surum_sira + 1) {
+        continue;
+      }
       const earlierLower = earlier.metin.toLocaleLowerCase('tr-TR');
       const laterLower = later.metin.toLocaleLowerCase('tr-TR');
       const scheduleReversal = SCHEDULED_DATE_RE.test(earlierLower)
         && !POSTPONED_OR_NEGATED_RE.test(earlierLower)
         && POSTPONED_OR_NEGATED_RE.test(laterLower);
-      const readinessReversal = (READY_POSITIVE_RE.test(earlierLower) && READY_NEGATIVE_RE.test(laterLower))
-        || (READY_NEGATIVE_RE.test(earlierLower) && READY_POSITIVE_RE.test(laterLower));
+      const readinessReversal = hasOpposingReadinessClaim(
+        extractReadinessClaims(earlierLower),
+        extractReadinessClaims(laterLower)
+      );
       if (scheduleReversal || readinessReversal) {
         addConflict({
           tur: 'not_surum_celiskisi',
@@ -463,27 +542,31 @@ export function detectNoteDuplicatesAndContradictions({
       }
     }
 
-    // Görev durumu ile yalnızca güncel olduğu doğrulanan not arasında belirlenimci uyuşmazlık (S18, S24).
-    if (task && taskEvidenceId && latest && latest.surum_tipi === 'guncel' && !latest.guvenilmez_yonerge_iceriyor) {
+    // Görev durumu ile yalnızca güncel olduğu doğrulanan ve kırpılmamış not arasında belirlenimci uyuşmazlık.
+    if (task && taskEvidenceId && latest && latest.surum_tipi === 'guncel'
+      && !latest.guvenilmez_yonerge_iceriyor && !latest.kirpildi) {
       const latestLower = latest.metin.toLocaleLowerCase('tr-TR');
+      const latestWithoutNegatedAbsence = latestLower.replace(NEGATED_ABSENCE_RE, ' ');
       const latestDay = latest.kayit_zamani ? istanbulDay(latest.kayit_zamani) : null;
       const isTaskOpen = task.status !== 'done';
       const isTaskOverdue = isTaskOpen && Boolean(task.targetFinish) && task.targetFinish < today;
-      if (isTaskOpen && COMPLETED_CLAIM_RE.test(latestLower) && !PENDING_QUALIFIER_RE.test(latestLower)) {
+      if (isTaskOpen && COMPLETED_CLAIM_RE.test(latestLower) && !PENDING_QUALIFIER_RE.test(latestWithoutNegatedAbsence)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
           kanitlar: [taskEvidenceId, latest.id],
           gorev: task.code || taskId,
           aciklama: 'Görev kaydı açık görünürken görev notu işin tamamlandığını bildiriyor.'
         });
-      } else if (isTaskOverdue && NO_RISK_CLAIM_RE.test(latestLower) && Boolean(latestDay && period?.baslangic && latestDay < period.baslangic)) {
+      } else if (isTaskOverdue && NO_RISK_CLAIM_RE.test(latestLower)
+        && Boolean(latestDay && task.targetFinish && latestDay > task.targetFinish)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
           kanitlar: [taskEvidenceId, latest.id],
           gorev: task.code || taskId,
-          aciklama: 'Dönem öncesinde kaydedilen "risk/gecikme yok" notu ile güncel gecikmiş görev durumu uyuşmuyor.'
+          aciklama: 'Hedef bitiş tarihi geçtikten sonra kaydedilen "risk/gecikme yok" notu ile gecikmiş görev durumu uyuşmuyor.'
         });
-      } else if (!isTaskOpen && BLOCKED_OR_NOT_DONE_RE.test(latestLower) && Boolean(latestDay && task.actualFinish && latestDay > task.actualFinish)) {
+      } else if (!isTaskOpen && BLOCKED_OR_NOT_DONE_RE.test(latestLower)
+        && Boolean(latestDay && task.actualFinish && latestDay > task.actualFinish)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
           kanitlar: [taskEvidenceId, latest.id],
@@ -494,29 +577,25 @@ export function detectNoteDuplicatesAndContradictions({
     }
   }
 
-  // 3. Aynı projede ve aynı ortam öznesinde güncel farklı görev notları arasında açık karşıt bildirim.
-  const safeCurrentNotes = noteEntries.filter((entry) => !entry.guvenilmez_yonerge_iceriyor && entry.surum_tipi === 'guncel');
-  const readyPositive = safeCurrentNotes
-    .map((entry) => {
-      const lower = entry.metin.toLocaleLowerCase('tr-TR');
-      return READY_POSITIVE_RE.test(lower) ? { entry, subject: extractReadinessSubject(lower) } : null;
-    })
-    .filter(Boolean);
-  const readyNegative = safeCurrentNotes
-    .map((entry) => {
-      const lower = entry.metin.toLocaleLowerCase('tr-TR');
-      return READY_NEGATIVE_RE.test(lower) ? { entry, subject: extractReadinessSubject(lower) } : null;
-    })
-    .filter(Boolean);
-  for (const pos of readyPositive) {
-    for (const neg of readyNegative) {
-      if (pos.entry._taskId === neg.entry._taskId) continue;
-      // Farklı projeler veya farklı adlandırılmış ortamlar ortak özne kanıtı olmadan çelişki sayılmaz.
-      if (!pos.entry._projectId || pos.entry._projectId !== neg.entry._projectId) continue;
-      if (pos.subject === null || neg.subject === null || pos.subject !== neg.subject) continue;
+  // 3. Aynı projede ve aynı ortam öznesinde güncel, kırpılmamış farklı görev notları arasında açık karşıt bildirim.
+  const safeCurrentNotes = noteEntries
+    .filter((entry) => !entry.guvenilmez_yonerge_iceriyor && !entry.kirpildi && entry.surum_tipi === 'guncel')
+    .map((entry) => ({
+      entry,
+      claims: extractReadinessClaims(entry.metin.toLocaleLowerCase('tr-TR'))
+    }))
+    .filter((item) => item.claims.length > 0);
+
+  for (let i = 0; i < safeCurrentNotes.length; i += 1) {
+    for (let j = i + 1; j < safeCurrentNotes.length; j += 1) {
+      const left = safeCurrentNotes[i];
+      const right = safeCurrentNotes[j];
+      if (left.entry._taskId === right.entry._taskId) continue;
+      if (!left.entry._projectId || left.entry._projectId !== right.entry._projectId) continue;
+      if (!hasOpposingReadinessClaim(left.claims, right.claims)) continue;
       addConflict({
         tur: 'notlar_arasi_celiski',
-        kanitlar: [neg.entry.id, pos.entry.id],
+        kanitlar: [left.entry.id, right.entry.id],
         aciklama: 'Aynı projedeki farklı görev notları aynı test/ortam hazırlığı hakkında karşıt bildirim taşıyor.'
       });
     }
@@ -563,6 +642,7 @@ export async function collectReportNotes({
   signal?.throwIfAborted?.();
   const maxTasksForNotes = Math.min(limits.maxSelectedTasks ?? REPORT_EVIDENCE_LIMITS.maxSelectedTasks, prioritizedTasks.length);
   const candidateTasks = prioritizedTasks.slice(0, maxTasksForNotes);
+  const tasksExcludedByTaskCap = Math.max(0, prioritizedTasks.length - candidateTasks.length);
   const candidateIds = candidateTasks.map((task) => task.id);
 
   if (candidateIds.length === 0) {
@@ -570,18 +650,21 @@ export async function collectReportNotes({
       versions: [],
       completeness: {
         riza: true,
-        metin: 'kapsamda not okunacak görev yok',
+        metin: tasksExcludedByTaskCap > 0
+          ? `0 not (${tasksExcludedByTaskCap} görev not okuma sınırı dışında)`
+          : 'kapsamda not okunacak görev yok',
         dahil: 0,
         disarida_kalan: 0,
-        notsuz_gorev: 0,
+        notsuz_gorev: tasksExcludedByTaskCap > 0 ? null : 0,
         kirpilan: 0,
-        denetim_kesik: false
+        denetim_kesik: tasksExcludedByTaskCap > 0
       }
     };
   }
 
   const maxNoteChars = limits.maxNoteChars ?? REPORT_EVIDENCE_LIMITS.maxNoteChars;
   const maxAuditEvents = limits.maxNoteAuditEvents ?? REPORT_EVIDENCE_LIMITS.maxNoteAuditEvents;
+  const maxSelectedNotes = limits.maxSelectedNotes ?? REPORT_EVIDENCE_LIMITS.maxSelectedNotes;
   const cutOffMs = cutOffUtc ? (cutOffUtc instanceof Date ? cutOffUtc.getTime() : Date.parse(cutOffUtc)) : null;
 
   // Güncel açıklamalar ve yetkili MR_AuditLog açıklama geçişleri sınırlı iki okuma ile alınır.
@@ -603,50 +686,74 @@ export async function collectReportNotes({
     auditByTask.get(event.taskId).push(event);
   }
 
-  const allVersions = [];
+  const versionsByTaskQueue = [];
   let tasksWithoutObservedNotes = 0;
+  let tasksWithheldByCutoff = 0;
+  let totalObservedVersions = 0;
+
   for (const task of candidateTasks) {
+    const taskModifiedAfterCutoff = Boolean(
+      cutOffMs != null
+      && Number.isFinite(cutOffMs)
+      && task.updatedAt
+      && Date.parse(task.updatedAt) > cutOffMs
+    );
     const taskVersions = reconstructTaskNoteChronology({
       task,
       currentNote: currentResult.notes.get(task.id) || null,
       auditEvents: auditByTask.get(task.id) || [],
       period,
       cutOffMs,
-      maxNoteChars
+      maxNoteChars: Math.max(1, maxNoteChars)
     });
     if (taskVersions.length === 0) {
-      tasksWithoutObservedNotes += 1;
+      if (taskModifiedAfterCutoff) {
+        tasksWithheldByCutoff += 1;
+      } else {
+        tasksWithoutObservedNotes += 1;
+      }
       continue;
     }
-    for (const version of taskVersions) {
-      allVersions.push({
+    totalObservedVersions += taskVersions.length;
+    // Görev içi seçim sırası: dönem içi not → güncel sürüm → en yeni sürüm.
+    const rankedTaskVersions = taskVersions
+      .map((version) => ({
         ...version,
         _taskPriorityRank: task._priorityRank ?? 0
+      }))
+      .sort((left, right) => {
+        if (left.donem_ici !== right.donem_ici) return left.donem_ici ? -1 : 1;
+        const leftCurrent = left.surum_tipi === 'guncel';
+        const rightCurrent = right.surum_tipi === 'guncel';
+        if (leftCurrent !== rightCurrent) return leftCurrent ? -1 : 1;
+        return right.surum_sira - left.surum_sira;
       });
-    }
+    versionsByTaskQueue.push(rankedTaskVersions);
   }
 
-  // Seçim sıralaması: görev önceliği → dönem içi not → güncel sürüm → en yeni sürüm (bütçe en yeni ve dönem içi sürümleri korur).
-  allVersions.sort((left, right) => {
-    if (left._taskPriorityRank !== right._taskPriorityRank) {
-      return left._taskPriorityRank - right._taskPriorityRank;
+  // Adil tur-bazlı (round-robin) seçim: tek bir çok düzenlenmiş görev tüm not bütçesini tüketip
+  // diğer öncelikli görevleri aç bırakmaz; her görev öncelik sırasıyla en değerli sürümünü önce alır.
+  const prioritizedPool = [];
+  let round = 0;
+  while (true) {
+    let addedInRound = false;
+    for (const queue of versionsByTaskQueue) {
+      if (round < queue.length) {
+        prioritizedPool.push(queue[round]);
+        addedInRound = true;
+      }
     }
-    if (left.donem_ici !== right.donem_ici) {
-      return left.donem_ici ? -1 : 1;
-    }
-    const leftCurrent = left.surum_tipi === 'guncel';
-    const rightCurrent = right.surum_tipi === 'guncel';
-    if (leftCurrent !== rightCurrent) {
-      return leftCurrent ? -1 : 1;
-    }
-    if (left.taskId === right.taskId) {
-      return right.surum_sira - left.surum_sira;
-    }
-    return left.taskId.localeCompare(right.taskId);
-  });
+    if (!addedInRound) break;
+    round += 1;
+  }
 
-  const maxSelectedNotes = limits.maxSelectedNotes ?? REPORT_EVIDENCE_LIMITS.maxSelectedNotes;
-  const selected = allVersions.slice(0, maxSelectedNotes);
+  // Sıfır karakter bütçesi boş not kanıtı üretmez; bütün gözlenen notlar sınır nedeniyle dışarıda sayılır.
+  const effectiveSelectedCap = maxNoteChars <= 0 ? 0 : Math.max(0, maxSelectedNotes);
+  const selected = prioritizedPool.slice(0, effectiveSelectedCap).map((version, index) => ({
+    ...version,
+    _selectionOrder: index
+  }));
+
   // Sunum sıralaması: görev önceliği korunarak aynı görevdeki sürümler kronolojik (eskiden yeniye) sıralanır.
   selected.sort((left, right) => {
     if (left._taskPriorityRank !== right._taskPriorityRank) {
@@ -655,19 +762,28 @@ export async function collectReportNotes({
     if (left.taskId === right.taskId) {
       return left.surum_sira - right.surum_sira;
     }
-    return left.taskId.localeCompare(right.taskId);
+    return compareAscii(left.taskId, right.taskId);
   });
-  const omittedCount = Math.max(0, allVersions.length - selected.length);
+
+  const omittedCount = Math.max(0, totalObservedVersions - selected.length);
   const clippedCount = selected.filter((item) => item.kirpildi).length;
-  const historyIncomplete = Boolean(auditResult.truncated || currentResult.truncated || (auditResult.corruptedCount || 0) > 0);
-  // Denetim geçmişi kesik veya bozuksa notu gözlenmeyen görevler kesin "notsuz" ilan edilmez (`null`).
+  const historyIncomplete = Boolean(
+    auditResult.truncated
+    || currentResult.truncated
+    || (auditResult.corruptedCount || 0) > 0
+    || tasksWithheldByCutoff > 0
+    || tasksExcludedByTaskCap > 0
+  );
+  // Denetim geçmişi kesik, bozuk, kesit sonrası saklı veya görev sınırı dışındaysa kesin "notsuz" ilan edilmez (`null`).
   const definitiveTasksWithoutNotes = historyIncomplete ? null : tasksWithoutObservedNotes;
 
   const summaryParts = [];
-  if (selected.length === 0) {
+  if (omittedCount > 0) {
+    summaryParts.push(selected.length > 0
+      ? `ilk ${selected.length} not (${omittedCount} not sınır nedeniyle dışarıda)`
+      : `0 not (${omittedCount} not sınır nedeniyle dışarıda)`);
+  } else if (selected.length === 0) {
     summaryParts.push(historyIncomplete ? 'gözlenen not kaydı yok (denetim kesik)' : 'not kaydı yok');
-  } else if (omittedCount > 0) {
-    summaryParts.push(`ilk ${selected.length} not (${omittedCount} not sınır nedeniyle dışarıda)`);
   } else {
     summaryParts.push(`${selected.length} not`);
   }
@@ -675,6 +791,12 @@ export async function collectReportNotes({
     summaryParts.push(`${definitiveTasksWithoutNotes} görev notsuz`);
   } else if (historyIncomplete && tasksWithoutObservedNotes > 0) {
     summaryParts.push(`${tasksWithoutObservedNotes} görevde gözlenen not yok (denetim kesik)`);
+  }
+  if (tasksWithheldByCutoff > 0) {
+    summaryParts.push(`${tasksWithheldByCutoff} görevde güncel not kesit sonrası değişim nedeniyle dışarıda`);
+  }
+  if (tasksExcludedByTaskCap > 0) {
+    summaryParts.push(`${tasksExcludedByTaskCap} görev not okuma sınırı dışında`);
   }
   if (clippedCount > 0) summaryParts.push(`${clippedCount} not ${maxNoteChars} karakterde kırpıldı`);
   if (historyIncomplete) summaryParts.push('denetim/not okuması kesik veya eksik');
@@ -688,7 +810,9 @@ export async function collectReportNotes({
       disarida_kalan: omittedCount,
       notsuz_gorev: definitiveTasksWithoutNotes,
       kirpilan: clippedCount,
-      denetim_kesik: historyIncomplete
+      denetim_kesik: historyIncomplete,
+      kesit_sonrasi_saklanan_gorev: tasksWithheldByCutoff,
+      okuma_disi_gorev: tasksExcludedByTaskCap
     }
   };
 }
