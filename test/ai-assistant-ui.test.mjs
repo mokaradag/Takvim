@@ -2695,6 +2695,36 @@ test('kayıt yapan kipli pencerenin Escape olayı masaüstü yardımcısını ka
   }
 });
 
+test('dar ekranda kipli sayfaya dönüşen Bilgin paneli üstte açık kipli pencerenin Esc sahipliğini almaz', async () => {
+  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+  const previous = { window: globalThis.window, document: globalThis.document, observer: globalThis.MutationObserver };
+  const events = new EventTarget();
+  const docEvents = new EventTarget();
+  // Dar görünüm: panel çekmece katmanında kipli sayfa olarak çizilir ve odak tuzağı etkinleşir.
+  globalThis.window = Object.assign(events, { matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) });
+  globalThis.document = { body: { classList: { contains: () => false } }, activeElement: null,
+    addEventListener: docEvents.addEventListener.bind(docEvents), removeEventListener: docEvents.removeEventListener.bind(docEvents) };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  const { controller } = await readyController();
+  const closes = [];
+  // Bildirim penceresi (kipli katman) panelden ÖNCE açıktır; panel sonradan etkinleşir.
+  const modal = mountComponent((props) => { useModalFocusTrap(props); return null; }, {
+    containerRef: { current: null }, initialFocusRef: { current: null }, onClose() { closes.push('modal'); }
+  });
+  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() { closes.push('assistant'); } } });
+  const escape = () => Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' });
+  try {
+    docEvents.dispatchEvent(escape());
+    assert.deepEqual(closes, ['modal'], 'Esc görünür kipli pencereyi kapatır, arkadaki Bilgin sayfasını değil');
+    modal.unmount();
+    docEvents.dispatchEvent(escape());
+    assert.deepEqual(closes, ['modal', 'assistant'], 'pencere kapanınca Esc sahipliği Bilgin sayfasına döner');
+  } finally {
+    panel.unmount(); controller.dispose();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer;
+  }
+});
+
 test("serbest metin izni tek tura aittir; gönderimde tüketilir ve bağlam değişince sıfırlanır", async () => {
   const rotaData = { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: true }] };
   const { controller, api, state } = await readyController({ api: fakeApi({ loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { ...READINESS, rotaData } }) }) });

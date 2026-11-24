@@ -18,6 +18,36 @@ export function hasBlockingModal() {
   return activeTraps.some((token) => token.priority >= 500 || token.blockedRef.current);
 }
 
+/**
+ * Klavyenin (Tab/Esc) sahibi olan tuzak: en yüksek katman önceliği, eşitlikte
+ * en son açılan. Sahiplik açılış sırasını değil GÖRSEL katmanı izler: alt
+ * katmandaki bir yüzey (ör. dar ekrana geçişte çekmece katmanında kipli sayfaya
+ * dönüşen Bilgin paneli) üstteki açık kipli pencereden SONRA etkinleşse bile
+ * görünmeyen denetimlerine Tab/Esc ile ulaşılamaz.
+ */
+function keyboardOwner() {
+  let owner = null;
+  for (const token of activeTraps) if (!owner || token.priority >= owner.priority) owner = token;
+  return owner;
+}
+
+function isDocumentRoot(element, focusDocument) {
+  return element === focusDocument.body || element === focusDocument.documentElement;
+}
+
+/** Odak geri verilecek öge bağlı, belge kökü değil ve gerçekten odak alabilir olmalıdır. */
+function canReceiveFocus(element, focusDocument) {
+  return Boolean(element?.isConnected && typeof element.focus === 'function'
+    && !isDocumentRoot(element, focusDocument) && !element.disabled && !element.closest?.('[inert]'));
+}
+
+/** Öge tuzağın penceresinde ya da ona `data-modal-owner` ile bağlı gövde portalında mı? */
+function trapOwnsElement(token, element) {
+  if (!element) return false;
+  if (token.containerRef.current?.contains?.(element)) return true;
+  return element.closest?.('[data-modal-owner]')?.getAttribute('data-modal-owner') === token.scopeId;
+}
+
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
@@ -80,30 +110,39 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
     const owner = containerRef.current;
     const restoreFocus = restoreFocusRef?.current;
     const shouldRestoreFocus = () => restoreFocusEnabledRef?.current !== false;
-    initialFocusRef.current?.focus();
+    // Daha üst katmanda açık bir pencere varken etkinleşen alt katman odağı ondan
+    // çalmaz; odak, üstteki pencere kapanınca aşağıdaki geri verme adımıyla gelir.
+    if (!activeTraps.some((token) => token.priority > priority)) initialFocusRef.current?.focus();
     const restore = () => {
       if (!shouldRestoreFocus() || focusEpochRef.current !== epoch) return;
       const focused = focusDocument.activeElement;
-      if (focused?.isConnected && focused !== focusDocument.body && focused !== openedFrom && !owner?.contains?.(focused)) return;
+      if (focused?.isConnected && !isDocumentRoot(focused, focusDocument) && focused !== openedFrom && !owner?.contains?.(focused)) return;
       // Açan öge pencereyle AYNI çizimde sökülebilir (ör. bildirim kartı paneliyle
-      // birlikte kapanır); odak o anda gövdeye düşer. Gövde bağlı olsa da odak
-      // alabilen bir açan değildir: yedek `restoreFocusRef` kullanılır.
-      const opener = openedFrom?.isConnected && openedFrom !== focusDocument.body
-        ? openedFrom
-        : (restoreFocus?.isConnected ? restoreFocus : restoreFocusRef?.current);
-      if (opener && typeof opener.focus === 'function' && opener.isConnected) opener.focus();
+      // birlikte kapanır; odak o anda gövdeye düşer) ya da artık devre dışı
+      // olabilir. Odak alamayan aday atlanır, sıradaki yedeğe geçilir.
+      let opener = [openedFrom, restoreFocus, restoreFocusRef?.current]
+        .find((candidate) => canReceiveFocus(candidate, focusDocument));
+      // Arkada hâlâ açık bir tuzak varsa odak onun DIŞINDA bırakılmaz (ör. zil
+      // düğmesi açık Bilgin sayfasının ya da "Görevi aç" ile açılan görev
+      // çekmecesinin arkasında kalırdı); klavye sahibi yüzeyin ilk odağına döner.
+      const remaining = keyboardOwner();
+      if (remaining && !trapOwnsElement(remaining, opener)) {
+        opener = [remaining.initialFocusRef.current, remaining.containerRef.current]
+          .find((candidate) => canReceiveFocus(candidate, focusDocument));
+      }
+      if (canReceiveFocus(opener, focusDocument)) opener.focus();
     };
     return () => { (globalThis.requestAnimationFrame || setTimeout)(restore); };
-  }, [containerRef, initialFocusRef, restoreFocusRef, restoreFocusEnabledRef, enabled]);
+  }, [containerRef, initialFocusRef, restoreFocusRef, restoreFocusEnabledRef, enabled, priority]);
 
   useEffect(() => {
     if (!enabled || typeof document === 'undefined') return undefined;
     const owner = containerRef.current;
     owner?.setAttribute('data-focus-scope', scopeId);
-    const token = { priority, blockedRef };
+    const token = { priority, blockedRef, scopeId, containerRef, initialFocusRef };
     activeTraps.push(token);
     const handleKeyDown = (event) => {
-      if (activeTraps[activeTraps.length - 1] !== token || event.defaultPrevented) return;
+      if (keyboardOwner() !== token || event.defaultPrevented) return;
       if (event.key === 'Escape') {
         if (event.isComposing || event.keyCode === 229) return;
         if (!event.defaultPrevented && !blockedRef.current) {
@@ -139,5 +178,5 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       if (index >= 0) activeTraps.splice(index, 1);
       owner?.removeAttribute('data-focus-scope');
     };
-  }, [containerRef, enabled, scopeId, priority]);
+  }, [containerRef, initialFocusRef, enabled, scopeId, priority]);
 }

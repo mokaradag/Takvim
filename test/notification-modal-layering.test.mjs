@@ -7,6 +7,7 @@ import { button, click, key, mountDom } from './helpers/clientDomHarness.mjs';
 
 const { ScheduleRequestCenter } = await import('../src/features/schedule-change/ScheduleRequestCenter.jsx');
 const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+const { useApplyTweaks } = await import('../src/hooks/useApplyTweaks.js');
 const { createRoot } = await import('react-dom/client');
 
 /**
@@ -152,6 +153,9 @@ test('Bildirim penceresi üst çubuğun yığılma bağlamı dışında görünt
   const dialog = layer.querySelector(':scope > [role="dialog"]');
   assert.ok(backdrop, 'arka perde pencereyle aynı katmandadır');
   assert.ok(dialog, 'pencere katmanın içindedir');
+  // Konumlu kardeşler DOM sırasıyla boyanır: perde pencereden SONRA gelseydi
+  // pencerenin üstüne çizilir ve denetimlerinin tıklamalarını yutardı.
+  assert.ok(backdrop.compareDocumentPosition(dialog) & Node.DOCUMENT_POSITION_FOLLOWING, 'perde pencereden önce, yani altında çizilir');
   assert.equal(dialog.getAttribute('aria-modal'), 'true');
   assert.equal(document.getElementById(dialog.getAttribute('aria-labelledby'))?.textContent, 'Tarih değişikliği talebi');
   assert.ok(dialog.contains(document.activeElement), 'ilk odak pencerenin içindedir');
@@ -221,6 +225,9 @@ test('Pencere içindeki Tab odak tuzağı gövdeye taşındıktan sonra da pence
   await openNotification(toggle, /Kararınız bekleniyor.*Mehmet Kaya/);
   const dialog = document.querySelector('.schedule-modal-layer [role="dialog"]');
   const focusable = [...dialog.querySelectorAll('button:not([disabled]), textarea:not([disabled])')];
+  // Sarma, birbirinden FARKLI iki uç arasında sınanır; tek ögeli liste kendine
+  // sarar ve tuzak bozulsa da test geçerdi.
+  assert.ok(focusable.length >= 2 && focusable[0] !== focusable.at(-1), 'pencerede birden çok odaklanabilir öge vardır');
   act(() => focusable.at(-1).focus());
   key('Tab');
   assert.ok(document.activeElement === focusable[0], 'son ögeden Tab pencerenin başına sarar');
@@ -271,52 +278,91 @@ test('Görev atama bildirimi kipli pencere açmaz ve görev açma yolunu korur',
 });
 
 test('Gövdeye taşınan pencere tema kapsamını ve kök değişkenlerini devralır', async (t) => {
-  // Tema sınıfı gövdede, tema değişkenleri kökte uygulanır (bkz. useApplyTweaks).
-  // Portal hedefi bu kapsamların İÇİNDE olmalıdır; `.app` gibi bir alt kabuğa
-  // bağlı seçici pencereyi biçimlendirmemelidir.
-  document.body.classList.add('theme-light');
-  t.after(() => document.body.classList.remove('theme-light'));
-  const { view, toggle } = mountCenter();
-  t.after(() => view.unmount());
+  // Tema, uygulamanın GERÇEK tema yolu (useApplyTweaks) ile uygulanır: sınıf
+  // gövdeye, vurgu değişkenleri köke, yazı ölçeği gövdenin `zoom` değerine.
+  // Portal hedefi bu kapsamların İÇİNDE olmalıdır.
+  function ThemedCenter({ theme }) {
+    useApplyTweaks({ theme, accent: '#10b981', density: 'regular', fontScale: 'large' });
+    return React.createElement(
+      'header',
+      { className: 'topbar' },
+      React.createElement('div', { className: 'topbar-actions' }, React.createElement(ScheduleRequestCenter, { onNavigate: () => {} }))
+    );
+  }
+  const { state } = notificationState();
+  const view = mountDom(ThemedCenter, { theme: 'light' }, state);
+  t.after(() => {
+    view.unmount();
+    document.body.classList.remove('theme-light', 'theme-dark');
+    document.body.style.removeProperty('zoom');
+    for (const name of ['--accent', '--accent-strong', '--accent-soft', '--accent-fg', '--density']) document.documentElement.style.removeProperty(name);
+  });
 
-  await openNotification(toggle, /Kararınız bekleniyor.*Mehmet Kaya/);
+  await openNotification(view.host.querySelector('.schedule-request-toggle'), /Kararınız bekleniyor.*Mehmet Kaya/);
   const layer = document.querySelector('.schedule-modal-layer');
-  assert.ok(layer.closest('.theme-light') === document.body, 'pencere gövdedeki tema kapsamındadır');
+  assert.ok(layer.closest('.theme-light') === document.body, 'pencere uygulanan açık tema kapsamındadır');
+  assert.equal(document.documentElement.style.getPropertyValue('--accent'), '#10b981', 'vurgu değişkeni köktedir; pencere de devralır');
+  assert.notEqual(document.body.style.zoom, '', 'yazı ölçeği gövdededir; gövdedeki pencere de ölçeklenir');
 
-  const tweaks = read('src/hooks/useApplyTweaks.js');
-  assert.match(tweaks, /body\.classList\.toggle\('theme-light'/, 'tema sınıfı gövdeye uygulanır');
-  assert.match(tweaks, /const root = document\.documentElement;\s*root\.style\.setProperty\('--accent'/, 'vurgu değişkenleri köke uygulanır');
-  assert.match(tweaks, /document\.body\.style\.zoom = zoom/, 'yazı ölçeği gövdeye uygulanır; portal da ölçeklenir');
+  // Tema pencere açıkken değişirse gövdedeki pencere yeni temayı alır.
+  view.render({ theme: 'dark' });
+  assert.ok(layer.isConnected, 'tema değişimi pencereyi sökmez');
+  assert.ok(layer.closest('.theme-dark') === document.body && !document.body.classList.contains('theme-light'), 'pencere koyu tema kapsamına geçer');
 
   // Pencere biçimleri yalnızca kendi sınıflarına bağlıdır; kabuk veya üst çubuk
-  // soyundan seçici yoktur, taşıma görünümü değiştirmez.
+  // soyundan seçici (boşluklu ya da `>`/`+`/`~` bitişik birleştiricili) yoktur.
   const selectors = [];
   for (const path of ['src/app/globals.css', 'src/app/styles/shell.css', 'src/app/styles/features.css']) {
     postcss.parse(read(path)).walkRules((rule) => selectors.push(...rule.selectors));
   }
-  const scoped = selectors.filter((selector) => /\.(?:topbar|app|main|schedule-request-center)\b[^,]*\s+[^,]*\.(?:schedule-modal|coordination-modal)/.test(selector));
+  const scoped = selectors.filter((selector) => /\.(?:topbar|app|main|content|schedule-request-center)\b.*\.(?:schedule-modal|coordination-modal)/.test(selector));
   assert.deepEqual(scoped, [], 'kipli pencere kabuk kapsamına bağlı biçim kullanmaz');
 });
 
 /* ── Katman sözleşmesi ──────────────────────────────────────── */
 
-/** Koşulsuz kurallardan bir seçicinin son bildirimlerini birleştirir. */
+const insideAtRule = (node) => {
+  for (let parent = node.parent; parent; parent = parent.parent) if (parent.type === 'atrule') return true;
+  return false;
+};
+
+/**
+ * Koşulsuz kurallardan bir seçicinin son bildirimlerini birleştirir. Yalnızca
+ * kuralın KENDİ bildirimleri alınır; iç içe bir alt kuraldaki değer seçicinin
+ * kendisine aitmiş gibi sayılmaz.
+ */
 function declarations(source, selector) {
   const merged = {};
   postcss.parse(source).walkRules((rule) => {
-    if (rule.parent?.type === 'atrule' || !rule.selectors.includes(selector)) return;
-    rule.walkDecls((decl) => { merged[decl.prop] = decl.value; });
+    if (insideAtRule(rule) || !rule.selectors.includes(selector)) return;
+    rule.each((node) => { if (node.type === 'decl') merged[node.prop] = node.value; });
   });
   return merged;
 }
 
+/**
+ * Bir özelliğin seçici için yazılmış BÜTÜN değerleri: koşulsuz kural ve her
+ * `@media`/`@supports` koşulu. Görünüm alanına bağlı bir geçersiz kılma da
+ * katman sırasını bozamaz.
+ */
+function propertyValues(source, selector, prop) {
+  const values = [];
+  postcss.parse(source).walkRules((rule) => {
+    if (!rule.selectors.includes(selector)) return;
+    rule.each((node) => { if (node.type === 'decl' && node.prop === prop) values.push(node.value); });
+  });
+  return values;
+}
+
 /** `var(--z-*)` ve `calc(var(--z-*) + n)` katman değerlerini sayıya çevirir. */
 function layerValue(value, layers) {
+  let number;
   const plain = value.match(/^var\((--z-[\w-]+)\)$/);
-  if (plain) return layers[plain[1]];
   const offset = value.match(/^calc\(var\((--z-[\w-]+)\)\s*([+-])\s*(\d+)\)$/);
-  if (offset) return layers[offset[1]] + (offset[2] === '+' ? 1 : -1) * Number(offset[3]);
-  const number = Number(value);
+  if (plain) number = layers[plain[1]];
+  else if (offset) number = layers[offset[1]] + (offset[2] === '+' ? 1 : -1) * Number(offset[3]);
+  else number = Number(value);
+  // Tanımsız bir `--z-*` belirteci de (undefined/NaN) burada yakalanır.
   assert.ok(Number.isFinite(number), `çözülemeyen katman değeri: ${value}`);
   return number;
 }
@@ -334,24 +380,44 @@ test('Yapışkan şeritler ve kabuk katmanları kipli pencerenin arkasında kal�
   assert.equal(modalLayer.position, 'fixed', 'pencere katmanı görünüm alanına sabitlenir');
   assert.equal(modalLayer.inset, '0', 'arka perde bütün görünüm alanını kaplar');
   assert.equal(modalLayer['z-index'], 'var(--z-modal)', 'merkezi katman sözleşmesi korunur; keyfi büyük değer yoktur');
-  const modal = layerValue(modalLayer['z-index'], layers);
+  const modalValues = propertyValues(features, '.schedule-modal-layer', 'z-index').map((value) => layerValue(value, layers));
+  const modal = Math.min(...modalValues);
+  assert.equal(modal, layers['--z-modal'], 'hiçbir görünüm alanı koşulu pencere katmanını düşürmez');
 
   const backdrop = declarations(features, '.schedule-modal-backdrop');
+  assert.equal(backdrop.position, 'absolute', 'perde katmana göre konumlanır; konumsuz `inset` etkisiz kalırdı');
   assert.equal(backdrop.inset, '0');
-  assert.match(backdrop['backdrop-filter'], /^blur\(/, 'arka plan bulanıklaştırılır');
+  const blur = backdrop['backdrop-filter']?.match(/^blur\(\s*([\d.]+)px\s*\)$/);
+  assert.ok(blur && Number(blur[1]) > 0, `arka plan gerçekten bulanıklaştırılır (${backdrop['backdrop-filter']})`);
 
-  // Özet ve Raporlar tarih/bölüm şeridi, Proje Yapısı ve Rapor sekmeleri.
+  // Özet ve Raporlar tarih/bölüm şeridi, Proje Yapısı ve Rapor sekmeleri; her
+  // koşullu (`@media`) değer de dahil edilir.
   const background = {
-    'yapışkan çalışma alanı şeridi': declarations(features, '.workspace-sticky')['z-index'],
-    'yapışkan rapor sekmeleri': declarations(features, '.reports-module > .request-tabs.workspace-sticky')['z-index'],
-    'kenar çubuğu': declarations(shell, '.sidebar')['z-index'],
-    'üst çubuk': declarations(shell, '.topbar')['z-index'],
-    'bildirim paneli açıkken üst çubuk': declarations(shell, '.topbar:has(.schedule-request-popover)')['z-index'],
-    'görev çekmecesi': declarations(features, '.drawer-backdrop')['z-index']
+    'yapışkan çalışma alanı şeridi': [features, '.workspace-sticky'],
+    'yapışkan rapor sekmeleri': [features, '.reports-module > .request-tabs.workspace-sticky'],
+    'kenar çubuğu': [shell, '.sidebar'],
+    'üst çubuk': [shell, '.topbar'],
+    'bildirim paneli açıkken üst çubuk': [shell, '.topbar:has(.schedule-request-popover)'],
+    'görev çekmecesi': [features, '.drawer-backdrop']
   };
-  for (const [label, value] of Object.entries(background)) {
-    assert.ok(value, `${label} katmanı tanımlıdır`);
-    assert.ok(layerValue(value, layers) < modal, `${label} (${value}) kipli pencerenin altındadır`);
+  for (const [label, [source, selector]] of Object.entries(background)) {
+    const values = propertyValues(source, selector, 'z-index');
+    assert.ok(values.length, `${label} katmanı tanımlıdır`);
+    for (const value of values) assert.ok(layerValue(value, layers) < modal, `${label} (${value}) kipli pencerenin altındadır`);
+  }
+
+  // Şeritlerin ATA öğeleri (`.app`, `.main`, `.content`) pencerenin üstünde bir
+  // yığılma bağlamı kurarsa şeritler yerel katmanlarından bağımsız olarak perdenin
+  // üstüne boyanır. Bu atalara yazılan her katman pencerenin altında kalmalıdır.
+  const ancestorTarget = /(?:^|[\s>+~])\.(?:app|main|content)(?=$|[.:[])[^\s>+~]*$/;
+  for (const [file, source] of [['globals.css', globals], ['shell.css', shell], ['features.css', features]]) {
+    postcss.parse(source).walkRules((rule) => {
+      if (!rule.selectors.some((selector) => ancestorTarget.test(selector))) return;
+      rule.each((node) => {
+        if (node.type !== 'decl' || node.prop !== 'z-index' || node.value === 'auto') return;
+        assert.ok(layerValue(node.value, layers) < modal, `${file} · ${rule.selector} (${node.value}) şerit atası pencerenin altındadır`);
+      });
+    });
   }
 
   // Üst çubuk kendi yığılma bağlamını kurar ve katmanı rapor sekmelerinin
@@ -359,11 +425,119 @@ test('Yapışkan şeritler ve kabuk katmanları kipli pencerenin arkasında kal�
   // üst çubuktan çıkarılması bu yüzden zorunludur.
   const topbar = declarations(shell, '.topbar');
   assert.equal(topbar.isolation, 'isolate');
-  assert.ok(layerValue(topbar['z-index'], layers) < layerValue(background['yapışkan rapor sekmeleri'], layers));
+  assert.ok(layerValue(topbar['z-index'], layers) < layerValue(declarations(features, '.reports-module > .request-tabs.workspace-sticky')['z-index'], layers));
   assert.match(read('src/features/schedule-change/ScheduleRequestCenter.jsx'), /createPortal\(children, document\.body\)/);
 
   // Şeritlerin yapışkan davranışı korunur; hata katman düşürülerek gizlenmez.
   assert.equal(declarations(features, '.workspace-sticky').position, 'sticky');
   assert.equal(declarations(features, '.workspace-sticky')['z-index'], 'var(--z-chrome)');
-  assert.equal(background['yapışkan rapor sekmeleri'], 'calc(var(--z-chrome) + 1)');
+  assert.equal(declarations(features, '.reports-module > .request-tabs.workspace-sticky')['z-index'], 'calc(var(--z-chrome) + 1)');
+});
+
+/* ── Tuzaklar arası klavye ve odak sahipliği ────────────────── */
+
+/** Alt katmanda (çekmece/Bilgin sayfası) sonradan etkinleşebilen kipli yüzey. */
+function LowerSurface({ enabled, onClose }) {
+  const containerRef = useRef(null);
+  const inputRef = useRef(null);
+  useModalFocusTrap({ containerRef, initialFocusRef: inputRef, onClose, enabled, priority: 310 });
+  return React.createElement(
+    'aside',
+    { ref: containerRef, className: 'lower-surface', role: 'dialog', 'aria-modal': enabled ? 'true' : undefined },
+    React.createElement('textarea', { ref: inputRef, 'aria-label': 'Yazma alanı' }),
+    React.createElement('button', { type: 'button' }, 'Gönder')
+  );
+}
+
+function mountLowerSurface(t, onClose) {
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  const render = (enabled) => act(() => root.render(React.createElement(LowerSurface, { enabled, onClose })));
+  t.after(() => { act(() => root.unmount()); host.remove(); });
+  return { host, render };
+}
+
+test('Alt katmandaki tuzak sonradan etkinleşse de odak ve Tab/Esc sahipliği üstteki bildirim penceresinde kalır', async (t) => {
+  // Bilgin masaüstünde açıkken bildirim penceresi açılır, sonra görünüm daralır
+  // ve panel çekmece katmanında kipli sayfaya dönüşür. Panel görsel olarak
+  // pencerenin ALTINDADIR; odağı ve klavyeyi de ondan alamaz.
+  const { view, toggle } = mountCenter();
+  t.after(() => view.unmount());
+  const closes = [];
+  const lower = mountLowerSurface(t, () => closes.push('alt yüzey'));
+  lower.render(false);
+
+  await openNotification(toggle, /Kararınız bekleniyor.*Mehmet Kaya/);
+  const dialog = document.querySelector('.schedule-modal-layer [role="dialog"]');
+  lower.render(true);
+  assert.ok(dialog.contains(document.activeElement), 'etkinleşen alt katman odağı pencereden çalmaz');
+
+  const focusable = [...dialog.querySelectorAll('button:not([disabled]), textarea:not([disabled])')];
+  act(() => focusable.at(-1).focus());
+  key('Tab');
+  assert.ok(document.activeElement === focusable[0], 'Tab üstteki pencerede sarar, arkadaki yüzeye geçmez');
+
+  key('Escape');
+  assert.equal(modalLayers().length, 0, 'Esc görünür bildirim penceresini kapatır');
+  assert.deepEqual(closes, [], 'arkadaki yüzey Esc ile kapanmaz');
+
+  await nextFrame();
+  assert.ok(document.activeElement === lower.host.querySelector('textarea'), 'pencere kapanınca odak zile değil açık kalan yüzeye döner');
+  key('Escape');
+  assert.deepEqual(closes, ['alt yüzey'], 'Esc sahipliği alt yüzeye geri döner');
+});
+
+test('Görevi aç ile açılan görev çekmecesi odağı alır; kapanan pencere odağı zile geri çekmez', async (t) => {
+  // "Görevi aç" görevi (çekmece) açar, ardından pencereyi kapatır. Çekmece
+  // pencere hâlâ açıkken bağlanır; kapanan pencerenin odak geri vermesi odağı
+  // çekmecenin arkasındaki zile taşımamalıdır.
+  let lower = null;
+  const { view, toggle } = mountCenter({
+    actions: {
+      ...notificationState().state.actions,
+      openTask: async () => { lower.render(true); return { ok: true }; }
+    }
+  });
+  t.after(() => view.unmount());
+  lower = mountLowerSurface(t, () => {});
+  lower.render(false);
+
+  await openNotification(toggle, /Kararınız bekleniyor.*Mehmet Kaya/);
+  await act(async () => { click(button('Görevi aç', document.querySelector('.schedule-modal-layer'))); });
+  assert.equal(modalLayers().length, 0, 'görev açılınca pencere kapanır');
+  await nextFrame();
+  assert.ok(lower.host.contains(document.activeElement), 'odak açılan görev çekmecesindedir');
+  assert.ok(document.activeElement !== toggle, 'odak çekmecenin arkasındaki zile taşınmaz');
+});
+
+test('Odak alamayan açan atlanır; devre dışı zil yerine açık kalan yüzeye dönülür', async (t) => {
+  // Bildirim listesi pencere açıkken boşalırsa zil devre dışı kalır; devre dışı
+  // düğmeye `focus()` etkisizdir. Kök öge (`html`) de açan sayılmaz.
+  const bell = document.createElement('button');
+  bell.disabled = true;
+  document.body.append(bell);
+  t.after(() => { bell.remove(); document.documentElement.removeAttribute('tabindex'); });
+  const lower = mountLowerSurface(t, () => {});
+  lower.render(true);
+  document.documentElement.tabIndex = -1;
+  act(() => document.documentElement.focus());
+
+  function TrapProbe({ open }) {
+    const containerRef = useRef(null);
+    const restoreFocusRef = useRef(bell);
+    useModalFocusTrap({ containerRef, initialFocusRef: containerRef, restoreFocusRef, onClose: () => {}, enabled: open });
+    return open ? React.createElement('div', { ref: containerRef, tabIndex: -1, role: 'dialog', 'aria-modal': 'true' }) : null;
+  }
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  t.after(() => { act(() => root.unmount()); host.remove(); });
+  act(() => root.render(React.createElement(TrapProbe, { open: true })));
+  assert.equal(document.activeElement.getAttribute('role'), 'dialog', 'üstteki pencere odağı alır');
+
+  act(() => root.render(React.createElement(TrapProbe, { open: false })));
+  await nextFrame();
+  assert.ok(document.activeElement !== bell && document.activeElement !== document.documentElement, 'devre dışı zil ve kök öge hedef alınmaz');
+  assert.ok(document.activeElement === lower.host.querySelector('textarea'), 'odak açık kalan kipli yüzeye döner');
 });

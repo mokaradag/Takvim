@@ -283,9 +283,12 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   }), []);
 
   // Esc odak kipinden çıkar; aynı paneldeki geçerli odak ve yazma konumu korunur.
+  // Kipli panel çekmece katmanında (`--z-drawer`) çizilir; tuzak önceliği de bu
+  // katmandır. Böylece dar ekrana geçişte etkinleşen panel, üstte açık duran
+  // kipli pencerenin (ör. bildirim penceresi) odağını ve Tab/Esc sahipliğini almaz.
   const exitFocus = useCallback(() => setFocused?.(false), [setFocused]);
   useModalFocusTrap({ containerRef: panelRef, initialFocusRef: focusTargetRef, restoreFocusRef: launcherRef, restoreFocusEnabledRef,
-    onClose: focused ? exitFocus : close, enabled: open && modal });
+    onClose: focused ? exitFocus : close, enabled: open && modal, priority: 310 });
   useVisualViewportFit(panelRef, open && sheet);
 
   const composerAvailable = actual && state.status === 'ready' && !state.refreshing && !state.active.loading && state.readiness?.available
