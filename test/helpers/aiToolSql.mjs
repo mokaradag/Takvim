@@ -423,6 +423,52 @@ function taskFacts(db, params) {
       return true;
     });
     results.push([{ HasPostCutoffDeletion: hasPostCutoffDeletion ? 1 : 0 }]);
+    const factTaskProject = new Map(facts.map((row) => [upper(row.TaskId), upper(row.ProjectId)]));
+    const transitionsByTask = new Map();
+    for (const row of db.auditLog || []) {
+      if (row.EntityType !== 'TASK' || !['CREATE', 'UPDATE'].includes(row.ActionCode)) continue;
+      const occurredMs = new Date(row.OccurredAt).getTime();
+      if (!Number.isFinite(occurredMs) || occurredMs > cutOffMs) continue;
+      const taskId = isGuid(row.EntityId) ? upper(row.EntityId) : null;
+      if (!taskId || !factTaskProject.has(taskId)) continue;
+      const proj = projectRow(db, row.ProjectId);
+      if (!proj?.IsActive) continue;
+      const auditProjectId = upper(proj.ProjectId);
+      if (!scope.isAdmin && auditProjectId !== factTaskProject.get(taskId) && !fullOrRead.has(auditProjectId)) continue;
+      const parseObj = (raw) => {
+        if (!raw) return null;
+        try {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+        } catch {
+          return null;
+        }
+      };
+      const scalarStatus = (obj) => {
+        if (!obj) return null;
+        const raw = obj.Status !== undefined ? obj.Status : obj.status;
+        return (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') ? String(raw) : null;
+      };
+      const doneAliases = new Set(['done', 'completed', 'cancelled']);
+      const beforeStatus = scalarStatus(parseObj(row.BeforeJson));
+      const afterStatus = scalarStatus(parseObj(row.AfterJson));
+      const isCompletion = afterStatus != null && doneAliases.has(afterStatus)
+        && (row.ActionCode === 'CREATE' || (beforeStatus != null && !doneAliases.has(beforeStatus)));
+      const isReopen = row.ActionCode === 'UPDATE'
+        && beforeStatus != null && doneAliases.has(beforeStatus)
+        && afterStatus != null && !doneAliases.has(afterStatus);
+      if (!isCompletion && !isReopen) continue;
+      const entry = transitionsByTask.get(taskId) || { TaskId: taskId, LastCompletedAuditAt: null, LastReopenAt: null };
+      const occurredDate = new Date(occurredMs);
+      if (isCompletion && (!entry.LastCompletedAuditAt || occurredMs > entry.LastCompletedAuditAt.getTime())) {
+        entry.LastCompletedAuditAt = occurredDate;
+      }
+      if (isReopen && (!entry.LastReopenAt || occurredMs > entry.LastReopenAt.getTime())) {
+        entry.LastReopenAt = occurredDate;
+      }
+      transitionsByTask.set(taskId, entry);
+    }
+    results.push([...transitionsByTask.values()]);
   }
   return results;
 }

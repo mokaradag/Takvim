@@ -949,6 +949,13 @@ export async function buildExecutiveReportEvidence({
       }
     };
 
+    const hasCompletionAuditByTaskId = new Set();
+    for (const transition of taskFactsResult.taskAuditTransitions || []) {
+      if (!transition?.taskId) continue;
+      if (transition.lastCompletedAuditAt) hasCompletionAuditByTaskId.add(transition.taskId);
+      if (transition.lastReopenAt) recordReopenTimestamp(transition.taskId, transition.lastReopenAt);
+    }
+
     const registerRevalidationTask = (taskId, projectId) => {
       if (!taskId || !projectId) return;
       const existing = activityLiveTasksForRevalidation.get(taskId);
@@ -1088,13 +1095,12 @@ export async function buildExecutiveReportEvidence({
       ? 'partial'
       : 'complete';
 
-    // 7. Dönemde tamamlanan görev kimlikleri: dönemdeki gerçekleşen bitiş + denetim tamamlama geçişi.
-    // Tek bir tamamlama olayı geriye/ileriye dönük ActualFinish nedeniyle rapor ve karşılaştırma dönemlerinde çift sayılmaz.
+    // 7. Dönemde tamamlanan görev kimlikleri: denetim tamamlama geçişi varsa dönem ataması yalnızca denetim olayından gelir;
+    // denetim tamamlama kaydı olmayan görevlerde gerçekleşen bitiş yedek olarak kullanılır (karşılaştırma seçiminden bağımsız).
     const completedInPeriodIds = new Set();
     for (const task of visibleTasks) {
-      const hasComparisonOnlyAuditCompletion = auditCompletedInComparisonIds.has(task.id) && !auditCompletedInPeriodIds.has(task.id);
       const doneByActualFinish = !task._postCutoffModified
-        && !hasComparisonOnlyAuditCompletion
+        && !hasCompletionAuditByTaskId.has(task.id)
         && task.status === 'done'
         && Boolean(task.actualFinish)
         && task.actualFinish >= normalizedRequest.donem.baslangic
@@ -1280,9 +1286,8 @@ export async function buildExecutiveReportEvidence({
       const comp = normalizedRequest.karsilastirma_donemi;
       const comparisonCompletedIds = new Set();
       for (const task of visibleTasks) {
-        const hasReportOnlyAuditCompletion = auditCompletedInPeriodIds.has(task.id) && !auditCompletedInComparisonIds.has(task.id);
         const doneByActualFinish = !task._postCutoffModified
-          && !hasReportOnlyAuditCompletion
+          && !hasCompletionAuditByTaskId.has(task.id)
           && task.status === 'done'
           && Boolean(task.actualFinish)
           && task.actualFinish >= comp.baslangic

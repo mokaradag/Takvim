@@ -117,13 +117,20 @@ export async function readTaskFacts(executor, scope, {
   const [factRows = [], projectRows = [], assigneeRows = []] = sets;
   const rosterRowsRead = withRoster ? (sets[3] || []) : [];
   const postCutoffRows = normalizedCutOff ? (sets[withRoster ? 4 : 3] || []) : [];
+  const auditTransitionRows = normalizedCutOff ? (sets[withRoster ? 5 : 4] || []) : [];
   const hasPostCutoffDeletion = Boolean(postCutoffRows[0]?.HasPostCutoffDeletion);
+  const taskAuditTransitions = auditTransitionRows.map((row) => ({
+    taskId: canonicalActualId(row.TaskId),
+    lastCompletedAuditAt: row.LastCompletedAuditAt ? new Date(row.LastCompletedAuditAt).toISOString() : null,
+    lastReopenAt: row.LastReopenAt ? new Date(row.LastReopenAt).toISOString() : null
+  })).filter((row) => Boolean(row.taskId));
   const { rows, truncated } = capped(factRows, maxRows);
   const roster = withRoster ? capped(rosterRowsRead, rosterRows) : null;
   return {
     facts: rows.map(factFromRow),
     truncated,
     hasPostCutoffDeletion,
+    taskAuditTransitions,
     projects: projectRows,
     assignees: assigneesByTask(assigneeRows),
     ...(roster ? { roster: {

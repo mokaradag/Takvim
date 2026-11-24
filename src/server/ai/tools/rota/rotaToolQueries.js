@@ -21,6 +21,10 @@ const TRIM_SPAN_EXPR = (expr, startExpr) => `SUBSTRING(${expr}, ${startExpr}, (L
 const IS_JSON_OBJECT_SQL = (col) => `(${col} IS NOT NULL AND ISJSON(${col}) = 1 AND SUBSTRING(${col}, ${TRIM_START_EXPR(col)}, 1) = N'{')`;
 
 const SAFE_JSON_STATUS_SQL = (col) => `CASE WHEN ${IS_JSON_OBJECT_SQL(col)} THEN COALESCE(JSON_VALUE(${col}, '$.Status'), JSON_VALUE(${col}, '$.status')) END`;
+const COMPLETED_AUDIT_STATUSES_SQL = Object.entries(PERSISTED_TASK_STATUSES)
+  .filter(([, status]) => status === 'done')
+  .map(([alias]) => `'${alias}'`)
+  .join(', ');
 
 /**
  * Rota AI alan araçlarının SABİT SQL metinleri.
@@ -541,6 +545,51 @@ ${TEAM_ROSTER}
           ELSE 0
         END = 1
     ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffDeletion;
+
+    -- Anlık görüntü kesitine kadar canlı görevlerin yetkili tamamlama ve yeniden açılma denetim zamanları.
+    SELECT
+      f.TaskId,
+      MAX(CASE WHEN statusCheck.IsCompletion = 1 THEN a.OccurredAt END) AS LastCompletedAuditAt,
+      MAX(CASE WHEN statusCheck.IsReopen = 1 THEN a.OccurredAt END) AS LastReopenAt
+    FROM #AiFacts f
+    JOIN dbo.MR_AuditLog a
+      ON a.EntityType = 'TASK'
+     AND a.ActionCode IN ('CREATE', 'UPDATE')
+     AND a.OccurredAt <= @cutOffUtc
+     AND TRY_CONVERT(uniqueidentifier, a.EntityId) = f.TaskId
+    JOIN dbo.MR_Projects ap ON ap.ProjectId = a.ProjectId AND ap.IsActive = 1
+    CROSS APPLY (
+      SELECT
+        ${SAFE_JSON_STATUS_SQL('a.BeforeJson')} AS BeforeStatus,
+        ${SAFE_JSON_STATUS_SQL('a.AfterJson')} AS AfterStatus
+    ) st
+    CROSS APPLY (
+      SELECT
+        CASE
+          WHEN st.AfterStatus IS NOT NULL
+            AND st.AfterStatus COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
+            AND (
+              a.ActionCode = 'CREATE'
+              OR (st.BeforeStatus IS NOT NULL AND st.BeforeStatus COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL}))
+            )
+          THEN 1 ELSE 0
+        END AS IsCompletion,
+        CASE
+          WHEN a.ActionCode = 'UPDATE'
+            AND st.BeforeStatus IS NOT NULL
+            AND st.BeforeStatus COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
+            AND st.AfterStatus IS NOT NULL
+            AND st.AfterStatus COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL})
+          THEN 1 ELSE 0
+        END AS IsReopen
+    ) statusCheck
+    WHERE (statusCheck.IsCompletion = 1 OR statusCheck.IsReopen = 1)
+      AND (
+        @isAdmin = 1
+        OR a.ProjectId = f.ProjectId
+        OR EXISTS (SELECT 1 FROM #AiPostCutoffGrants pg WHERE pg.ProjectId = a.ProjectId)
+      )
+    GROUP BY f.TaskId;
     DROP TABLE #AiPostCutoffGrants;
   END
   DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiAssigneeFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects, #AiRosterStart, #AiRosterEnd;`;
@@ -1066,11 +1115,6 @@ ${visibleTasks()}
   WHERE @cutOffUtc IS NOT NULL AND t.UpdatedAt IS NOT NULL AND t.UpdatedAt > @cutOffUtc
   ORDER BY visible.TaskId;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
-
-const COMPLETED_AUDIT_STATUSES_SQL = Object.entries(PERSISTED_TASK_STATUSES)
-  .filter(([, status]) => status === 'done')
-  .map(([alias]) => `'${alias}'`)
-  .join(', ');
 
 /**
  * Aşama 4I-A — Yönetici raporu görev açıklaması denetim tarihçesi (yalnızca açık `notlar: dahil` rızasıyla çağrılır).

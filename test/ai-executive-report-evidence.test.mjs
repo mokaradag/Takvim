@@ -3475,3 +3475,106 @@ test('not yorumlama ve sözleşme sıkılaştırması: sorular, çok sözcüklü
   );
 });
 
+test('karşılaştırma seçimi ana dönem tamamlanan sayısını değiştirmez ve dönem sonrası yeniden açılma yanlış not çelişkisi üretmez', async () => {
+  // 1. Denetim tamamlama tarihi (28 Ekim) ile ActualFinish (4 Kasım) farklı dönemlerdeyse
+  //    karsilastirma: yok ile onceki_donem ana dönem (2–8 Kasım) toplamında aynı sonucu üretir.
+  const crossPeriodTaskId = '61000000-0000-4000-8000-000000009921';
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: crossPeriodTaskId, ProjectId: P.KUZEY, Title: 'Farklı dönemde denetim tamamlamalı görev',
+        Status: 'done', Priority: 'high', TargetFinish: '2026-11-05', ActualFinish: '2026-11-04',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-15T08:00:00.000Z', UpdatedAt: '2026-11-04T10:00:00.000Z'
+      }
+    ],
+    auditLog: [
+      {
+        AuditId: 8301, OccurredAt: '2026-10-28T12:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: crossPeriodTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress' }),
+        AfterJson: JSON.stringify({ Status: 'done' })
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const withoutComp = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        karsilastirma: 'yok',
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    const withComp = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        karsilastirma: 'onceki_donem',
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    const mainWithoutComp = withoutComp.evidencePackage.kanitlar.find(
+      (k) => k.tur === 'olcu' && k.olcu === 'tamamlanan' && k.donem?.baslangic === '2026-11-02'
+    );
+    const mainWithComp = withComp.evidencePackage.kanitlar.find(
+      (k) => k.tur === 'olcu' && k.olcu === 'tamamlanan' && k.donem?.baslangic === '2026-11-02'
+    );
+    const prevWithComp = withComp.evidencePackage.kanitlar.find(
+      (k) => k.tur === 'olcu' && k.olcu === 'tamamlanan' && k.donem?.baslangic === '2026-10-26'
+    );
+    assert.equal(mainWithoutComp?.deger, 0, 'denetim tamamlama tarihi 28 Ekim olan görev karşılaştırma yokken 2–8 Kasım sayımına girmemelidir');
+    assert.equal(mainWithComp?.deger, 0, 'karşılaştırma açıldığında da ana dönem tamamlanan sayısı değişmemelidir');
+    assert.equal(prevWithComp?.deger, 1, 'görev yalnızca denetim tamamlama dönemine (26 Ekim–1 Kasım) sayılmalıdır');
+  });
+
+  // 2. 5 Kasım'da "Tamamlandı." notuyla tamamlanıp rapor dönemi sonrasında ama veri_ani öncesinde (9 Kasım)
+  //    notu değiştirilmeden yeniden açılan görev yanlış durum_not_uyusmazligi üretmez.
+  const postPeriodReopenTaskId = '61000000-0000-4000-8000-000000009922';
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: postPeriodReopenTaskId, ProjectId: P.KUZEY, Title: 'Dönem sonrası yeniden açılan görev',
+        Status: 'in-progress', Priority: 'high', TargetFinish: '2026-11-20',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-20T08:00:00.000Z', UpdatedAt: '2026-11-09T04:30:00.000Z',
+        Description: 'Tamamlandı.'
+      }
+    ],
+    auditLog: [
+      {
+        AuditId: 8311, OccurredAt: '2026-11-05T12:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: postPeriodReopenTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress', Description: 'Çalışma sürüyor.' }),
+        AfterJson: JSON.stringify({ Status: 'done', Description: 'Tamamlandı.' })
+      },
+      {
+        AuditId: 8312, OccurredAt: '2026-11-09T04:30:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: postPeriodReopenTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'done', Description: 'Tamamlandı.' }),
+        AfterJson: JSON.stringify({ Status: 'in-progress', Description: 'Tamamlandı.' })
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        notlar: 'dahil'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    assert.equal(
+      evidencePackage.celiskiler.some((c) => c.tur === 'durum_not_uyusmazligi'),
+      false,
+      'dönem sonrası ama veri_ani öncesi kaydedilen yeniden açılma eski tamamlandı notunu çelişki saymamalıdır'
+    );
+  });
+});
+
+
