@@ -33,6 +33,7 @@ Sonuçla birlikte tarayıcıyı, işletim sistemini, derleme commit'ini ve gör�
 - **Marka amblemi** tercihi hem kenar hem üst çubuk amblemini gizler.
 - Dekoratif amblem işaretçi olaylarını engellemez.
 - `Dışa aktar`, üst çubuğun altında kesilmeden açılır ve klavyeyle erişilebilir kalır.
+- Zilden açılan tarih talebi ve atama koordinasyonu pencerelerinde Özet tarih/bölüm şeridi, Proje Yapısı sekmeleri, Raporlar sekmeleri ve tarih şeridi ile kenar çubuğu arka perdenin altında tekdüze bulanıklaşır; pencere başlığı ve kapatma düğmesi şeritlerin altında kalmaz. Pencere kapanınca odak zile döner ve şeritler yapışkan kalır.
 - Tema, bölümlü Temel Kip/Kapsamlı Kip seçici ve çıkış kenar çubuğu altlığındadır; üst çubukta yinelenmez.
 - Klavyeyle erişilen denetimlerde odak göstergeleri görünürdür.
 

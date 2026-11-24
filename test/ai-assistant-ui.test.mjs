@@ -1609,7 +1609,6 @@ test('hazırlık veya görünüm değişimi odak isteği olmadan odağı çalmaz
   panel.unmount();
 });
 
-
 test('yanıt kopyası görünen metindir; geçerli URL sonları korunur', async () => {
   const { assistantMarkdownText } = await import('../src/features/ai/assistant/assistantMarkdown.js');
   assert.equal(assistantMarkdownText('**Önemli** [doküman](https://example.com)'), 'Önemli doküman');
@@ -2669,29 +2668,79 @@ test('başka sekmenin anahtar bildirimi açık panelin hazırlığını yeniler 
   assert.equal(channels[0].closed, true);
 });
 
-test('kayıt yapan kipli pencerenin Escape olayı masaüstü yardımcısını kapatmaz', async (t) => {
-  const { useModalFocusTrap, hasBlockingModal } = await import('../src/hooks/useModalFocusTrap.js');
-  const previous = { window: globalThis.window, document: globalThis.document, observer: globalThis.MutationObserver };
+function stubAssistantKeyboardEvents(t, narrow = false) {
   const events = new EventTarget();
   const docEvents = new EventTarget();
-  globalThis.window = events;
-  globalThis.document = { body: { classList: { contains: () => false } }, activeElement: null,
-    addEventListener: docEvents.addEventListener.bind(docEvents), removeEventListener: docEvents.removeEventListener.bind(docEvents) };
-  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  if (narrow) events.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+  const stubs = {
+    window: events,
+    document: {
+      body: { classList: { contains: () => false } },
+      activeElement: null,
+      addEventListener: docEvents.addEventListener.bind(docEvents),
+      removeEventListener: docEvents.removeEventListener.bind(docEvents)
+    },
+    MutationObserver: class { observe() {} disconnect() {} }
+  };
+  for (const [name, stub] of Object.entries(stubs)) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, name);
+    t.after(() => {
+      if (original) Object.defineProperty(globalThis, name, original);
+      else delete globalThis[name];
+    });
+    globalThis[name] = stub;
+  }
+  return { events, docEvents };
+}
+
+test('kayıt yapan kipli pencerenin Escape olayı masaüstü yardımcısını kapatmaz', async (t) => {
+  const { useModalFocusTrap, hasBlockingModal } = await import('../src/hooks/useModalFocusTrap.js');
+  const { events, docEvents } = stubAssistantKeyboardEvents(t);
   const { controller } = await readyController();
   const closes = [];
-  const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() { closes.push('assistant'); } } });
-  const trap = mountComponent((props) => { useModalFocusTrap(props); return null; }, {
-    containerRef: { current: null }, initialFocusRef: { current: null }, blocked: true, priority: 310, onClose() { closes.push('modal'); }
-  });
+  let panel;
+  let trap;
   try {
+    panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() { closes.push('assistant'); } } });
+    trap = mountComponent((props) => { useModalFocusTrap(props); return null; }, {
+      containerRef: { current: null }, initialFocusRef: { current: null }, blocked: true, priority: 310, onClose() { closes.push('modal'); }
+    });
     assert.equal(hasBlockingModal(), true);
     const event = Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' });
     docEvents.dispatchEvent(event); events.dispatchEvent(event);
     assert.deepEqual(closes, []);
   } finally {
-    trap.unmount(); panel.unmount(); controller.dispose();
-    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer;
+    trap?.unmount();
+    panel?.unmount();
+    controller.dispose();
+  }
+});
+
+test('dar ekranda kipli sayfaya dönüşen Bilgin paneli üstte açık kipli pencerenin Esc sahipliğini almaz', async (t) => {
+  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+  // Dar görünüm: panel çekmece katmanında kipli sayfa olarak çizilir ve odak tuzağı etkinleşir.
+  const { docEvents } = stubAssistantKeyboardEvents(t, true);
+  const { controller } = await readyController();
+  const closes = [];
+  const escape = () => Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' });
+  let modal;
+  let panel;
+  try {
+    // Bildirim penceresi panelden önce açıktır; panel sonradan etkinleşir.
+    modal = mountComponent((props) => { useModalFocusTrap(props); return null; }, {
+      containerRef: { current: null }, initialFocusRef: { current: null }, onClose() { closes.push('modal'); }
+    });
+    panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() { closes.push('assistant'); } } });
+    docEvents.dispatchEvent(escape());
+    assert.deepEqual(closes, ['modal'], 'Esc görünür kipli pencereyi kapatır, arkadaki Bilgin sayfasını değil');
+    modal.unmount();
+    modal = null;
+    docEvents.dispatchEvent(escape());
+    assert.deepEqual(closes, ['modal', 'assistant'], 'pencere kapanınca Esc sahipliği Bilgin sayfasına döner');
+  } finally {
+    panel?.unmount();
+    modal?.unmount();
+    controller.dispose();
   }
 });
 

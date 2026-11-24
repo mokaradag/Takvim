@@ -1785,7 +1785,7 @@ temeli gevşetmeden eklemelidir.
 - Tur isteği `expectedSequence` alanıyla son görülen ileti sırasını bildirir. Sunucu yeni turu eklemeden önce konuşma kilidi altında bu değeri denetler; bayat görünüm `CONVERSATION_STALE` ile reddedilir. Arayüz taslağı korur ve konuşmayı yenileme eylemi sunar. Eski istemciler için alan isteğe bağlıdır; kimlik ve bağlam yine sunucudan gelir.
 - Gecikmiş yazım yarışında aynı kullanıcı turuna önceden kaydedilmiş yanıt başarı olarak döner. `done.reconciled=true` yalnızca bu durumda kanonik `assistantMessage.content` alanını taşır; istemci uzunluk ve tur eşleşmesini doğrulayarak geçici akış metnini kayıtlı yanıtla değiştirir.
 - Geçmiş listesi, tarama imlecinin geçtiği satırları yalnızca baş sayfadan düştükleri için silmez. Sonraki sayfada değişmez oluşturma anahtarının üst aralığı da taranır; başka sekmede eklenen kayıtlar baş sayfadan düşseler bile bulunur.
-- Kipli proje, personel ve takvim günü pencereleri ortak odak tuzağına katılır. Komut paleti daha yüksek veya kayıt yapan kipli pencere altında açılmaz; görev panelinden yardımcıya geçiş panel kapandıktan sonra yapılır.
+- Kipli proje, personel ve takvim günü pencereleri ortak odak tuzağına katılır. Komut paleti; kipli pencereler, kipli Bilgin paneli (dar ekran sayfası ve masaüstü odak görünümü; görsel katmanı paletin altında olsa da), bildirim paneli, Sistem Yönetimi ayrıntı çekmecesi ya da kayıt yapan bir pencere açıkken açılmaz (`blocksCommandPalette`); görev çekmecesi engellemez; görev panelinden yardımcıya geçiş panel kapandıktan sonra yapılır.
 - Kaydedilmemiş taslaklar konuşma geçişinde korunur. Anahtar değişikliği diğer sekmelere yalnızca gizli veri içermeyen bir değişim işaretiyle bildirilir.
 
 ---
