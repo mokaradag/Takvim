@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -11,6 +12,11 @@ const { ScheduleRequestCenter } = await import('../src/features/schedule-change/
 const { hasBlockingModal, useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
 const { DetailDrawer } = await import('../src/features/system-admin/components/DetailDrawer.jsx');
 const { useApplyTweaks } = await import('../src/hooks/useApplyTweaks.js');
+const { RotaAssistantPanel } = await import('../src/features/ai/assistant/RotaAssistant.jsx');
+const { createAssistantController } = await import('../src/features/ai/assistant/assistantController.js');
+const { ASSISTANT_SHEET_QUERY } = await import('../src/features/ai/assistant/assistantInteraction.js');
+const { TWEAKS_STORAGE_KEY } = await import('../src/lib/tweaksBootstrap.js');
+const { SIDEBAR_PREFERENCE_KEY } = await import('../src/components/shell/sidebarPreference.js');
 const { createRoot } = await import('react-dom/client');
 
 /**
@@ -579,6 +585,129 @@ test('Her odak tuzağının önceliği yüzeyinin CSS katmanına eşittir', () =
 });
 
 /* ── Tuzaklar arası klavye ve odak sahipliği ────────────────── */
+
+test('Bildirim penceresi açıkken Bilgin yazma alanına bekleyen odak verilmez', async (t) => {
+  const { view, toggle } = mountCenter();
+  t.after(() => view.unmount());
+  const controller = createAssistantController({ api: {
+    loadAssistantReadinessRequest: async () => ({ ok: true, assistant: {
+      available: true, modes: [{ id: 'standard', label: 'Standart', available: true }]
+    } }),
+    listAssistantConversationsRequest: async () => ({ ok: true, conversations: [], nextCursor: null })
+  } });
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  t.after(() => { act(() => root.unmount()); host.remove(); controller.dispose(); });
+  await controller.activate();
+
+  const assistant = { controller, open: true, actual: true, launcherRef: { current: null }, close() {} };
+  const render = (focusRequest) => act(() => root.render(React.createElement(RotaAssistantPanel, {
+    assistant: { ...assistant, focusRequest }
+  })));
+  render(0);
+  const panel = host.querySelector('.rota-assistant');
+  const composer = panel?.querySelector('textarea');
+  assert.ok(composer?.isConnected, 'Bilgin yazma alanı DOM ağacına bağlıdır');
+
+  await openNotification(toggle, /Kararınız bekleniyor.*Mehmet Kaya/);
+  const dialog = document.querySelector('.schedule-modal-layer [role="dialog"]');
+  assert.ok(dialog?.isConnected && !panel.contains(dialog), 'bildirim penceresi ayrı bir DOM yüzeyidir');
+  assert.ok(dialog.contains(document.activeElement), 'ilk odak bildirim penceresindedir');
+
+  // Etkin öge gövdeye düşse de klavye sahipliği açık bildirim penceresindedir.
+  act(() => document.activeElement.blur());
+  assert.ok(document.activeElement === document.body, 'odak isteği öncesinde etkin öge gövdedir');
+  render(1);
+  assert.ok(document.activeElement === document.body, 'Bilgin açık pencerenin arkasında odak almaz');
+
+  key('Escape');
+  assert.equal(modalLayers().length, 0);
+  await nextFrame();
+  act(() => document.activeElement.blur());
+  render(2);
+  assert.ok(document.activeElement === composer, 'pencere kapandıktan sonraki istek yazma alanına odak verir');
+});
+
+test('AppShell komut paleti kısayolunu dar Bilgin sayfasında ve odak görünümünde engeller', async (t) => {
+  // Node, Next'in uzantısız paket yolunu ve biçim içe aktarmasını kendisi çözmez.
+  const hooks = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      return nextResolve(specifier === 'next/dynamic' ? 'next/dynamic.js' : specifier, context);
+    },
+    load(url, context, nextLoad) {
+      if (url === new URL('../src/app/styles/assistant.css', import.meta.url).href) {
+        return { format: 'module', source: '', shortCircuit: true };
+      }
+      return nextLoad(url, context);
+    }
+  });
+  let AppShell;
+  try {
+    ({ default: AppShell } = await import('../src/components/shell/AppShell.jsx'));
+    await import('../src/components/shell/AssistantShell.jsx');
+  } finally {
+    hooks.deregister();
+  }
+
+  const preferences = {
+    mergen_rota_mode_selected_v1: '1',
+    mp_seen_welcome_v2: '1',
+    [TWEAKS_STORAGE_KEY]: JSON.stringify({ landingView: 'yardim' }),
+    [SIDEBAR_PREFERENCE_KEY]: null
+  };
+  for (const [name, value] of Object.entries(preferences)) {
+    const previous = localStorage.getItem(name);
+    if (value === null) localStorage.removeItem(name);
+    else localStorage.setItem(name, value);
+    t.after(() => previous === null ? localStorage.removeItem(name) : localStorage.setItem(name, previous));
+  }
+  const media = Object.assign(new window.EventTarget(), { matches: false });
+  const originalMatchMedia = window.matchMedia;
+  window.matchMedia = (query) => query === ASSISTANT_SHEET_QUERY ? media : { matches: false };
+  t.after(() => { window.matchMedia = originalMatchMedia; });
+
+  const { state } = notificationState({ session: { dataMode: 'demo' } });
+  const workspace = { mode: 'portfolio', tasks: [], people: [], projects: [], wbs: [] };
+  const bodyClass = document.body.className;
+  const rootStyle = document.documentElement.style.cssText;
+  await act(async () => {
+    const view = mountDom(AppShell, {}, { ...state, tasks: workspace.tasks, people: workspace.people,
+      projects: workspace.projects, workspace });
+    t.after(() => {
+      view.unmount();
+      document.body.className = bodyClass;
+      document.documentElement.style.cssText = rootStyle;
+    });
+  });
+  click(button('Bilgin'));
+  const panel = document.querySelector('.rota-assistant');
+  const palette = () => document.querySelector('.cmd-panel[role="dialog"]');
+  const shortcut = () => key('k', document.activeElement, { ctrlKey: true });
+
+  assert.equal(panel.getAttribute('role'), 'complementary');
+  shortcut();
+  assert.ok(palette(), 'yerleşik masaüstü paneli açıkken kısayol paleti açar');
+  key('Escape');
+  assert.ok(!palette(), 'Esc açık paleti kapatır');
+
+  click(button('Odak görünümü', panel));
+  assert.equal(panel.getAttribute('aria-modal'), 'true');
+  shortcut();
+  assert.ok(!palette(), 'masaüstü odak görünümünde kısayol paleti açmaz');
+  key('Escape');
+
+  media.matches = true;
+  act(() => media.dispatchEvent(new Event('change')));
+  assert.ok(panel.matches('.is-sheet[aria-modal="true"]'));
+  shortcut();
+  assert.ok(!palette(), 'dar ekran sayfasında kısayol paleti açmaz');
+
+  click(button('Bilgin’i kapat', panel));
+  assert.ok(!panel.isConnected);
+  shortcut();
+  assert.ok(palette(), 'Bilgin kapandıktan sonra kısayol yeniden çalışır');
+});
 
 /** Alt katmanda (çekmece/Bilgin sayfası) sonradan etkinleşebilen kipli yüzey. */
 function LowerSurface({ enabled, onClose }) {

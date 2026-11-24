@@ -16,6 +16,7 @@ for (const key of [
   'MouseEvent',
   'KeyboardEvent',
   'Event',
+  'MutationObserver',
   'getComputedStyle',
   'localStorage'
 ]) {

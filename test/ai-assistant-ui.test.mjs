@@ -1609,35 +1609,6 @@ test('hazırlık veya görünüm değişimi odak isteği olmadan odağı çalmaz
   panel.unmount();
 });
 
-test('üstte açık kipli pencere varken Bilgin bekleyen odağı yazma alanına vermez', async (t) => {
-  // Etkin öge gövdede kalsa bile (ör. pencere içinde odaklanamayan bir alana
-  // tıklandı) klavyenin sahibi üstteki penceredir; yazma alanı onun arkasında
-  // odak almamalıdır. Pencere kapandıktan sonraki yeni istek odağı yine verir.
-  const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
-  const previous = globalThis.document;
-  const listeners = new Set();
-  globalThis.document = { activeElement: null, body: {}, addEventListener(type, fn) { listeners.add(fn); }, removeEventListener(type, fn) { listeners.delete(fn); } };
-  t.after(() => { globalThis.document = previous; });
-  const { controller } = await readyController();
-  const modal = mountComponent((props) => { useModalFocusTrap(props); return null; }, {
-    containerRef: { current: null }, initialFocusRef: { current: null }, onClose() {}
-  });
-  const assistant = { controller, open: true, actual: true, focusRequest: 0, launcherRef: { current: null }, close() {} };
-  const panel = mountComponent(RotaAssistantPanel, { assistant });
-  let focused = 0;
-  findElement(panel.output, (node) => node.type === AssistantComposer).props.inputRef.current = { focus() { focused += 1; } };
-  try {
-    panel.render({ assistant: { ...assistant, focusRequest: 1 } });
-    assert.equal(focused, 0, 'kipli pencere açıkken yazma alanı odak almaz');
-    modal.unmount();
-    panel.render({ assistant: { ...assistant, focusRequest: 2 } });
-    assert.equal(focused, 1, 'pencere kapandıktan sonraki istek odağı verir');
-  } finally {
-    panel.unmount();
-  }
-});
-
-
 test('yanıt kopyası görünen metindir; geçerli URL sonları korunur', async () => {
   const { assistantMarkdownText } = await import('../src/features/ai/assistant/assistantMarkdown.js');
   assert.equal(assistantMarkdownText('**Önemli** [doküman](https://example.com)'), 'Önemli doküman');
@@ -2749,29 +2720,6 @@ test('dar ekranda kipli sayfaya dönüşen Bilgin paneli üstte açık kipli pen
     assert.deepEqual(closes, ['modal', 'assistant'], 'pencere kapanınca Esc sahipliği Bilgin sayfasına döner');
   } finally {
     panel.unmount(); controller.dispose();
-    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer;
-  }
-});
-
-test('kipli Bilgin paneli dar sayfada ve odak görünümünde komut paleti kısayolunu engeller', async () => {
-  // Panel çekmece katmanında çizilse de (öncelik 310) kısayol engeli katmandan
-  // bağımsızdır: Ctrl+K ile açılan paletten seçilen görevin çekmecesi tam ekran
-  // panelin arkasında kalır ve klavyeyi gizli düzenleyici alırdı.
-  const { hasBlockingModal } = await import('../src/hooks/useModalFocusTrap.js');
-  const previous = { window: globalThis.window, document: globalThis.document, observer: globalThis.MutationObserver };
-  globalThis.document = { body: { classList: { contains: () => false } }, activeElement: null, addEventListener() {}, removeEventListener() {} };
-  globalThis.MutationObserver = class { observe() {} disconnect() {} };
-  const { controller } = await readyController();
-  try {
-    for (const [label, narrow, focused] of [['dar ekran sayfası', true, false], ['masaüstü odak görünümü', false, true], ['yerleşik masaüstü paneli', false, false]]) {
-      globalThis.window = Object.assign(new EventTarget(), { matchMedia: () => ({ matches: narrow, addEventListener() {}, removeEventListener() {} }) });
-      const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focused, setFocused() {}, focusRequest: 0, launcherRef: { current: null }, close() {} } });
-      assert.equal(hasBlockingModal(), narrow || focused, `${label}: komut paleti ${narrow || focused ? 'engellenir' : 'engellenmez'}`);
-      panel.unmount();
-    }
-    assert.equal(hasBlockingModal(), false, 'panel kapanınca engel kalkar');
-  } finally {
-    controller.dispose();
     globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer;
   }
 });
