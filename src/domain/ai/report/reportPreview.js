@@ -45,7 +45,7 @@ function sanitizePackageForPreview(pkg, { includeRawText = false } = {}) {
   return {
     ...sanitizedTop,
     kanitlar: rawEntries.map((entry) => {
-      if (!isPlainObject(entry)) return entry;
+      if (!isPlainObject(entry)) return redactProtectedKeysDeep(entry);
       if (entry.tur === 'not') {
         const cleaned = redactProtectedKeysDeep(entry);
         delete cleaned.korunan_metin_gizlendi;

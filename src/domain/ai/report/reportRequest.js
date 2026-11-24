@@ -110,9 +110,9 @@ function rejectUnknownFields(obj, allowed, prefix) {
   }
 }
 
-/** Verilen anı Europe/Istanbul saat diliminde saat farkıyla ISO-8601 metnine çevirir. */
-export function formatIstanbulTimestamp(value = new Date()) {
-  const date = value instanceof Date ? value : new Date(value);
+/** Veri anı zaman damgasını doğrulanmış Date nesnesine çevirir; geçersizse ReportRequestError fırlatır. */
+export function normalizeReportNow(value = new Date()) {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
   if (!Number.isFinite(date.getTime())) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST,
@@ -120,6 +120,12 @@ export function formatIstanbulTimestamp(value = new Date()) {
       ['$.now:invalid']
     );
   }
+  return date;
+}
+
+/** Verilen anı Europe/Istanbul saat diliminde saat farkıyla ISO-8601 metnine çevirir. */
+export function formatIstanbulTimestamp(value = new Date()) {
+  const date = normalizeReportNow(value);
   const map = Object.fromEntries(
     ISTANBUL_PARTS.formatToParts(date)
       .filter((part) => part.type !== 'literal')
@@ -194,7 +200,7 @@ function finalizePeriod(range, today) {
 }
 
 /** Rapor dönemini tür ve kapanmış dönem kurallarıyla çözer. */
-function resolveReportPeriod(raporTuru, rawDonem, today) {
+function resolveReportPeriod(raporTuru, rawDonem, today, closureDay = today) {
   let range = null;
   if (rawDonem === undefined) {
     if (raporTuru === 'haftalik') {
@@ -228,7 +234,8 @@ function resolveReportPeriod(raporTuru, rawDonem, today) {
     range = parseExplicitRange(rawDonem, 'donem', REPORT_REQUEST_ERROR_CODES.INVALID_PERIOD);
   }
 
-  const position = windowPosition(range, today);
+  const effectiveClosureDay = closureDay && closureDay < today ? closureDay : today;
+  const position = windowPosition(range, effectiveClosureDay);
   if (!position || position.position !== 'past' || position.open) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INCOMPLETE_PERIOD,
@@ -403,7 +410,7 @@ function resolveComparison(karsilastirma, rawCustomRange, reportRange, today) {
  * @param {{ now?: Date, today?: string | null }} [options] - Türkiye iş günü çözüm bağlamı.
  * @returns {object} Değişmez, doğrulanmış rapor isteği.
  */
-export function validateExecutiveReportRequest(input, { now = new Date(), today = null } = {}) {
+export function validateExecutiveReportRequest(input, { now = undefined, today = null } = {}) {
   if (!isPlainObject(input)) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST,
@@ -413,7 +420,9 @@ export function validateExecutiveReportRequest(input, { now = new Date(), today 
   }
   rejectUnknownFields(input, ALLOWED_REQUEST_FIELDS, '$');
 
-  const resolvedToday = today ?? businessDate(now);
+  const normalizedNow = now === undefined ? null : normalizeReportNow(now);
+  const cutoffDay = normalizedNow ? businessDate(normalizedNow) : (today == null ? businessDate(new Date()) : null);
+  const resolvedToday = today ?? cutoffDay;
   if (!isIsoDay(resolvedToday)) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST,
@@ -421,6 +430,7 @@ export function validateExecutiveReportRequest(input, { now = new Date(), today 
       ['$.today:invalid']
     );
   }
+  const closureDay = cutoffDay && cutoffDay < resolvedToday ? cutoffDay : resolvedToday;
 
   const { rapor_turu: raporTuru } = input;
   if (typeof raporTuru !== 'string' || !REPORT_PERIOD_TYPES.includes(raporTuru)) {
@@ -469,8 +479,8 @@ export function validateExecutiveReportRequest(input, { now = new Date(), today 
   }
 
   const kapsam = validateScope(input.kapsam);
-  const reportRange = resolveReportPeriod(raporTuru, input.donem, resolvedToday);
-  const comparisonRange = resolveComparison(karsilastirma, input.karsilastirma_donemi, reportRange, resolvedToday);
+  const reportRange = resolveReportPeriod(raporTuru, input.donem, resolvedToday, closureDay);
+  const comparisonRange = resolveComparison(karsilastirma, input.karsilastirma_donemi, reportRange, closureDay);
 
   return Object.freeze({
     rapor_turu: raporTuru,
@@ -532,6 +542,36 @@ function samePeriodRange(left, right) {
   return Boolean(left && right && left.baslangic === right.baslangic && left.bitis === right.bitis);
 }
 
+const PROTECTED_TEXT_KEY_SET = new Set(PROTECTED_TEXT_KEYS);
+
+function hasSparseHole(arr) {
+  for (let index = 0; index < arr.length; index += 1) {
+    if (!Object.hasOwn(arr, index)) return true;
+  }
+  return false;
+}
+
+function findProtectedTextKeyPaths(value, prefix, out, visited = new Set()) {
+  if (!value || typeof value !== 'object') return;
+  if (visited.has(value)) return;
+  visited.add(value);
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) continue;
+      findProtectedTextKeyPaths(value[index], `${prefix}[${index}]`, out, visited);
+    }
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    const nextPath = prefix ? `${prefix}.${key}` : key;
+    if (PROTECTED_TEXT_KEY_SET.has(key)) {
+      out.push(nextPath);
+    } else {
+      findProtectedTextKeyPaths(value[key], nextPath, out, visited);
+    }
+  }
+}
+
 /**
  * Kurulmuş bir `4i-kanit-1` kanıt paketinin yapısal bütünlüğünü, kimlik tutarlılığını,
  * rıza sınırını ve serileştirilmiş boyut sınırlarını doğrular.
@@ -544,22 +584,73 @@ export function validateEvidencePackageContract(pkg) {
   if (!isPlainObject(pkg)) return { ok: false, problems: ['paket:nesne_degil'], serializedChars: 0 };
   if (pkg.sema !== REPORT_EVIDENCE_SCHEMA) problems.push('sema:gecersiz');
 
-  // İstek üstverisinin temel alanları ve kanonik kapsam yapısı doğrulanır.
+  // İstek üstverisinin temel alanları, rapor türü sınırları, karşılaştırma kipi ve kanonik kapsam yapısı doğrulanır.
   let reportPeriod = null;
   let comparisonPeriod = null;
   if (!isPlainObject(pkg.istek)) {
     problems.push('istek:eksik');
   } else {
+    const raporTuru = pkg.istek.rapor_turu;
+    const validRaporTuru = typeof raporTuru === 'string' && REPORT_PERIOD_TYPES.includes(raporTuru);
+    if (!validRaporTuru) {
+      problems.push('istek:rapor_turu_gecersiz');
+    }
+
     if (!isPlainObject(pkg.istek.donem) || !isIsoDay(pkg.istek.donem.baslangic) || !isIsoDay(pkg.istek.donem.bitis)
       || pkg.istek.donem.baslangic > pkg.istek.donem.bitis) {
       problems.push('istek:donem_gecersiz');
     } else {
-      reportPeriod = pkg.istek.donem;
+      const reportRange = { dateFrom: pkg.istek.donem.baslangic, dateTo: pkg.istek.donem.bitis };
+      const reportLen = windowLength(reportRange);
+      const periodMatchesType = reportLen <= REPORT_REQUEST_LIMITS.maxRangeDays
+        && (raporTuru !== 'haftalik' || reportLen === 7)
+        && (raporTuru !== 'aylik' || windowKind(reportRange) === 'month');
+      if (!periodMatchesType) {
+        problems.push('istek:donem_gecersiz');
+      } else {
+        reportPeriod = pkg.istek.donem;
+      }
     }
-    if (pkg.istek.karsilastirma && pkg.istek.karsilastirma !== 'yok' && isPlainObject(pkg.istek.karsilastirma_donemi)
-      && isIsoDay(pkg.istek.karsilastirma_donemi.baslangic) && isIsoDay(pkg.istek.karsilastirma_donemi.bitis)
-      && pkg.istek.karsilastirma_donemi.baslangic <= pkg.istek.karsilastirma_donemi.bitis) {
-      comparisonPeriod = pkg.istek.karsilastirma_donemi;
+
+    const karsilastirma = pkg.istek.karsilastirma === undefined ? 'yok' : pkg.istek.karsilastirma;
+    if (typeof karsilastirma !== 'string' || !REPORT_COMPARISON_MODES.includes(karsilastirma)) {
+      problems.push('istek:karsilastirma_gecersiz');
+    } else if (karsilastirma === 'yok') {
+      if (pkg.istek.karsilastirma_donemi !== undefined) {
+        problems.push('istek:karsilastirma_donemi_gecersiz');
+      }
+    } else {
+      const compObj = pkg.istek.karsilastirma_donemi;
+      const compFormatOk = isPlainObject(compObj)
+        && isIsoDay(compObj.baslangic)
+        && isIsoDay(compObj.bitis)
+        && compObj.baslangic <= compObj.bitis;
+      if (!compFormatOk) {
+        problems.push('istek:karsilastirma_donemi_gecersiz');
+      } else {
+        const compRange = { dateFrom: compObj.baslangic, dateTo: compObj.bitis };
+        const compLen = windowLength(compRange);
+        let compValid = compLen <= REPORT_REQUEST_LIMITS.maxRangeDays;
+        if (compValid && reportPeriod) {
+          const repRange = { dateFrom: reportPeriod.baslangic, dateTo: reportPeriod.bitis };
+          if (compRange.dateTo >= repRange.dateFrom) {
+            compValid = false;
+          } else if (karsilastirma === 'onceki_donem') {
+            const expectedPrev = previousWindow(repRange);
+            compValid = Boolean(expectedPrev
+              && expectedPrev.dateFrom === compRange.dateFrom
+              && expectedPrev.dateTo === compRange.dateTo
+              && comparableWindows(compRange, repRange));
+          } else if (karsilastirma === 'ozel_donem') {
+            compValid = compLen === windowLength(repRange);
+          }
+        }
+        if (compValid) {
+          comparisonPeriod = compObj;
+        } else {
+          problems.push('istek:karsilastirma_donemi_gecersiz');
+        }
+      }
     }
 
     const scopeObj = pkg.istek.kapsam;
@@ -567,7 +658,7 @@ export function validateEvidencePackageContract(pkg) {
       if (!isPlainObject(scopeObj)) return false;
       if (Object.keys(scopeObj).some((key) => !ALLOWED_SCOPE_FIELDS.has(key))) return false;
       if (typeof scopeObj.tur !== 'string' || !REPORT_SCOPE_TYPES.includes(scopeObj.tur)) return false;
-      if (!Array.isArray(scopeObj.kimlikler) || scopeObj.kimlikler.length === 0) return false;
+      if (!Array.isArray(scopeObj.kimlikler) || scopeObj.kimlikler.length === 0 || hasSparseHole(scopeObj.kimlikler)) return false;
       if (scopeObj.tur !== 'projeler' && scopeObj.kimlikler.length !== 1) return false;
       if (scopeObj.tur === 'projeler' && scopeObj.kimlikler.length > REPORT_REQUEST_LIMITS.maxProjectIds) return false;
       const maxIdLen = ORG_SCOPE_TYPES.has(scopeObj.tur)
@@ -634,7 +725,7 @@ export function validateEvidencePackageContract(pkg) {
       || periodObj.baslangic > periodObj.bitis) {
       return false;
     }
-    if (!reportPeriod) return true;
+    if (!reportPeriod) return false;
     return samePeriodRange(periodObj, reportPeriod) || samePeriodRange(periodObj, comparisonPeriod);
   };
 
@@ -661,8 +752,12 @@ export function validateEvidencePackageContract(pkg) {
       }
     }
 
-    // Ölçülerde dönem ve anlık kesit zaman kökenleri birbirine karışamaz; bilinmeyen ölçü adı kabul edilmez.
+    // Ölçülerde dönem ve anlık kesit zaman kökenleri birbirine karışamaz; sonlu sayı veya açık null değer zorunludur.
     if (item.tur === 'olcu') {
+      const validMeasureValue = item.deger === null || (typeof item.deger === 'number' && Number.isFinite(item.deger));
+      if (!validMeasureValue) {
+        problems.push(`olcu:deger_gecersiz:${item.id}`);
+      }
       const hasDonem = Object.hasOwn(item, 'donem') && item.donem !== undefined;
       const hasVeriAni = Object.hasOwn(item, 'veri_ani') && item.veri_ani !== undefined;
       if (hasDonem && hasVeriAni) {
@@ -722,11 +817,21 @@ export function validateEvidencePackageContract(pkg) {
     }
   }
 
-  // Not yineleme göndergeleri yalnızca pakette kalan diğer not kimliklerine işaret edebilir.
+  // Rıza kapalıyken paketin herhangi bir iç içe alanında (türetilmiş, çelişki, tamlık dâhil) korunan metin anahtarı bulunamaz.
+  if (!consentEnabled) {
+    const leakedPaths = [];
+    findProtectedTextKeyPaths(pkg, '', leakedPaths);
+    for (const leakedPath of leakedPaths) {
+      const problemTag = `riza:korunan_metin_yasak:${leakedPath}`;
+      if (!problems.includes(problemTag)) problems.push(problemTag);
+    }
+  }
+
+  // Not yineleme göndergeleri yalnızca pakette kalan diğer not kimliklerine işaret edebilir (seyrek dizi delikleri yasaktır).
   for (const note of noteItems) {
     if (Object.hasOwn(note, 'yinelenen_kanitlar')) {
       const refs = note.yinelenen_kanitlar;
-      if (!Array.isArray(refs) || refs.length === 0
+      if (!Array.isArray(refs) || refs.length === 0 || hasSparseHole(refs)
         || refs.some((ref) => typeof ref !== 'string' || ref === note.id || !noteEvidenceIds.has(ref))) {
         problems.push(`not:gecersiz_yineleme_gondergesi:${note.id}`);
       }
@@ -741,16 +846,17 @@ export function validateEvidencePackageContract(pkg) {
     }
     if (findingIds.has(finding.id)) problems.push(`turetilmis:yinelenen_kimlik:${finding.id}`);
     findingIds.add(finding.id);
-    if (!Array.isArray(finding.girdiler) || finding.girdiler.length === 0
-      || finding.girdiler.some((ref) => !evidenceIds.has(ref))) {
+    if (!Array.isArray(finding.girdiler) || finding.girdiler.length === 0 || hasSparseHole(finding.girdiler)
+      || finding.girdiler.some((ref) => typeof ref !== 'string' || !evidenceIds.has(ref))) {
       problems.push(`turetilmis:gecersiz_kanit_gondergesi:${finding.id}`);
     }
   }
 
   for (const conflict of celiskiler || []) {
     if (!isPlainObject(conflict) || !Array.isArray(conflict.kanitlar) || conflict.kanitlar.length < 2
-      || new Set(conflict.kanitlar).size < 2
-      || conflict.kanitlar.some((ref) => !evidenceIds.has(ref))) {
+      || hasSparseHole(conflict.kanitlar)
+      || conflict.kanitlar.some((ref) => typeof ref !== 'string' || !evidenceIds.has(ref))
+      || new Set(conflict.kanitlar).size < 2) {
       problems.push('celiski:gecersiz_kanit_gondergesi');
     }
   }
@@ -758,6 +864,11 @@ export function validateEvidencePackageContract(pkg) {
   if ((kanitlar || []).length > maxItems) problems.push('sinir:kanit_sayisi_asildi');
   const serializedChars = JSON.stringify(pkg).length;
   if (serializedChars > maxChars) problems.push('sinir:karakter_sayisi_asildi');
+  if (isPlainObject(pkg.tamlik) && Object.hasOwn(pkg.tamlik, 'karakter_sayisi') && pkg.tamlik.karakter_sayisi !== undefined) {
+    if (!Number.isSafeInteger(pkg.tamlik.karakter_sayisi) || pkg.tamlik.karakter_sayisi !== serializedChars) {
+      problems.push('tamlik:karakter_sayisi_uyumsuz');
+    }
+  }
 
   return { ok: problems.length === 0, problems, serializedChars };
 }

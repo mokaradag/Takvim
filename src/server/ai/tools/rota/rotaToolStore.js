@@ -76,10 +76,11 @@ export async function readTaskFacts(executor, scope, {
   projectId = null, projectIds = [], taskIds = [], wbsId = null, seriesId = null, recurringOnly = false, text = '',
   openOnly = false, targetFrom = null, targetTo = null, createdByMe = false, hasDescription = false, includeUndated = false,
   statuses = [], priorities = [], milestone = null, deadline = null,
-  dateField = null, dateFrom = null, dateTo = null, today = null,
+  dateField = null, dateFrom = null, dateTo = null, today = null, cutOffUtc = null,
   assigneeMode = 'any', personSicil = null, teamLevel = null, assigneeSicils = [], includeHasDescription = true,
   withAssignees = false, maxRows, rosterRows = 0
 }) {
+  const normalizedCutOff = normalizeCutOffUtc(cutOffUtc, { required: false });
   const request = scoped(executor, scope, { projectId, projectIds, taskIds });
   request.input('maxRows', sql.Int, maxRows + 1);
   request.input('wbsId', sql.UniqueIdentifier, wbsId);
@@ -97,6 +98,7 @@ export async function readTaskFacts(executor, scope, {
   request.input('dateFrom', sql.Date, dateFrom);
   request.input('dateTo', sql.Date, dateTo);
   request.input('today', sql.Date, today);
+  request.input('cutOffUtc', sql.DateTime2, normalizedCutOff);
   request.input('hasDescription', sql.Bit, hasDescription ? 1 : 0);
   request.input('includeUndated', sql.Bit, includeUndated ? 1 : 0);
   request.input('createdByMe', sql.Bit, createdByMe ? 1 : 0);
@@ -111,12 +113,17 @@ export async function readTaskFacts(executor, scope, {
   const withRoster = rosterRows > 0 && assigneeMode === 'team';
   request.input('withRoster', sql.Bit, withRoster ? 1 : 0);
   request.input('rosterRows', sql.Int, withRoster ? rosterRows + 1 : 0);
-  const [factRows = [], projectRows = [], assigneeRows = [], rosterRowsRead = []] = recordsets(await request.query(AI_TOOL_TASK_FACTS_SQL));
+  const sets = recordsets(await request.query(AI_TOOL_TASK_FACTS_SQL));
+  const [factRows = [], projectRows = [], assigneeRows = []] = sets;
+  const rosterRowsRead = withRoster ? (sets[3] || []) : [];
+  const postCutoffRows = normalizedCutOff ? (sets[withRoster ? 4 : 3] || []) : [];
+  const hasPostCutoffDeletion = Boolean(postCutoffRows[0]?.HasPostCutoffDeletion);
   const { rows, truncated } = capped(factRows, maxRows);
   const roster = withRoster ? capped(rosterRowsRead, rosterRows) : null;
   return {
     facts: rows.map(factFromRow),
     truncated,
+    hasPostCutoffDeletion,
     projects: projectRows,
     assignees: assigneesByTask(assigneeRows),
     ...(roster ? { roster: {
@@ -312,11 +319,11 @@ function normalizeCutOffUtc(cutOffUtc, { required = false } = {}) {
  */
 export async function readReportTaskNotes(executor, scope, taskIds, { maxRows = 60, cutOffUtc = null } = {}) {
   const normalizedCutOff = normalizeCutOffUtc(cutOffUtc, { required: false });
-  if (!taskIds.length) return { notes: new Map(), truncated: false };
+  if (!taskIds.length) return { notes: new Map(), truncated: false, withheldTaskIds: new Set() };
   const request = scoped(executor, scope, { taskIds });
   request.input('maxNoteRows', sql.Int, maxRows + 1);
   request.input('cutOffUtc', sql.DateTime2, normalizedCutOff);
-  const [noteRows = []] = recordsets(await request.query(AI_TOOL_REPORT_TASK_NOTES_SQL));
+  const [noteRows = [], withheldRows = []] = recordsets(await request.query(AI_TOOL_REPORT_TASK_NOTES_SQL));
   const { rows, truncated } = capped(noteRows, maxRows);
   const notes = new Map(rows.map((row) => {
     const characters = Array.from(String(row.Description ?? ''));
@@ -327,7 +334,8 @@ export async function readReportTaskNotes(executor, scope, taskIds, { maxRows = 
       fullHash: row.DescriptionHash ? String(row.DescriptionHash) : null
     }];
   }));
-  return { notes, truncated };
+  const withheldTaskIds = new Set(withheldRows.map((row) => canonicalActualId(row.TaskId)).filter(Boolean));
+  return { notes, truncated, withheldTaskIds };
 }
 
 /**
@@ -532,7 +540,8 @@ export async function readReportActivitySummary(executor, scope, {
       projectId: canonicalActualId(row.CurrentProjectId),
       lastActivityDay: row.LastActivityDay ? String(row.LastActivityDay).slice(0, 10) : null,
       completedInPeriod: Boolean(row.CompletedInPeriod),
-      completedProjectId: canonicalActualId(row.CompletedProjectId)
+      completedProjectId: canonicalActualId(row.CompletedProjectId),
+      lastReopenAt: row.LastReopenAt ? new Date(row.LastReopenAt).toISOString() : null
     })).filter((row) => row.taskId),
     contributingProjects: projectRows.map((row) => ({
       projectId: canonicalActualId(row.ProjectId),

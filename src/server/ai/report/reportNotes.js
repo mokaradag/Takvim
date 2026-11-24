@@ -43,15 +43,18 @@ const PROMPT_INJECTION_PATTERNS = Object.freeze([
 const COMPLETED_CLAIM_RE = /(?:^|[.!?;]\s*)(?:görev\s+|iş\s+)?(?:tamamen\s+)?(?:tamamland[ıi]|bitti|kapand[ıi])(?=\s*(?:[.!?;]|$))/iu;
 const NEGATED_ABSENCE_RE = /(?:engel|risk|sorun|gecikme|eksik|bloker|pürüz)\s+yok(?![\p{L}])/giu;
 const PENDING_QUALIFIER_RE = /(?:bekleniyor|bekliyor|haftaya|ertelendi|sürüyor|devam\s+ediyor|eksik(?![\p{L}])|(?<![\p{L}])yok(?![\p{L}])|başlamad[ıi]|kesin\s+değil|planland[ıi])/iu;
-const BLOCKED_OR_NOT_DONE_RE = /(?:henüz\s+başlamad[ıi]|ertelendi|durduruldu|iptal\s+edildi|tamamlanmad[ıi]|hazır\s+değil)/iu;
+const BLOCKED_OR_NOT_DONE_RE = /(?:henüz\s+başlamad[ıi]|ertelendi|durduruldu|iptal\s+edildi|tamamlanmad[ıi]|bitmedi|teslim\s+edilmedi|hazır\s+değil)/iu;
 const SCHEDULED_DATE_RE = /(?:(?:\d{1,2}[./-]\d{1,2}|\d{4}-\d{2}-\d{2}|(?:ocak|şubat|mart|nisan|mayıs|haziran|temmuz|ağustos|eylül|ekim|kasım|aralık)|hafta|gün|tarih)[^.!?;,\n]{0,40}(?:planland[ıi]|hedeflendi|belirlendi)|(?:planland[ıi]|hedeflendi|belirlendi)(?=\s*(?:[.!?;,]|$))|risk\s+yok|gecikme\s+yok)/iu;
 // "gecikme yok / bulunmuyor / beklenmiyor / olmadı" gibi olumsuzlanmış gecikme ifadeleri erteleme sayılmaz.
 const POSTPONED_OR_NEGATED_RE = /(?:ertelendi|iptal\s+edildi|gecikme(?!\s+(?:yok|bulunmuyor|beklenmiyor|olmad[ıi]))|yeni\s+tarih\s+(?:ilan\s+edilmedi|belirsiz|yok)|gecikme\s+riski\s+var)/iu;
-const NO_RISK_CLAIM_RE = /(?:risk\s+yok|gecikme\s+yok|sorun\s+yok)/iu;
-// Her tümcedeki ortam hazırlık bildirimini ve öznesini (pozitif/negatif kutbuyla birlikte) yakalar.
-const CLAUSE_SPLIT_RE = /[.!?;,\n]+/u;
-const READINESS_CLAUSE_RE = /(?:^|\s)(?:([\p{L}\d_-]+)\s+)?(?:test\s+)?ortam(?:[ıi])?\s+hazır(?![\p{L}])(\s+değil(?![\p{L}]))?/iu;
-const GENERIC_SUBJECT_WORDS = new Set(['bu', 'şu', 'mevcut', 'ilgili', 'tüm', 'bütün', 'genel', 'ortak', 'test', 'entegrasyon']);
+// Gecikmiş görev uyuşmazlığı yalnızca gecikmeyi açıkça reddeden ifadelerde kurulur; tek başına "risk yok" yeterli değildir.
+const EXPLICIT_NO_DELAY_CLAIM_RE = /(?:gecikme\s+(?:yok|bulunmuyor|beklenmiyor|olmad[ıi])|zamanında\s+(?:tamamlanacak|teslim\s+edilecek|ilerliyor)|takvimde\s+sapma\s+yok)/iu;
+const DELAY_ACKNOWLEDGED_RE = /(?:gecikti|gecikiyor|gecikme\s+var|ertelendi)/iu;
+// Tümce ayırıcı soru işaretini (?) tümce sonunda korur; böylece soru tümceleri olumlu bildirim sayılmaz.
+const CLAUSE_SPLIT_RE = /[.!;,\n]+|(?<=\?)\s*/u;
+const TURKISH_QUESTION_PARTICLE_RE = /(?:^|\s)(?:m[ıiuü](?:d[ıiuü]r)?|acaba)(?=$|[\s?!.,;:])/iu;
+const READINESS_CLAUSE_RE = /(?:^|[\s:])((?:[\p{L}\d_-]+\s+){0,4}?)(?:(test|entegrasyon|üretim|canlı|staging|preprod|qa|uat|geliştirme|dev)\s+)?ortam(?:[ıi])?\s+hazır(?![\p{L}])(\s+değil(?![\p{L}]))?/iu;
+const GENERIC_SUBJECT_WORDS = new Set(['bu', 'şu', 'mevcut', 'ilgili', 'tüm', 'bütün', 'genel', 'ortak', 'test', 'entegrasyon', 'yeni', 'eski', 'diğer', 'için', 'ile', 've', 'veya', 'da', 'de']);
 
 function compareAscii(left, right) {
   const a = String(left ?? '');
@@ -129,21 +132,44 @@ function duplicateKey(text) {
 
 /**
  * Bir not metnindeki tüm ortam hazırlığı tümcelerini kutup (`positive`/`negative`) ve
- * normalleştirilmiş özne anahtarıyla çıkarır.
+ * çok sözcüklü normalleştirilmiş özne anahtarıyla çıkarır; Türkçe soru tümcelerini atlar.
  */
 function extractReadinessClaims(lowerText) {
   const claims = [];
   for (const rawClause of String(lowerText || '').split(CLAUSE_SPLIT_RE)) {
     const clause = rawClause.trim();
     if (!clause) continue;
+    // Soru işareti veya Türkçe soru eki ("mı/mi/mu/mü") taşıyan tümceler kesin iddia sayılmaz.
+    if (clause.endsWith('?') || TURKISH_QUESTION_PARTICLE_RE.test(clause)) continue;
     const match = READINESS_CLAUSE_RE.exec(clause);
     if (!match) continue;
-    const rawQualifier = (match[1] || '').trim();
-    const subject = (!rawQualifier || GENERIC_SUBJECT_WORDS.has(rawQualifier)) ? '' : rawQualifier;
-    const polarity = match[2] ? 'negative' : 'positive';
+    const prefixTokens = (match[1] || '')
+      .trim()
+      .split(/\s+/u)
+      .filter((token) => token.length > 0 && !GENERIC_SUBJECT_WORDS.has(token));
+    const envType = (match[2] || '').trim();
+    const subjectTokens = [...prefixTokens];
+    if (envType && !GENERIC_SUBJECT_WORDS.has(envType)) {
+      subjectTokens.push(envType);
+    }
+    const subject = subjectTokens.join(' ');
+    const polarity = match[3] ? 'negative' : 'positive';
     claims.push({ subject, polarity });
   }
   return claims;
+}
+
+/** Görev düzeyinde olumsuz/tamamlanmamış iddia olup olmadığını ortam hazırlığı tümcelerini ayırarak denetler. */
+function hasTaskLevelNotDoneClaim(lowerText) {
+  for (const rawClause of String(lowerText || '').split(CLAUSE_SPLIT_RE)) {
+    const clause = rawClause.trim();
+    if (!clause) continue;
+    if (clause.endsWith('?') || TURKISH_QUESTION_PARTICLE_RE.test(clause)) continue;
+    // Başka bir ortamın hazırlık bildirimini ("Test ortamı hazır değil.") görevin tamamlanmadığı iddiası sayma.
+    if (READINESS_CLAUSE_RE.test(clause)) continue;
+    if (BLOCKED_OR_NOT_DONE_RE.test(clause)) return true;
+  }
+  return false;
 }
 
 /** İki hazırlık iddia listesi arasında aynı özne üzerinde zıt kutuplu çift olup olmadığını döner. */
@@ -465,7 +491,8 @@ export function detectNoteDuplicatesAndContradictions({
   taskById,
   taskEvidenceIdByTaskId,
   today,
-  period = null
+  period = null,
+  lastReopenAtByTaskId = new Map()
 }) {
   const contradictions = [];
   const seenConflictKeys = new Set();
@@ -548,24 +575,33 @@ export function detectNoteDuplicatesAndContradictions({
       const latestLower = latest.metin.toLocaleLowerCase('tr-TR');
       const latestWithoutNegatedAbsence = latestLower.replace(NEGATED_ABSENCE_RE, ' ');
       const latestDay = latest.kayit_zamani ? istanbulDay(latest.kayit_zamani) : null;
+      const latestMs = latest.kayit_zamani ? Date.parse(latest.kayit_zamani) : Number.NaN;
+      const reopenIso = lastReopenAtByTaskId?.get(taskId) || task.lastReopenAt || null;
+      const reopenMs = reopenIso ? Date.parse(reopenIso) : Number.NaN;
+      // Bilinen bir yeniden açılma varsa ve notun bu yeniden açılmadan SONRA yazıldığı kanıtlanamıyorsa uyuşmazlık ilan edilmez.
+      const notePostdatesKnownReopen = !Number.isFinite(reopenMs)
+        || (Number.isFinite(latestMs) && latestMs > reopenMs);
       const isTaskOpen = task.status !== 'done';
       const isTaskOverdue = isTaskOpen && Boolean(task.targetFinish) && task.targetFinish < today;
-      if (isTaskOpen && COMPLETED_CLAIM_RE.test(latestLower) && !PENDING_QUALIFIER_RE.test(latestWithoutNegatedAbsence)) {
+      if (isTaskOpen && notePostdatesKnownReopen
+        && COMPLETED_CLAIM_RE.test(latestLower)
+        && !PENDING_QUALIFIER_RE.test(latestWithoutNegatedAbsence)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
           kanitlar: [taskEvidenceId, latest.id],
           gorev: task.code || taskId,
           aciklama: 'Görev kaydı açık görünürken görev notu işin tamamlandığını bildiriyor.'
         });
-      } else if (isTaskOverdue && NO_RISK_CLAIM_RE.test(latestLower)
+      } else if (isTaskOverdue && EXPLICIT_NO_DELAY_CLAIM_RE.test(latestLower)
+        && !DELAY_ACKNOWLEDGED_RE.test(latestLower)
         && Boolean(latestDay && task.targetFinish && latestDay > task.targetFinish)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
           kanitlar: [taskEvidenceId, latest.id],
           gorev: task.code || taskId,
-          aciklama: 'Hedef bitiş tarihi geçtikten sonra kaydedilen "risk/gecikme yok" notu ile gecikmiş görev durumu uyuşmuyor.'
+          aciklama: 'Hedef bitiş tarihi geçtikten sonra kaydedilen "gecikme yok" notu ile gecikmiş görev durumu uyuşmuyor.'
         });
-      } else if (!isTaskOpen && BLOCKED_OR_NOT_DONE_RE.test(latestLower)
+      } else if (!isTaskOpen && hasTaskLevelNotDoneClaim(latestLower)
         && Boolean(latestDay && task.actualFinish && latestDay > task.actualFinish)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
@@ -577,11 +613,12 @@ export function detectNoteDuplicatesAndContradictions({
     }
   }
 
-  // 3. Aynı projede ve aynı ortam öznesinde güncel, kırpılmamış farklı görev notları arasında açık karşıt bildirim.
+  // 3. Aynı projede ve aynı ortam öznesinde eşzamanlı/örtüşen güncel, kırpılmamış farklı görev notları arasında açık karşıt bildirim.
   const safeCurrentNotes = noteEntries
     .filter((entry) => !entry.guvenilmez_yonerge_iceriyor && !entry.kirpildi && entry.surum_tipi === 'guncel')
     .map((entry) => ({
       entry,
+      day: entry.kayit_zamani ? istanbulDay(entry.kayit_zamani) : null,
       claims: extractReadinessClaims(entry.metin.toLocaleLowerCase('tr-TR'))
     }))
     .filter((item) => item.claims.length > 0);
@@ -592,6 +629,8 @@ export function detectNoteDuplicatesAndContradictions({
       const right = safeCurrentNotes[j];
       if (left.entry._taskId === right.entry._taskId) continue;
       if (!left.entry._projectId || left.entry._projectId !== right.entry._projectId) continue;
+      // Farklı takvim günlerine ait gözlemler kronolojik ilerlemedir; eşzamanlı çelişki olarak işaretlenmez.
+      if ((left.day || right.day) && left.day !== right.day) continue;
       if (!hasOpposingReadinessClaim(left.claims, right.claims)) continue;
       addConflict({
         tur: 'notlar_arasi_celiski',
@@ -621,6 +660,7 @@ export async function collectReportNotes({
   prioritizedTasks,
   period,
   cutOffUtc,
+  factsTruncated = false,
   limits = REPORT_EVIDENCE_LIMITS
 }) {
   // Açık rıza kapısı: `notlar: dahil` dışındaki hiçbir durumda korunan metin okunmaz.
@@ -646,18 +686,21 @@ export async function collectReportNotes({
   const candidateIds = candidateTasks.map((task) => task.id);
 
   if (candidateIds.length === 0) {
+    const emptyIncomplete = Boolean(tasksExcludedByTaskCap > 0 || factsTruncated);
     return {
       versions: [],
       completeness: {
         riza: true,
         metin: tasksExcludedByTaskCap > 0
           ? `0 not (${tasksExcludedByTaskCap} görev not okuma sınırı dışında)`
-          : 'kapsamda not okunacak görev yok',
+          : factsTruncated
+            ? 'gözlenen not kaydı yok (görev/kadro okuması kesik)'
+            : 'kapsamda not okunacak görev yok',
         dahil: 0,
         disarida_kalan: 0,
-        notsuz_gorev: tasksExcludedByTaskCap > 0 ? null : 0,
+        notsuz_gorev: emptyIncomplete ? null : 0,
         kirpilan: 0,
-        denetim_kesik: tasksExcludedByTaskCap > 0
+        denetim_kesik: emptyIncomplete
       }
     };
   }
@@ -689,27 +732,41 @@ export async function collectReportNotes({
   const versionsByTaskQueue = [];
   let tasksWithoutObservedNotes = 0;
   let tasksWithheldByCutoff = 0;
+  let tasksWithClippedEmptyNotes = 0;
   let totalObservedVersions = 0;
 
   for (const task of candidateTasks) {
+    const currentNote = currentResult.notes.get(task.id) || null;
+    const readerWithheld = Boolean(currentResult.withheldTaskIds?.has(task.id));
     const taskModifiedAfterCutoff = Boolean(
       cutOffMs != null
       && Number.isFinite(cutOffMs)
       && task.updatedAt
       && Date.parse(task.updatedAt) > cutOffMs
     );
+    // Görev olgularında açıklama var görünürken not okuyucusu satır döndürmediyse eşzamanlı değişim/saklama sayılır.
+    const concurrentMissingWithDescription = Boolean(task.hasDescription === true && !currentNote && !currentResult.truncated);
+    const currentWithheldByCutoff = readerWithheld || taskModifiedAfterCutoff || concurrentMissingWithDescription;
+    if (currentWithheldByCutoff) {
+      tasksWithheldByCutoff += 1;
+    }
+
+    // Kırpılmış alıntı temizlendikten sonra boş kalıyorsa (ör. 1601 görünmez boşluk + metin) "notsuz" sayılmaz.
+    const clippedEmptyCurrent = Boolean(!currentWithheldByCutoff && currentNote?.clipped && !normalizeNoteText(currentNote.text));
+    if (clippedEmptyCurrent) {
+      tasksWithClippedEmptyNotes += 1;
+    }
+
     const taskVersions = reconstructTaskNoteChronology({
       task,
-      currentNote: currentResult.notes.get(task.id) || null,
+      currentNote: currentWithheldByCutoff ? null : currentNote,
       auditEvents: auditByTask.get(task.id) || [],
       period,
       cutOffMs,
       maxNoteChars: Math.max(1, maxNoteChars)
     });
     if (taskVersions.length === 0) {
-      if (taskModifiedAfterCutoff) {
-        tasksWithheldByCutoff += 1;
-      } else {
+      if (!currentWithheldByCutoff && !clippedEmptyCurrent && task.hasDescription !== true) {
         tasksWithoutObservedNotes += 1;
       }
       continue;
@@ -772,9 +829,11 @@ export async function collectReportNotes({
     || currentResult.truncated
     || (auditResult.corruptedCount || 0) > 0
     || tasksWithheldByCutoff > 0
+    || tasksWithClippedEmptyNotes > 0
     || tasksExcludedByTaskCap > 0
+    || factsTruncated
   );
-  // Denetim geçmişi kesik, bozuk, kesit sonrası saklı veya görev sınırı dışındaysa kesin "notsuz" ilan edilmez (`null`).
+  // Denetim geçmişi kesik, bozuk, kesit sonrası saklı veya görev/kadro sınırı dışındaysa kesin "notsuz" ilan edilmez (`null`).
   const definitiveTasksWithoutNotes = historyIncomplete ? null : tasksWithoutObservedNotes;
 
   const summaryParts = [];

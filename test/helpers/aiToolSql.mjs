@@ -146,7 +146,7 @@ function projectRow(db, projectId) {
 }
 
 /** SCOPE_PROJECTS + VISIBLE_TASKS parçalarının karşılığı. */
-function scopeOf(db, params, { restrictTasks = null } = {}) {
+function scopeOf(db, params, { restrictTasks = null, filterByAssignees = false } = {}) {
   const sicil = Number(params.sicil);
   const isAdmin = Boolean(params.isAdmin);
   const projectFilter = params.projectId ? upper(params.projectId) : null;
@@ -154,11 +154,24 @@ function scopeOf(db, params, { restrictTasks = null } = {}) {
   const taskFilter = String(params.taskIds || '').split(',').map((value) => value.trim()).filter(isGuid).map(upper);
   const filterActive = restrictTasks ? true : String(params.taskIds || '').length > 0;
   const allowedTasks = new Set(restrictTasks ? restrictTasks.map(upper) : taskFilter);
+  const assigneeFilter = filterByAssignees
+    ? new Set(String(params.assigneeSicils || '').split(',').map((v) => Number(v.trim())).filter((n) => Number.isSafeInteger(n) && n > 0))
+    : new Set();
   const projects = new Map();
   const projectIndex = new Map(db.projects.map((row) => [upper(row.ProjectId), row]));
   const activeProject = (id) => {
     const project = projectIndex.get(upper(id));
-    return project && project.IsActive && (!params.projectSearchText || charindex(params.projectSearchText, `${project.ProjectCode || ''} ${project.ProjectName}`) > 0) && (!params.sourceFilter || params.sourceFilter === 'all' || (params.sourceFilter === 'corporate') === (project.SourceType === 'CORPORATE')) && (!projectFilter || same(project.ProjectId, projectFilter)) && (!projectFilters.size || projectFilters.has(upper(project.ProjectId))) && (!filterActive || db.tasks.some((task) => same(task.ProjectId, project.ProjectId) && allowedTasks.has(upper(task.TaskId)))) ? project : null;
+    if (!project || !project.IsActive) return null;
+    if (params.projectSearchText && charindex(params.projectSearchText, `${project.ProjectCode || ''} ${project.ProjectName}`) <= 0) return null;
+    if (params.sourceFilter && params.sourceFilter !== 'all' && (params.sourceFilter === 'corporate') !== (project.SourceType === 'CORPORATE')) return null;
+    if (projectFilter && !same(project.ProjectId, projectFilter)) return null;
+    if (projectFilters.size && !projectFilters.has(upper(project.ProjectId))) return null;
+    if (filterActive && !db.tasks.some((task) => same(task.ProjectId, project.ProjectId) && allowedTasks.has(upper(task.TaskId)))) return null;
+    if (assigneeFilter.size > 0 && !db.tasks.some((task) => same(task.ProjectId, project.ProjectId)
+      && assigneesOf(db, task.TaskId).some((ta) => assigneeFilter.has(Number(ta.Sicil))))) {
+      return null;
+    }
+    return project;
   };
   if (isAdmin) {
     for (const project of db.projects) {
@@ -265,10 +278,11 @@ function taskFacts(db, params) {
     && (!params.teamLevel || (entry.ScopeType || 'UNIT') === params.teamLevel))) {
     const error = new Error('AI_TOOL_SCOPE_UNAVAILABLE'); error.number = 51002; throw error;
   }
-  const scope = scopeOf(db, params);
+  const scope = scopeOf(db, params, { filterByAssignees: true });
   const text = String(params.text || '');
   const statuses = new Set(String(params.statusCsv || '').split(',').filter(Boolean));
   const priorities = new Set(String(params.priorityCsv || '').split(',').filter(Boolean));
+  const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
   const assigneeSicilsFilter = new Set(
     String(params.assigneeSicils || '')
       .split(',')
@@ -289,6 +303,7 @@ function taskFacts(db, params) {
     }
   };
   const filtered = [...scope.visible.values()].filter(({ task, IdentityBase }) => {
+    if (cutOffMs != null && task.CreatedAt && new Date(task.CreatedAt).getTime() > cutOffMs) return false;
     if (params.wbsId && !same(task.WbsId, params.wbsId)) return false;
     if (params.seriesId && !same(task.TaskId, params.seriesId) && !same(task.RecurrenceParentTaskId, params.seriesId)) return false;
     if (params.recurringOnly && !task.RecurrenceRule && !task.RecurrenceParentTaskId) return false;
@@ -366,8 +381,50 @@ function taskFacts(db, params) {
       return { ProjectId: project.ProjectId, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, SourceType: project.SourceType, ...access };
     });
   const assignees = params.withAssignees ? assigneeRows(db, scope, facts, params) : [];
-  return [facts, projects, assignees,
-    ...(Number(params.withRoster) === 1 && params.assigneeMode === 'team' ? [teamRoster(db, params, facts, assignees)] : [])];
+  const results = [facts, projects, assignees];
+  if (Number(params.withRoster) === 1 && params.assigneeMode === 'team') {
+    results.push(teamRoster(db, params, facts, assignees));
+  }
+  if (cutOffMs != null) {
+    const fullOrRead = new Set();
+    for (const token of String(params.scopeProjects || '').split(',')) {
+      if (token.length !== 40) continue;
+      const id = token.slice(0, 36);
+      if (isGuid(id) && (token[37] === 'F' || token[38] === '1')) fullOrRead.add(upper(id));
+    }
+    const projectFilter = params.projectId ? upper(params.projectId) : null;
+    const projectFilters = new Set(String(params.projectIds || '').split(',').filter(isGuid).map(upper));
+    const hasPostCutoffDeletion = (db.auditLog || []).some((row) => {
+      if (row.EntityType !== 'TASK' || row.ActionCode !== 'DELETE') return false;
+      if (new Date(row.OccurredAt).getTime() <= cutOffMs) return false;
+      const proj = projectRow(db, row.ProjectId);
+      if (!proj?.IsActive) return false;
+      if (projectFilter && !same(proj.ProjectId, projectFilter)) return false;
+      if (projectFilters.size > 0 && !projectFilters.has(upper(proj.ProjectId))) return false;
+      let snap = null;
+      try {
+        const parsed = typeof row.BeforeJson === 'string' ? JSON.parse(row.BeforeJson) : row.BeforeJson;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) snap = parsed;
+      } catch {
+        snap = null;
+      }
+      const deletedAssignees = Array.isArray(snap?.assigneeIds)
+        ? snap.assigneeIds.filter((v) => typeof v === 'number' || typeof v === 'string').map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
+        : [];
+      const authorized = scope.isAdmin
+        || fullOrRead.has(upper(proj.ProjectId))
+        || Number(snap?.CreatedBySicil) === scope.sicil
+        || deletedAssignees.some((id) => id === scope.sicil || executiveOf(db, scope.sicil, id));
+      if (!authorized) return false;
+      if (assigneeSicilsFilter.size > 0 && !deletedAssignees.some((id) => assigneeSicilsFilter.has(id))) return false;
+      if (params.assigneeMode === 'me' && !deletedAssignees.includes(scope.sicil)) return false;
+      if (params.assigneeMode === 'person' && !deletedAssignees.includes(Number(params.personSicil))) return false;
+      if (params.assigneeMode === 'team' && !deletedAssignees.some((id) => teamMemberOf(db, params, scope.sicil, id))) return false;
+      return true;
+    });
+    results.push([{ HasPostCutoffDeletion: hasPostCutoffDeletion ? 1 : 0 }]);
+  }
+  return results;
 }
 
 function taskVisibility(db, params) {
@@ -629,24 +686,39 @@ function outlook(db, params) {
 
 function reportTaskNotes(db, params) {
   const scope = scopeOf(db, params);
+  if (Number.isFinite(Number(params.analysisMaxRows)) && scope.visible.size >= Number(params.analysisMaxRows)) {
+    const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+  }
   const limit = Number(params.maxNoteRows || 61);
   const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
   const rows = [...scope.visible.values()]
-    .filter(({ task }) => String(task.Description ?? '').trim())
+    .filter(({ task }) => trimUnicodeSpan(task.Description).length > 0)
     .filter(({ task }) => cutOffMs == null || !task.UpdatedAt || new Date(task.UpdatedAt).getTime() <= cutOffMs)
     .sort((a, b) => sqlGuidSortKey(a.task.TaskId).localeCompare(sqlGuidSortKey(b.task.TaskId)))
     .slice(0, limit)
-    .map(({ task }) => ({
-      TaskId: upper(task.TaskId),
-      ProjectId: upper(task.ProjectId),
-      Description: Array.from(String(task.Description).replace(/^\s+/u, '')).slice(0, 1601).join(''),
-      DescriptionHash: descriptionHash(task.Description)
-    }));
-  return [rows];
+    .map(({ task }) => {
+      const trimmed = trimUnicodeSpan(task.Description);
+      return {
+        TaskId: upper(task.TaskId),
+        ProjectId: upper(task.ProjectId),
+        Description: Array.from(trimmed).slice(0, 1601).join(''),
+        DescriptionHash: descriptionHash(task.Description)
+      };
+    });
+  const withheldRows = cutOffMs == null
+    ? []
+    : [...scope.visible.values()]
+      .filter(({ task }) => task.UpdatedAt && new Date(task.UpdatedAt).getTime() > cutOffMs)
+      .sort((a, b) => sqlGuidSortKey(a.task.TaskId).localeCompare(sqlGuidSortKey(b.task.TaskId)))
+      .map(({ task }) => ({ TaskId: upper(task.TaskId) }));
+  return [rows, withheldRows];
 }
 
 function reportNoteAudit(db, params) {
   const scope = scopeOf(db, params);
+  if (Number.isFinite(Number(params.analysisMaxRows)) && scope.visible.size >= Number(params.analysisMaxRows)) {
+    const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+  }
   const limit = Number(params.maxAuditRows || 251);
   const cutOffMs = new Date(params.cutOffUtc).getTime();
   // `@scopeProjects` belirteçlerinden FULL veya READ yetkili proje kümesini çöz (üretim SQL ile aynı kural).
@@ -682,9 +754,9 @@ function reportNoteAudit(db, params) {
   };
   const clipExcerpt = (raw) => {
     if (raw == null) return null;
-    const trimmedStart = String(raw).replace(/^[\u0009-\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]+/u, '');
-    if (!trimUnicodeSpan(trimmedStart)) return null;
-    return Array.from(trimmedStart).slice(0, 1601).join('');
+    const trimmed = trimUnicodeSpan(raw);
+    if (!trimmed) return null;
+    return Array.from(trimmed).slice(0, 1601).join('');
   };
 
   const rows = [];
@@ -694,11 +766,11 @@ function reportNoteAudit(db, params) {
     const visible = scope.visible.get(upper(row.EntityId));
     if (!visible) continue;
     const project = projectRow(db, row.ProjectId);
-    if (!project) continue;
-    const authorizedAuditProject = scope.isAdmin || (project.IsActive && (
+    if (!project || !project.IsActive) continue;
+    const authorizedAuditProject = scope.isAdmin || (
       same(row.ProjectId, visible.task.ProjectId)
       || fullOrReadProjects.has(upper(row.ProjectId))
-    ));
+    );
     if (!authorizedAuditProject) continue;
 
     const before = parseSnapshot(row.BeforeJson);
@@ -707,7 +779,19 @@ function reportNoteAudit(db, params) {
     const afterSpan = trimUnicodeSpan(after.descRaw);
     const beforeNonEmpty = beforeSpan.length > 0;
     const afterNonEmpty = afterSpan.length > 0;
-    const changed = before.malformed || after.malformed
+
+    let beforeOriginUnauthorized = false;
+    if (before.projectId && !same(before.projectId, row.ProjectId)) {
+      const originProject = projectRow(db, before.projectId);
+      const originOk = scope.isAdmin
+        ? Boolean(originProject?.IsActive)
+        : Boolean(originProject?.IsActive && fullOrReadProjects.has(before.projectId));
+      if (!originOk) {
+        beforeOriginUnauthorized = true;
+      }
+    }
+
+    const changed = before.malformed || after.malformed || beforeOriginUnauthorized
       || (row.ActionCode === 'CREATE' && afterNonEmpty)
       || (row.ActionCode === 'UPDATE' && (
         (beforeNonEmpty && !afterNonEmpty)
@@ -715,14 +799,6 @@ function reportNoteAudit(db, params) {
         || (beforeNonEmpty && afterNonEmpty && beforeSpan !== afterSpan)
       ));
     if (!changed) continue;
-
-    let beforeOriginUnauthorized = false;
-    if (!scope.isAdmin && before.projectId && !same(before.projectId, row.ProjectId)) {
-      const originProject = projectRow(db, before.projectId);
-      if (!(originProject?.IsActive && fullOrReadProjects.has(before.projectId))) {
-        beforeOriginUnauthorized = true;
-      }
-    }
 
     rows.push({
       AuditId: Number(row.AuditId),
@@ -940,6 +1016,11 @@ function reportActivitySummary(db, params) {
     }
   }
 
+  const scalarJsonStatus = (obj) => {
+    const asScalar = (val) => (val === null || val === undefined || typeof val === 'object' ? null : String(val));
+    return asScalar(obj.Status) ?? asScalar(obj.status) ?? null;
+  };
+
   const scopedRows = [];
   for (const row of db.auditLog || []) {
     if (row.EntityType !== 'TASK' || !['CREATE', 'UPDATE', 'DELETE'].includes(row.ActionCode)) continue;
@@ -954,15 +1035,18 @@ function reportActivitySummary(db, params) {
     const deletedSnap = deletion ? safeJson(deletion.BeforeJson) : { ok: false, obj: {} };
     const deletedAssignees = deletedSnap.ok ? validAssigneeIds(deletedSnap.obj.assigneeIds) : [];
 
-    const visible = isAdmin || (project?.IsActive && (
-      (visibleProjects.has(upper(row.ProjectId))
-        && (!liveTask || visibleProjects.has(upper(liveTask.ProjectId)) || partialTasks.has(upper(liveTask.TaskId))))
-      || (liveTask && same(liveTask.ProjectId, row.ProjectId) && partialTasks.has(upper(liveTask.TaskId)))
-      || (!liveTask && deletedSnap.ok && (
-        Number(deletedSnap.obj.CreatedBySicil) === sicil
-        || deletedAssignees.some(historicallyVisible)
+    const visible = Boolean(project?.IsActive) && (
+      (isAdmin && (!liveTask || scope.projects.has(upper(liveTask.ProjectId))))
+      || (!isAdmin && (
+        (visibleProjects.has(upper(row.ProjectId))
+          && (!liveTask || visibleProjects.has(upper(liveTask.ProjectId)) || partialTasks.has(upper(liveTask.TaskId))))
+        || (liveTask && same(liveTask.ProjectId, row.ProjectId) && partialTasks.has(upper(liveTask.TaskId)))
+        || (!liveTask && deletedSnap.ok && (
+          Number(deletedSnap.obj.CreatedBySicil) === sicil
+          || deletedAssignees.some(historicallyVisible)
+        ))
       ))
-    ));
+    );
     if (!visible) continue;
 
     if (assigneeFilter.size > 0) {
@@ -984,8 +1068,8 @@ function reportActivitySummary(db, params) {
 
     const beforeParsed = safeJson(row.BeforeJson);
     const afterParsed = safeJson(row.AfterJson);
-    const beforeStatus = beforeParsed.ok ? (beforeParsed.obj.Status ?? beforeParsed.obj.status ?? null) : null;
-    const afterStatus = afterParsed.ok ? (afterParsed.obj.Status ?? afterParsed.obj.status ?? null) : null;
+    const beforeStatus = beforeParsed.ok ? scalarJsonStatus(beforeParsed.obj) : null;
+    const afterStatus = afterParsed.ok ? scalarJsonStatus(afterParsed.obj) : null;
     const completionEvent = afterParsed.ok && afterStatus != null && isDoneAlias(afterStatus)
       && (row.ActionCode === 'CREATE' || (beforeParsed.ok && beforeStatus != null && !isDoneAlias(beforeStatus)));
     const reopenEvent = beforeParsed.ok && afterParsed.ok && beforeStatus != null && isDoneAlias(beforeStatus)
@@ -993,7 +1077,8 @@ function reportActivitySummary(db, params) {
     const kind = row.ActionCode === 'DELETE' ? 'deleted' : row.ActionCode === 'CREATE' ? 'created' : completionEvent ? 'completed' : 'updated';
 
     scopedRows.push({
-      ActionGroup: row.CorrelationId || `audit:${row.AuditId}`,
+      AuditId: Number(row.AuditId) || 0,
+      ActionGroup: row.CorrelationId ? String(row.CorrelationId).toUpperCase() : `audit:${row.AuditId}`,
       EntityId: upper(row.EntityId),
       ActorSicil: Number(row.ActorSicil),
       ProjectId: upper(row.ProjectId),
@@ -1001,10 +1086,27 @@ function reportActivitySummary(db, params) {
       Kind: kind,
       Completed: completionEvent ? 1 : 0,
       Reopened: reopenEvent ? 1 : 0,
+      LastReopenAt: reopenEvent ? row.OccurredAt : null,
       LiveTask: liveTask
     });
     if (scopedRows.length >= probeRows) {
       const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+    }
+  }
+
+  // Her görev için dönemdeki en son tamamlama olayının projesini (OccurredAt DESC, AuditId DESC) tekilleştir.
+  const latestCompletionByEntity = new Map();
+  for (const row of scopedRows) {
+    if (!row.Completed) continue;
+    const rowMs = new Date(row.OccurredAt).getTime();
+    const prev = latestCompletionByEntity.get(row.EntityId);
+    if (!prev || rowMs > prev.ms || (rowMs === prev.ms && row.AuditId > prev.auditId)) {
+      latestCompletionByEntity.set(row.EntityId, {
+        projectId: row.ProjectId,
+        isLive: Boolean(row.LiveTask),
+        ms: rowMs,
+        auditId: row.AuditId
+      });
     }
   }
 
@@ -1020,6 +1122,7 @@ function reportActivitySummary(db, params) {
         OccurredAt: row.OccurredAt,
         Completed: row.Completed,
         Reopened: row.Reopened,
+        LastReopenAt: row.LastReopenAt,
         Deleted: row.Kind === 'deleted' ? 1 : 0,
         Created: row.Kind === 'created' ? 1 : 0,
         LiveTask: row.LiveTask
@@ -1028,6 +1131,9 @@ function reportActivitySummary(db, params) {
       if (new Date(row.OccurredAt).getTime() > new Date(existing.OccurredAt).getTime()) existing.OccurredAt = row.OccurredAt;
       if (row.Completed) existing.Completed = 1;
       if (row.Reopened) existing.Reopened = 1;
+      if (row.LastReopenAt && (!existing.LastReopenAt || new Date(row.LastReopenAt).getTime() > new Date(existing.LastReopenAt).getTime())) {
+        existing.LastReopenAt = row.LastReopenAt;
+      }
       if (row.Kind === 'deleted') existing.Deleted = 1;
       if (row.Kind === 'created') existing.Created = 1;
     }
@@ -1070,28 +1176,32 @@ function reportActivitySummary(db, params) {
         _deletedCompletedTasks: new Set()
       });
     }
-    if (g.Completed && !g.LiveTask) {
+    const latestComp = latestCompletionByEntity.get(g.EntityId);
+    if (latestComp && !latestComp.isLive && latestComp.projectId === g.ProjectId) {
       contributingProjectMap.get(g.ProjectId)._deletedCompletedTasks.add(g.EntityId);
     }
     if (!g.LiveTask) continue;
     const tid = upper(g.LiveTask.TaskId);
     const actDay = istanbulFmt.format(new Date(g.OccurredAt));
     const prev = liveByTask.get(tid);
+    const winningProjectId = latestComp && latestComp.isLive ? latestComp.projectId : null;
     if (!prev) {
       liveByTask.set(tid, {
         TaskId: upper(g.LiveTask.TaskId),
         CurrentProjectId: upper(g.LiveTask.ProjectId),
         LastActivityDay: actDay,
         CompletedInPeriod: g.Completed ? 1 : 0,
-        CompletedProjectId: g.Completed ? g.ProjectId : null
+        CompletedProjectId: winningProjectId,
+        LastReopenAt: g.LastReopenAt || null
       });
     } else {
       if (actDay > prev.LastActivityDay) prev.LastActivityDay = actDay;
       if (g.Completed) {
         prev.CompletedInPeriod = 1;
-        if (!prev.CompletedProjectId || g.ProjectId > prev.CompletedProjectId) {
-          prev.CompletedProjectId = g.ProjectId;
-        }
+        prev.CompletedProjectId = winningProjectId;
+      }
+      if (g.LastReopenAt && (!prev.LastReopenAt || new Date(g.LastReopenAt).getTime() > new Date(prev.LastReopenAt).getTime())) {
+        prev.LastReopenAt = g.LastReopenAt;
       }
     }
   }
@@ -1175,7 +1285,8 @@ const NO_PROJECT_SCOPE_CAP = new Set(['wbs-selector', 'report-scope-roster', 're
 
 function runLoggedAiToolQuery(db, marker, params) {
   if (db.aiToolFailure?.[marker[1]]) throw db.aiToolFailure[marker[1]];
-  if (!NO_PROJECT_SCOPE_CAP.has(marker[1]) && scopeOf(db, params).projects.size >= Number(params.analysisMaxRows)) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
+  const projectScope = scopeOf(db, params, { filterByAssignees: marker[1] === 'task-facts' });
+  if (!NO_PROJECT_SCOPE_CAP.has(marker[1]) && projectScope.projects.size >= Number(params.analysisMaxRows)) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   // Sonuç kümesi hesaplanmadan SQL nüfus bütçesi bağımsız uygulanır.
   const boundedTaskQueries = new Set(['task-facts', 'task-detail', 'portfolio', 'project-detail', 'wbs', 'baseline']);
   if (boundedTaskQueries.has(marker[1]) || (marker[1] === 'dependencies' && !params.focusTaskId)) {
