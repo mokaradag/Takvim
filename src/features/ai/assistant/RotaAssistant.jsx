@@ -286,9 +286,11 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   // Kipli panel çekmece katmanında (`--z-drawer`) çizilir; tuzak önceliği de bu
   // katmandır. Böylece dar ekrana geçişte etkinleşen panel, üstte açık duran
   // kipli pencerenin (ör. bildirim penceresi) odağını ve Tab/Esc sahipliğini almaz.
+  // Kısayol engeli katmandan bağımsızdır: tam ekran panel açıkken komut paleti
+  // açılmaz; paletten seçilen görevin çekmecesi panelin arkasında kalırdı.
   const exitFocus = useCallback(() => setFocused?.(false), [setFocused]);
   useModalFocusTrap({ containerRef: panelRef, initialFocusRef: focusTargetRef, restoreFocusRef: launcherRef, restoreFocusEnabledRef,
-    onClose: focused ? exitFocus : close, enabled: open && modal, priority: 310 });
+    onClose: focused ? exitFocus : close, enabled: open && modal, priority: 310, blocksCommandPalette: true });
   useVisualViewportFit(panelRef, open && sheet);
 
   const composerAvailable = actual && state.status === 'ready' && !state.refreshing && !state.active.loading && state.readiness?.available

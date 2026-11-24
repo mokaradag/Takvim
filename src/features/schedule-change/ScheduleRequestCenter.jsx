@@ -239,8 +239,11 @@ export function ScheduleRequestCenter({ onNavigate }) {
     disabled: requestToggleDisabled
   } = scheduleRequestCenterViewState(listed, open);
 
+  // Panel açılır pencere katmanında (`--z-popover`) çizilir; tuzak önceliği de
+  // budur. Panel açıkken dar ekrana geçen Bilgin sayfası (çekmece katmanı) onu
+  // örter ve Tab/Esc görünür sayfaya geçer. Komut paleti engeli korunur.
   useModalFocusTrap({ containerRef: popoverRef, initialFocusRef: popoverRef, restoreFocusRef: toggleRef,
-    onClose: () => setOpen(false), enabled: requestCenterOpen });
+    onClose: () => setOpen(false), enabled: requestCenterOpen, priority: 200, blocksCommandPalette: true });
 
   useEffect(() => {
     setOpen((current) => reduceScheduleRequestCenterOpen(current, { type: 'sync', hasRequests }));
@@ -260,13 +263,16 @@ export function ScheduleRequestCenter({ onNavigate }) {
   return (
     <>
       <div className="schedule-request-center" ref={rootRef}>
+        {/* `disabled` yerine `aria-disabled`: zil, bildirim pencerelerinin odak
+            dönüş hedefidir. Liste pencere açıkken boşalırsa devre dışı düğme odak
+            alamaz ve odak gövdeye düşerdi. Boş listede tıklama zaten etkisizdir. */}
         <button
           ref={toggleRef}
           className="icon-btn schedule-request-toggle"
           type="button"
           aria-label={`${unreadCount} okunmamış bildirim, ${pendingCount} kararınızı bekleyen kayıt`}
           aria-expanded={requestCenterOpen}
-          disabled={requestToggleDisabled}
+          aria-disabled={requestToggleDisabled || undefined}
           onClick={() => setOpen((current) => reduceScheduleRequestCenterOpen(current, { type: 'toggle', hasRequests }))}
           title={hasRequests ? 'Bildirimler' : 'Bildirim bulunmuyor'}
         >

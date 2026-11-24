@@ -13,9 +13,14 @@ export function modalTrapDepth() {
   return activeTraps.length;
 }
 
-/** Daha yüksek veya kayıt yapan bir pencere komut paletini engeller. */
+/**
+ * Komut paletini engelleyen ya da kayıt yapan bir yüzey açık mı? Engel, görsel
+ * katmandan (`priority`) AYRI bir sözleşmedir: kipli Bilgin paneli çekmece
+ * katmanında çizilse de kısayolu engeller; aksi hâlde paletten açılan görev
+ * çekmecesi tam ekran panelin arkasında kalırdı.
+ */
 export function hasBlockingModal() {
-  return activeTraps.some((token) => token.priority >= 500 || token.blockedRef.current);
+  return activeTraps.some((token) => token.blocksCommandPalette || token.blockedRef.current);
 }
 
 /**
@@ -35,10 +40,16 @@ function isDocumentRoot(element, focusDocument) {
   return element === focusDocument.body || element === focusDocument.documentElement;
 }
 
-/** Odak geri verilecek öge bağlı, belge kökü değil ve gerçekten odak alabilir olmalıdır. */
-function canReceiveFocus(element, focusDocument) {
-  return Boolean(element?.isConnected && typeof element.focus === 'function'
-    && !isDocumentRoot(element, focusDocument) && !element.disabled && !element.closest?.('[inert]'));
+/**
+ * Adaya odak vermeyi DENER ve odağın gerçekten ona geçip geçmediğini döndürür.
+ * Odaklanabilirlik tahmin edilmez: devre dışı, `inert` içinde ya da gizli
+ * (`display: none`, `visibility: hidden`, `hidden`) bir ögede `focus()` etkisiz
+ * kalır ve sıradaki yedeğe geçilir.
+ */
+function focusOpener(opener, focusDocument) {
+  if (!opener?.isConnected || typeof opener.focus !== 'function' || isDocumentRoot(opener, focusDocument)) return false;
+  opener.focus();
+  return focusDocument.activeElement === opener;
 }
 
 /** Öge tuzağın penceresinde ya da ona `data-modal-owner` ile bağlı gövde portalında mı? */
@@ -90,8 +101,12 @@ export function resolveFocusTrapTarget({ focusableCount, activeIndex, containsAc
  * `aria-modal="true"` odağı KISITLAMAZ: klavye kullanıcısı iletişim kutusundan
  * arkadaki uygulama kabuğuna sekme ile çıkabiliyordu. Bu kanca paylaşımlıdır ki
  * her modal aynı davranışı yeniden yazmak zorunda kalmasın.
+ *
+ * `priority` yüzeyin GÖRSEL katmanıdır (klavye sahipliği); `blocksCommandPalette`
+ * kısayol engelidir. Varsayılan engel kipli pencere katmanıdır (≥ 500); farklı
+ * katmanda çizilip yine de engellemesi gereken yüzey bunu açıkça bildirir.
  */
-export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, restoreFocusEnabledRef = null, onClose, blocked = false, enabled = true, priority = 500 }) {
+export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusRef = null, restoreFocusEnabledRef = null, onClose, blocked = false, enabled = true, priority = 500, blocksCommandPalette = priority >= 500 }) {
   const scopeId = useId();
   const focusEpochRef = useRef(0);
   const closeRef = useRef(onClose);
@@ -118,19 +133,20 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       const focused = focusDocument.activeElement;
       if (focused?.isConnected && !isDocumentRoot(focused, focusDocument) && focused !== openedFrom && !owner?.contains?.(focused)) return;
       // Açan öge pencereyle AYNI çizimde sökülebilir (ör. bildirim kartı paneliyle
-      // birlikte kapanır; odak o anda gövdeye düşer) ya da artık devre dışı
-      // olabilir. Odak alamayan aday atlanır, sıradaki yedeğe geçilir.
-      let opener = [openedFrom, restoreFocus, restoreFocusRef?.current]
-        .find((candidate) => canReceiveFocus(candidate, focusDocument));
+      // birlikte kapanır; odak o anda gövdeye düşer) ya da odak alamaz hâle
+      // gelmiş olabilir. Adaylar sırayla denenir; odak gerçekten geçene dek
+      // sıradaki yedeğe geçilir.
+      const candidates = [openedFrom, restoreFocus, restoreFocusRef?.current];
       // Arkada hâlâ açık bir tuzak varsa odak onun DIŞINDA bırakılmaz (ör. zil
       // düğmesi açık Bilgin sayfasının ya da "Görevi aç" ile açılan görev
-      // çekmecesinin arkasında kalırdı); klavye sahibi yüzeyin ilk odağına döner.
+      // çekmecesinin arkasında kalırdı); yalnızca o yüzeye ait adaylar, ardından
+      // klavye sahibi yüzeyin ilk odağı ve kabı denenir.
       const remaining = keyboardOwner();
-      if (remaining && !trapOwnsElement(remaining, opener)) {
-        opener = [remaining.initialFocusRef.current, remaining.containerRef.current]
-          .find((candidate) => canReceiveFocus(candidate, focusDocument));
-      }
-      if (canReceiveFocus(opener, focusDocument)) opener.focus();
+      const ordered = remaining
+        ? [...candidates.filter((candidate) => trapOwnsElement(remaining, candidate)),
+          remaining.initialFocusRef.current, remaining.containerRef.current]
+        : candidates;
+      ordered.some((candidate) => focusOpener(candidate, focusDocument));
     };
     return () => { (globalThis.requestAnimationFrame || setTimeout)(restore); };
   }, [containerRef, initialFocusRef, restoreFocusRef, restoreFocusEnabledRef, enabled, priority]);
@@ -139,7 +155,7 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
     if (!enabled || typeof document === 'undefined') return undefined;
     const owner = containerRef.current;
     owner?.setAttribute('data-focus-scope', scopeId);
-    const token = { priority, blockedRef, scopeId, containerRef, initialFocusRef };
+    const token = { priority, blocksCommandPalette, blockedRef, scopeId, containerRef, initialFocusRef };
     activeTraps.push(token);
     const handleKeyDown = (event) => {
       if (keyboardOwner() !== token || event.defaultPrevented) return;
@@ -178,5 +194,5 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       if (index >= 0) activeTraps.splice(index, 1);
       owner?.removeAttribute('data-focus-scope');
     };
-  }, [containerRef, initialFocusRef, enabled, scopeId, priority]);
+  }, [containerRef, initialFocusRef, enabled, scopeId, priority, blocksCommandPalette]);
 }

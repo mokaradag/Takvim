@@ -110,7 +110,7 @@ function mountCenter(stateOverrides) {
   const view = mountDom(TopbarHost, {}, state);
   const topbar = view.host.querySelector('.topbar');
   const toggle = topbar.querySelector('.schedule-request-toggle');
-  return { view, topbar, toggle, calls };
+  return { view, topbar, toggle, calls, state };
 }
 
 /** Zil panelini açar ve başlığı eşleşen bildirim kartını seçer. */
@@ -380,9 +380,19 @@ test('Yapışkan şeritler ve kabuk katmanları kipli pencerenin arkasında kal�
   assert.equal(modalLayer.position, 'fixed', 'pencere katmanı görünüm alanına sabitlenir');
   assert.equal(modalLayer.inset, '0', 'arka perde bütün görünüm alanını kaplar');
   assert.equal(modalLayer['z-index'], 'var(--z-modal)', 'merkezi katman sözleşmesi korunur; keyfi büyük değer yoktur');
+  // Her koşuldaki değer TAM OLARAK `--z-modal` olmalıdır: düşürülen pencere
+  // şeritlerin altında kalır, yükseltilen pencere ise üstünde kalması gereken
+  // aranabilir seçim panellerini ve ipuçlarını örter.
   const modalValues = propertyValues(features, '.schedule-modal-layer', 'z-index').map((value) => layerValue(value, layers));
-  const modal = Math.min(...modalValues);
-  assert.equal(modal, layers['--z-modal'], 'hiçbir görünüm alanı koşulu pencere katmanını düşürmez');
+  assert.ok(modalValues.length && modalValues.every((value) => value === layers['--z-modal']), `pencere katmanı her koşulda --z-modal değerindedir (${modalValues})`);
+  const modal = layers['--z-modal'];
+
+  // Perde mutlak konumludur; pencerenin KENDİSİ de konumlu olmalıdır. Konumsuz
+  // pencere DOM sırası doğru olsa bile konumlu perdenin altında boyanır ve
+  // denetimlerine tıklanamaz.
+  const positioned = new Set(['relative', 'absolute', 'fixed', 'sticky']);
+  const dialogPositions = propertyValues(features, '.schedule-modal', 'position');
+  assert.ok(dialogPositions.length && dialogPositions.every((value) => positioned.has(value)), `pencere her koşulda konumludur (${dialogPositions})`);
 
   const backdrop = declarations(features, '.schedule-modal-backdrop');
   assert.equal(backdrop.position, 'absolute', 'perde katmana göre konumlanır; konumsuz `inset` etkisiz kalırdı');
@@ -540,4 +550,78 @@ test('Odak alamayan açan atlanır; devre dışı zil yerine açık kalan yüzey
   await nextFrame();
   assert.ok(document.activeElement !== bell && document.activeElement !== document.documentElement, 'devre dışı zil ve kök öge hedef alınmaz');
   assert.ok(document.activeElement === lower.host.querySelector('textarea'), 'odak açık kalan kipli yüzeye döner');
+});
+
+test('Bildirim paneli açıkken etkinleşen üst katman yüzeyi odağı ve Tab/Esc sahipliğini alır', async (t) => {
+  // Panel açılır pencere katmanındadır (`--z-popover`); dar ekrana geçişte kipli
+  // sayfaya dönüşen Bilgin (çekmece katmanı) onu örter. Klavye görünür sayfaya
+  // geçer; sayfa kapanınca odak hâlâ açık olan panele döner.
+  const { view, toggle } = mountCenter();
+  t.after(() => view.unmount());
+  const closes = [];
+  const lower = mountLowerSurface(t, () => closes.push('üst yüzey'));
+  lower.render(false);
+
+  click(toggle);
+  const popover = document.querySelector('.schedule-request-popover');
+  assert.ok(popover?.contains(document.activeElement), 'odak açılan bildirim panelindedir');
+  lower.render(true);
+  assert.ok(document.activeElement === lower.host.querySelector('textarea'), 'paneli örten yüzey odağı alır');
+
+  key('Escape');
+  assert.deepEqual(closes, ['üst yüzey'], 'Esc görünür yüzeye aittir');
+  assert.ok(document.querySelector('.schedule-request-popover'), 'örtülen bildirim paneli Esc ile kapanmaz');
+
+  lower.render(false);
+  await nextFrame();
+  assert.ok(document.querySelector('.schedule-request-popover').contains(document.activeElement), 'yüzey kapanınca odak açık panele döner');
+});
+
+test('Liste pencere açıkken boşalırsa zil odak alabilir kalır ve odak zile döner', async (t) => {
+  // Başka bir sekme son bildirimi temizlerse liste boşalır. Zil devre dışı
+  // (`disabled`) olsaydı odak alamaz, kapanışta odak gövdeye düşerdi.
+  const { view, toggle, state } = mountCenter();
+  t.after(() => view.unmount());
+
+  await openNotification(toggle, /Kararınız bekleniyor.*Mehmet Kaya/);
+  Object.assign(state, { scheduleRequests: [], assignmentCoordinations: [], taskNotifications: [] });
+  view.render();
+  assert.equal(toggle.getAttribute('aria-disabled'), 'true', 'boş listede zil kullanılamaz olarak bildirilir');
+  assert.equal(toggle.disabled, false, 'zil odak alabilir kalır');
+  assert.equal(modalLayers().length, 1, 'açık pencere listenin boşalmasıyla kapanmaz');
+
+  key('Escape');
+  await nextFrame();
+  assert.ok(document.activeElement === toggle, 'odak gövdeye değil zile döner');
+  click(toggle);
+  assert.ok(document.querySelector('.schedule-request-popover') === null, 'boş listede zil paneli açmaz');
+});
+
+test('Gizlenen açan atlanır; odak gerçekten geçebilen sonraki yedeğe verilir', async (t) => {
+  // Açan öge bağlı kalıp gizlenebilir (`hidden`, `display: none`). Tarayıcı ona
+  // odak vermez; aday kabul edilseydi yedek hiç denenmez, odak kökte kalırdı.
+  // JSDOM gizli ögeye de odak verdiği için tarayıcı davranışı burada açıkça kurulur.
+  const opener = document.createElement('button');
+  const fallback = document.createElement('button');
+  document.body.append(opener, fallback);
+  t.after(() => { opener.remove(); fallback.remove(); });
+  act(() => opener.focus());
+
+  function TrapProbe({ open }) {
+    const containerRef = useRef(null);
+    const restoreFocusRef = useRef(fallback);
+    useModalFocusTrap({ containerRef, initialFocusRef: containerRef, restoreFocusRef, onClose: () => {}, enabled: open });
+    return open ? React.createElement('div', { ref: containerRef, tabIndex: -1, role: 'dialog', 'aria-modal': 'true' }) : null;
+  }
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  t.after(() => { act(() => root.unmount()); host.remove(); });
+  act(() => root.render(React.createElement(TrapProbe, { open: true })));
+
+  opener.hidden = true;
+  opener.focus = () => {};
+  act(() => root.render(React.createElement(TrapProbe, { open: false })));
+  await nextFrame();
+  assert.ok(document.activeElement === fallback, 'gizli açan atlanır, odak yedeğe geçer');
 });

@@ -2725,6 +2725,29 @@ test('dar ekranda kipli sayfaya dönüşen Bilgin paneli üstte açık kipli pen
   }
 });
 
+test('kipli Bilgin paneli dar sayfada ve odak görünümünde komut paleti kısayolunu engeller', async () => {
+  // Panel çekmece katmanında çizilse de (öncelik 310) kısayol engeli katmandan
+  // bağımsızdır: Ctrl+K ile açılan paletten seçilen görevin çekmecesi tam ekran
+  // panelin arkasında kalır ve klavyeyi gizli düzenleyici alırdı.
+  const { hasBlockingModal } = await import('../src/hooks/useModalFocusTrap.js');
+  const previous = { window: globalThis.window, document: globalThis.document, observer: globalThis.MutationObserver };
+  globalThis.document = { body: { classList: { contains: () => false } }, activeElement: null, addEventListener() {}, removeEventListener() {} };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  const { controller } = await readyController();
+  try {
+    for (const [label, narrow, focused] of [['dar ekran sayfası', true, false], ['masaüstü odak görünümü', false, true], ['yerleşik masaüstü paneli', false, false]]) {
+      globalThis.window = Object.assign(new EventTarget(), { matchMedia: () => ({ matches: narrow, addEventListener() {}, removeEventListener() {} }) });
+      const panel = mountComponent(RotaAssistantPanel, { assistant: { controller, open: true, actual: true, focused, setFocused() {}, focusRequest: 0, launcherRef: { current: null }, close() {} } });
+      assert.equal(hasBlockingModal(), narrow || focused, `${label}: komut paleti ${narrow || focused ? 'engellenir' : 'engellenmez'}`);
+      panel.unmount();
+    }
+    assert.equal(hasBlockingModal(), false, 'panel kapanınca engel kalkar');
+  } finally {
+    controller.dispose();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.MutationObserver = previous.observer;
+  }
+});
+
 test("serbest metin izni tek tura aittir; gönderimde tüketilir ve bağlam değişince sıfırlanır", async () => {
   const rotaData = { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: true }] };
   const { controller, api, state } = await readyController({ api: fakeApi({ loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { ...READINESS, rotaData } }) }) });
