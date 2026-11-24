@@ -44,7 +44,11 @@ const {
 const { buildExecutiveReportEvidence } = await import('../src/server/ai/report/reportEvidence.js');
 const { NOTE_LIMITS } = await import('../src/server/ai/tools/analysisPlan.js');
 const { TASK_NOTE_CHARS, REPORT_TASK_NOTE_CHARS } = await import('../src/server/ai/tools/rota/rotaToolStore.js');
-const { AI_TOOL_REPORT_TASK_NOTES_SQL, AI_TOOL_TASK_NOTES_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+const {
+  AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL,
+  AI_TOOL_REPORT_TASK_NOTES_SQL,
+  AI_TOOL_TASK_NOTES_SQL
+} = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
 const { getSqlPool } = await import('../src/server/db/pool.js');
 const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
 const { TOOL_ERROR_CODES, ToolError } = await import('../src/server/ai/tools/toolErrors.js');
@@ -2878,5 +2882,68 @@ test('zamansal doğruluk ve not/bütçe yakınsaması: gelecek ActualFinish, sil
     assert.equal(doneMetric.deger, 1, 'dönemde tamamlanıp silinen görev tamamlanan ölçüsüne dâhil edilmelidir');
     const msFinding = pkg.turetilmis.find((f) => f.tur === 'kilometre_tasi_ozeti');
     assert.ok(msFinding && msFinding.girdiler.length >= 2, 'kilometre_tasi_ozeti ilgili ölçü ve görev kanıtlarına bağlanmalıdır');
+  });
+});
+
+test('çok projeli raporda silinmiş tamamlamalar proje kırılımına yansır ve SQL küme içinde alt sorgu kullanmaz', async () => {
+  // SQL Server Msg 130 koruması: COUNT(...) küme ifadesi içinde alt sorgu (NOT EXISTS / SELECT) bulunmamalıdır.
+  assert.doesNotMatch(
+    AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL,
+    /COUNT\s*\([^)]*\b(NOT\s+EXISTS|SELECT)\b/i,
+    'AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL içinde COUNT(...) kümesinin içinde alt sorgu bulunmamalıdır'
+  );
+  assert.match(
+    AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL,
+    /LEFT\s+JOIN\s+dbo\.MR_Tasks\s+live\s+ON\s+live\.TaskId\s*=\s*TRY_CONVERT\(uniqueidentifier,\s*g\.EntityId\)/i,
+    'canlı görev denetimi kümeleme öncesinde LEFT JOIN ile yapılmalıdır'
+  );
+
+  const kuzeyLiveDoneId = '11111111-1111-4111-8111-111111111201';
+  const meltemDeletedDoneId = '11111111-1111-4111-8111-111111111202';
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: kuzeyLiveDoneId, ProjectId: P.KUZEY, Title: 'Kuzey tamamlanan canlı görev',
+        Status: 'done', Priority: 'normal', ActualFinish: '2026-11-04',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-20T08:00:00.000Z', UpdatedAt: '2026-11-04T10:00:00.000Z'
+      }
+    ],
+    auditLog: [
+      {
+        AuditId: 7201, OccurredAt: '2026-11-04T10:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: kuzeyLiveDoneId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress' }), AfterJson: JSON.stringify({ Status: 'done' })
+      },
+      {
+        AuditId: 7202, OccurredAt: '2026-11-05T09:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: meltemDeletedDoneId, ProjectId: P.MELTEM,
+        BeforeJson: JSON.stringify({ Status: 'in-progress' }), AfterJson: JSON.stringify({ Status: 'done' })
+      },
+      {
+        AuditId: 7203, OccurredAt: '2026-11-06T10:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'DELETE', EntityType: 'TASK', EntityId: meltemDeletedDoneId, ProjectId: P.MELTEM,
+        BeforeJson: JSON.stringify({ Title: 'Meltem tamamlanıp silinen görev', Status: 'done', CreatedBySicil: U.YONETICI, assigneeIds: [U.YONETICI] }),
+        AfterJson: null
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'projeler', kimlikler: ['PRJ-KUZEY', 'PRJ-MELTEM'] },
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    assert.equal(validateEvidencePackageContract(evidencePackage).ok, true);
+    const doneMetrics = evidencePackage.kanitlar.filter((e) => e.tur === 'olcu' && e.olcu === 'tamamlanan');
+    const overall = doneMetrics.find((e) => Array.isArray(e.kapsam) && e.kapsam.length === 2);
+    const kuzeyMetric = doneMetrics.find((e) => Array.isArray(e.kapsam) && e.kapsam.length === 1 && e.kapsam[0] === 'PRJ-KUZEY');
+    const meltemMetric = doneMetrics.find((e) => Array.isArray(e.kapsam) && e.kapsam.length === 1 && e.kapsam[0] === 'PRJ-MELTEM');
+    assert.equal(overall?.deger, 2, 'genel tamamlanan ölçüsü canlı ve silinmiş tamamlamaların toplamı olmalıdır');
+    assert.equal(kuzeyMetric?.deger, 1, 'PRJ-KUZEY proje kırılımı canlı tamamlamayı saymalıdır');
+    assert.equal(meltemMetric?.deger, 1, 'PRJ-MELTEM proje kırılımı dönem içinde tamamlanıp silinen görevi de saymalıdır');
   });
 });

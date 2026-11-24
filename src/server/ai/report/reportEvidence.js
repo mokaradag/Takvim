@@ -1206,6 +1206,12 @@ export async function buildExecutiveReportEvidence({
     // Çok projeli kapsamlarda proje bazlı tamamlanan kırılımı ikincil ölçü olarak eklenir (görevsiz seçili projeler dâhil).
     const secondaryMetrics = [];
     if (scopeCodes.length > 1) {
+      const deletedCompletedByProjectId = new Map();
+      for (const proj of periodActivityAgg?.contributingProjects || []) {
+        if (proj?.projectId && Number(proj.deletedCompleted || 0) > 0) {
+          deletedCompletedByProjectId.set(proj.projectId, Number(proj.deletedCompleted || 0));
+        }
+      }
       const sortedProjects = [...projects.values()].sort((a, b) => compareAscii(a.projectId, b.projectId));
       const codeCounts = new Map();
       for (const project of sortedProjects) {
@@ -1213,11 +1219,11 @@ export async function buildExecutiveReportEvidence({
         codeCounts.set(code, (codeCounts.get(code) || 0) + 1);
       }
       for (const project of sortedProjects) {
-        // Denetim tamamlaması farklı bir projede gerçekleştiyse (taşınmış görev) tamamlama kaynak projeye yazılır.
+        // Denetim tamamlaması farklı bir projede gerçekleştiyse (taşınmış görev) tamamlama kaynak projeye yazılır; dönem içinde tamamlanıp silinen görevler de proje kırılımına eklenir.
         const projCompleted = completedInPeriodTasks.filter((task) => {
           const attributedProjectId = auditCompletedProjectByTaskId.get(task.id) || task.projectId;
           return attributedProjectId === project.projectId;
-        }).length;
+        }).length + (deletedCompletedByProjectId.get(project.projectId) || 0);
         const projAccess = projectAccess(scope, project.projectId);
         const projComplete = Boolean(scope.isAdmin || projAccess?.accessLevel === 'FULL' || projAccess?.readGrant)
           && factsComplete

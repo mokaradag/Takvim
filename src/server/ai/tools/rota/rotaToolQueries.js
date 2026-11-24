@@ -1436,18 +1436,19 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
 
   SELECT
     COUNT(*) AS Total,
-    COUNT(DISTINCT EntityId) AS TaskCount,
-    COUNT(DISTINCT ActorSicil) AS ActorCount,
-    COUNT(DISTINCT CASE WHEN Completed = 1 THEN EntityId END) AS CompletedCount,
-    COUNT(DISTINCT CASE WHEN Completed = 1 AND NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks live WHERE live.TaskId = TRY_CONVERT(uniqueidentifier, #ReportActivityGroups.EntityId)) THEN EntityId END) AS DeletedCompletedCount,
-    COUNT(DISTINCT CASE WHEN Created = 1 THEN EntityId END) AS CreatedCount,
-    COUNT(DISTINCT CASE WHEN Deleted = 1 THEN EntityId END) AS DeletedCount,
-    COUNT(DISTINCT CASE WHEN Reopened = 1 THEN EntityId END) AS ReopenedCount,
+    COUNT(DISTINCT g.EntityId) AS TaskCount,
+    COUNT(DISTINCT g.ActorSicil) AS ActorCount,
+    COUNT(DISTINCT CASE WHEN g.Completed = 1 THEN g.EntityId END) AS CompletedCount,
+    COUNT(DISTINCT CASE WHEN g.Completed = 1 AND live.TaskId IS NULL THEN g.EntityId END) AS DeletedCompletedCount,
+    COUNT(DISTINCT CASE WHEN g.Created = 1 THEN g.EntityId END) AS CreatedCount,
+    COUNT(DISTINCT CASE WHEN g.Deleted = 1 THEN g.EntityId END) AS DeletedCount,
+    COUNT(DISTINCT CASE WHEN g.Reopened = 1 THEN g.EntityId END) AS ReopenedCount,
     (SELECT COUNT(*) FROM (
       SELECT EntityId FROM #ReportActivityGroups GROUP BY EntityId
       HAVING MAX(Created) = 0 AND MAX(Deleted) = 0 AND MAX(Completed) = 0 AND MAX(Reopened) = 0
     ) updatedOnly) AS UpdatedOnlyCount
-  FROM #ReportActivityGroups;
+  FROM #ReportActivityGroups g
+  LEFT JOIN dbo.MR_Tasks live ON live.TaskId = TRY_CONVERT(uniqueidentifier, g.EntityId);
 
   SELECT
     t.TaskId,
@@ -1459,12 +1460,15 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
   JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, g.EntityId)
   GROUP BY t.TaskId, t.ProjectId;
 
-  SELECT DISTINCT
+  SELECT
     g.ProjectId,
     p.ProjectCode,
-    p.ProjectName
+    p.ProjectName,
+    COUNT(DISTINCT CASE WHEN g.Completed = 1 AND live.TaskId IS NULL THEN g.EntityId END) AS DeletedCompletedCount
   FROM #ReportActivityGroups g
   LEFT JOIN dbo.MR_Projects p ON p.ProjectId = g.ProjectId
+  LEFT JOIN dbo.MR_Tasks live ON live.TaskId = TRY_CONVERT(uniqueidentifier, g.EntityId)
+  GROUP BY g.ProjectId, p.ProjectCode, p.ProjectName
   ORDER BY g.ProjectId;
 
   DROP TABLE #ReportActivityGroups, #ReportActivityScope, #ReportActivityAssignees, #ReportActivityProjects, #AiScopeTaskIds, #AiScopeProjects;`;

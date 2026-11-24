@@ -537,7 +537,8 @@ export async function readReportActivitySummary(executor, scope, {
     contributingProjects: projectRows.map((row) => ({
       projectId: canonicalActualId(row.ProjectId),
       code: row.ProjectCode ? String(row.ProjectCode).trim() : null,
-      name: row.ProjectName ? String(row.ProjectName).trim() : null
+      name: row.ProjectName ? String(row.ProjectName).trim() : null,
+      deletedCompleted: Number(row.DeletedCompletedCount || 0)
     })).filter((row) => row.projectId)
   };
 }

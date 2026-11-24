@@ -1066,8 +1066,12 @@ function reportActivitySummary(db, params) {
       contributingProjectMap.set(g.ProjectId, {
         ProjectId: g.ProjectId,
         ProjectCode: p?.ProjectCode ?? null,
-        ProjectName: p?.ProjectName ?? null
+        ProjectName: p?.ProjectName ?? null,
+        _deletedCompletedTasks: new Set()
       });
+    }
+    if (g.Completed && !g.LiveTask) {
+      contributingProjectMap.get(g.ProjectId)._deletedCompletedTasks.add(g.EntityId);
     }
     if (!g.LiveTask) continue;
     const tid = upper(g.LiveTask.TaskId);
@@ -1092,7 +1096,13 @@ function reportActivitySummary(db, params) {
     }
   }
   const contributingProjects = [...contributingProjectMap.values()]
-    .sort((a, b) => sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId)));
+    .sort((a, b) => sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId)))
+    .map(({ ProjectId, ProjectCode, ProjectName, _deletedCompletedTasks }) => ({
+      ProjectId,
+      ProjectCode,
+      ProjectName,
+      DeletedCompletedCount: _deletedCompletedTasks.size
+    }));
   return [counts, [...liveByTask.values()], contributingProjects];
 }
 
