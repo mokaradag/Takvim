@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import postcss from 'postcss';
 import React, { act, useRef } from 'react';
 import { button, click, key, mountDom } from './helpers/clientDomHarness.mjs';
 
 const { ScheduleRequestCenter } = await import('../src/features/schedule-change/ScheduleRequestCenter.jsx');
-const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+const { hasBlockingModal, useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
+const { DetailDrawer } = await import('../src/features/system-admin/components/DetailDrawer.jsx');
 const { useApplyTweaks } = await import('../src/hooks/useApplyTweaks.js');
 const { createRoot } = await import('react-dom/client');
 
@@ -321,40 +324,55 @@ test('Gövdeye taşınan pencere tema kapsamını ve kök değişkenlerini devra
 
 /* ── Katman sözleşmesi ──────────────────────────────────────── */
 
-const insideAtRule = (node) => {
-  for (let parent = node.parent; parent; parent = parent.parent) if (parent.type === 'atrule') return true;
-  return false;
-};
-
-/**
- * Koşulsuz kurallardan bir seçicinin son bildirimlerini birleştirir. Yalnızca
- * kuralın KENDİ bildirimleri alınır; iç içe bir alt kuraldaki değer seçicinin
- * kendisine aitmiş gibi sayılmaz.
- */
-function declarations(source, selector) {
-  const merged = {};
-  postcss.parse(source).walkRules((rule) => {
-    if (insideAtRule(rule) || !rule.selectors.includes(selector)) return;
-    rule.each((node) => { if (node.type === 'decl') merged[node.prop] = node.value; });
-  });
-  return merged;
+/** Kök yerleşimin içe aktardığı bütün biçim dosyaları ve koşullu yüklenen Bilgin biçimleri. */
+function stylesheets() {
+  const paths = [...read('src/app/layout.js').matchAll(/^import '\.\/(.+\.css)';$/gm)].map((match) => `src/app/${match[1]}`);
+  assert.ok(paths.includes('src/app/globals.css') && paths.includes('src/app/styles/features.css'), 'kök yerleşimin biçim dosyaları bulunur');
+  return [...paths, 'src/app/styles/assistant.css'].map((path) => [path, postcss.parse(read(path))]);
 }
 
 /**
- * Bir özelliğin seçici için yazılmış BÜTÜN değerleri: koşulsuz kural ve her
- * `@media`/`@supports` koşulu. Görünüm alanına bağlı bir geçersiz kılma da
- * katman sırasını bozamaz.
+ * Seçicinin ÖZNESİ (son birleşik seçicisi) sınıfı taşıyor mu? `:has(...)`,
+ * `:not(...)` gibi parantez içleri özneyi belirlemez; `.reports-module
+ * .workspace-sticky` ya da `.topbar:has(...)` gibi birleşik ve bağlamlı
+ * seçiciler de sınıfın öğesine uygulanır.
  */
-function propertyValues(source, selector, prop) {
+function targetsClass(selector, className) {
+  let flat = selector;
+  while (/\([^()]*\)/.test(flat)) flat = flat.replace(/\([^()]*\)/g, '');
+  const subject = flat.trim().split(/\s*[\s>+~]\s*/).at(-1);
+  return new RegExp(`\\.${className}(?![\\w-])`).test(subject);
+}
+
+/**
+ * Öznesi sınıf olan HER kuraldaki özellik değerleri: her biçim dosyası, her
+ * `@media`/`@supports` koşulu ve her birleşik ya da bağlamlı seçici. Yalnızca
+ * kuralın KENDİ bildirimleri alınır; iç içe alt kural seçiciye sayılmaz.
+ */
+function subjectValues(sheets, className, prop) {
   const values = [];
-  postcss.parse(source).walkRules((rule) => {
-    if (!rule.selectors.includes(selector)) return;
-    rule.each((node) => { if (node.type === 'decl' && node.prop === prop) values.push(node.value); });
-  });
+  for (const [path, root] of sheets) {
+    root.walkRules((rule) => {
+      if (!rule.selectors.some((selector) => targetsClass(selector, className))) return;
+      rule.each((node) => { if (node.type === 'decl' && node.prop === prop) values.push({ at: `${path} · ${rule.selector}`, value: node.value }); });
+    });
+  }
   return values;
 }
 
-/** `var(--z-*)` ve `calc(var(--z-*) + n)` katman değerlerini sayıya çevirir. */
+/** Tam seçicili koşulsuz kuralın bildirimleri (beklenen kanonik değerler için). */
+function declarations(sheets, selector) {
+  const merged = {};
+  for (const [, root] of sheets) {
+    root.walkRules((rule) => {
+      for (let parent = rule.parent; parent; parent = parent.parent) if (parent.type === 'atrule') return;
+      if (rule.selectors.includes(selector)) rule.each((node) => { if (node.type === 'decl') merged[node.prop] = node.value; });
+    });
+  }
+  return merged;
+}
+
+/** `var(--z-*)` ve `calc(var(--z-*) ± n)` katman değerlerini sayıya çevirir. */
 function layerValue(value, layers) {
   let number;
   const plain = value.match(/^var\((--z-[\w-]+)\)$/);
@@ -367,81 +385,177 @@ function layerValue(value, layers) {
   return number;
 }
 
-test('Yapışkan şeritler ve kabuk katmanları kipli pencerenin arkasında kalır', () => {
-  const globals = read('src/app/globals.css');
-  const shell = read('src/app/styles/shell.css');
-  const features = read('src/app/styles/features.css');
-  const root = declarations(globals, ':root');
-  const layers = Object.fromEntries(Object.entries(root)
+function layerTokens(sheets) {
+  return Object.fromEntries(Object.entries(declarations(sheets, ':root'))
     .filter(([name]) => name.startsWith('--z-'))
     .map(([name, value]) => [name, Number(value)]));
+}
 
-  const modalLayer = declarations(features, '.schedule-modal-layer');
-  assert.equal(modalLayer.position, 'fixed', 'pencere katmanı görünüm alanına sabitlenir');
-  assert.equal(modalLayer.inset, '0', 'arka perde bütün görünüm alanını kaplar');
-  assert.equal(modalLayer['z-index'], 'var(--z-modal)', 'merkezi katman sözleşmesi korunur; keyfi büyük değer yoktur');
-  // Her koşuldaki değer TAM OLARAK `--z-modal` olmalıdır: düşürülen pencere
-  // şeritlerin altında kalır, yükseltilen pencere ise üstünde kalması gereken
-  // aranabilir seçim panellerini ve ipuçlarını örter.
-  const modalValues = propertyValues(features, '.schedule-modal-layer', 'z-index').map((value) => layerValue(value, layers));
-  assert.ok(modalValues.length && modalValues.every((value) => value === layers['--z-modal']), `pencere katmanı her koşulda --z-modal değerindedir (${modalValues})`);
+test('Yapışkan şeritler ve kabuk katmanları kipli pencerenin arkasında kalır', () => {
+  const sheets = stylesheets();
+  const layers = layerTokens(sheets);
   const modal = layers['--z-modal'];
+  assert.ok(Number.isFinite(modal), 'kipli pencere katmanı tanımlıdır');
+  // Pencere içindeki aranabilir seçim panelleri ve ipuçları pencerenin üstünde kalır.
+  assert.ok(modal < layers['--z-select-popover'] && layers['--z-select-popover'] < layers['--z-tooltip'], 'kipli pencere aranabilir seçim panellerinin ve ipuçlarının altındadır');
 
-  // Perde mutlak konumludur; pencerenin KENDİSİ de konumlu olmalıdır. Konumsuz
-  // pencere DOM sırası doğru olsa bile konumlu perdenin altında boyanır ve
-  // denetimlerine tıklanamaz.
-  const positioned = new Set(['relative', 'absolute', 'fixed', 'sticky']);
-  const dialogPositions = propertyValues(features, '.schedule-modal', 'position');
-  assert.ok(dialogPositions.length && dialogPositions.every((value) => positioned.has(value)), `pencere her koşulda konumludur (${dialogPositions})`);
-
-  const backdrop = declarations(features, '.schedule-modal-backdrop');
-  assert.equal(backdrop.position, 'absolute', 'perde katmana göre konumlanır; konumsuz `inset` etkisiz kalırdı');
-  assert.equal(backdrop.inset, '0');
-  const blur = backdrop['backdrop-filter']?.match(/^blur\(\s*([\d.]+)px\s*\)$/);
-  assert.ok(blur && Number(blur[1]) > 0, `arka plan gerçekten bulanıklaştırılır (${backdrop['backdrop-filter']})`);
-
-  // Özet ve Raporlar tarih/bölüm şeridi, Proje Yapısı ve Rapor sekmeleri; her
-  // koşullu (`@media`) değer de dahil edilir.
-  const background = {
-    'yapışkan çalışma alanı şeridi': [features, '.workspace-sticky'],
-    'yapışkan rapor sekmeleri': [features, '.reports-module > .request-tabs.workspace-sticky'],
-    'kenar çubuğu': [shell, '.sidebar'],
-    'üst çubuk': [shell, '.topbar'],
-    'bildirim paneli açıkken üst çubuk': [shell, '.topbar:has(.schedule-request-popover)'],
-    'görev çekmecesi': [features, '.drawer-backdrop']
+  const values = (className, prop) => subjectValues(sheets, className, prop);
+  const every = (entries, predicate, message) => {
+    assert.ok(entries.length, `${message}: değer tanımlıdır`);
+    for (const { at, value } of entries) assert.ok(predicate(value), `${message} (${at}: ${value})`);
   };
-  for (const [label, [source, selector]] of Object.entries(background)) {
-    const values = propertyValues(source, selector, 'z-index');
-    assert.ok(values.length, `${label} katmanı tanımlıdır`);
-    for (const value of values) assert.ok(layerValue(value, layers) < modal, `${label} (${value}) kipli pencerenin altındadır`);
+
+  // Pencere katmanı her koşulda TAM OLARAK `--z-modal` olur: düşürülen pencere
+  // şeritlerin altında kalır, yükseltilen pencere seçim panellerini örter.
+  every(values('schedule-modal-layer', 'z-index'), (value) => layerValue(value, layers) === modal, 'pencere katmanı --z-modal değerindedir');
+  every(values('schedule-modal-layer', 'position'), (value) => value === 'fixed', 'pencere katmanı görünüm alanına sabitlenir');
+  assert.equal(declarations(sheets, '.schedule-modal-layer').inset, '0', 'arka perde bütün görünüm alanını kaplar');
+
+  // Perde ve pencere aynı katmanın kardeşleridir; perde DOM'da önce gelir.
+  // Konumlu kardeşler katman değeri yoksa DOM sırasıyla boyanır. Perde konumludur;
+  // pencere de konumlu olmalı ve perde ondan yüksek bir katman almamalıdır.
+  const positioned = new Set(['relative', 'absolute', 'fixed', 'sticky']);
+  every(values('schedule-modal-backdrop', 'position'), (value) => value === 'absolute', 'perde katmana göre konumlanır');
+  assert.equal(declarations(sheets, '.schedule-modal-backdrop').inset, '0');
+  every(values('schedule-modal', 'position'), (value) => positioned.has(value), 'pencere konumludur');
+  const backdropLayers = values('schedule-modal-backdrop', 'z-index').map(({ value }) => layerValue(value, layers));
+  const dialogLayers = values('schedule-modal', 'z-index').map(({ value }) => layerValue(value, layers));
+  // Katman değeri olmayan konumlu öge 0 düzeyinde boyanır; eşitlikte DOM'da sonra
+  // gelen pencere üstte kalır.
+  const highestBackdrop = backdropLayers.length ? Math.max(...backdropLayers) : 0;
+  const lowestDialog = dialogLayers.length ? Math.min(...dialogLayers) : 0;
+  assert.ok(highestBackdrop <= lowestDialog, `perde pencerenin üstünde bir katman almaz (perde ${backdropLayers}, pencere ${dialogLayers})`);
+
+  // Bulanıklık hiçbir görünüm alanı koşulunda kapatılmaz.
+  every(values('schedule-modal-backdrop', 'backdrop-filter'), (value) => Number(value.match(/^blur\(\s*([\d.]+)px\s*\)$/)?.[1]) > 0, 'arka plan bulanıklaştırılır');
+  // Perde, katman ve pencere işaretçi olaylarını yakalar; tıklama arkadaki
+  // kenar çubuğuna ya da şeritlere geçmez.
+  for (const className of ['schedule-modal-layer', 'schedule-modal-backdrop', 'schedule-modal']) {
+    for (const { at, value } of values(className, 'pointer-events')) assert.notEqual(value, 'none', `${at} işaretçi olaylarını geçirmez`);
   }
 
-  // Şeritlerin ATA öğeleri (`.app`, `.main`, `.content`) pencerenin üstünde bir
-  // yığılma bağlamı kurarsa şeritler yerel katmanlarından bağımsız olarak perdenin
-  // üstüne boyanır. Bu atalara yazılan her katman pencerenin altında kalmalıdır.
-  const ancestorTarget = /(?:^|[\s>+~])\.(?:app|main|content)(?=$|[.:[])[^\s>+~]*$/;
-  for (const [file, source] of [['globals.css', globals], ['shell.css', shell], ['features.css', features]]) {
-    postcss.parse(source).walkRules((rule) => {
-      if (!rule.selectors.some((selector) => ancestorTarget.test(selector))) return;
-      rule.each((node) => {
-        if (node.type !== 'decl' || node.prop !== 'z-index' || node.value === 'auto') return;
-        assert.ok(layerValue(node.value, layers) < modal, `${file} · ${rule.selector} (${node.value}) şerit atası pencerenin altındadır`);
-      });
-    });
+  // Özet ve Raporlar tarih/bölüm şeridi, Proje Yapısı ve Rapor sekmeleri, kabuk
+  // ve alt katmanlar: öznesi bu sınıflar olan HER kural pencerenin altındadır.
+  const background = {
+    'workspace-sticky': 'yapışkan çalışma alanı şeritleri',
+    sidebar: 'kenar çubuğu',
+    topbar: 'üst çubuk',
+    'drawer-backdrop': 'çekmece perdesi',
+    drawer: 'çekmece',
+    'rota-assistant': 'Bilgin paneli'
+  };
+  for (const [className, label] of Object.entries(background)) {
+    every(values(className, 'z-index').filter(({ value }) => value !== 'auto'), (value) => layerValue(value, layers) < modal, `${label} kipli pencerenin altındadır`);
+  }
+
+  // Şeritlerin ATA öğeleri pencerenin üstünde bir yığılma bağlamı kurarsa şeritler
+  // yerel katmanlarından bağımsız olarak perdenin üstüne boyanır.
+  for (const className of ['app', 'main', 'content']) {
+    for (const { at, value } of values(className, 'z-index')) {
+      if (value !== 'auto') assert.ok(layerValue(value, layers) < modal, `${at} (${value}) şerit atası pencerenin altındadır`);
+    }
   }
 
   // Üst çubuk kendi yığılma bağlamını kurar ve katmanı rapor sekmelerinin
   // altındadır: içinde çizilen hiçbir perde şeritleri örtemez. Pencerenin
   // üst çubuktan çıkarılması bu yüzden zorunludur.
-  const topbar = declarations(shell, '.topbar');
+  const topbar = declarations(sheets, '.topbar');
   assert.equal(topbar.isolation, 'isolate');
-  assert.ok(layerValue(topbar['z-index'], layers) < layerValue(declarations(features, '.reports-module > .request-tabs.workspace-sticky')['z-index'], layers));
+  const reportTabs = declarations(sheets, '.reports-module > .request-tabs.workspace-sticky');
+  assert.ok(layerValue(topbar['z-index'], layers) < layerValue(reportTabs['z-index'], layers));
   assert.match(read('src/features/schedule-change/ScheduleRequestCenter.jsx'), /createPortal\(children, document\.body\)/);
 
   // Şeritlerin yapışkan davranışı korunur; hata katman düşürülerek gizlenmez.
-  assert.equal(declarations(features, '.workspace-sticky').position, 'sticky');
-  assert.equal(declarations(features, '.workspace-sticky')['z-index'], 'var(--z-chrome)');
-  assert.equal(declarations(features, '.reports-module > .request-tabs.workspace-sticky')['z-index'], 'calc(var(--z-chrome) + 1)');
+  const sticky = declarations(sheets, '.workspace-sticky');
+  assert.equal(sticky.position, 'sticky');
+  assert.equal(sticky['z-index'], 'var(--z-chrome)');
+  assert.equal(reportTabs['z-index'], 'calc(var(--z-chrome) + 1)');
+});
+
+test('Bağlamlı ya da koşullu bir geçersiz kılma da katman denetiminden kaçamaz', () => {
+  // Denetimin kendisi sınanır: yalnızca tam seçiciye bakan bir yardımcı bu
+  // kuralları kaçırır ve şerit perdenin üstüne çıktığı hâlde test geçerdi.
+  const sheets = [['örnek.css', postcss.parse(`
+    .reports-module .workspace-sticky { z-index: 999; }
+    @media (max-width: 760px) { .schedule-modal-backdrop { backdrop-filter: none; } }
+    .app>.sidebar:hover { z-index: 700; }
+    .topbar:has(.schedule-request-popover) { z-index: 200; }
+    .workspace-sticky-note { z-index: 900; }
+    .card:not(.workspace-sticky) { z-index: 800; }
+  `)]];
+  assert.deepEqual(subjectValues(sheets, 'workspace-sticky', 'z-index').map(({ value }) => value), ['999']);
+  assert.deepEqual(subjectValues(sheets, 'schedule-modal-backdrop', 'backdrop-filter').map(({ value }) => value), ['none']);
+  assert.deepEqual(subjectValues(sheets, 'sidebar', 'z-index').map(({ value }) => value), ['700']);
+  assert.deepEqual(subjectValues(sheets, 'topbar', 'z-index').map(({ value }) => value), ['200']);
+});
+
+/**
+ * Her odak tuzağı çağıranı ve yüzeyinin katmanı (çağrı sırasıyla): katman
+ * belirteci ve bu belirteci taşıyan yüzey sınıfı. Satır içi biçimli yüzeyde
+ * sınıf yerine bileşen kaynağındaki `var(--z-*)` aranır.
+ */
+const TRAP_LAYERS = {
+  'src/components/shell/CommandPalette.jsx': [['--z-command', 'cmd-backdrop']],
+  'src/components/shell/DataModeChooser.jsx': [['--z-modal', 'mode-picker-backdrop']],
+  'src/components/shell/ProjectCreateDialog.jsx': [['--z-modal', null]],
+  'src/components/shell/WelcomeScreen.jsx': [['--z-modal', 'welcome-backdrop']],
+  'src/features/ai/assistant/RotaAssistant.jsx': [['--z-drawer', 'rota-assistant']],
+  'src/features/assignment-coordination/AssignmentCoordinationDialog.jsx': [['--z-modal', 'schedule-modal-layer']],
+  'src/features/calendar/CalendarView.jsx': [['--z-modal', 'day-expand-backdrop']],
+  'src/features/dashboard/KpiTaskModal.jsx': [['--z-modal', 'schedule-modal-layer']],
+  'src/features/schedule-change/ScheduleChangeDialog.jsx': [['--z-modal', 'schedule-modal-layer']],
+  'src/features/schedule-change/ScheduleRequestCenter.jsx': [['--z-modal', 'schedule-modal-layer'], ['--z-popover', 'schedule-request-popover']],
+  'src/features/system-admin/components/DetailDrawer.jsx': [['--z-drawer', 'drawer']],
+  'src/features/task-detail/ReadOnlyTaskDrawer.jsx': [['--z-drawer', 'drawer']],
+  'src/features/task-detail/SimpleTaskDrawer.jsx': [['--z-drawer', 'drawer']],
+  'src/features/task-detail/TaskDrawer.jsx': [['--z-drawer', 'drawer']],
+  'src/features/team/PersonDetailDialog.jsx': [['--z-modal', 'person-dialog-backdrop']]
+};
+
+/** Kaynaktaki `useModalFocusTrap(...)` çağrılarının bildirdiği öncelikler (varsayılan 500). */
+function trapPriorities(source) {
+  const priorities = [];
+  for (let index = source.indexOf('useModalFocusTrap('); index >= 0; index = source.indexOf('useModalFocusTrap(', index + 1)) {
+    let depth = 0;
+    let end = index + 'useModalFocusTrap'.length;
+    do {
+      if (source[end] === '(') depth += 1;
+      else if (source[end] === ')') depth -= 1;
+      end += 1;
+    } while (depth > 0 && end < source.length);
+    const declared = source.slice(index, end).match(/\bpriority:\s*(\d+)/);
+    priorities.push(declared ? Number(declared[1]) : 500);
+  }
+  return priorities;
+}
+
+test('Her odak tuzağının önceliği yüzeyinin CSS katmanına eşittir', () => {
+  // Klavye sahibi görsel olarak en üstteki tuzaktır; bunun için her tuzağın
+  // önceliği yüzeyinin GERÇEK katmanını yansıtmalıdır. Varsayılan 500 ile kalan
+  // bir çekmece, üstünü örten Bilgin sayfasının Tab/Esc sahipliğini çalardı.
+  const sheets = stylesheets();
+  const layers = layerTokens(sheets);
+  const sourceRoot = fileURLToPath(new URL('../src', import.meta.url));
+  const callers = readdirSync(sourceRoot, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.jsx?$/.test(entry.name))
+    .map((entry) => `src/${relative(sourceRoot, join(entry.parentPath, entry.name)).split(sep).join('/')}`)
+    .filter((path) => path !== 'src/hooks/useModalFocusTrap.js' && read(path).includes('useModalFocusTrap('))
+    .sort();
+  assert.deepEqual(callers, Object.keys(TRAP_LAYERS).sort(), 'yeni bir tuzak çağıranı katmanını bu tabloya bildirir');
+
+  for (const [path, surfaces] of Object.entries(TRAP_LAYERS)) {
+    const source = read(path);
+    assert.deepEqual(trapPriorities(source), surfaces.map(([token]) => layers[token]), `${path} tuzak öncelikleri yüzey katmanlarına eşittir`);
+    for (const [token, className] of surfaces) {
+      if (!className) {
+        assert.ok(source.includes(`'var(${token})'`), `${path} satır içi katmanı ${token}`);
+        continue;
+      }
+      assert.match(source, new RegExp(`\\b${className}\\b`), `${path} yüzeyi ${className} sınıfını kullanır`);
+      const declared = subjectValues(sheets, className, 'z-index').map(({ value }) => value);
+      assert.ok(declared.includes(`var(${token})`), `${className} katmanı ${token} (${declared})`);
+    }
+  }
 });
 
 /* ── Tuzaklar arası klavye ve odak sahipliği ────────────────── */
@@ -496,6 +610,84 @@ test('Alt katmandaki tuzak sonradan etkinleşse de odak ve Tab/Esc sahipliği ü
   assert.ok(document.activeElement === lower.host.querySelector('textarea'), 'pencere kapanınca odak zile değil açık kalan yüzeye döner');
   key('Escape');
   assert.deepEqual(closes, ['alt yüzey'], 'Esc sahipliği alt yüzeye geri döner');
+});
+
+test('Yönetim çekmecesi açıkken dar Bilgin sayfası klavye sahipliğini alır', async (t) => {
+  // Sistem Yönetimi ayrıntı çekmecesi `--z-drawer` katmanındadır. Görünüm daralınca
+  // Bilgin aynı katmanda, gövdeye taşınmış (DOM'da sonra gelen) kipli sayfaya
+  // dönüşür ve çekmeceyi örter. Klavye görünür sayfaya geçmelidir.
+  const closes = [];
+  const drawerHost = document.createElement('div');
+  document.body.append(drawerHost);
+  const drawerRoot = createRoot(drawerHost);
+  t.after(() => { act(() => drawerRoot.unmount()); drawerHost.remove(); });
+  act(() => drawerRoot.render(React.createElement(DetailDrawer, { title: 'Veritabanı', onClose: () => closes.push('çekmece') },
+    React.createElement('p', null, 'Bileşen ayrıntısı'))));
+  const drawer = drawerHost.querySelector('.sysadmin-drawer');
+  assert.ok(drawer.contains(document.activeElement), 'çekmece açılınca odağı alır');
+  assert.equal(hasBlockingModal(), true, 'çekmece komut paletini engellemeyi sürdürür');
+
+  const lower = mountLowerSurface(t, () => closes.push('Bilgin'));
+  lower.render(true);
+  const textarea = lower.host.querySelector('textarea');
+  assert.ok(document.activeElement === textarea, 'çekmeceyi örten Bilgin sayfası odağı alır');
+  act(() => lower.host.querySelector('button').focus());
+  key('Tab');
+  assert.ok(document.activeElement === textarea, 'Tab görünür sayfada sarar, örtülen çekmeceye geçmez');
+
+  key('Escape');
+  assert.deepEqual(closes, ['Bilgin'], 'Esc görünür sayfayı kapatır, örtülen çekmeceyi değil');
+  lower.render(false);
+  await nextFrame();
+  assert.ok(drawer.contains(document.activeElement), 'sayfa kapanınca odak açık kalan çekmeceye döner');
+  key('Escape');
+  assert.deepEqual(closes, ['Bilgin', 'çekmece'], 'Esc sahipliği çekmeceye geri döner');
+});
+
+test('Eşit katmanda klavye sahibi DOM sırasında sonra gelen, yani üstte boyanan yüzeydir', async (t) => {
+  // Aynı yığılma bağlamında eşit `z-index` taşıyan kardeşler ağaç sırasıyla
+  // boyanır. DOM'da sonra gelen yüzey önce açılmış olsa bile üsttedir; sonradan
+  // etkinleşen ama altta kalan yüzey odağı ve Tab/Esc sahipliğini alamaz.
+  const closes = [];
+  const below = mountLowerSurface(t, () => closes.push('alttaki'));
+  const above = mountLowerSurface(t, () => closes.push('üstteki'));
+  above.render(true);
+  const aboveInput = above.host.querySelector('textarea');
+  assert.ok(document.activeElement === aboveInput);
+  below.render(true);
+  assert.ok(document.activeElement === aboveInput, 'altta boyanan yüzey odağı çalmaz');
+  key('Escape');
+  assert.deepEqual(closes, ['üstteki'], 'Esc üstte boyanan yüzeye aittir');
+  above.render(false);
+  await nextFrame();
+  key('Escape');
+  assert.deepEqual(closes, ['üstteki', 'alttaki'], 'üstteki kapanınca sahiplik alttakine geçer');
+});
+
+test('Pencere kapanınca açık kalan tuzağın dışında kalan odak o tuzağa geri alınır', async (t) => {
+  // Odak pencere açıkken arkadaki bir ögeye taşınmış olabilir. Pencere kapanırken
+  // arkada açık bir kipli yüzey varsa odak onun dışında bırakılmaz.
+  const lower = mountLowerSurface(t, () => {});
+  lower.render(true);
+  const outside = document.createElement('button');
+  outside.textContent = 'Arka plan';
+  document.body.append(outside);
+  t.after(() => outside.remove());
+
+  function TrapProbe({ open }) {
+    const containerRef = useRef(null);
+    useModalFocusTrap({ containerRef, initialFocusRef: containerRef, onClose: () => {}, enabled: open });
+    return open ? React.createElement('div', { ref: containerRef, tabIndex: -1, role: 'dialog', 'aria-modal': 'true' }) : null;
+  }
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  t.after(() => { act(() => root.unmount()); host.remove(); });
+  act(() => root.render(React.createElement(TrapProbe, { open: true })));
+  act(() => outside.focus());
+  act(() => root.render(React.createElement(TrapProbe, { open: false })));
+  await nextFrame();
+  assert.ok(lower.host.contains(document.activeElement), 'odak açık kalan kipli yüzeye geri alınır');
 });
 
 test('Görevi aç ile açılan görev çekmecesi odağı alır; kapanan pencere odağı zile geri çekmez', async (t) => {

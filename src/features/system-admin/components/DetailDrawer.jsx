@@ -13,7 +13,10 @@ import { useModalFocusTrap } from '../../../hooks/useModalFocusTrap.js';
 export function DetailDrawer({ title, subtitle = null, onClose, children, footer = null }) {
   const containerRef = useRef(null);
   const closeRef = useRef(null);
-  useModalFocusTrap({ containerRef, initialFocusRef: closeRef, onClose });
+  // Çekmece `--z-drawer` katmanında çizilir; tuzak önceliği de bu katmandır.
+  // Varsayılan 500 ile kayıtlı kalsaydı dar ekranda üstünü örten Bilgin sayfası
+  // açıkken Tab/Esc görünmeyen çekmecede kalırdı. Komut paleti engeli korunur.
+  useModalFocusTrap({ containerRef, initialFocusRef: closeRef, onClose, priority: 310, blocksCommandPalette: true });
 
   return (
     <>
