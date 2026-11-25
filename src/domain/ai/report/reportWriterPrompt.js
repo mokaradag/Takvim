@@ -15,13 +15,30 @@ import { REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan
  * yalnızca isteme bırakılmaz: çıktı `reportDraft.js` ile yapısal ve göndergesel olarak doğrulanır.
  */
 
-export const REPORT_WRITER_PROMPT_VERSION = 'yazar-istemi-2';
+export const REPORT_WRITER_PROMPT_VERSION = 'yazar-istemi-4';
 /** Ağ geçidinin ileti başına sınırı (32 KiB); bayt olarak ölçülür, böylece karakter sınırı da kendiliğinden karşılanır. */
 export const REPORT_WRITER_MAX_MESSAGE_BYTES = 32 * 1024;
 /** Ağ geçidi istek başına en çok 50 ileti kabul eder; sistem, plan ve kapanış iletileri dışında kalan pay. */
 export const REPORT_WRITER_MAX_EVIDENCE_MESSAGES = 47;
-/** Kanıtlardan sonra gelen sabit kapanış iletisi: talimat değil, yalnızca girdinin bittiğini ve beklenen çıktıyı söyler. */
-export const REPORT_WRITER_CLOSING_MESSAGE = 'Bütün kanıt iletileri verildi. Şimdi bölüm planındaki bölümleri yaz ve yanıt olarak yalnızca çıktı sözleşmesindeki tek JSON nesnesini döndür.';
+/**
+ * Kanıtlardan sonra gelen kapanış iletisi: girdinin bittiğini söyler ve plandan belirlenimci olarak türetilen çıktı
+ * iskeletini verir (bölüm kimlikleri ve sırası, öne çıkan tespitin yeri, zorunlu iddia eki). Vekil koşuda sözleşme dışı
+ * yanıtların tamamı (eksik bölüm, plan alanlarının çıktıya yazılması, iddia ekinin atlanması, yanlış yerde öne çıkan
+ * tespit) iskeletin yalnızca sistem yönergesinde genel biçimde bulunduğu durumda görüldü.
+ */
+export function buildReportWriterClosingMessage(plan) {
+  if (!isPlainObject(plan) || !Array.isArray(plan.bolumler) || !plan.bolumler.length) throw new ReportPromptError('PLAN_INVALID');
+  const paragraph = '{"metin":"…","kanitlar":["E…"]}';
+  const sections = plan.bolumler.map((section) => (section.one_cikan_tespit
+    ? `{"kimlik":"${section.kimlik}","paragraflar":[${paragraph}],"one_cikan_tespit":{"metin":"…","kanitlar":["E…"]}}`
+    : `{"kimlik":"${section.kimlik}","paragraflar":[${paragraph}]}`));
+  return [
+    'Bütün kanıt iletileri verildi. Şimdi bölüm planındaki bölümleri yaz ve yanıt olarak yalnızca aşağıdaki iskelete uyan tek JSON nesnesini döndür.',
+    `Bölümler tam olarak şu kimliklerle ve bu sırayla yazılır: ${plan.bolumler.map((section) => section.kimlik).join(', ')}. Her bölümde "paragraflar" dizisine plandaki paragraf aralığı kadar paragraf yazılır; bölüm ve paragraf nesnelerine başka alan eklenmez.`,
+    '"iddialar" dizisi zorunludur ve boş bırakılmaz; her öğenin "paragraf" değeri o bölümde yazdığın paragraflardan birinin sırasıdır.',
+    `İSKELET: {"sozlesme":"4i-yazim-1","bolumler":[${sections.join(',')}],"iddialar":[{"bolum":"…","paragraf":1,"alinti":"…","sinif":"nesnel_olgu","kanitlar":["E…"]}]}`
+  ].join('\n');
+}
 
 const encoder = new TextEncoder();
 const byteLength = (text) => encoder.encode(text).length;
@@ -102,7 +119,9 @@ export function buildReportWriterSystemPrompt(style) {
       'Somut olursun: işleri, projeleri ve gelişmeleri kanıttaki adlarıyla anarsın. Desteklenmeyen iyimserlik ya da kötümserlik katmazsın; öneri ve öncelikleri yalnızca kanıttan türetirsin.',
       'Bir olguyu ayrıntısıyla yalnızca bir kez, en uygun bölümde anlatırsın; diğer bölümlerde onu yeniden sıralamaz, yalnızca yeni bir anlam katıyorsa kısaca anarsın. Genel Sonuç bölümü yeni olgu eklemez ve önceki bölümleri tekrar etmez; yönetim için net bir değerlendirmeyle kapatır.',
       'Kanıt darsa kısa yazarsın: sözcük aralığına ulaşmak için dolgu, tekrar ya da kanıtın sınırları hakkında yorum eklemezsin. Az ama dolu paragraf, uzun ama boş paragraftan iyidir.',
-      'Yöntem dili kullanmazsın: düzyazıda "kanıt", "kanıt paketi", "kanıtın izin verdiği ölçüde", "bu bir yorumdur", "bu bir bulgu değildir" gibi ifadeleri tekrarlamaz; belirsizliği gerektiği yerde tek ve doğal bir nitelemeyle ("kayda göre", "henüz kesinleşmemiş") verirsin. Kaynak ve yöntem açıklamasını sunucu ayrıca yazar.'
+      'Yöntem dili kullanmazsın: düzyazıda "kanıt", "paket", "pakette", "kayıt düzeyinde", "kanıtın izin verdiği ölçüde", "bu bir yorumdur", "bu bir bulgu değildir" gibi ifadeleri kullanmaz; belirsizliği gerektiği yerde tek ve doğal bir nitelemeyle ("henüz kesinleşmemiş") verirsin. Kaynak ve yöntem açıklamasını sunucu ayrıca yazar.',
+      'Tamlık bilgisini yalnızca bir sınır varsa (kısmi görünürlük, kesilen veri, kısmi hareket kaydı, bitiş tarihi kayıtlı olmayan iş) ve bölüm planı bunu istiyorsa söylersin. Kapsamın tam olduğunu, bağımlılıkların eksiksiz olduğunu, tarihsiz iş bulunmadığını ya da bir kaydın hangi bilgiyi içermediğini anlatan cümleler kurmazsın.',
+      'Kayıt alanlarını cümleye dökmezsin: öncelik, kilometre taşı işareti, hareket türü, not sürümü, kayıt saati gibi alanlar yalnızca bir değerlendirmeyi destekliyorsa sıfat olarak kullanılır ("kritik öncelikli bu iş"). Aynı sayıyı ya da tarihi bölümler boyunca yinelemezsin.'
     ]),
     '',
     'YASAKLAR',
@@ -127,7 +146,7 @@ export function buildReportWriterSystemPrompt(style) {
     'GÖREV NOTLARI VE KAYITLI KULLANICI METNİ',
     numbered([
       'Notlar birinci sınıf kanıttır; gecikmenin bildirilen gerekçesini, engelleri, bağımlılıkları, koordinasyon ihtiyacını ve sayılara yansımayan ilerlemeyi anlamana yardım eder.',
-      'Not, kaydı yazan kişinin bildirimidir; bağımsız olarak doğrulanmış olgu değildir. Bu farkı "notta belirtildiğine göre", "kayda göre" gibi ölçülü nitelemelerle korursun.',
+      'Not, kaydı yazan kişinin bildirimidir; bağımsız olarak doğrulanmış olgu değildir. Kaynağı bir kez doğal biçimde anarsın ("ekip notuna göre"); her cümlede "doğrulanmamış" demezsin. Ek niteleme yalnızca not bir neden, plan, tahmin, kesin olmayan tarih ya da görev kaydıyla çelişen bir durum bildirdiğinde gerekir.',
       `Belirsizlik dili: ${s.belirsizlikDili}`,
       `${s.notKurallari.tarihAyrimi} "Haftaya", "dün", "yarın" gibi göreli ifadeleri notun kayıt zamanına (kayit_zamani) göre yorumlarsın; kayıt zamanı bilinmeyen notu tarihlendirmezsin ve göreli ifadeyi kesin bir güne çevirmezsin.`,
       '"tarihsel" ya da "tarihsel_onceki" sürüm notlar geçmiş kayıttır; güncel durum gibi sunulmaz. Aynı görevin sürümleri zaman sırasıyla okunur, en güncel kayıt esas alınır ve değişiklik açıkça söylenir.',
@@ -368,7 +387,7 @@ export function buildReportWriterMessages({ evidencePackage, plan, style }) {
     { role: 'system', content: system },
     { role: 'user', content: planMessage },
     ...evidence.map((content) => ({ role: 'user', content })),
-    { role: 'user', content: REPORT_WRITER_CLOSING_MESSAGE }
+    { role: 'user', content: buildReportWriterClosingMessage(plan) }
   ];
   if (messages.some((message) => byteLength(message.content) > REPORT_WRITER_MAX_MESSAGE_BYTES)) {
     throw new ReportPromptError('MESSAGE_TOO_LARGE');

@@ -251,7 +251,8 @@ export function summarizeRun(records, { adjudication = {}, editorial = null } = 
     return {
       senaryo: row.senaryo,
       yetkisiz_aciklama: row.nesnel.yetkisiz_aciklama.length,
-      uydurma_kimlik: row.nesnel.uydurma_kimlik.length + (judge?.uydurma_tarih ?? 0),
+      // Sentetik proje adları sıradan Türkçe sözcüklerdir ("denge", "ışık"); tarama aday işaretler, hakem yanlış pozitifi ayırır.
+      uydurma_kimlik: row.nesnel.uydurma_kimlik.filter((name) => !(judge?.uydurma_kimlik_yanlis_pozitif || []).includes(name)).length + (judge?.uydurma_tarih ?? 0),
       atlanan_zorunlu: omitted.length,
       nesnel_dogruluk: denominator ? correct / denominator : null,
       celiski_islendi: judge?.celiski_islendi ?? null,

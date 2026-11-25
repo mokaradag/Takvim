@@ -27,10 +27,16 @@ const SECTION_GUIDANCE = Object.freeze({
   oncelikler: 'Kanıttaki yaklaşan terminlerden, açık kritik işlerden ve bağımlılıklardan çıkan, uygulanabilir sonraki dönem önceliklerini yaz; kanıta bağlanmayan genel öneri verme.',
   genel_sonuc: 'Raporu yeni olgu eklemeden, önceki bölümleri tekrarlamadan, yönetim için net bir değerlendirmeyle kısaca kapat.'
 });
+const SPARSE_GUIDANCE = 'Kanıt dar: bu bölümü tek kısa paragrafla yaz. Önceki bölümlerde söyleneni yineleme; bu bölüme özgü yeni bir değerlendirme yoksa ilgili konuyu tek cümleyle anlamına bağla.';
 const TASK_DONE = 'tamamlandi';
 const HIGH_PRIORITIES = new Set(['critical', 'high', 'kritik', 'yuksek']);
 const MAX_SECTION_EVIDENCE = 60;
 const MIN_SECTION_WORDS = 60;
+const SPARSE_MIN_SECTION_WORDS = 30;
+/** Bu sayıda ya da daha az anlatı kanıtı (görev, not, belge, hareket, türetim) seyrek kanıttır. */
+const SPARSE_EVIDENCE_ITEMS = 4;
+/** Seyrek kanıtta bile anlatının toplam üst sınırı bu değerin altına inmez. */
+const MIN_TOTAL_WORDS = 250;
 /** Alt sözcük sınırının tam uygulandığı anlatı kanıtı sayısı (görev, not, belge, hareket ve türetim). */
 const RICH_EVIDENCE_ITEMS = 12;
 
@@ -292,6 +298,12 @@ function integrityDisclosures(pkg, { groups }, riskSectionPlanned) {
       yonerge: 'Kanıtta yönetim dikkati gerektiren risk ya da engel var. Odak tercihi ya da kapatılan bölüm ne olursa olsun bu konuyu Yönetici Değerlendirmesi içinde en az bir kez açıkça an.'
     });
   }
+  if (focus === 'riskler' && !riskSectionPlanned && !riskEvidence.length) {
+    out.push({
+      kimlik: 'risk_odagi_risk_yok', bolum: 'yonetici_degerlendirmesi', kanitlar: [],
+      yonerge: 'Rapor risk odağıyla istendi ancak kanıtta yönetim dikkati gerektiren gecikme, çelişki ya da kayıtlı engel yok. Bunu açık ve kısa biçimde söyle; odak tercihi nedeniyle risk üretme.'
+    });
+  }
   const completed = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'tamamlanan' && own(item.donem, 'baslangic') === pkg.istek.donem.baslangic);
   const activity = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'hareket' && own(item.donem, 'baslangic') === pkg.istek.donem.baslangic);
   if (activity && activity.deger === 0 && activity.kayit_kapsami !== 'partial' && (!completed || completed.deger === 0)) {
@@ -357,23 +369,27 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
   const riskPlanned = included.some((section) => section.kimlik === 'riskler');
   const disclosures = integrityDisclosures(pkg, classified, riskPlanned);
 
-  const [styleMin, totalMax] = writerStyle.sozcukButcesi[detail];
-  // Dar kanıtta alt sınır orantılı düşer: dolgu metni üretmeye zorlayan bütçe kurulmaz. Üst sınır stil kararıdır.
+  const [styleMin, styleMax] = writerStyle.sozcukButcesi[detail];
+  // Bütçe kanıt yoğunluğuyla orantılıdır: dar kanıtta hem alt hem üst sınır düşer. Vekil koşuda seyrek paketlerde zorunlu
+  // bölümlere düşen sözcük tabanı bölümler arası tekrara, kayıt alanı anlatımına ve yöntem diline yol açtı.
   const richness = groups.gorev.length + groups.not.length + groups.belge.length + groups.hareket.length + derivedAll.length;
-  const totalMin = Math.max(MIN_SECTION_WORDS * 2, roundTo(styleMin * Math.min(1, (richness + 3) / RICH_EVIDENCE_ITEMS), 10));
+  const sparse = richness <= SPARSE_EVIDENCE_ITEMS;
+  const sectionFloor = sparse ? SPARSE_MIN_SECTION_WORDS : MIN_SECTION_WORDS;
+  const totalMin = Math.max(sectionFloor * 2, roundTo(styleMin * Math.min(1, (richness + 3) / RICH_EVIDENCE_ITEMS), 10));
+  const totalMax = Math.max(totalMin, MIN_TOTAL_WORDS, roundTo(styleMax * Math.min(1, (richness + 2) / RICH_EVIDENCE_ITEMS), 10));
   const weightSum = included.reduce((sum, section) => sum + writerStyle.agirliklar[section.kimlik], 0);
   const [paraMin, paraMax] = writerStyle.paragrafSozcukAraligi;
   const sections = included.map((section) => {
     const share = writerStyle.agirliklar[section.kimlik] / weightSum;
-    const min = Math.max(MIN_SECTION_WORDS, roundTo(totalMin * share, 10));
+    const min = Math.max(sectionFloor, roundTo(totalMin * share, 10));
     const max = Math.max(min, roundTo(totalMax * share, 10));
     return Object.freeze({
       kimlik: section.kimlik,
       baslik: scopeType === 'kisi' && section.baslikKisi ? section.baslikKisi : section.baslik,
       zorunlu: section.zorunlu,
       sozcuk_araligi: Object.freeze([min, max]),
-      paragraf_araligi: Object.freeze([Math.max(1, Math.floor(min / paraMax)), Math.max(1, Math.ceil(max / paraMin))]),
-      yonerge: SECTION_GUIDANCE[section.kimlik],
+      paragraf_araligi: Object.freeze(sparse ? [1, 1] : [Math.max(1, Math.floor(min / paraMax)), Math.max(1, Math.ceil(max / paraMin))]),
+      yonerge: sparse ? `${SECTION_GUIDANCE[section.kimlik]} ${SPARSE_GUIDANCE}` : SECTION_GUIDANCE[section.kimlik],
       odak_kanitlar: Object.freeze(uniqueOrdered(allocation[section.kimlik], refOrder)),
       zorunlu_aciklamalar: Object.freeze(disclosures.filter((entry) => entry.bolum === section.kimlik)
         .map((entry) => Object.freeze({ ...entry, kanitlar: Object.freeze([...new Set(entry.kanitlar)]) }))),
@@ -386,6 +402,7 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
     stil_surumu: writerStyle.surum,
     ayrinti: detail,
     ayrinti_yonergesi: writerStyle.ayrintiDuzeyi[detail],
+    kanit_yogunlugu: sparse ? 'seyrek' : 'normal',
     odak: pkg.istek.odak ?? 'dengeli',
     sozcuk_araligi: Object.freeze([totalMin, totalMax]),
     bolumler: Object.freeze(sections),

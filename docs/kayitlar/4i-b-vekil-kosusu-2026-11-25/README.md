@@ -9,7 +9,7 @@
 | Alan | Değer |
 | --- | --- |
 | Commit tabanı | 4I-B dalı (bu kayıtla aynı commit) |
-| Yazım sözleşmesi / istem | `4i-yazim-1` / `yazar-istemi-2` |
+| Yazım sözleşmesi / istem | `4i-yazim-1` / `yazar-istemi-4` (son yapılandırma; ara sürümler `ara-kosular-ozet.json`) |
 | Paket kümesi | `test/fixtures/bilgin-executive-report-writer-packages.json` (48 paket, küme özeti dosyada) |
 | Yapılandırma özetleri | `kosu-yapilandirma-ozetleri.sha256` (yazar modülleri, stil belgesi, paket kümesi; `sha256sum -c` ile doğrulanır) |
 | Taşıyıcı | `vekil` (`scripts/report-writer-qualification.mjs`): yalıtılmış ev klasörü, araçsız, tek tur, model kimliği ve tek API çağrısı her yanıtta denetlenir; düşünme düşük efor düzeyinin kendi davranışına bırakılmış ve kaydedilmiştir |
@@ -21,9 +21,11 @@
 | Dosya | İçerik |
 | --- | --- |
 | `kosu-kaydi.jsonl` | 48 senaryonun değiştirilmemiş ham model yanıtları, ayrıştırılmış taslaklar, kullanım, süre ve kayıt anındaki nesnel tarama |
+| `ara-kosular-ozet.json` | İstem 1–3'ün tam koşularının özeti ve bulguları (son koşuyla birleştirilmez) |
+| `ara-kosu-istem2-editoryal-degerlendirme.json` | İstem 2 taslaklarının kör model değerlendirmesi (B kapısı geçilemezdi; istem 3–4 düzeltmelerinin gerekçesi) |
 | `hakem-kararlari.json` | Defter dışı değerler ve otomatik eşleşmeyen zorunlu olgular için elle verilen kararlar ve gerekçeleri (hakem: geliştirme oturumu; insan değil) |
 | `anlati-ornekleri.md` | Haftalık, aylık, başarı ve risk odaklı, dönem karşılaştırmalı, zengin not sentezi ve çelişkili kanıt örnekleri — gerçek yazar çıktısı, düzeltilmemiş |
-| `gecici-editoryal-degerlendirme.json` | Yazardan farklı, kör bir model değerlendiricisinin E1–E9 ve mekanik döküm puanları (**insan puanı değildir**, destekleyici kanıttır) |
+| `gecici-editoryal-degerlendirme.json` | İstem 4 taslaklarının, yazardan farklı ve kör bir model değerlendiricisince E1–E9 ve mekanik döküm puanları (**insan puanı değildir**, destekleyici kanıttır). Değerlendirici yönergesine istem 2 değerlendirmesine göre tek açıklama eklendi: durumun gerçekten küçük olduğu raporda yerinde kısalık kusur sayılmaz (ölçütün R7 beklentisiyle uyumlu); iki değerlendirme bu nedenle tam karşılaştırılabilir değildir |
 | `kor-puanlama-paketi.md`, `kor-puanlama-cizelgesi.csv` | İki kör insan puanlayıcı için paket ve çizelge (rastgele kod ve sıra; model ve senaryo kimliği yok) |
 | `kor-puanlama-anahtari-PUANLAYICIYA-VERILMEZ.json` | Kod → senaryo anahtarı; yalnızca koordinatör kullanır |
 

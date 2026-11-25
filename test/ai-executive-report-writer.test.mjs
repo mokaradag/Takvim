@@ -142,6 +142,24 @@ test('bölüm planı: kısmi görünürlük, kısmi hareket, tarihsiz tamamlanan
   assert.ok(plan.buildReportSectionPlan(pkg, style).bolumler[0].zorunlu_aciklamalar.some((d) => d.kimlik === 'karsilastirma_kurulamadi'));
 });
 
+test('bölüm planı: seyrek kanıtta bütçe ve paragraf sayısı daralır; risk odaklı istekte risk yoksa bu açıkça istenir', () => {
+  const sparse = plan.buildReportSectionPlan(pkgOf('S42'), style);
+  const rich = plan.buildReportSectionPlan(pkgOf('S01'), style);
+  assert.equal(sparse.kanit_yogunlugu, 'seyrek');
+  assert.equal(rich.kanit_yogunlugu, 'normal');
+  assert.ok(sparse.sozcuk_araligi[1] < rich.sozcuk_araligi[1], 'seyrek kanıtın üst sınırı da düşer');
+  assert.ok(sparse.sozcuk_araligi[1] >= 250, 'toplam üst sınır tabanın altına inmez');
+  assert.ok(sparse.bolumler.every((section) => section.paragraf_araligi[0] === 1 && section.paragraf_araligi[1] === 1));
+  assert.ok(sparse.bolumler.every((section) => section.yonerge.includes('Kanıt dar')));
+  assert.ok(rich.bolumler.every((section) => !section.yonerge.includes('Kanıt dar')));
+  // S22: risk odağı, kanıtta risk yok → risk bölümü planlanmaz, durum açıkça söylenir.
+  const s22 = plan.buildReportSectionPlan(pkgOf('S22'), style);
+  assert.ok(!s22.bolumler.some((section) => section.kimlik === 'riskler'));
+  assert.ok(s22.bolumler[0].zorunlu_aciklamalar.some((d) => d.kimlik === 'risk_odagi_risk_yok'));
+  // Gerçek risk varken bu açıklama verilmez.
+  assert.ok(!plan.buildReportSectionPlan(pkgOf('S03'), style).bolumler.flatMap((b) => b.zorunlu_aciklamalar).some((d) => d.kimlik === 'risk_odagi_risk_yok'));
+});
+
 test('bölüm planı: ayrıntı düzeyi bütçeyi, kişi kapsamı başlığı belirler; not metni plan kararını değiştirmez', () => {
   const short = plan.buildReportSectionPlan(pkgOf('S30'), style);
   const long = plan.buildReportSectionPlan(pkgOf('S31'), style);
@@ -192,7 +210,15 @@ test('istem: kanıt iletileri 32 KiB (UTF-8 bayt) sınırında bölünür; kanı
   const all = prompt.buildReportWriterMessages({ evidencePackage: pkg, plan: plan.buildReportSectionPlan(pkg, style), style });
   assert.ok(all.length <= 50, 'ağ geçidinin istek başına ileti sınırı');
   assert.equal(all[0].role, 'system');
-  assert.equal(all.at(-1).content, prompt.REPORT_WRITER_CLOSING_MESSAGE);
+  // Kapanış iletisi plandan türetilen çıktı iskeletidir: plandaki bölüm kimlikleri aynı sırayla, öne çıkan tespit yalnızca
+  // yönetici değerlendirmesinde, iddia eki zorunlu; içinde kanıt verisi yoktur.
+  const closing = all.at(-1).content;
+  assert.equal(closing, prompt.buildReportWriterClosingMessage(plan.buildReportSectionPlan(pkg, style)));
+  const skeleton = JSON.parse(closing.slice(closing.indexOf('İSKELET: ') + 'İSKELET: '.length));
+  assert.deepEqual(skeleton.bolumler.map((b) => b.kimlik), plan.buildReportSectionPlan(pkg, style).bolumler.map((b) => b.kimlik));
+  assert.deepEqual(skeleton.bolumler.filter((b) => b.one_cikan_tespit).map((b) => b.kimlik), ['yonetici_degerlendirmesi']);
+  assert.ok(Array.isArray(skeleton.iddialar) && skeleton.iddialar.length === 1);
+  assert.doesNotMatch(closing, /Kuzey|Ufuk|Can Ertem|PRJ-/u);
   // Tek başına sınırı aşan kanıt bölünmez, istem kurulmaz.
   const huge = pkgOf('S01');
   huge.kanitlar.push({ id: `E${huge.kanitlar.length + 1}`, tur: 'not', kaynak: 'MR_AuditLog', metin: 'ş'.repeat(20000), guvenilmez_veri: true });

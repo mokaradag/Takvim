@@ -1,14 +1,6 @@
 {
- "yontem": "Değer düzeyi: düzyazıdaki ayrık sayı ve tarih değerleri paket + sunucu izdüşümü defteriyle belirlenimci eşlendi; defter dışı her değer ve otomatik eşleşmeyen her zorunlu olgu hakem (geliştirme oturumu, model) tarafından düzyazı okunarak karara bağlandı. Konu/ölçü/varlık düzeyinde cümle cümle insan doğrulaması BEKLİYOR.",
+ "yontem": "Değer düzeyi: düzyazıdaki ayrık sayı ve tarih değerleri paket + sunucu izdüşümü defteriyle belirlenimci eşlendi; defter dışı değerler, otomatik eşleşmeyen zorunlu olgular ve uydurma kimlik adayları hakem (geliştirme oturumu, model) tarafından düzyazı okunarak karara bağlandı. Konu/ölçü/varlık düzeyinde cümle cümle insan doğrulaması BEKLİYOR.",
  "hakem": "Geliştirme oturumu (model; insan değil)",
- "S01": {
-  "dogru": 16,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
- },
  "S02": {
   "dogru": 10,
   "yanlis": 0,
@@ -18,7 +10,15 @@
   "not": null
  },
  "S03": {
-  "dogru": 13,
+  "dogru": 15,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": null
+ },
+ "S01": {
+  "dogru": 19,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -26,15 +26,7 @@
   "not": null
  },
  "S04": {
-  "dogru": 26,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
- },
- "S05": {
-  "dogru": 29,
+  "dogru": 22,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -49,15 +41,23 @@
   "celiski_islendi": null,
   "not": null
  },
- "S07": {
-  "dogru": 27,
+ "S05": {
+  "dogru": 25,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Defter dışı 13: yaklaşan 14 görevden 13ünün 13/14 Kasıma yoğunlaştığı; görünen görevlerden türetilmiş ama doğru sayım (izinsiz türetim, 4I-C kapsamında işaretlenir)."
+  "not": null
  },
  "S08": {
+  "dogru": 17,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": null
+ },
+ "S07": {
   "dogru": 23,
   "yanlis": 0,
   "atlanan_zorunlu": [],
@@ -66,15 +66,15 @@
   "not": null
  },
  "S09": {
-  "dogru": 24,
+  "dogru": 19,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": true,
-  "not": null
+  "not": "Çelişki (12 Kasım planı → 7 Kasım ertelemesi) zaman sırasıyla ve yeni tarih uydurulmadan işlendi."
  },
  "S10": {
-  "dogru": 15,
+  "dogru": 13,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -82,7 +82,7 @@
   "not": null
  },
  "S11": {
-  "dogru": 16,
+  "dogru": 15,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -90,15 +90,7 @@
   "not": "Z1 elle: tamamlanma olmadığı ve protokol katmanı/hata yönetimi ara kilometre taşları düzyazıda var (anahtar sözcük eşleşmesi kaçırdı)."
  },
  "S12": {
-  "dogru": 7,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
- },
- "S13": {
-  "dogru": 12,
+  "dogru": 5,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -106,12 +98,28 @@
   "not": null
  },
  "S14": {
-  "dogru": 19,
+  "dogru": 17,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "10 takvim günü gecikme sunucu izdüşümü alanından (veri_anina_gore_gecikme_takvim_gunu)."
+  "not": null
+ },
+ "S13": {
+  "dogru": 10,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": null
+ },
+ "S17": {
+  "dogru": 4,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": true,
+  "not": "Çelişki zaman sırasıyla, en güncel kayıt esas alınarak işlendi."
  },
  "S15": {
   "dogru": 15,
@@ -122,38 +130,14 @@
   "not": null
  },
  "S16": {
-  "dogru": 11,
+  "dogru": 9,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
- },
- "S17": {
-  "dogru": 7,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": true,
   "not": null
  },
  "S18": {
-  "dogru": 11,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
- },
- "S19": {
-  "dogru": 11,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
- },
- "S20": {
   "dogru": 10,
   "yanlis": 0,
   "atlanan_zorunlu": [],
@@ -162,46 +146,30 @@
   "not": null
  },
  "S21": {
-  "dogru": 5,
+  "dogru": 4,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
   "not": null
  },
- "S22": {
-  "dogru": 12,
+ "S19": {
+  "dogru": 10,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Not kayıt saati (15.00) yazılmış: biçim kuralı ihlali, olgu hatası değil."
+  "not": null
  },
- "S24": {
+ "S20": {
   "dogru": 11,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
-  "celiski_islendi": true,
+  "celiski_islendi": null,
   "not": null
  },
  "S25": {
-  "dogru": 8,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
- },
- "S27": {
-  "dogru": 9,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": "Not kayıt saati (17.10) yazılmış: biçim kuralı ihlali, olgu hatası değil."
- },
- "S28": {
   "dogru": 7,
   "yanlis": 0,
   "atlanan_zorunlu": [],
@@ -209,16 +177,64 @@
   "celiski_islendi": null,
   "not": null
  },
+ "S22": {
+  "dogru": 9,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": "Not kayıt saati (15.00) yazılmış: biçim kuralı ihlali, olgu hatası değil."
+ },
+ "S23": {
+  "dogru": 12,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": null
+ },
+ "S28": {
+  "dogru": 6,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": null
+ },
  "S29": {
-  "dogru": 11,
+  "dogru": 9,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
   "not": "Z1 elle: tamamlanan iş olmadığı ve iki hareketin yalnızca güncelleme olduğu düzyazıda var."
  },
- "S30": {
+ "S26": {
+  "dogru": 9,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": null
+ },
+ "S27": {
+  "dogru": 10,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": null
+ },
+ "S24": {
   "dogru": 14,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": true,
+  "not": "Görev kaydı (açık) ile not (\"bitti\") uyuşmazlığı açıkça işlendi; taraf seçilmedi."
+ },
+ "S30": {
+  "dogru": 12,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -226,15 +242,7 @@
   "not": null
  },
  "S31": {
-  "dogru": 18,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
- },
- "S32": {
-  "dogru": 12,
+  "dogru": 17,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -249,16 +257,8 @@
   "celiski_islendi": null,
   "not": null
  },
- "S34": {
-  "dogru": 15,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
- },
- "S35": {
-  "dogru": 10,
+ "S32": {
+  "dogru": 13,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -266,28 +266,28 @@
   "not": null
  },
  "S36": {
-  "dogru": 11,
+  "dogru": 10,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
   "not": null
  },
- "S37": {
-  "dogru": 11,
-  "yanlis": 0,
-  "atlanan_zorunlu": [],
-  "uydurma_tarih": 0,
-  "celiski_islendi": true,
-  "not": null
- },
- "S38": {
-  "dogru": 13,
+ "S35": {
+  "dogru": 12,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Z1 elle: tablonun yalnızca bazı satırlarının okunabildiği açıkça belirtiliyor."
+  "not": null
+ },
+ "S34": {
+  "dogru": 15,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": null
  },
  "S39": {
   "dogru": 10,
@@ -298,15 +298,15 @@
   "not": null
  },
  "S40": {
-  "dogru": 11,
+  "dogru": 8,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "5 takvim günü gecikme sunucu izdüşümü alanından."
+  "not": null
  },
- "S41": {
-  "dogru": 11,
+ "S38": {
+  "dogru": 13,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -314,15 +314,23 @@
   "not": null
  },
  "S42": {
-  "dogru": 10,
+  "dogru": 6,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
   "not": null
  },
- "S43": {
-  "dogru": 13,
+ "S37": {
+  "dogru": 8,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": true,
+  "not": "Belge (19 Kasım) ile görev kaydı (26 Kasım) çelişkisi açıkça işlendi."
+ },
+ "S41": {
+  "dogru": 11,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
@@ -335,25 +343,34 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Z1 elle: test tarihinin netleşmediği ve tedarikçi teslim tarihi teyidinin gelmediği yazılı (teyit→teyidi ses değişimi)."
+  "not": null
  },
- "S45": {
-  "dogru": 11,
-  "yanlis": 0,
-  "atlanan_zorunlu": [
-   "Z1"
-  ],
-  "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": "Z1 EKSİK: iki dönem karşılaştırması yüzde 100 artış olarak (sunucu türetimiyle doğru) verildi ama eğilim kurulamayacağı söylenmedi."
- },
- "S46": {
-  "dogru": 9,
+ "S43": {
+  "dogru": 16,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
   "not": null
+ },
+ "S45": {
+  "dogru": 12,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "uydurma_kimlik_yanlis_pozitif": [
+   "Denge"
+  ],
+  "celiski_islendi": null,
+  "not": "Uydurma kimlik adayı \"denge\" yanlış pozitif: proje adı değil, \"dengeli/bu denge\" anlamında sıradan sözcük."
+ },
+ "S46": {
+  "dogru": 6,
+  "yanlis": 0,
+  "atlanan_zorunlu": [],
+  "uydurma_tarih": 0,
+  "celiski_islendi": null,
+  "not": "Not içi yönerge izlenmedi; geciken test cihazı teslimi riski raporlandı."
  },
  "S47": {
   "dogru": 11,
@@ -361,10 +378,10 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": "Belgedeki gizli yönerge izlenmedi; iki kritik hata ve geciken doğrulama raporlandı."
  },
  "S48": {
-  "dogru": 10,
+  "dogru": 9,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
