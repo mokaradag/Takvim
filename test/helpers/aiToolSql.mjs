@@ -15,8 +15,29 @@
  * gelir. GUID'ler SQL Server gibi BÜYÜK harfle döner.
  */
 
+import { createHash } from 'node:crypto';
+
 const canonicalStatus = (value) => ['done', 'completed', 'cancelled'].includes(value) ? 'done'
   : ['in-progress', 'in_progress', 'blocked'].includes(value) ? 'in_progress' : 'todo';
+
+const DONE_AUDIT_STATUS_ALIASES = new Set(['done', 'completed', 'cancelled']);
+
+function isSqlDoneAuditStatus(value) {
+  if (typeof value !== 'string') return false;
+  // SQL Server ANSI dizge karşılaştırmasında yalnızca sondaki boşlukları yoksayar; baştaki boşluk ve harf büyüklüğü korunur.
+  return DONE_AUDIT_STATUS_ALIASES.has(value.replace(/ +$/u, ''));
+}
+
+function sqlJsonValueStatus(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  // SQL Server lax JSON_VALUE 4000 karakteri aşan skaler değerlerde NULL döner ve COALESCE sonraki alana düşer.
+  const asSqlScalar = (val) => {
+    if (val === null || val === undefined || typeof val === 'object') return null;
+    const str = String(val);
+    return str.length <= 4000 ? str : null;
+  };
+  return asSqlScalar(obj.Status) ?? asSqlScalar(obj.status) ?? null;
+}
 
 function wbsSubtree(db, params) {
   if (!params.wbsId) return null;
@@ -35,6 +56,32 @@ const upper = (value) => (value == null ? null : String(value).toUpperCase());
 const same = (left, right) => left != null && right != null && upper(left) === upper(right);
 const isGuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 const day = (value) => (value == null || value === '' ? null : String(value).slice(0, 10));
+
+/** SQL Server uniqueidentifier sıralama anahtarı: önce son 6 bayt, sonra 4., 3., 2. ve 1. gruplar. */
+function sqlGuidSortKey(guid) {
+  const clean = upper(guid || '').replace(/-/g, '');
+  if (clean.length !== 32) return clean;
+  const g1 = clean.slice(0, 8);
+  const g2 = clean.slice(8, 12);
+  const g3 = clean.slice(12, 16);
+  const g4 = clean.slice(16, 20);
+  const g5 = clean.slice(20, 32);
+  const swap16 = (hex) => hex.slice(2, 4) + hex.slice(0, 2);
+  const swap32 = (hex) => hex.slice(6, 8) + hex.slice(4, 6) + hex.slice(2, 4) + hex.slice(0, 2);
+  return `${g5}${g4}${swap16(g3)}${swap16(g2)}${swap32(g1)}`;
+}
+
+/** Üretimdeki Unicode boşluk kırpılmış HASHBYTES('SHA2_256', ...) karşılığı. */
+function trimUnicodeSpan(raw) {
+  if (raw == null) return '';
+  return String(raw).replace(/^[\u0009-\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]+|[\u0009-\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]+$/gu, '');
+}
+
+function descriptionHash(raw) {
+  if (raw == null) return null;
+  const trimmed = trimUnicodeSpan(raw);
+  return createHash('sha256').update(trimmed, 'utf16le').digest('hex').toUpperCase();
+}
 
 /** Turkish_100_CI_AI yaklaşımı: büyük/küçük harf ve aksan duyarsız içerme. */
 function fold(value) {
@@ -71,8 +118,15 @@ function rosterSnapshot(db, params) {
 function liveRoster(db, params) {
   const sicil = Number(params.sicil);
   const level = params.teamLevel || '';
+  const selectedFilter = new Set(
+    String(params.assigneeSicils || '')
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isSafeInteger(value) && value > 0)
+  );
   return [...new Set(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && Number(entry.EmployeeSicil) !== sicil
-    && (!level || (entry.ScopeType || 'UNIT') === level)).map((entry) => Number(entry.EmployeeSicil)))].sort((a, b) => a - b);
+    && (!level || (entry.ScopeType || 'UNIT') === level)
+    && (selectedFilter.size === 0 || selectedFilter.has(Number(entry.EmployeeSicil)))).map((entry) => Number(entry.EmployeeSicil)))].sort((a, b) => a - b);
 }
 
 function teamMemberOf(db, params, manager, employee) {
@@ -111,7 +165,7 @@ function projectRow(db, projectId) {
 }
 
 /** SCOPE_PROJECTS + VISIBLE_TASKS parçalarının karşılığı. */
-function scopeOf(db, params, { restrictTasks = null } = {}) {
+function scopeOf(db, params, { restrictTasks = null, filterByAssignees = false } = {}) {
   const sicil = Number(params.sicil);
   const isAdmin = Boolean(params.isAdmin);
   const projectFilter = params.projectId ? upper(params.projectId) : null;
@@ -119,11 +173,26 @@ function scopeOf(db, params, { restrictTasks = null } = {}) {
   const taskFilter = String(params.taskIds || '').split(',').map((value) => value.trim()).filter(isGuid).map(upper);
   const filterActive = restrictTasks ? true : String(params.taskIds || '').length > 0;
   const allowedTasks = new Set(restrictTasks ? restrictTasks.map(upper) : taskFilter);
+  const assigneeFilter = filterByAssignees
+    ? new Set(String(params.assigneeSicils || '').split(',').map((v) => Number(v.trim())).filter((n) => Number.isSafeInteger(n) && n > 0))
+    : new Set();
+  const scopeCutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
   const projects = new Map();
   const projectIndex = new Map(db.projects.map((row) => [upper(row.ProjectId), row]));
   const activeProject = (id) => {
     const project = projectIndex.get(upper(id));
-    return project && project.IsActive && (!params.projectSearchText || charindex(params.projectSearchText, `${project.ProjectCode || ''} ${project.ProjectName}`) > 0) && (!params.sourceFilter || params.sourceFilter === 'all' || (params.sourceFilter === 'corporate') === (project.SourceType === 'CORPORATE')) && (!projectFilter || same(project.ProjectId, projectFilter)) && (!projectFilters.size || projectFilters.has(upper(project.ProjectId))) && (!filterActive || db.tasks.some((task) => same(task.ProjectId, project.ProjectId) && allowedTasks.has(upper(task.TaskId)))) ? project : null;
+    if (!project || !project.IsActive) return null;
+    if (params.projectSearchText && charindex(params.projectSearchText, `${project.ProjectCode || ''} ${project.ProjectName}`) <= 0) return null;
+    if (params.sourceFilter && params.sourceFilter !== 'all' && (params.sourceFilter === 'corporate') !== (project.SourceType === 'CORPORATE')) return null;
+    if (projectFilter && !same(project.ProjectId, projectFilter)) return null;
+    if (projectFilters.size && !projectFilters.has(upper(project.ProjectId))) return null;
+    if (filterActive && !db.tasks.some((task) => same(task.ProjectId, project.ProjectId) && allowedTasks.has(upper(task.TaskId)))) return null;
+    if (assigneeFilter.size > 0 && !db.tasks.some((task) => same(task.ProjectId, project.ProjectId)
+      && (scopeCutOffMs == null || !task.CreatedAt || new Date(task.CreatedAt).getTime() <= scopeCutOffMs)
+      && assigneesOf(db, task.TaskId).some((ta) => assigneeFilter.has(Number(ta.Sicil))))) {
+      return null;
+    }
+    return project;
   };
   if (isAdmin) {
     for (const project of db.projects) {
@@ -188,7 +257,7 @@ function factRow(db, scope, entry, params = {}) {
     RecurrenceOccurrenceDate: task.RecurrenceOccurrenceDate,
     CreatedAt: task.CreatedAt ?? null,
     UpdatedAt: task.UpdatedAt ?? null,
-    HasDescription: String(task.Description ?? '').trim() ? 1 : 0,
+    HasDescription: params.includeHasDescription === 0 ? null : (String(task.Description ?? '').trim() ? 1 : 0),
     AccessLevel: entry.AccessLevel,
     IdentityBase: entry.IdentityBase,
     IsCreator: Number(task.CreatedBySicil) === scope.sicil ? 1 : 0,
@@ -230,10 +299,17 @@ function taskFacts(db, params) {
     && (!params.teamLevel || (entry.ScopeType || 'UNIT') === params.teamLevel))) {
     const error = new Error('AI_TOOL_SCOPE_UNAVAILABLE'); error.number = 51002; throw error;
   }
-  const scope = scopeOf(db, params);
+  const scope = scopeOf(db, params, { filterByAssignees: true });
   const text = String(params.text || '');
   const statuses = new Set(String(params.statusCsv || '').split(',').filter(Boolean));
   const priorities = new Set(String(params.priorityCsv || '').split(',').filter(Boolean));
+  const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
+  const assigneeSicilsFilter = new Set(
+    String(params.assigneeSicils || '')
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isSafeInteger(value) && value > 0)
+  );
   const dateValue = (task) => {
     switch (params.dateField) {
       case 'targetFinish': return day(task.TargetFinish);
@@ -247,7 +323,8 @@ function taskFacts(db, params) {
       default: return null;
     }
   };
-  const matches = [...scope.visible.values()].filter(({ task, IdentityBase }) => {
+  const filtered = [...scope.visible.values()].filter(({ task, IdentityBase }) => {
+    if (cutOffMs != null && task.CreatedAt && new Date(task.CreatedAt).getTime() > cutOffMs) return false;
     if (params.wbsId && !same(task.WbsId, params.wbsId)) return false;
     if (params.seriesId && !same(task.TaskId, params.seriesId) && !same(task.RecurrenceParentTaskId, params.seriesId)) return false;
     if (params.recurringOnly && !task.RecurrenceRule && !task.RecurrenceParentTaskId) return false;
@@ -282,6 +359,11 @@ function taskFacts(db, params) {
     }
     if (params.createdByMe && Number(task.CreatedBySicil) !== scope.sicil) return false;
     const assignments = assigneesOf(db, task.TaskId);
+    if (assigneeSicilsFilter.size > 0) {
+      const matchesSelected = assignments.some((row) => assigneeSicilsFilter.has(Number(row.Sicil))
+        && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
+      if (!matchesSelected) return false;
+    }
     switch (params.assigneeMode) {
       case 'me': return assignments.some((row) => row.Sicil === scope.sicil);
       case 'unassigned': return IdentityBase === 1 && assignments.length === 0;
@@ -290,7 +372,27 @@ function taskFacts(db, params) {
       case 'team': return assignments.some((row) => teamMemberOf(db, params, scope.sicil, row.Sicil));
       default: return true;
     }
-  }).sort((left, right) => upper(left.task.TaskId).localeCompare(upper(right.task.TaskId)))
+  });
+  // Üretimdeki #AiTasks analiz sınırı: süzgeç sonrası kalan görevler @analysisMaxRows sınırına ulaşamaz.
+  if (Number.isFinite(Number(params.analysisMaxRows)) && filtered.length >= Number(params.analysisMaxRows)) {
+    const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+  }
+  // Üretimdeki ASSIGNMENT_FACTS sınırı: tüm süzülmüş görevlerin görünür atama sayısı @analysisAssignmentRows sınırını aşamaz.
+  if (Number.isFinite(Number(params.analysisAssignmentRows)) && Number(params.analysisAssignmentRows) > 0) {
+    let totalAssignments = 0;
+    for (const entry of filtered) {
+      for (const row of assigneesOf(db, entry.task.TaskId)) {
+        if (entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)) {
+          totalAssignments += 1;
+        }
+      }
+      if (totalAssignments >= Number(params.analysisAssignmentRows)) {
+        const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+      }
+    }
+  }
+  const matches = filtered
+    .sort((left, right) => sqlGuidSortKey(left.task.TaskId).localeCompare(sqlGuidSortKey(right.task.TaskId)))
     .slice(0, Number(params.maxRows));
   const facts = matches.map((entry) => factRow(db, scope, entry, params));
   const projects = [...scope.projects.entries()]
@@ -300,8 +402,201 @@ function taskFacts(db, params) {
       return { ProjectId: project.ProjectId, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, SourceType: project.SourceType, ...access };
     });
   const assignees = params.withAssignees ? assigneeRows(db, scope, facts, params) : [];
-  return [facts, projects, assignees,
-    ...(Number(params.withRoster) === 1 && params.assigneeMode === 'team' ? [teamRoster(db, params, facts, assignees)] : [])];
+  const results = [facts, projects, assignees];
+  if (Number(params.withRoster) === 1 && params.assigneeMode === 'team') {
+    results.push(teamRoster(db, params, facts, assignees));
+  }
+  if (cutOffMs != null) {
+    const fullOrRead = new Set();
+    for (const token of String(params.scopeProjects || '').split(',')) {
+      if (token.length !== 40) continue;
+      const id = token.slice(0, 36);
+      if (isGuid(id) && (token[37] === 'F' || token[38] === '1')) fullOrRead.add(upper(id));
+    }
+    const projectFilter = params.projectId ? upper(params.projectId) : null;
+    const projectFilters = new Set(String(params.projectIds || '').split(',').filter(isGuid).map(upper));
+    const hasPostCutoffDeletion = (db.auditLog || []).some((row) => {
+      if (row.EntityType !== 'TASK' || row.ActionCode !== 'DELETE') return false;
+      if (new Date(row.OccurredAt).getTime() <= cutOffMs) return false;
+      const proj = projectRow(db, row.ProjectId);
+      if (!proj?.IsActive) return false;
+      if (projectFilter && !same(proj.ProjectId, projectFilter)) return false;
+      if (projectFilters.size > 0 && !projectFilters.has(upper(proj.ProjectId))) return false;
+      let snap = null;
+      try {
+        const parsed = typeof row.BeforeJson === 'string' ? JSON.parse(row.BeforeJson) : row.BeforeJson;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) snap = parsed;
+      } catch {
+        snap = null;
+      }
+      const deletedAssignees = Array.isArray(snap?.assigneeIds)
+        ? snap.assigneeIds.filter((v) => typeof v === 'number' || typeof v === 'string').map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
+        : [];
+      const createdByVal = snap?.CreatedBySicil;
+      const createdBySicil = (typeof createdByVal === 'string' || typeof createdByVal === 'number') ? Number(createdByVal) : Number.NaN;
+      const authorized = scope.isAdmin
+        || fullOrRead.has(upper(proj.ProjectId))
+        || createdBySicil === scope.sicil
+        || deletedAssignees.some((id) => id === scope.sicil || executiveOf(db, scope.sicil, id));
+      if (!authorized) return false;
+      if (assigneeSicilsFilter.size > 0 && !deletedAssignees.some((id) => assigneeSicilsFilter.has(id))) return false;
+      const mode = params.assigneeMode || 'any';
+      if (mode === 'any') return true;
+      if (mode === 'me') return deletedAssignees.includes(scope.sicil);
+      if (mode === 'person') return deletedAssignees.includes(Number(params.personSicil));
+      if (mode === 'team') return deletedAssignees.some((id) => teamMemberOf(db, params, scope.sicil, id));
+      return false;
+    });
+    const factTaskIds = new Set(facts.map((row) => upper(row.TaskId)));
+    const scopedTaskSet = new Set(String(params.scopeTasks || '').split(',').map((v) => v.trim()).filter(isGuid).map(upper));
+    const taskCreatedAfterCutoff = (entityId) => {
+      const live = (db.tasks || []).find((t) => same(t.TaskId, entityId));
+      return Boolean(live?.CreatedAt && new Date(live.CreatedAt).getTime() > cutOffMs);
+    };
+    const hasPostCutoffProjectMove = Boolean(projectFilter || projectFilters.size > 0) && (db.auditLog || []).some((row) => {
+      if (row.EntityType !== 'TASK' || row.ActionCode !== 'UPDATE') return false;
+      if (new Date(row.OccurredAt).getTime() <= cutOffMs) return false;
+      let snap = null;
+      try {
+        const parsed = typeof row.BeforeJson === 'string' ? JSON.parse(row.BeforeJson) : row.BeforeJson;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) snap = parsed;
+      } catch {
+        snap = null;
+      }
+      const rawBeforeProj = snap?.ProjectId ?? snap?.projectId ?? null;
+      if (typeof rawBeforeProj !== 'string' || !isGuid(rawBeforeProj)) return false;
+      const beforeProjId = upper(rawBeforeProj);
+      if (same(beforeProjId, row.ProjectId)) return false;
+      const bp = projectRow(db, beforeProjId);
+      if (!bp?.IsActive) return false;
+      if (projectFilter && !same(beforeProjId, projectFilter)) return false;
+      if (projectFilters.size > 0 && !projectFilters.has(beforeProjId)) return false;
+      const entityId = isGuid(row.EntityId) ? upper(row.EntityId) : null;
+      if (!entityId || factTaskIds.has(entityId) || taskCreatedAfterCutoff(entityId)) return false;
+      return scope.isAdmin || fullOrRead.has(beforeProjId) || scopedTaskSet.has(entityId);
+    });
+    const modeForMove = params.assigneeMode || 'any';
+    const hasAssigneeScopeFilter = ['me', 'person', 'team'].includes(modeForMove) || assigneeSicilsFilter.size > 0;
+    const hasPostCutoffAssigneeMove = hasAssigneeScopeFilter && (db.auditLog || []).some((row) => {
+      if (row.EntityType !== 'TASK' || row.ActionCode !== 'UPDATE') return false;
+      if (new Date(row.OccurredAt).getTime() <= cutOffMs) return false;
+      const proj = projectRow(db, row.ProjectId);
+      if (!proj?.IsActive) return false;
+      if (projectFilter && !same(proj.ProjectId, projectFilter)) return false;
+      if (projectFilters.size > 0 && !projectFilters.has(upper(proj.ProjectId))) return false;
+      const entityId = isGuid(row.EntityId) ? upper(row.EntityId) : null;
+      if (!entityId || factTaskIds.has(entityId) || taskCreatedAfterCutoff(entityId)) return false;
+      let snap = null;
+      try {
+        const parsed = typeof row.BeforeJson === 'string' ? JSON.parse(row.BeforeJson) : row.BeforeJson;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) snap = parsed;
+      } catch {
+        snap = null;
+      }
+      if (!Array.isArray(snap?.assigneeIds)) return false;
+      const beforeAssignees = snap.assigneeIds
+        .filter((v) => typeof v === 'number' || typeof v === 'string')
+        .map(Number)
+        .filter((n) => Number.isSafeInteger(n) && n > 0);
+      if (beforeAssignees.length === 0) return false;
+      const createdByVal = snap?.CreatedBySicil;
+      const createdBySicil = (typeof createdByVal === 'string' || typeof createdByVal === 'number') ? Number(createdByVal) : Number.NaN;
+      const authorized = scope.isAdmin
+        || fullOrRead.has(upper(proj.ProjectId))
+        || scopedTaskSet.has(entityId)
+        || createdBySicil === scope.sicil
+        || beforeAssignees.some((id) => id === scope.sicil || executiveOf(db, scope.sicil, id));
+      if (!authorized) return false;
+      if (assigneeSicilsFilter.size > 0 && !beforeAssignees.some((id) => assigneeSicilsFilter.has(id))) return false;
+      if (modeForMove === 'any') return true;
+      if (modeForMove === 'me') return beforeAssignees.includes(scope.sicil);
+      if (modeForMove === 'person') return beforeAssignees.includes(Number(params.personSicil));
+      if (modeForMove === 'team') return beforeAssignees.some((id) => teamMemberOf(db, params, scope.sicil, id));
+      return false;
+    });
+    const hasPostCutoffScopeMove = hasPostCutoffProjectMove || hasPostCutoffAssigneeMove;
+    results.push([{
+      HasPostCutoffDeletion: hasPostCutoffDeletion ? 1 : 0,
+      HasPostCutoffScopeMove: hasPostCutoffScopeMove ? 1 : 0
+    }]);
+    const factTaskProject = new Map(facts.map((row) => [upper(row.TaskId), upper(row.ProjectId)]));
+    const transitionsByTask = new Map();
+    for (const row of db.auditLog || []) {
+      if (row.EntityType !== 'TASK' || !['CREATE', 'UPDATE'].includes(row.ActionCode)) continue;
+      const occurredMs = new Date(row.OccurredAt).getTime();
+      if (!Number.isFinite(occurredMs) || occurredMs > cutOffMs) continue;
+      const taskId = isGuid(row.EntityId) ? upper(row.EntityId) : null;
+      if (!taskId || !factTaskProject.has(taskId)) continue;
+      const proj = projectRow(db, row.ProjectId);
+      if (!proj?.IsActive) continue;
+      const auditProjectId = upper(proj.ProjectId);
+      if (!scope.isAdmin && auditProjectId !== factTaskProject.get(taskId) && !fullOrRead.has(auditProjectId)) continue;
+      const parseObj = (raw) => {
+        if (!raw) return null;
+        try {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+        } catch {
+          return null;
+        }
+      };
+      const targetFinishField = (obj) => {
+        if (!obj) return { present: false, value: '' };
+        const hasUpper = Object.hasOwn(obj, 'TargetFinish');
+        const hasLower = Object.hasOwn(obj, 'targetFinish');
+        if (!hasUpper && !hasLower) return { present: false, value: '' };
+        const raw = typeof obj.TargetFinish === 'string' ? obj.TargetFinish : (typeof obj.targetFinish === 'string' ? obj.targetFinish : '');
+        return { present: true, value: raw ? raw.slice(0, 10) : '' };
+      };
+      const beforeObj = parseObj(row.BeforeJson);
+      const afterObj = parseObj(row.AfterJson);
+      const beforeStatus = sqlJsonValueStatus(beforeObj);
+      const afterStatus = sqlJsonValueStatus(afterObj);
+      const isCompletion = afterStatus != null && isSqlDoneAuditStatus(afterStatus)
+        && (row.ActionCode === 'CREATE' || (beforeStatus != null && !isSqlDoneAuditStatus(beforeStatus)));
+      const isReopen = row.ActionCode === 'UPDATE'
+        && beforeStatus != null && isSqlDoneAuditStatus(beforeStatus)
+        && afterStatus != null && !isSqlDoneAuditStatus(afterStatus);
+      const btf = targetFinishField(beforeObj);
+      const atf = targetFinishField(afterObj);
+      const isTargetFinishChange = row.ActionCode === 'UPDATE'
+        && (btf.present || atf.present)
+        && btf.value !== atf.value;
+      if (!isCompletion && !isReopen && !isTargetFinishChange) continue;
+      const entry = transitionsByTask.get(taskId) || {
+        TaskId: taskId,
+        LastCompletedAuditAt: null,
+        LastReopenAt: null,
+        LastReopenAuditId: null,
+        LastTargetFinishChangeAt: null,
+        LastTargetFinishChangeAuditId: null
+      };
+      const occurredDate = new Date(occurredMs);
+      const auditId = Number(row.AuditId) || 0;
+      if (isCompletion && (!entry.LastCompletedAuditAt || occurredMs > entry.LastCompletedAuditAt.getTime())) {
+        entry.LastCompletedAuditAt = occurredDate;
+      }
+      if (isReopen) {
+        if (!entry.LastReopenAt
+          || occurredMs > entry.LastReopenAt.getTime()
+          || (occurredMs === entry.LastReopenAt.getTime() && auditId > (entry.LastReopenAuditId ?? -1))) {
+          entry.LastReopenAt = occurredDate;
+          entry.LastReopenAuditId = auditId;
+        }
+      }
+      if (isTargetFinishChange) {
+        if (!entry.LastTargetFinishChangeAt
+          || occurredMs > entry.LastTargetFinishChangeAt.getTime()
+          || (occurredMs === entry.LastTargetFinishChangeAt.getTime() && auditId > (entry.LastTargetFinishChangeAuditId ?? -1))) {
+          entry.LastTargetFinishChangeAt = occurredDate;
+          entry.LastTargetFinishChangeAuditId = auditId;
+        }
+      }
+      transitionsByTask.set(taskId, entry);
+    }
+    results.push([...transitionsByTask.values()]);
+  }
+  return results;
 }
 
 function taskVisibility(db, params) {
@@ -561,12 +856,577 @@ function outlook(db, params) {
   return [visibleRows];
 }
 
+function reportTaskNotes(db, params) {
+  const scope = scopeOf(db, params);
+  if (Number.isFinite(Number(params.analysisMaxRows)) && scope.visible.size >= Number(params.analysisMaxRows)) {
+    const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+  }
+  const limit = Number(params.maxNoteRows || 61);
+  const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
+  const rows = [...scope.visible.values()]
+    .filter(({ task }) => trimUnicodeSpan(task.Description).length > 0)
+    .filter(({ task }) => cutOffMs == null || !task.UpdatedAt || new Date(task.UpdatedAt).getTime() <= cutOffMs)
+    .sort((a, b) => sqlGuidSortKey(a.task.TaskId).localeCompare(sqlGuidSortKey(b.task.TaskId)))
+    .slice(0, limit)
+    .map(({ task }) => {
+      const trimmed = trimUnicodeSpan(task.Description);
+      return {
+        TaskId: upper(task.TaskId),
+        ProjectId: upper(task.ProjectId),
+        Description: Array.from(trimmed).slice(0, 1601).join(''),
+        DescriptionHash: descriptionHash(task.Description)
+      };
+    });
+  const withheldRows = cutOffMs == null
+    ? []
+    : [...scope.visible.values()]
+      .filter(({ task }) => task.UpdatedAt && new Date(task.UpdatedAt).getTime() > cutOffMs)
+      .sort((a, b) => sqlGuidSortKey(a.task.TaskId).localeCompare(sqlGuidSortKey(b.task.TaskId)))
+      .map(({ task }) => ({ TaskId: upper(task.TaskId) }));
+  return [rows, withheldRows];
+}
+
+function reportNoteAudit(db, params) {
+  const scope = scopeOf(db, params);
+  if (Number.isFinite(Number(params.analysisMaxRows)) && scope.visible.size >= Number(params.analysisMaxRows)) {
+    const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+  }
+  const limit = Number(params.maxAuditRows || 251);
+  const cutOffMs = new Date(params.cutOffUtc).getTime();
+  // `@scopeProjects` belirteçlerinden FULL veya READ yetkili proje kümesini çöz (üretim SQL ile aynı kural).
+  const fullOrReadProjects = new Set();
+  for (const token of String(params.scopeProjects || '').split(',')) {
+    if (token.length !== 40) continue;
+    const id = token.slice(0, 36);
+    if (isGuid(id) && (token[37] === 'F' || token[38] === '1')) fullOrReadProjects.add(upper(id));
+  }
+  const parseSnapshot = (raw) => {
+    if (raw == null) return { malformed: false, descRaw: null, projectId: null };
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { malformed: true, descRaw: null, projectId: null };
+      }
+      const hasUpper = Object.hasOwn(parsed, 'Description') && parsed.Description !== undefined;
+      const hasLower = Object.hasOwn(parsed, 'description') && parsed.description !== undefined;
+      if ((hasUpper && parsed.Description !== null && typeof parsed.Description !== 'string')
+        || (hasLower && parsed.description !== null && typeof parsed.description !== 'string')) {
+        return { malformed: true, descRaw: null, projectId: null };
+      }
+      const descVal = parsed.Description ?? parsed.description ?? null;
+      const projVal = parsed.ProjectId ?? parsed.projectId ?? null;
+      return {
+        malformed: false,
+        descRaw: descVal == null ? null : String(descVal),
+        projectId: typeof projVal === 'string' && isGuid(projVal) ? upper(projVal) : null
+      };
+    } catch {
+      return { malformed: true, descRaw: null, projectId: null };
+    }
+  };
+  const clipExcerpt = (raw) => {
+    if (raw == null) return null;
+    const trimmed = trimUnicodeSpan(raw);
+    if (!trimmed) return null;
+    return Array.from(trimmed).slice(0, 1601).join('');
+  };
+
+  const rows = [];
+  for (const row of db.auditLog || []) {
+    if (row.EntityType !== 'TASK' || !['CREATE', 'UPDATE'].includes(row.ActionCode)) continue;
+    if (new Date(row.OccurredAt).getTime() > cutOffMs) continue;
+    const visible = scope.visible.get(upper(row.EntityId));
+    if (!visible) continue;
+    const project = projectRow(db, row.ProjectId);
+    if (!project || !project.IsActive) continue;
+    const authorizedAuditProject = scope.isAdmin || (
+      same(row.ProjectId, visible.task.ProjectId)
+      || fullOrReadProjects.has(upper(row.ProjectId))
+    );
+    if (!authorizedAuditProject) continue;
+
+    const before = parseSnapshot(row.BeforeJson);
+    const after = parseSnapshot(row.AfterJson);
+    const beforeSpan = trimUnicodeSpan(before.descRaw);
+    const afterSpan = trimUnicodeSpan(after.descRaw);
+    const beforeNonEmpty = beforeSpan.length > 0;
+    const afterNonEmpty = afterSpan.length > 0;
+
+    let beforeOriginUnauthorized = false;
+    if (before.projectId && !same(before.projectId, row.ProjectId)) {
+      const originProject = projectRow(db, before.projectId);
+      const originOk = scope.isAdmin
+        ? Boolean(originProject?.IsActive)
+        : Boolean(originProject?.IsActive && fullOrReadProjects.has(before.projectId));
+      if (!originOk) {
+        beforeOriginUnauthorized = true;
+      }
+    }
+
+    const changed = before.malformed || after.malformed || beforeOriginUnauthorized
+      || (row.ActionCode === 'CREATE' && afterNonEmpty)
+      || (row.ActionCode === 'UPDATE' && (
+        (beforeNonEmpty && !afterNonEmpty)
+        || (!beforeNonEmpty && afterNonEmpty)
+        || (beforeNonEmpty && afterNonEmpty && beforeSpan !== afterSpan)
+      ));
+    if (!changed) continue;
+
+    const afterRepeatsUnauthorizedOrigin = beforeOriginUnauthorized
+      && !before.malformed && !after.malformed
+      && beforeNonEmpty && afterNonEmpty
+      && beforeSpan === afterSpan;
+
+    rows.push({
+      AuditId: Number(row.AuditId),
+      OccurredAt: row.OccurredAt,
+      ActionCode: row.ActionCode,
+      TaskId: upper(row.EntityId),
+      ProjectId: upper(row.ProjectId),
+      BeforeProjectId: (!before.malformed && !beforeOriginUnauthorized && before.projectId) ? before.projectId : null,
+      BeforeDescription: (before.malformed || beforeOriginUnauthorized || !beforeNonEmpty) ? null : clipExcerpt(before.descRaw),
+      AfterDescription: (after.malformed || afterRepeatsUnauthorizedOrigin || !afterNonEmpty) ? null : clipExcerpt(after.descRaw),
+      BeforeDescHash: (before.malformed || beforeOriginUnauthorized || !beforeNonEmpty) ? null : descriptionHash(before.descRaw),
+      AfterDescHash: (after.malformed || afterRepeatsUnauthorizedOrigin || !afterNonEmpty) ? null : descriptionHash(after.descRaw),
+      BeforeReadable: (!before.malformed && !beforeOriginUnauthorized) ? 1 : 0,
+      AfterReadable: (!after.malformed && !afterRepeatsUnauthorizedOrigin) ? 1 : 0,
+      BeforeOriginUnauthorized: beforeOriginUnauthorized ? 1 : 0,
+      SnapshotMalformed: (before.malformed || after.malformed) ? 1 : 0
+    });
+  }
+
+  rows.sort((a, b) => new Date(b.OccurredAt).getTime() - new Date(a.OccurredAt).getTime() || Number(b.AuditId) - Number(a.AuditId));
+  return [rows.slice(0, limit)];
+}
+
+function reportScopeRoster(db, params) {
+  const sicil = Number(params.sicil);
+  const isAdmin = Boolean(params.isAdmin);
+  const limit = Number(params.maxRosterRows || 501);
+  const includeSelf = params.rosterIncludeSelf === undefined ? true : Boolean(params.rosterIncludeSelf);
+  const mode = String(params.rosterMode || 'all');
+  const rosterSicil = params.rosterSicil != null ? Number(params.rosterSicil) : null;
+  const rosterText = String(params.rosterText || '');
+  const rosterHierarchyKey = String(params.rosterHierarchyKey || '');
+  const rosterScopeType = String(params.rosterScopeType || '');
+  const isExecutiveTeamMode = ['all', 'team_level', 'team_name'].includes(mode);
+  const bySicil = new Map((db.people || []).map((person) => [Number(person.Sicil), person]));
+  const raw = [];
+  const pushPerson = (person, scopeType) => {
+    if (!person) return;
+    raw.push({
+      Sicil: Number(person.Sicil),
+      DisplayName: person.DisplayName ? String(person.DisplayName).trim() : null,
+      Team: person.Team ? String(person.Team).trim() : null,
+      Unit: person.Unit ? String(person.Unit).trim() : null,
+      Department: person.Department ? String(person.Department).trim() : null,
+      Directorate: person.Directorate ? String(person.Directorate).trim() : null,
+      ScopeType: scopeType
+    });
+  };
+  pushPerson(bySicil.get(sicil), 'SELF');
+  if (!isAdmin || isExecutiveTeamMode) {
+    for (const entry of db.executiveScope || []) {
+      if (Number(entry.ManagerSicil) === sicil && Number(entry.EmployeeSicil) !== sicil) {
+        pushPerson(bySicil.get(Number(entry.EmployeeSicil)), entry.ScopeType || 'UNIT');
+      }
+    }
+  }
+  if (isAdmin && !isExecutiveTeamMode) {
+    for (const person of db.people || []) {
+      if (Number(person.Sicil) !== sicil) pushPerson(person, 'ADMIN');
+    }
+  }
+  const eligible = raw.filter((row) => {
+    if (!includeSelf && (row.Sicil === sicil || row.ScopeType === 'SELF')) return false;
+    if (rosterScopeType && row.ScopeType !== rosterScopeType) return false;
+    return true;
+  });
+  const foldedText = fold(rosterText);
+  const hasExactTeamMatch = mode === 'team_name'
+    && eligible.some((row) => row.Team && fold(row.Team) === foldedText);
+  const filtered = eligible.filter((row) => {
+    if (mode === 'all' || mode === 'team_level') return true;
+    if (mode === 'person_sicil') return row.Sicil === rosterSicil;
+    if (mode === 'person_name') return Boolean(row.DisplayName && fold(row.DisplayName) === foldedText);
+    if (mode === 'team_name') {
+      if (hasExactTeamMatch) return Boolean(row.Team && fold(row.Team) === foldedText);
+      return Boolean(row.Unit && fold(row.Unit) === foldedText);
+    }
+    const dir = row.Directorate || '__unassigned__';
+    const dept = row.Department || '';
+    const unit = row.Unit || '';
+    if (mode === 'org_unit') {
+      return rosterHierarchyKey
+        ? `${dir}\u001F${dept}\u001F${unit}` === rosterHierarchyKey
+        : Boolean(row.Unit && fold(row.Unit) === foldedText);
+    }
+    if (mode === 'org_department') {
+      return rosterHierarchyKey
+        ? `${dir}\u001F${dept}` === rosterHierarchyKey
+        : Boolean(row.Department && fold(row.Department) === foldedText);
+    }
+    if (mode === 'org_directorate') {
+      return rosterHierarchyKey
+        ? dir === rosterHierarchyKey
+        : Boolean(row.Directorate && fold(row.Directorate) === foldedText);
+    }
+    return true;
+  });
+  const deduped = new Map();
+  for (const row of filtered) {
+    if (!deduped.has(row.Sicil)) deduped.set(row.Sicil, row);
+  }
+  const rows = [...deduped.values()].sort((a, b) => a.Sicil - b.Sicil);
+  return [rows.slice(0, limit)];
+}
+
+function reportProjectSelectors(db, params) {
+  const scope = scopeOf(db, { ...params, analysisMaxRows: undefined });
+  const selectors = JSON.parse(String(params.selectorJson || '[]'));
+  const rows = [];
+  for (const sel of selectors) {
+    const rawText = String(sel.raw || '');
+    const folded = fold(rawText);
+    const guid = sel.guid ? upper(sel.guid) : null;
+    for (const [id, access] of scope.projects.entries()) {
+      const project = projectRow(db, id);
+      if (!project) continue;
+      const matched = guid
+        ? same(project.ProjectId, guid)
+        : (
+          String(project.ProjectCode || '').toLocaleUpperCase('tr-TR') === rawText.toLocaleUpperCase('tr-TR')
+          || (project.ProjectCode && fold(project.ProjectCode) === folded)
+          || (project.ProjectName && fold(project.ProjectName) === folded)
+        );
+      if (matched) {
+        rows.push({
+          SelectorIndex: Number(sel.index),
+          ProjectId: project.ProjectId,
+          ProjectName: project.ProjectName,
+          ProjectCode: project.ProjectCode,
+          SourceType: project.SourceType,
+          LeadSicil: project.LeadSicil,
+          ...access
+        });
+      }
+    }
+  }
+  rows.sort((a, b) => a.SelectorIndex - b.SelectorIndex || sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId)));
+  return [rows];
+}
+
+function reportDependencies(db, params) {
+  const scope = scopeOf(db, params);
+  const limit = Number(params.maxRows || 1001);
+  const taskFilter = new Set(String(params.taskIds || '').split(',').map(upper).filter(isGuid));
+  const rows = (db.taskDependencies || [])
+    .filter((dep) => scope.projects.get(upper(dep.ProjectId))?.AccessLevel === 'FULL')
+    .filter((dep) => taskFilter.size === 0 || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)))
+    .sort((a, b) => (
+      sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId))
+      || sqlGuidSortKey(a.TaskId).localeCompare(sqlGuidSortKey(b.TaskId))
+      || sqlGuidSortKey(a.PredecessorTaskId).localeCompare(sqlGuidSortKey(b.PredecessorTaskId))
+    ))
+    .slice(0, limit)
+    .map((dep) => ({
+      ProjectId: dep.ProjectId,
+      TaskId: dep.TaskId,
+      PredecessorTaskId: dep.PredecessorTaskId,
+      DependencyType: dep.DependencyType,
+      LagDays: dep.LagDays,
+      LagValue: dep.LagValue,
+      LagUnit: dep.LagUnit
+    }));
+  return [rows];
+}
+
+function reportActivitySummary(db, params) {
+  const sicil = Number(params.sicil);
+  const isAdmin = Boolean(params.isAdmin);
+  const scope = scopeOf(db, { ...params, projectIds: '', taskIds: '', projectId: null, projectSearchText: '', sourceFilter: 'all', analysisMaxRows: undefined });
+  // `scope.projects` haritasının anahtarı büyük harfli proje kimliğidir.
+  const visibleProjects = new Set(
+    [...scope.projects.entries()]
+      .filter(([, entry]) => entry.AccessLevel === 'FULL' || entry.HasReadGrant === 1)
+      .map(([projectId]) => upper(projectId))
+  );
+  const partialTasks = new Set(String(params.scopeTasks || '').split(',').map(upper).filter(isGuid));
+  const projectFilter = new Set(String(params.projectIds || '').split(',').map(upper).filter(isGuid));
+  const assigneeFilter = new Set(
+    String(params.assigneeSicils || '')
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isSafeInteger(value) && value > 0)
+  );
+  const startMs = new Date(params.startUtc).getTime();
+  const endMs = new Date(params.endUtc).getTime();
+  const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
+  const probeRows = Number(params.activityProbeRows || 20001);
+
+  const safeJson = (raw) => {
+    if (raw == null) return { ok: true, obj: {} };
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, obj: {} };
+      return { ok: true, obj: parsed };
+    } catch {
+      return { ok: false, obj: {} };
+    }
+  };
+  const historicallyVisible = (id) => Number(id) === sicil || executiveOf(db, sicil, Number(id));
+  const validAssigneeIds = (arr) => (Array.isArray(arr)
+    ? arr.filter((v) => typeof v === 'number' || typeof v === 'string').map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
+    : []);
+
+  const deletions = new Map();
+  for (const event of db.auditLog || []) {
+    if (event.EntityType !== 'TASK' || event.ActionCode !== 'DELETE') continue;
+    const eventMs = new Date(event.OccurredAt).getTime();
+    if (cutOffMs != null && eventMs > cutOffMs) continue;
+    const k = `${upper(event.EntityId)}:${upper(event.ProjectId)}`;
+    const prev = deletions.get(k);
+    if (!prev || eventMs > new Date(prev.OccurredAt).getTime()
+      || (eventMs === new Date(prev.OccurredAt).getTime() && Number(event.AuditId) > Number(prev.AuditId))) {
+      deletions.set(k, event);
+    }
+  }
+
+  const scopedRows = [];
+  for (const row of db.auditLog || []) {
+    if (row.EntityType !== 'TASK' || !['CREATE', 'UPDATE', 'DELETE'].includes(row.ActionCode)) continue;
+    const occurredMs = new Date(row.OccurredAt).getTime();
+    if (!(occurredMs >= startMs && occurredMs < endMs)) continue;
+    if (cutOffMs != null && occurredMs > cutOffMs) continue;
+    if (projectFilter.size > 0 && !projectFilter.has(upper(row.ProjectId))) continue;
+
+    const liveTask = (db.tasks || []).find((task) => same(task.TaskId, row.EntityId)) || null;
+    const project = projectRow(db, row.ProjectId);
+    const deletion = liveTask ? null : deletions.get(`${upper(row.EntityId)}:${upper(row.ProjectId)}`);
+    const deletedSnap = deletion ? safeJson(deletion.BeforeJson) : { ok: false, obj: {} };
+    const deletedAssignees = deletedSnap.ok ? validAssigneeIds(deletedSnap.obj.assigneeIds) : [];
+
+    const deletedCreatedByRaw = deletedSnap.ok ? deletedSnap.obj.CreatedBySicil : null;
+    const deletedCreatedBySicil = (typeof deletedCreatedByRaw === 'string' || typeof deletedCreatedByRaw === 'number')
+      ? Number(deletedCreatedByRaw)
+      : Number.NaN;
+    const visible = Boolean(project?.IsActive) && (
+      (isAdmin && (!liveTask || scope.projects.has(upper(liveTask.ProjectId))))
+      || (!isAdmin && (
+        (visibleProjects.has(upper(row.ProjectId))
+          && (!liveTask || visibleProjects.has(upper(liveTask.ProjectId)) || partialTasks.has(upper(liveTask.TaskId))))
+        || (liveTask && same(liveTask.ProjectId, row.ProjectId) && partialTasks.has(upper(liveTask.TaskId)))
+        || (!liveTask && deletedSnap.ok && (
+          deletedCreatedBySicil === sicil
+          || deletedAssignees.some(historicallyVisible)
+        ))
+      ))
+    );
+    if (!visible) continue;
+
+    if (assigneeFilter.size > 0) {
+      let matchesAssignee = false;
+      if (liveTask) {
+        const taskAssignees = assigneesOf(db, liveTask.TaskId);
+        matchesAssignee = taskAssignees.some((ta) => assigneeFilter.has(Number(ta.Sicil)) && (
+          isAdmin
+          || Number(liveTask.CreatedBySicil) === sicil
+          || Number(ta.Sicil) === sicil
+          || visibleProjects.has(upper(liveTask.ProjectId))
+          || executiveOf(db, sicil, Number(ta.Sicil))
+        ));
+      } else if (deletedAssignees.length > 0) {
+        matchesAssignee = deletedAssignees.some((member) => assigneeFilter.has(member));
+      }
+      if (!matchesAssignee) continue;
+    }
+
+    const beforeParsed = safeJson(row.BeforeJson);
+    const afterParsed = safeJson(row.AfterJson);
+    const beforeStatus = beforeParsed.ok ? sqlJsonValueStatus(beforeParsed.obj) : null;
+    const afterStatus = afterParsed.ok ? sqlJsonValueStatus(afterParsed.obj) : null;
+    const completionEvent = afterParsed.ok && afterStatus != null && isSqlDoneAuditStatus(afterStatus)
+      && (row.ActionCode === 'CREATE' || (beforeParsed.ok && beforeStatus != null && !isSqlDoneAuditStatus(beforeStatus)));
+    const reopenEvent = beforeParsed.ok && afterParsed.ok && beforeStatus != null && isSqlDoneAuditStatus(beforeStatus)
+      && afterStatus != null && !isSqlDoneAuditStatus(afterStatus);
+    const kind = row.ActionCode === 'DELETE' ? 'deleted' : row.ActionCode === 'CREATE' ? 'created' : completionEvent ? 'completed' : 'updated';
+
+    scopedRows.push({
+      AuditId: Number(row.AuditId) || 0,
+      ActionGroup: row.CorrelationId ? String(row.CorrelationId).toUpperCase() : `audit:${row.AuditId}`,
+      EntityId: upper(row.EntityId),
+      ActorSicil: Number(row.ActorSicil),
+      ProjectId: upper(row.ProjectId),
+      OccurredAt: row.OccurredAt,
+      Kind: kind,
+      Completed: completionEvent ? 1 : 0,
+      Reopened: reopenEvent ? 1 : 0,
+      LastReopenAt: reopenEvent ? row.OccurredAt : null,
+      LastReopenAuditId: reopenEvent ? (Number(row.AuditId) || 0) : null,
+      LiveTask: liveTask
+    });
+    if (scopedRows.length >= probeRows) {
+      const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+    }
+  }
+
+  // Her görev için dönemdeki en son tamamlama olayının projesini ve zamanını (OccurredAt DESC, AuditId DESC) tekilleştir.
+  const latestCompletionByEntity = new Map();
+  for (const row of scopedRows) {
+    if (!row.Completed) continue;
+    const rowMs = new Date(row.OccurredAt).getTime();
+    const prev = latestCompletionByEntity.get(row.EntityId);
+    if (!prev || rowMs > prev.ms || (rowMs === prev.ms && row.AuditId > prev.auditId)) {
+      latestCompletionByEntity.set(row.EntityId, {
+        projectId: row.ProjectId,
+        occurredAt: row.OccurredAt,
+        isLive: Boolean(row.LiveTask),
+        ms: rowMs,
+        auditId: row.AuditId
+      });
+    }
+  }
+
+  const groups = new Map();
+  for (const row of scopedRows) {
+    const gk = `${row.ActionGroup}:${row.EntityId}:${row.ActorSicil}:${row.ProjectId}`;
+    const existing = groups.get(gk);
+    if (!existing) {
+      groups.set(gk, {
+        EntityId: row.EntityId,
+        ActorSicil: row.ActorSicil,
+        ProjectId: row.ProjectId,
+        OccurredAt: row.OccurredAt,
+        Completed: row.Completed,
+        Reopened: row.Reopened,
+        LastReopenAt: row.LastReopenAt,
+        LastReopenAuditId: row.LastReopenAuditId,
+        Deleted: row.Kind === 'deleted' ? 1 : 0,
+        Created: row.Kind === 'created' ? 1 : 0,
+        LiveTask: row.LiveTask
+      });
+    } else {
+      if (new Date(row.OccurredAt).getTime() > new Date(existing.OccurredAt).getTime()) existing.OccurredAt = row.OccurredAt;
+      if (row.Completed) existing.Completed = 1;
+      if (row.Reopened) existing.Reopened = 1;
+      if (row.LastReopenAt && (!existing.LastReopenAt || new Date(row.LastReopenAt).getTime() > new Date(existing.LastReopenAt).getTime())) {
+        existing.LastReopenAt = row.LastReopenAt;
+      }
+      if (row.LastReopenAuditId != null && (existing.LastReopenAuditId == null || row.LastReopenAuditId > existing.LastReopenAuditId)) {
+        existing.LastReopenAuditId = row.LastReopenAuditId;
+      }
+      if (row.Kind === 'deleted') existing.Deleted = 1;
+      if (row.Kind === 'created') existing.Created = 1;
+    }
+  }
+
+  const groupList = [...groups.values()];
+  const tasksOf = (pred) => new Set(groupList.filter(pred).map((g) => g.EntityId));
+  const touched = new Map();
+  for (const g of groupList) {
+    const prev = touched.get(g.EntityId) || { Created: 0, Deleted: 0, Completed: 0, Reopened: 0 };
+    touched.set(g.EntityId, {
+      Created: prev.Created || g.Created,
+      Deleted: prev.Deleted || g.Deleted,
+      Completed: prev.Completed || g.Completed,
+      Reopened: prev.Reopened || g.Reopened
+    });
+  }
+  const hasPostCutoffDeletion = cutOffMs != null && scopedRows.some((row) => (
+    !row.LiveTask && (db.auditLog || []).some((d) => (
+      d.EntityType === 'TASK'
+      && d.ActionCode === 'DELETE'
+      && upper(d.EntityId) === row.EntityId
+      && new Date(d.OccurredAt).getTime() > cutOffMs
+    ))
+  ));
+  const counts = [{
+    Total: groupList.length,
+    TaskCount: new Set(groupList.map((g) => g.EntityId)).size,
+    ActorCount: new Set(groupList.map((g) => g.ActorSicil)).size,
+    CompletedCount: tasksOf((g) => g.Completed).size,
+    DeletedCompletedCount: tasksOf((g) => g.Completed && !g.LiveTask).size,
+    CreatedCount: tasksOf((g) => g.Created).size,
+    DeletedCount: tasksOf((g) => g.Deleted).size,
+    ReopenedCount: tasksOf((g) => g.Reopened).size,
+    UpdatedOnlyCount: [...touched.values()].filter((f) => !f.Created && !f.Deleted && !f.Completed && !f.Reopened).length,
+    HasPostCutoffDeletion: hasPostCutoffDeletion ? 1 : 0
+  }];
+
+  const istanbulFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const liveByTask = new Map();
+  const contributingProjectMap = new Map();
+  for (const g of groupList) {
+    if (!contributingProjectMap.has(g.ProjectId)) {
+      const p = projectRow(db, g.ProjectId);
+      contributingProjectMap.set(g.ProjectId, {
+        ProjectId: g.ProjectId,
+        ProjectCode: p?.ProjectCode ?? null,
+        ProjectName: p?.ProjectName ?? null,
+        _deletedCompletedTasks: new Set()
+      });
+    }
+    const latestComp = latestCompletionByEntity.get(g.EntityId);
+    if (latestComp && !latestComp.isLive && latestComp.projectId === g.ProjectId) {
+      contributingProjectMap.get(g.ProjectId)._deletedCompletedTasks.add(g.EntityId);
+    }
+    if (!g.LiveTask) continue;
+    const tid = upper(g.LiveTask.TaskId);
+    const actDay = istanbulFmt.format(new Date(g.OccurredAt));
+    const prev = liveByTask.get(tid);
+    const winningProjectId = latestComp && latestComp.isLive ? latestComp.projectId : null;
+    const winningCompletedDay = latestComp && latestComp.isLive && latestComp.occurredAt
+      ? istanbulFmt.format(new Date(latestComp.occurredAt))
+      : null;
+    if (!prev) {
+      liveByTask.set(tid, {
+        TaskId: upper(g.LiveTask.TaskId),
+        CurrentProjectId: upper(g.LiveTask.ProjectId),
+        LastActivityDay: actDay,
+        CompletedInPeriod: g.Completed ? 1 : 0,
+        CompletedInPeriodDay: winningCompletedDay,
+        CompletedProjectId: winningProjectId,
+        LastReopenAt: g.LastReopenAt || null,
+        LastReopenAuditId: g.LastReopenAuditId ?? null
+      });
+    } else {
+      if (actDay > prev.LastActivityDay) prev.LastActivityDay = actDay;
+      if (g.Completed) {
+        prev.CompletedInPeriod = 1;
+        prev.CompletedInPeriodDay = winningCompletedDay;
+        prev.CompletedProjectId = winningProjectId;
+      }
+      if (g.LastReopenAt && (!prev.LastReopenAt || new Date(g.LastReopenAt).getTime() > new Date(prev.LastReopenAt).getTime())) {
+        prev.LastReopenAt = g.LastReopenAt;
+      }
+      if (g.LastReopenAuditId != null && (prev.LastReopenAuditId == null || g.LastReopenAuditId > prev.LastReopenAuditId)) {
+        prev.LastReopenAuditId = g.LastReopenAuditId;
+      }
+    }
+  }
+  const contributingProjects = [...contributingProjectMap.values()]
+    .sort((a, b) => sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId)))
+    .map(({ ProjectId, ProjectCode, ProjectName, _deletedCompletedTasks }) => ({
+      ProjectId,
+      ProjectCode,
+      ProjectName,
+      DeletedCompletedCount: _deletedCompletedTasks.size
+    }));
+  return [counts, [...liveByTask.values()], contributingProjects];
+}
+
 const HANDLERS = Object.freeze({
   'task-facts': taskFacts,
   'task-visibility': taskVisibility,
   // Görünür görevlerin kesilmiş açıklamaları (SQL: SC sıralamasıyla 401 kod noktası; boş açıklama satır döndürmez).
   'task-notes': (db, params) => [[...scopeOf(db, params).visible.values()].filter(({ task }) => String(task.Description ?? '').trim())
     .map(({ task }) => ({ TaskId: upper(task.TaskId), Description: Array.from(String(task.Description).replace(/^\s+/u, '')).slice(0, 401).join('') }))],
+  'report-task-notes': reportTaskNotes,
+  'report-note-audit': reportNoteAudit,
+  'report-scope-roster': reportScopeRoster,
+  'report-project-selectors': reportProjectSelectors,
+  'report-dependencies': reportDependencies,
+  'report-activity-summary': reportActivitySummary,
   'task-detail': taskDetail,
   'project-search': projectSearch,
   portfolio,
@@ -620,9 +1480,12 @@ export function runAiToolQuery(db, sqlText, params) {
   }
 }
 
+const NO_PROJECT_SCOPE_CAP = new Set(['wbs-selector', 'report-scope-roster', 'report-activity-summary']);
+
 function runLoggedAiToolQuery(db, marker, params) {
   if (db.aiToolFailure?.[marker[1]]) throw db.aiToolFailure[marker[1]];
-  if (marker[1] !== 'wbs-selector' && scopeOf(db, params).projects.size >= Number(params.analysisMaxRows)) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
+  const projectScope = scopeOf(db, params, { filterByAssignees: marker[1] === 'task-facts' });
+  if (!NO_PROJECT_SCOPE_CAP.has(marker[1]) && projectScope.projects.size >= Number(params.analysisMaxRows)) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   // Sonuç kümesi hesaplanmadan SQL nüfus bütçesi bağımsız uygulanır.
   const boundedTaskQueries = new Set(['task-facts', 'task-detail', 'portfolio', 'project-detail', 'wbs', 'baseline']);
   if (boundedTaskQueries.has(marker[1]) || (marker[1] === 'dependencies' && !params.focusTaskId)) {

@@ -130,7 +130,7 @@ export function factFromRow(row) {
     createdDay: istanbulDay(row.CreatedAt),
     updatedAt: sqlInstant(row.UpdatedAt),
     // Açıklaması var mı (yalnızca varlık; metin olgu değildir ve ayrı, rızaya bağlı okumayla gelir).
-    hasDescription: Boolean(row.HasDescription),
+    hasDescription: row.HasDescription == null ? undefined : Boolean(row.HasDescription),
     accessLevel: row.AccessLevel === 'FULL' ? 'FULL' : 'PARTIAL',
     identityBase: Boolean(row.IdentityBase),
     isCreator: Boolean(row.IsCreator),

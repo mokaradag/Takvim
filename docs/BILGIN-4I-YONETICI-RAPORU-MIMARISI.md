@@ -12,9 +12,11 @@ Güvenlik ve yetki sözleşmeleri değişmez: [Yetkilendirme Modeli](YETKILENDIR
 [AI Alan Araçları](YAPAY-ZEKA-ALAN-ARACLARI.md), [Yapay Zekâ Platformu](YAPAY-ZEKA-PLATFORMU.md) ve
 [AI Anlamsal Katmanı](YAPAY-ZEKA-ANLAMSAL-KATMAN.md). Bu belge onları yinelemez, üzerlerine kurar.
 
-**Durum (21.11.2026):** Bu belge 4I-0 kapsamında yazılmış bir **belirtimdir**. Rapor motoru, rapor arayüzü,
-yükleme hizmeti ya da kalıcı saklama **henüz yoktur**; uygulanan yalnızca stil belgesi, şablon, model kaydı
-uzlaştırması, kıyas fikstürü ve bunların belirlenimci sınamalarıdır.
+**Durum (23.11.2026):** 4I-0 (stil belgesi, şablon, model kaydı uzlaştırması, kıyas fikstürü) ve **4I-A**
+(yetkili yönetici kanıt paketi kurucusu `4i-kanit-1`, istek doğrulaması, rapor düzeyi rızalı zengin not okuması
+ve geliştirici tanı önizlemesi) uygulanıp belirlenimci sınamalarla doğrulandı. Rapor yazarı (4I-B), doğrulama/onarım
+döngüsü (4I-C), DOCX üreticisi (4I-D), Stüdyo arayüzü/HTTP uçları (4I-E), belge yükleme (4I-F) ve kalıcı saklama
+(4J) **henüz uygulanmadı**; canlı SQL Server ve kurum içi model doğrulamaları bekliyor.
 
 ---
 

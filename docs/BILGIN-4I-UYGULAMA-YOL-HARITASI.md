@@ -159,7 +159,7 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 
 ## 4I-A — Yönetici kanıt zekâsı
 
-**Durum: PLANLANDI.**
+**Durum: DOĞRULANDI.**
 
 1. **Amaç ve kullanıcı değeri** — Rapor için dönem ve kapsamdaki anlamlı işi (tamamlanan ve süren görevler,
    hareketler, rızalı notlar) yetkili, kökenli ve tamlığı bilinen tek bir kanıt paketinde toplamak.
@@ -175,10 +175,12 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
    `NOTE_LIMITS` değişmez; rapor kodu kendi modüllerinde (`src/domain/ai/report/*`, `src/server/ai/report/*`);
    kalıcı tablo ve uç yok (tanı önizlemesi sınama/betik düzeyinde).
 5. **Beklenen dosya ve bileşenler** — `reportRequest.js` (istek doğrulama), `reportEvidence.js` (paket kurucusu),
-   `reportNotes.js` (not sürümleri, öncelik, kırpma), ilgili sabit SQL eklemeleri, `test/ai-executive-report-evidence.test.mjs`,
-   sentetik SQL ikizi genişletmesi.
+   `reportNotes.js` (not sürümleri, öncelik, kırpma), `reportPreview.js` ve `scripts/yonetici-kanit-onizleme.mjs`
+   (geliştirici/sınama tanı önizlemesi), ilgili sabit SQL eklemeleri (`rotaToolQueries.js`, `rotaToolStore.js`),
+   `test/ai-executive-report-evidence.test.mjs`, `test/helpers/executiveReportBenchmarkSeed.mjs` ve sentetik SQL
+   ikizi genişletmesi (`test/helpers/aiToolSql.mjs`).
 6. **Gözlenebilir çıktılar** — Sentetik veride, görevlerden, notlardan ve hareketlerden seçilmiş anlamlı bilgiyi
-   gösteren tanı önizlemeleri (paket JSON'u + okunur özet); R1, R4, R5, R7, R8 vakalarının paketleri.
+   gösteren tanı önizlemeleri (paket JSON'u + okunur özet); R1, R4, R5, R6, R7, R8 ve S09 vakalarının paketleri.
 7. **Gerekli referans görüntüleri ve varlıklar** — Gerekmez (görsel çıktı yok).
 8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Dönemde tamamlanan işin notları pakette; not kayıt zamanı
    ile olay tarihi ayrı; tamlık ve kırpma doğru; çelişkiler işaretli; paket sınırları içinde; SQL süresi bütçede.
@@ -197,7 +199,10 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
     okumasının gizlilik kuralını atlaması (aynı çapa kuralı + sınama); not hacmi (sınırlar). Geri alma: rapor
     modülleri çalışma zamanına bağlanmadığından dal geri alınır.
 15. **Kapsam dışı** — Düzyazı, doğrulama, DOCX, arayüz, belge yükleme.
-16. **Durum ve doğrulama kanıtı** — Henüz uygulanmadı.
+16. **Durum ve doğrulama kanıtı** — **Durum: DOĞRULANDI** (tüm belirlenimci istek, kanıt, not kronolojisi,
+    güvenlik, yetki, kıyas ve regresyon sınamaları sentetik bellek içi SQL ikiziyle geçti; yeni HTTP ucu, kalıcı
+    tablo, model görünür aracı ya da yeni bağımlılık eklenmedi; canlı SQL Server ve Windows sunucusu üzerindeki
+    çalışma doğrulaması **bekliyor**). Koşu sayıları §Oturum devri'ndedir.
 
 ---
 
@@ -447,3 +452,33 @@ model kaydı uzlaştırması; sentetik kıyas fikstürü (48 senaryo, 8 temsili 
 - **Sonraki giriş noktası: 4I-A** — rapor isteği tanımı ve yetkili kanıt paketi kurucusu; önce
   [mimari §5–§6](BILGIN-4I-YONETICI-RAPORU-MIMARISI.md) ve bu belgenin 4I-A bölümü okunur. 4I-A, 4I-0 sınır
   sınamasını (çalışma zamanında rapor sözleşmesi göndergesi yok) bilinçli olarak günceller.
+
+### 2026-11-23 — Aşama 4I-A yönetici kanıt zekâsı
+
+Uygulandı: katı yönetici raporu istek sözleşmesi (`src/domain/ai/report/reportRequest.js`), güvenli geliştirici/sınama
+tanı önizlemesi (`src/domain/ai/report/reportPreview.js`, `scripts/yonetici-kanit-onizleme.mjs`), rapor düzeyi açık
+rızayla çalışan zengin ve kronolojik görev notu okuyucusu (`src/server/ai/report/reportNotes.js`), yetkili yönetici
+kanıt paketi kurucusu (`src/server/ai/report/reportEvidence.js`, şema `4i-kanit-1`), dar kapsamlı salt okunur
+parametreli SQL eklemeleri (`src/server/ai/tools/rota/rotaToolQueries.js`, `src/server/ai/tools/rota/rotaToolStore.js`),
+sentetik SQL ikizi işleyicileri ve kıyas verisi (`test/helpers/aiToolSql.mjs`,
+`test/helpers/executiveReportBenchmarkSeed.mjs`) ile kapsamlı kabul/güvenlik/kronoloji/regresyon sınamaları
+(`test/ai-executive-report-evidence.test.mjs`).
+
+- **Doğrulama kanıtı (2026-11-23, Node 22, Linux, sentetik bellek içi SQL ikizi):** tam paket
+  `npm test -- --test-concurrency=4` **6743/6743** (başarısız, iptal, atlanan 0); yeni
+  `ai-executive-report-evidence` **29/29**, `ai-executive-report-foundation` **26/26**, `ai-executive-report-benchmark`
+  **10/10**, `ai-architecture-contract` **26/26**, `ai-model-registry` **25/25**; `npm run lint` uyarısız;
+  `npm run build` başarılı (yeni HTTP/API ucu, yeni model görünür aracı, yeni kalıcı tablo/göç ya da yeni bağımlılık yok).
+- **Kapsam ve güvenlik özeti:** `Sicil`, `authorizationEpoch` ve proje erişim kararları `serverContext` içinde
+  sunucuda kalır; toplama sonunda yetki parmak izi yeniden doğrulanır; `notlar: haric` iken güncel not ve not
+  geçmişi denetim sorguları (`readReportTaskNotes`, `readReportNoteAuditHistory`) hiç çalışmaz ve hiçbir açıklama
+  metni okunmaz (dönem ölçüsü ve durum geçişi için salt sayım/durum okuyan hareket ve görev-olgu denetim sorguları
+  çalışmaya devam eder); `MR_AuditLog.OccurredAt` yalnızca yeni (`after`) sürüme atanır, `before` veya `MR_Tasks.UpdatedAt`
+  üzerinden kayıt zamanı uydurulmaz; bilinmeyen ölçüler (`history.undatedDone`, sıfır/kısmi paydalı yüzdeler) `null`
+  kalır; Aşama H sohbet not sınırları (`NOTE_LIMITS.tasks = 10`, `TASK_NOTE_CHARS = 400`) değişmeden korundu.
+- **Bilinen sınırlar (canlı doğrulama bekliyor):** tüm SQL doğrulaması sentetik bellek içi ikizle yapıldı; canlı
+  SQL Server (`MR_AuditLog`, `MR_Tasks`, `MR_V_ExecutiveScope`, `MR_V_PeopleDirectory`) ve Windows sunucusu üzerindeki
+  çalışma doğrulaması bu ortamda yapılamadı (**bekliyor**).
+- **Sonraki giriş noktası: 4I-B** — insan kalitesinde anlatı üretimi (`4i-yazim-1`), bölüm planı, yazar istemi ve
+  kurum içi canlı model nitelendirmesi (canlı `GET /models` ve kurum içi model erişimi ön koşuldur).
+
