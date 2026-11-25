@@ -25,7 +25,8 @@ const DOC_AND_CONFIG_FILES = [
   'README.md',
   '.env.example',
   'package.json',
-  ...readdirSync(path.join(ROOT, 'docs')).map((name) => `docs/${name}`)
+  // Alt klasörlerdeki belgeler (ör. ölçüm kayıtları) de taranır; klasörün kendisi dosya gibi okunmaz.
+  ...walk(path.join(ROOT, 'docs')).map((file) => path.relative(ROOT, file).split(path.sep).join('/'))
 ];
 
 /* ── Port ───────────────────────────────────────────────── */

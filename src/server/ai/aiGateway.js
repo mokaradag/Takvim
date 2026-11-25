@@ -495,6 +495,8 @@ export function createAiGateway({
         // yazılmaz. Ağ geçidi sessizce başka modele yönlendirdiyse ikisi ayrışır.
         model: result.model ?? null,
         configuredModel: route.model,
+        // Kayıtta bu model için açıkça bildirilmiş diğer yanıt adları; kimlik denetimi yapan çağıran içindir.
+        reportedModels: route.reportedModels ?? [],
         credentialSource: credential.source,
         durationMs,
         queueWaitMs: context.queueWaitMs

@@ -332,6 +332,8 @@ bağlıdır ve bilinmedikçe boş bırakılır.
 | `speech.tts.fast` | Metinden konuşmaya (hızlı) | `speech.tts` |
 | `speech.tts.quality` | Metinden konuşmaya (yüksek kalite) | `speech.tts` |
 | `image.generation` | Görsel üretimi | `image.generation` |
+| `report.writer` | Yönetici raporu yazarı | `chat` |
+| `report.writer.quality` | Yönetici raporu yazarı (yüksek kalite) | `chat` |
 
 Aşama 1'de yalnızca `chat.fast` kullanılır (bağlantı sınaması). Aşama 4B'de
 `embedding` ve `rerank` anlamsal aday keşfinde kullanılır. Aşama 2'de
@@ -340,6 +342,13 @@ Aşama 3'te Rota verisi araçları açıkken Standart kip `chat.tools`, Derin
 düşünme `chat.tools.reasoning` ile çalışır; kipin araç profili yoksa o kip
 Rota verisi seçiliyken `unavailable` verir; kullanıcı Genel sohbet seçerse
 genel sohbet profilini kullanır. Diğer profiller sonraki aşamaların sözleşmesidir.
+
+Aşama 4I-B'de yönetici raporu yazarı `report.writer` (otomatik) ve `report.writer.quality` (yüksek kalite)
+profillerini ister. Bu iki profil sohbet profil kümesinden (`AI_PROFILES`) bilinçli olarak ayrı tutulur
+(`AI_REPORT_PROFILES`) ve **nitelendirme protokolü geçilmeden hiçbir kayıtta modele eşlenmez**; eşlenmemiş
+profil `PROFILE_NOT_CONFIGURED` ile kullanılamaz kalır (bkz. [4I Kıyas ve Kabul Çerçevesi](BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md)).
+Nitelikli model belirlendiğinde eşleme yalnızca kayıt verisine eklenir; `maxOutputTokens` akıl yürüten
+modellerin düşünme payını da karşılamalı, `timeoutMs` ise rolün süre kapısıyla (240 sn / 600 sn) uyumlu olmalıdır.
 
 Varsayılan eşleme `src/server/ai/defaultModelRegistry.js` dosyasındadır. Depoda
 ayrıca **mevcut kurum içi sunucu kataloğunun operasyonel anlık görüntüsü**

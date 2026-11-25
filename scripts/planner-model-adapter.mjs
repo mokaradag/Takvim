@@ -751,12 +751,21 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
   // araç yerel MCP sunucusundan kendi adıyla, kayıt sırasıyla sunulur ve çağrısı öteki araç devirleri gibi iletilir. Şema doğrulamasını
   // CLI değil, üretimdeki gibi sunucu yapar.
   const namedAuto = process.env.PLANNER_CLAUDE_NAMED_TOOL === 'auto';
+  // PLANNER_CLAUDE_ALLOW_THINKING=1: düşünmeyi efor düzeyinin kendi davranışına bırakır (ör. yönetici raporu yazarı vekil koşusu);
+  // düşünme belirteçleri kayda yazılır. Varsayılan planlayıcı kuralı (düşünme kapalı ve denetimli) değişmez. Araçlı turlarda kullanılamaz.
+  const allowThinking = process.env.PLANNER_CLAUDE_ALLOW_THINKING === '1';
+  if (allowThinking && payload.toolChoice !== 'none') return fail('PLANNER_THINKING_REQUIRES_NO_TOOLS');
   const forced = !namedAuto && payload.toolChoice?.name ? all.find((tool) => tool.name === payload.toolChoice.name) || null : null;
   // Zorunlu araç turunda yalnızca zorunlu şema (PLANNER_CLAUDE_FORCED_RETRY yeniden denemesi): üretimin adlı araç seçimi
   // modelin başka araç çağırmasını kısıtlı çözümle engeller; CLI bunu yapamaz, bu yüzden yeniden deneme ayrıca sayılır.
   const tools = hideTools ? [] : forced ? all.filter((tool) => tool !== forced) : all;
   // Üretim turunun çıktı sınırı (ör. doğal yanıt düzeninin dar sınırı) korunur; verilmemişse planlayıcı sınırı.
-  const outputLimit = Number.isSafeInteger(payload.maxOutputTokens) && payload.maxOutputTokens > 0 ? Math.min(payload.maxOutputTokens, 4096) : 4096;
+  // PLANNER_CLAUDE_OUTPUT_CAP: uzun düzyazı üreten geliştirme koşuları (ör. yönetici raporu yazarı) için üst sınır; verilmezse
+  // planlayıcının 4096 sınırı aynen geçerlidir. Değer 1024–64000 dışındaysa koşu durur (sınır sessizce kalkmaz).
+  let outputCap = 4096;
+  try { outputCap = limitFromEnv('PLANNER_CLAUDE_OUTPUT_CAP') ?? 4096; } catch (error) { return fail(error.code); }
+  if (outputCap < 1024 || outputCap > 64000) return fail('PLANNER_LIMIT_INVALID');
+  const outputLimit = Number.isSafeInteger(payload.maxOutputTokens) && payload.maxOutputTokens > 0 ? Math.min(payload.maxOutputTokens, outputCap) : outputCap;
   const staticPromptHash = hash(system.content);
   const promptHash = hash(conversationText(rest, system.content));
   const toolCatalogHash = hash(JSON.stringify([forced?.name ?? null, all, hideTools]));
@@ -801,7 +810,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     const windows = process.platform === 'win32'
       ? Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(SystemRoot|windir|ComSpec|PATHEXT)$/i.test(key))) : {};
     const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => keep.test(key))), ...windows, PATH: process.env.PATH || '', HOME: home,
-      ...(process.platform === 'win32' ? { USERPROFILE: home } : {}), MAX_THINKING_TOKENS: '0',
+      ...(process.platform === 'win32' ? { USERPROFILE: home } : {}), ...(allowThinking ? {} : { MAX_THINKING_TOKENS: '0' }),
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputLimit), ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const args = ['-p', '--model', model, '--effort', effort, '--system-prompt-file', path.join(work, 'system.txt'), '--tools', '',
       '--strict-mcp-config', ...(tools.length ? ['--mcp-config', path.join(work, 'mcp.json')] : []),
@@ -883,7 +892,8 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheState.error) return fail(cacheState.error, row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
-    if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);
+    if (row.thinking !== 'off' && !allowThinking) return fail('PLANNER_THINKING_ON', row);
+    if (allowThinking) row.thinkingAllowed = true;
     appendLedger(log, row);
     // Zorunlu turda öteki araçların çağrısı yalnızca yeniden denemesiz devirde (üretimin `auto` seçimi) iletilir.
     const structured = !result.is_error && result.structured_output && typeof result.structured_output === 'object' && !Array.isArray(result.structured_output);
