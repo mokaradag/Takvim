@@ -38,12 +38,36 @@ const FIXED_OUTPUT_TOKENS = 1500;
 const REASONING_HEADROOM_TOKENS = 40960;
 const MAX_REQUESTED_OUTPUT_TOKENS = 65536;
 
+const NORMAL_FINISH_REASONS = new Set(['stop', 'end_turn']);
+
 function writerFailure(code, reason, extra = {}) {
   return new AiError(code, { details: { reason, ...extra } });
 }
 
 function cancelled(signal) {
   if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
+}
+
+/** İstemci iptal ettiğinde yavaş dönen yeniden doğrulamayı beklemeden iptal hatası fırlatır. */
+function raceWithCancel(run, signal) {
+  cancelled(signal);
+  if (!signal) return Promise.resolve().then(run);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new AiError(AI_ERROR_CODES.AI_CANCELLED));
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve()
+      .then(run)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+async function assertStillAuthorized(revalidate, signal) {
+  const stillAuthorized = await raceWithCancel(() => revalidate({ signal }), signal);
+  cancelled(signal);
+  if (stillAuthorized !== true) {
+    throw new ServerPersistenceError('AUTHORIZATION_CHANGED', 'Rapor yazımı sırasında yetki kapsamı değiştiği için taslak döndürülmedi.');
+  }
 }
 
 /**
@@ -54,7 +78,7 @@ function cancelled(signal) {
  * @returns {{ plan: object, messages: object[], profile: string, maxOutputTokens: number, promptVersion: string }} İstek.
  */
 export function prepareReportWriterRequest({ evidencePackage, style, quality = REPORT_WRITER_QUALITY.AUTOMATIC, kapaliBolumler = [] }) {
-  const profile = PROFILE_BY_QUALITY[quality];
+  const profile = typeof quality === 'string' && Object.hasOwn(PROFILE_BY_QUALITY, quality) ? PROFILE_BY_QUALITY[quality] : null;
   if (!profile) throw writerFailure(AI_ERROR_CODES.AI_REQUEST_INVALID, 'REPORT_WRITER_QUALITY_INVALID');
   const contract = validateEvidencePackageContract(evidencePackage);
   if (!contract.ok) {
@@ -90,16 +114,27 @@ export function assessReportWriterModelIdentity({ model = null, configuredModel 
 }
 
 /**
- * Değiştirilmemiş model yanıtını taslağa çevirir. Kesilen (uzunluk sınırına takılan) yanıt kısmi çıktıdır
- * ve ayrıştırılmadan reddedilir; JSON kazıma, eksik parçayı tamamlama ya da metni düzeltme yapılmaz.
+ * Değiştirilmemiş model yanıtını taslağa çevirir. Kesilen (`length`) ya da normal bitmemiş (`content_filter`,
+ * `tool_calls` vb.) yanıt kısmi/geçersiz çıktıdır ve ayrıştırılmadan reddedilir; JSON kazıma, eksik parçayı
+ * tamamlama ya da metni düzeltme yapılmaz.
  */
+const KNOWN_ABNORMAL_FINISH_REASONS = new Set(['content_filter', 'tool_calls', 'function_call']);
+
 export function finalizeReportWriterResponse({ text, finishReason = null, plan, evidencePackage }) {
   if (finishReason === 'length') throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
+  if (typeof finishReason === 'string' && finishReason.trim() && !NORMAL_FINISH_REASONS.has(finishReason)) {
+    const safeReason = KNOWN_ABNORMAL_FINISH_REASONS.has(finishReason) ? finishReason : 'other';
+    throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_INCOMPLETE_FINISH', { finishReason: safeReason });
+  }
   try {
     return parseReportDraft(text, { plan, evidencePackage });
   } catch (error) {
     if (error instanceof ReportDraftError) {
-      throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_INVALID', { draftCode: error.code, path: error.path });
+      throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_INVALID', {
+        draftCode: error.code,
+        path: error.path,
+        ...(error.reason ? { draftReason: error.reason } : {})
+      });
     }
     throw error;
   }
@@ -112,8 +147,8 @@ export function finalizeReportWriterResponse({ text, finishReason = null, plan, 
  * @param {object} input.evidencePackage - 4I-A `4i-kanit-1` paketi (yetki bağlamı içermez).
  * @param {object} input.style - Kanonik stil belgesinin ayrıştırılmış hâli.
  * @param {{ completeChat: Function }} input.gateway - Mevcut yapay zekâ ağ geçidi.
- * @param {(options: { signal: AbortSignal|null }) => Promise<boolean>} input.revalidate - İçerik dönmeden önce
- *   güncel yetki ve rızayı doğrulayan sunucu denetimi; `true` dönmezse içerik döndürülmez.
+ * @param {(options: { signal: AbortSignal|null }) => Promise<boolean>} input.revalidate - Gönderim öncesinde ve
+ *   içerik dönmeden önce güncel yetki ve rızayı doğrulayan sunucu denetimi; `true` dönmezse işlem durdurulur.
  * @param {string} [input.quality] - `otomatik` ya da `yuksek_kalite`.
  * @param {string[]} [input.kapaliBolumler] - Kullanıcının kapattığı isteğe bağlı bölümler.
  * @param {AbortSignal|null} [input.signal] - İstemci iptali.
@@ -125,26 +160,42 @@ export async function writeExecutiveReportDraft({
   cancelled(signal);
   if (typeof gateway?.completeChat !== 'function') throw writerFailure(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, 'REPORT_WRITER_GATEWAY_MISSING');
   if (typeof revalidate !== 'function') throw writerFailure(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, 'REPORT_WRITER_REVALIDATION_MISSING');
-  const request = prepareReportWriterRequest({ evidencePackage, style, quality, kapaliBolumler });
+  // İstem ve taslak doğrulaması aynı kanıt anlık görüntüsüne bağlanır; çağrı sırasında dış nesne değişse bile tutarlılık bozulmaz.
+  let evidenceSnapshot;
+  try {
+    evidenceSnapshot = structuredClone(evidencePackage);
+  } catch {
+    throw writerFailure(AI_ERROR_CODES.AI_REQUEST_INVALID, 'REPORT_EVIDENCE_INVALID', { problemCount: 1 });
+  }
+  const request = prepareReportWriterRequest({ evidencePackage: evidenceSnapshot, style, quality, kapaliBolumler });
   const startedAt = now();
-  const result = await gateway.completeChat({
-    profile: request.profile,
-    messages: request.messages,
-    maxOutputTokens: request.maxOutputTokens,
-    signal,
-    requireText: true,
-    // İletiler sunucunun ürettiği sabit istektir: sağlayıcının 4xx yanıtı kullanıcı değil yapılandırma hatasıdır.
-    callerInput: false
-  });
+  let result;
+  try {
+    result = await gateway.completeChat({
+      profile: request.profile,
+      messages: request.messages,
+      maxOutputTokens: request.maxOutputTokens,
+      signal,
+      requireText: true,
+      // İletiler sunucunun ürettiği sabit istektir: sağlayıcının 4xx yanıtı kullanıcı değil yapılandırma hatasıdır.
+      callerInput: false,
+      // Kuyruk beklemesi sırasında yetki ya da rıza kaldırıldıysa kanıt sağlayıcıya hiç gönderilmez.
+      beforeDispatch: (dispatchSignal) => assertStillAuthorized(revalidate, dispatchSignal ?? signal)
+    });
+  } catch (error) {
+    if (error instanceof AiError
+      && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID
+      && error.details?.reason === 'EMPTY_COMPLETION'
+      && error.details?.finishReason === 'length') {
+      throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
+    }
+    throw error;
+  }
   cancelled(signal);
   const identity = assessReportWriterModelIdentity(result);
-  const draft = finalizeReportWriterResponse({ text: result.text, finishReason: result.finishReason, plan: request.plan, evidencePackage });
+  const draft = finalizeReportWriterResponse({ text: result.text, finishReason: result.finishReason, plan: request.plan, evidencePackage: evidenceSnapshot });
   // Uzun süren yazım sırasında yetki ya da rıza değişmiş olabilir: içerik ancak güncel denetimden sonra döner.
-  const stillAuthorized = await revalidate({ signal });
-  cancelled(signal);
-  if (stillAuthorized !== true) {
-    throw new ServerPersistenceError('AUTHORIZATION_CHANGED', 'Rapor yazımı sırasında yetki kapsamı değiştiği için taslak döndürülmedi.');
-  }
+  await assertStillAuthorized(revalidate, signal);
   return Object.freeze({
     draft,
     plan: request.plan,

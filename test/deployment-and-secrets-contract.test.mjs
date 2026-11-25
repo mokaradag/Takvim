@@ -43,8 +43,13 @@ test('üretim komutu ve belgeler MERGEN Rota için 8008 portunu kullanır', () =
 test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
   for (const relativePath of DOC_AND_CONFIG_FILES) {
     const source = read(relativePath);
+    // Dağıtım komutu olarak 8009 hiçbir yerde geçmez.
+    assert.doesNotMatch(source, /-p\s*8009/, relativePath);
+    // Ölçüm kayıtları ve özet dosyalarındaki rastlantısal 8009 dizeleri port başvurusu sayılmaz.
+    if (relativePath.startsWith('docs/') && /\.(sha256|json|jsonl|csv)$/i.test(relativePath)) continue;
+    const scannable = source.replace(/[0-9a-f]{64}/gi, '');
     // Paragraf düzeyinde bakılır: cümle satır sonuna sarabilir.
-    for (const paragraph of source.split(/\n\s*\n/)) {
+    for (const paragraph of scannable.split(/\n\s*\n/)) {
       if (!paragraph.includes('8009')) continue;
       // 8009 yalnızca "MERGEN Bilge'ye aittir" bağlamında anılabilir.
       assert.match(
@@ -53,8 +58,6 @@ test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
         `${relativePath}: 8009 yalnızca MERGEN Bilge bağlamında anılabilir → ${paragraph.trim().slice(0, 120)}`
       );
     }
-    // Dağıtım komutu olarak 8009 hiçbir yerde geçmez.
-    assert.doesNotMatch(source, /-p\s*8009/, relativePath);
   }
 });
 
@@ -167,9 +170,11 @@ test('depoda gerçek sicil, gerçek jeton veya gerçek kurumsal adres bulunmaz',
     if (!statSync(file).isFile()) continue;
     const source = readFileSync(file, 'utf8');
     const relative = path.relative(ROOT, file);
+    // SHA-256 özetlerindeki rastlantısal onaltılık eşleşmeler gerçek sicil sayılmaz.
+    const scannable = source.replace(/[0-9a-f]{64}/gi, '');
     // Kaldırılan gerçek sicil değerleri geri gelmemelidir.
     for (const sicil of ['10276', '18068', '23977', '17205']) {
-      assert.equal(source.includes(sicil), false, `${relative}: gerçek sicil değeri (${sicil}) bulunmamalıdır`);
+      assert.equal(scannable.includes(sicil), false, `${relative}: gerçek sicil değeri (${sicil}) bulunmamalıdır`);
     }
     // Gerçek JWT veya Bearer jetonu yer almamalıdır.
     assert.doesNotMatch(source, /eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}/, `${relative}: ham JWT bulunmamalıdır`);

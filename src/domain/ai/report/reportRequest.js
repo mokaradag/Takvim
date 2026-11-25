@@ -169,6 +169,14 @@ export function normalizeReportNow(value = new Date()) {
   return date;
 }
 
+/** Veri anı ISO zaman damgasının Europe/Istanbul takvim gününü (YYYY-AA-GG) döndürür; geçersizse null. */
+export function snapshotBusinessDay(value) {
+  const nanos = parseIsoTimestampNanos(value);
+  if (nanos === null) return null;
+  const ms = Number(nanos >= 0n ? nanos / 1000000n : -((-nanos + 999999n) / 1000000n));
+  return businessDate(new Date(ms));
+}
+
 /** Verilen anı Europe/Istanbul saat diliminde (tam dakika farkı yoksa UTC olarak) ISO-8601 metnine çevirir. */
 export function formatIstanbulTimestamp(value = new Date()) {
   const date = normalizeReportNow(value);
@@ -788,13 +796,12 @@ export function validateEvidencePackageContract(pkg) {
   }
 
   const cutOffNanos = parseIsoTimestampNanos(pkg.veri_ani);
-  const validVeriAni = cutOffNanos !== null;
+  const cutOffBusinessDay = snapshotBusinessDay(pkg.veri_ani);
+  const validVeriAni = cutOffNanos !== null && cutOffBusinessDay !== null;
   if (!validVeriAni) {
     problems.push('veri_ani:gecersiz');
   } else if (reportPeriod) {
     // Rapor dönemi veri anındaki İstanbul iş gününden önce kapanmış olmalıdır.
-    const cutOffMs = Number(cutOffNanos >= 0n ? cutOffNanos / 1000000n : -((-cutOffNanos + 999999n) / 1000000n));
-    const cutOffBusinessDay = businessDate(new Date(cutOffMs));
     const periodPos = windowPosition({ dateFrom: reportPeriod.baslangic, dateTo: reportPeriod.bitis }, cutOffBusinessDay);
     if (!periodPos || periodPos.position !== 'past' || periodPos.open) {
       problems.push('istek:donem_acik');

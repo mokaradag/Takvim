@@ -26,13 +26,12 @@
 | `hakem-kararlari.json` | Defter dışı değerler ve otomatik eşleşmeyen zorunlu olgular için elle verilen kararlar ve gerekçeleri (hakem: geliştirme oturumu; insan değil) |
 | `anlati-ornekleri.md` | Haftalık, aylık, başarı ve risk odaklı, dönem karşılaştırmalı, zengin not sentezi ve çelişkili kanıt örnekleri — gerçek yazar çıktısı, düzeltilmemiş |
 | `gecici-editoryal-degerlendirme.json` | İstem 4 taslaklarının, yazardan farklı ve kör bir model değerlendiricisince E1–E9 ve mekanik döküm puanları (**insan puanı değildir**, destekleyici kanıttır). Değerlendirici yönergesine istem 2 değerlendirmesine göre tek açıklama eklendi: durumun gerçekten küçük olduğu raporda yerinde kısalık kusur sayılmaz (ölçütün R7 beklentisiyle uyumlu); iki değerlendirme bu nedenle tam karşılaştırılabilir değildir |
-| `kor-puanlama-paketi.md`, `kor-puanlama-cizelgesi.csv` | İki kör insan puanlayıcı için paket ve çizelge (rastgele kod ve sıra; model ve senaryo kimliği yok) |
-| `kor-puanlama-anahtari-PUANLAYICIYA-VERILMEZ.json` | Kod → senaryo anahtarı; yalnızca koordinatör kullanır |
+| `kor-puanlama-paketi.md`, `kor-puanlama-cizelgesi.csv` | İki kör insan puanlayıcı için paket ve çizelge (rastgele kod ve sıra, her taslakta doğrudan E8 uygulanabilirliği ve E8 için kör kaynak görev notları; model ve senaryo kimliği yok). Koordinatör kod anahtarı puanlayıcı dizinine ya da depoya konmaz (`insan-paketi --anahtar <dış-yol>` ile ayrı tutulur) |
 
-Özet yeniden üretimi:
+Özet yeniden üretimi (arşivlenmiş 25.11.2026 vekil koşusu güncel kanıt kümesinden önceki özetle üretildiği için tarihsel bayrakla çağrılır):
 
 ```bash
-node scripts/report-writer-qualification.mjs ozet --girdi docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/kosu-kaydi.jsonl --hakem docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/hakem-kararlari.json --editoryal docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/gecici-editoryal-degerlendirme.json
+node scripts/report-writer-qualification.mjs ozet --girdi docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/kosu-kaydi.jsonl --hakem docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/hakem-kararlari.json --editoryal docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/gecici-editoryal-degerlendirme.json --tarihsel-uyusmazlik-izni evet
 ```
 
 ## Sonuç (vekil, sentetik)

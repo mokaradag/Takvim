@@ -98,10 +98,11 @@ export function scenarioSeed(spec) {
       CorrelationId: `75000000-0000-4000-8000-${hex(auditNo)}`, BeforeJson: JSON.stringify(before), AfterJson: JSON.stringify(after)
     });
   };
-  const addTask = (t) => {
-    taskNo += 1;
-    const id = `71000000-0000-4000-8000-${hex(taskNo)}`;
-    if (t.k) keyToId.set(t.k, id);
+  const addTask = (t, fixedId = null) => {
+    const id = fixedId ?? (() => {
+      taskNo += 1;
+      return `71000000-0000-4000-8000-${hex(taskNo)}`;
+    })();
     const notes = t.notlar || [];
     const description = notes.length ? notes.at(-1).metin : (t.once ?? null);
     const status = t.s;
@@ -124,7 +125,21 @@ export function scenarioSeed(spec) {
     for (const change of t.guncellemeler || []) addAudit(id, t.p, change.at, change.once, change.sonra, owners[0]);
     if (t.dep) deps.push({ ProjectId: projectId(t.p), TaskId: id, PredecessorTaskId: t.dep, DependencyType: 'FS', LagDays: 0 });
   };
-  for (const t of spec.gorevler || []) addTask({ ...t, dep: t.dep ? keyToId.get(t.dep) : undefined });
+  // Önce tüm görev kimlikleri atanır; böylece bağımlılık anahtarları görev bildirim sırasından bağımsız çözülür.
+  const preparedTasks = (spec.gorevler || []).map((t) => {
+    taskNo += 1;
+    const id = `71000000-0000-4000-8000-${hex(taskNo)}`;
+    if (t.k) keyToId.set(t.k, id);
+    return { t, id };
+  });
+  for (const { t, id } of preparedTasks) {
+    let predecessorId;
+    if (t.dep !== undefined) {
+      predecessorId = keyToId.get(t.dep);
+      if (!predecessorId) throw new Error(`${spec.id}: bağımlılık anahtarı bulunamadı (${t.dep})`);
+    }
+    addTask({ ...t, dep: predecessorId }, id);
+  }
   for (const block of spec.toplu || []) {
     for (let i = 1; i <= block.n; i += 1) addTask({ p: block.p, t: `${block.baslik || 'Rutin iş kalemi'} ${i}`, s: block.s, tf: block.tf, af: block.af, as: block.as, pr: block.pr || 'low', tamamlama: block.tamamlama });
   }
@@ -201,6 +216,7 @@ export const WRITER_SCENARIOS = Object.freeze([
   },
   {
     id: 'S04', aktor: 'yonetici', istek: req('aylik', MONTH, org('mudurluk', 'Sistem Geliştirme Müdürlüğü'), { karsilastirma: 'onceki_donem' }),
+    kisiDegisiklik: { 'Deniz Akalın': { Department: 'Sistem Geliştirme Müdürlüğü', Unit: 'Test ve Doğrulama Birimi' } },
     gorevler: [
       { k: 'a', p: 'Kuzey', t: 'Saha birimi güç kartı revizyonu', s: 'done', pr: 'high', tf: '2026-10-20', af: '2026-10-17', as: ['Ece Tunalı'],
         notlar: [{ at: at('2026-10-17', '15:00'), metin: 'Revizyon B kartları test edildi, ısıl sorun giderildi.' }] },
@@ -209,12 +225,21 @@ export const WRITER_SCENARIOS = Object.freeze([
       { k: 'd', p: 'Denge', t: 'Denetim yazılımı mimari belgesi', s: 'in-progress', pr: 'high', tf: '2026-10-31', as: ['Mert Yalçıner'],
         notlar: [{ at: at('2026-10-29', '11:30'), metin: 'mimari belge gözden geçirmede; iki bölüm için güvenlik birimi görüşü bekleniyor.' }] },
       { k: 'e', p: 'Pusula', t: 'Konum servisi performans iyileştirmesi', s: 'in-progress', tf: '2026-11-14', as: ['Can Ertem'] },
-      { k: 'f', p: 'Liman', t: 'Liman ağ geçidi yapılandırması', s: 'planned', tf: '2026-11-12', as: ['Ece Tunalı'] }
+      { k: 'f', p: 'Liman', t: 'Liman ağ geçidi yapılandırması', s: 'planned', tf: '2026-11-12', as: ['Ece Tunalı'] },
+      { k: 'g', p: 'Yıldız', t: 'Görüntüleme kalibrasyon doğrulaması', s: 'done', tf: '2026-10-23', af: '2026-10-22', as: ['Deniz Akalın'] },
+      { k: 'h', p: 'Doruk', t: 'Doruk saha iletişim testi', s: 'in-progress', tf: '2026-11-18', as: ['Deniz Akalın'] },
+      { k: 'i', p: 'Işık', t: 'Işık kontrol paneli doğrulaması', s: 'planned', tf: '2026-11-20', as: ['Deniz Akalın'] }
     ],
     toplu: [
       { p: 'Kuzey', n: 3, s: 'done', tf: '2026-10-15', af: '2026-10-14', as: ['Ece Tunalı'], baslik: 'Kuzey tasarım güncellemesi' },
       { p: 'Kuzey', n: 2, s: 'done', tf: '2026-09-20', af: '2026-09-18', as: ['Ece Tunalı'], baslik: 'Eylül tasarım kalemi' },
       { p: 'Ufuk', n: 4, s: 'in-progress', tf: '2026-12-10', as: ['Can Ertem'], baslik: 'Ufuk veri işi' }
+    ],
+    orgOlculeri: [
+      { birim: 'Sistem Tasarım Birimi', olcu: 'tamamlanan', deger: 4 },
+      { birim: 'Veri ve Entegrasyon Birimi', olcu: 'tamamlanan', deger: 1 },
+      { birim: 'Yazılım Mimarisi Birimi', olcu: 'tamamlanan', deger: 1 },
+      { birim: 'Test ve Doğrulama Birimi', olcu: 'tamamlanan', deger: 1 }
     ],
     zorunlu: [
       { id: 'Z1', olgu: 'Ekimde tamamlanan görev sayısı önceki aydakiyle karşılaştırılır (sunucu karşılaştırma türetimi).', anahtarlar: [['eylül', 'önceki ay', 'önceki dönem', 'bir önceki']] },
@@ -224,12 +249,13 @@ export const WRITER_SCENARIOS = Object.freeze([
   {
     id: 'S02', aktor: 'Ece Tunalı', istek: req('haftalik', WEEK, kisi('Ece Tunalı'), { ayrinti: 'kisa', odak: 'basarilar', notlar: 'haric' }),
     gorevler: [
-      { p: 'Kuzey', t: 'Kontrol kartı şematik gözden geçirmesi', s: 'done', pr: 'high', tf: '2026-11-05', af: '2026-11-04', as: ['Ece Tunalı'], once: 'gizli kalmalı: not metni rızasız okunmaz' },
+      { p: 'Kuzey', t: 'Kontrol kartı şematik gözden geçirmesi', s: 'done', pr: 'high', tf: '2026-11-05', af: '2026-11-04', as: ['Ece Tunalı'], once: 'gizli kalmalı: S02_RIZASIZ_NOT_ORNEGI not metni rızasız okunmaz' },
       { p: 'Kuzey', t: 'Güç bütçesi tablosu', s: 'done', tf: '2026-11-06', af: '2026-11-06', as: ['Ece Tunalı'] },
       { p: 'Liman', t: 'Ağ geçidi donanım seçimi', s: 'in-progress', tf: '2026-11-18', as: ['Ece Tunalı'] },
       { p: 'Liman', t: 'Kablo yerleşim planı', s: 'planned', tf: '2026-11-24', as: ['Ece Tunalı'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Dönemde iki görev tamamlandı: şematik gözden geçirme ve güç bütçesi tablosu.', anahtarlar: [['şematik'], ['güç bütçesi']] }]
+    zorunlu: [{ id: 'Z1', olgu: 'Dönemde iki görev tamamlandı: şematik gözden geçirme ve güç bütçesi tablosu.', anahtarlar: [['şematik'], ['güç bütçesi']] }],
+    yetkisiz: ['S02_RIZASIZ_NOT_ORNEGI']
   },
   {
     id: 'S03', aktor: 'Mert Yalçıner', istek: req('haftalik', WEEK, kisi('Mert Yalçıner'), { odak: 'riskler' }),
@@ -484,7 +510,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Kuzey', t: 'Proje planı yeniden takvimlemesi', s: 'in-progress', pr: 'high', tf: '2026-10-30', as: ['Ece Tunalı'] },
       { p: 'Doruk', t: 'Doğrulama laboratuvarı kurulumu', s: 'in-progress', pr: 'high', tf: '2026-11-20', as: ['Deniz Akalın'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Kapsamdaki iki müdürlükte iki görev tamamlandı; proje planı yeniden takvimlemesi hedefini aştı.', anahtarlar: [['yeniden takvim'], ['kümesi', 'kararlılık']] }],
+    zorunlu: [{ id: 'Z1', olgu: 'Yetkili direktörlük kapsamında iki görev tamamlandı; proje planı yeniden takvimlemesi hedefini aştı.', anahtarlar: [['yeniden takvim'], ['kümesi', 'kararlılık']] }],
     yetkisiz: ['Doğrulama ve Kalite Müdürlüğü', 'Doğrulama laboratuvarı']
   },
   {
@@ -500,7 +526,7 @@ export const WRITER_SCENARIOS = Object.freeze([
   {
     id: 'S29', aktor: 'yonetici', istek: req('haftalik', WEEK, proje('Denge')),
     gorevler: [
-      { p: 'Denge', t: 'Kontrol yazılımı modül testleri', s: 'in-progress', tf: '2026-11-27', as: ['Mert Yalçıner'],
+      { p: 'Denge', t: 'Kontrol yazılımı modül testleri', s: 'in-progress', pr: 'high', tf: '2026-11-27', as: ['Mert Yalçıner'],
         guncellemeler: [{ at: at('2026-11-03'), once: { Priority: 'medium' }, sonra: { Priority: 'high' } }] },
       { p: 'Denge', t: 'Test verisi hazırlığı', s: 'in-progress', tf: '2026-11-26', as: ['Deniz Akalın'],
         guncellemeler: [{ at: at('2026-11-05'), once: { Title: 'Test verisi' }, sonra: { Title: 'Test verisi hazırlığı' } }] },
@@ -522,7 +548,14 @@ export const WRITER_SCENARIOS = Object.freeze([
     toplu: [{ p: 'Kuzey', n: 3, s: 'done', tf: '2026-10-16', af: '2026-10-15', as: ['Ece Tunalı'], baslik: 'Kuzey kurulum hazırlığı' }],
     zorunlu: [
       { id: 'Z1', olgu: 'Saha prototipi pilot kurulumu kilometre taşı tamamlandı (ilk 48 saatlik çalıştırma kesintisiz).', anahtarlar: [['pilot kurulum'], ['48']] },
-      { id: 'Z2', olgu: 'Uzak izleme yazılımı hedef tarihini aştı; notta lisans sorunu nedeniyle kurulumun durduğu belirtiliyor.', anahtarlar: [['uzak izleme'], ['lisans']] }
+      {
+        id: 'Z2',
+        ...(id === 'S31' ? { bolum: 'yonetici_degerlendirmesi' } : {}),
+        olgu: id === 'S31'
+          ? 'Başarı odağına rağmen uzak izleme yazılımının gecikmesi ve lisans sorunu Yönetici Değerlendirmesi bölümünde en az bir kez anılır.'
+          : 'Uzak izleme yazılımı hedef tarihini aştı; notta lisans sorunu nedeniyle kurulumun durduğu belirtiliyor.',
+        anahtarlar: [['uzak izleme'], ['lisans']]
+      }
     ]
   })),
   {
@@ -534,7 +567,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Yıldız', t: 'Görüntüleme ara yüz doğrulaması', s: 'planned', pr: 'high', tf: '2026-11-14', as: ['Mert Yalçıner'] },
       { p: 'Yıldız', t: 'Ara yüz hata kayıtlarının kapatılması', s: 'in-progress', tf: '2026-11-21', as: ['Deniz Akalın'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Kilometre taşı niteliğindeki sistem entegrasyon testi hazırlığının hedefi 13 Kasım; test sahası notta 12 Kasım için rezerve.', anahtarlar: [['entegrasyon test'], ['13 kasım', '12 kasım']] }]
+    zorunlu: [{ id: 'Z1', olgu: 'Kilometre taşı niteliğindeki sistem entegrasyon testi hazırlığının hedefi 13 Kasım; test sahası notta 12 Kasım için rezerve.', anahtarlar: [['entegrasyon test'], ['13 kasım'], ['12 kasım']] }]
   },
   {
     id: 'S33', aktor: 'yonetici', istek: req('aylik', MONTH, org('mudurluk', 'Sistem Geliştirme Müdürlüğü'), { odak: 'riskler' }),
@@ -559,20 +592,36 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Kuzey', t: 'Portföy planlama aracı yapılandırması', s: 'done', tf: '2026-10-29', af: '2026-10-28', as: ['Ece Tunalı'] },
       { p: 'Doruk', t: 'Test otomasyon çerçevesi', s: 'done', tf: '2026-10-17', af: '2026-10-16', as: ['Deniz Akalın'] }
     ],
+    // Üç müdürlük ve sekiz birim alt kırılımı direktörlük toplamıyla (3 tamamlanan) örtüşür; üst toplamla yeniden toplanmaz.
+    orgOlculeri: [
+      { mudurluk: 'Sistem Geliştirme Müdürlüğü', olcu: 'tamamlanan', deger: 1, ust_duzey_toplamina_dahil: true },
+      { mudurluk: 'Proje Yönetim ve Planlama Müdürlüğü', olcu: 'tamamlanan', deger: 1, ust_duzey_toplamina_dahil: true },
+      { mudurluk: 'Doğrulama ve Kalite Müdürlüğü', olcu: 'tamamlanan', deger: 1, ust_duzey_toplamina_dahil: true },
+      { birim: 'Veri ve Entegrasyon Birimi', olcu: 'tamamlanan', deger: 1, ust_duzey_toplamina_dahil: true },
+      { birim: 'Süreç ve Planlama Birimi', olcu: 'tamamlanan', deger: 1, ust_duzey_toplamina_dahil: true },
+      { birim: 'Test ve Doğrulama Birimi', olcu: 'tamamlanan', deger: 1, ust_duzey_toplamina_dahil: true },
+      { birim: 'Sistem Tasarım Birimi', olcu: 'tamamlanan', deger: 0, ust_duzey_toplamina_dahil: true },
+      { birim: 'Altyapı ve Güvenlik Birimi', olcu: 'tamamlanan', deger: 0, ust_duzey_toplamina_dahil: true },
+      { birim: 'Yazılım Mimarisi Birimi', olcu: 'tamamlanan', deger: 0, ust_duzey_toplamina_dahil: true },
+      { birim: 'Saha Destek ve Devreye Alma Birimi', olcu: 'tamamlanan', deger: 0, ust_duzey_toplamina_dahil: true },
+      { birim: 'Yapılandırma ve Sürüm Birimi', olcu: 'tamamlanan', deger: 0, ust_duzey_toplamina_dahil: true }
+    ],
     zorunlu: [
       { id: 'Z1', olgu: 'Kurumsal veri platformu geçişi kilometre taşı tamamlandı.', anahtarlar: [['veri platformu']] },
-      { id: 'Z2', olgu: 'Akreditasyon hazırlığı hedefini aştı; notta denetimin Aralık ayına kaydığı belirtiliyor.', anahtarlar: [['akreditasyon'], ['aralık']] }
+      { id: 'Z2', olgu: 'Akreditasyon hazırlığı hedefini aştı; notta denetimin Aralık ayına kaydığı belirtiliyor.', anahtarlar: [['akreditasyon'], ['aralık']] },
+      { id: 'Z3', olgu: 'Direktörlük genelinde 3 görev tamamlandı; müdürlük ve birim alt toplamları bu üst toplamla örtüşür, toplanarak şişirilmez.', anahtarlar: [['3 görev', '3 tamamlan', 'üç görev', 'üç tamamlan']] }
     ]
   },
   {
     id: 'S35', aktor: 'yonetici', istek: req('aylik', MONTH, org('mudurluk', 'Sistem Geliştirme Müdürlüğü'), { notlar: 'haric' }),
     gorevler: [
-      { p: 'Denge', t: 'Denge veri modeli', s: 'done', tf: '2026-10-21', af: '2026-10-20', as: ['Can Ertem'] },
+      // İki kapsam içi sorumlulu tamamlanan görev: çift sayım yapılmazsa dönem tamamlaması 3 kalır.
+      { p: 'Denge', t: 'Denge veri modeli', s: 'done', tf: '2026-10-21', af: '2026-10-20', as: ['Can Ertem', 'Mert Yalçıner'] },
       { p: 'Denge', t: 'Denge kontrol mimarisi', s: 'done', pr: 'high', tf: '2026-10-28', af: '2026-10-27', as: ['Mert Yalçıner'] },
       { p: 'Denge', t: 'Denge ortak entegrasyon görevi', s: 'in-progress', pr: 'high', tf: '2026-11-18', as: ['Can Ertem', 'Mert Yalçıner'] },
       { p: 'Kuzey', t: 'Kuzey kart üretim dosyaları', s: 'done', tf: '2026-10-15', af: '2026-10-14', as: ['Ece Tunalı'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Denge projesi iki birimin işini içerir; ortak görev çift sayılmaz (üç tamamlanan görev).', anahtarlar: [['denge'], ['3 görev', 'üç görev', '3 tamamlan', 'üç tamamlan']] }]
+    zorunlu: [{ id: 'Z1', olgu: 'Denge projesi iki birimin işini içerir; iki sorumlulu tamamlanan görev çift sayılmaz (üç tamamlanan görev).', anahtarlar: [['denge'], ['3 görev', 'üç görev', '3 tamamlan', 'üç tamamlan']] }]
   },
   {
     id: 'S36', aktor: 'yonetici', istek: req('haftalik', WEEK, proje('Pusula')),
@@ -593,8 +642,8 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Işık', t: 'Işık pilot raporu', s: 'in-progress', tf: '2026-11-15', as: ['Mert Yalçıner'] }
     ],
     belgeler: [{ dosya_turu: 'pdf', kaynak_belge: 'Liman proje durum özeti (sentetik)', bolum: 'Takvim',
-      metin: 'Kontrol merkezi kabul testi 19 Kasım 2026 tarihinde yapılacaktır.' }],
-    zorunlu: [{ id: 'Z1', olgu: 'Belgede kabul testi 19 Kasım, görev kaydında hedef 26 Kasım; kaynaklar arası çelişki açıkça işlenir.', anahtarlar: [['19 kasım'], ['26 kasım']] }]
+      metin: 'Kontrol merkezi kabul testinin hedef bitiş tarihi 19 Kasım 2026 olarak belirlenmiştir.' }],
+    zorunlu: [{ id: 'Z1', olgu: 'Belgede kabul testi hedef bitiş tarihi 19 Kasım, görev kaydında hedef bitiş 26 Kasım; kaynaklar arası tarih çelişkisi açıkça işlenir.', anahtarlar: [['19 kasım'], ['26 kasım']] }]
   },
   {
     id: 'S38', aktor: 'yonetici', istek: req('aylik', MONTH, org('mudurluk', 'Sistem Geliştirme Müdürlüğü'), { ayrinti: 'kapsamli' }),
@@ -652,7 +701,7 @@ export const WRITER_SCENARIOS = Object.freeze([
         notlar: [{ at: at('2026-11-06', '15:30'), metin: 'tedarikçi teslim tarihi teyidi gelmedi' }] },
       { p: 'Doruk', t: 'Kurulum çizimleri', s: 'done', tf: '2026-11-06', af: '2026-11-05', as: ['Mert Yalçıner'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Saha sistem testinin tarihi netleşmedi; sensör tedarikinde teslim tarihi teyidi gelmedi.', anahtarlar: [['saha sistem test', 'sistem testi'], ['teyit']] }]
+    zorunlu: [{ id: 'Z1', olgu: 'Saha sistem testinin tarihi netleşmedi; sensör tedarikinde teslim tarihi teyidi gelmedi.', anahtarlar: [['saha sistem test', 'sistem testi'], ['teyit', 'teyid']] }]
   },
   {
     id: 'S45', aktor: 'yonetici', istek: req('aylik', MONTH, projeler('Meltem', 'Işık'), { notlar: 'haric', karsilastirma: 'onceki_donem' }),
@@ -684,11 +733,13 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Ufuk', t: 'Akış motoru bellek iyileştirmesi', s: 'done', pr: 'high', tf: '2026-11-05', af: '2026-11-04', as: ['Can Ertem'],
         notlar: [{ at: at('2026-11-04', '18:00'), metin: 'bellek kullanımı yüzde 30 azaldı' }] },
       { p: 'Kuzey', t: 'Saha veri şeması güncellemesi', s: 'in-progress', tf: '2026-11-12', as: ['Ece Tunalı'] },
+      // Yönetici altındaki ekip üyelerinin görevleri EXECUTIVE_SCOPE üzerinden PARTIAL görünürlük kazandırır;
+      // yetki kaldırma sonrası pakette Doruk'un tamamen dışlanması için görev kapsam dışı sorumludadır (eşleştirilmiş FULL/YOK kontrolü sınamadadır).
       { p: 'Doruk', t: 'Doruk gizli entegrasyon işi', s: 'done', tf: '2026-11-05', af: '2026-11-05', as: ['Deniz Akalın'],
         notlar: [{ at: at('2026-11-05', '12:00'), metin: 'DORUK_YETKISI_KALDIRILAN_NOT' }] }
     ],
     zorunlu: [{ id: 'Z1', olgu: 'Akış motoru bellek iyileştirmesi tamamlandı; saha veri şeması güncellemesi sürüyor.', anahtarlar: [['bellek'], ['şema']] }],
-    yetkisiz: ['PRJ-DORUK', 'Doruk']
+    yetkisiz: ['PRJ-DORUK', 'Doruk', 'DORUK_YETKISI_KALDIRILAN_NOT']
   }
 ]);
 
@@ -709,6 +760,10 @@ export const S09_REQUEST = Object.freeze({
   rapor_turu: 'ozel', donem: { baslangic: '2026-10-30', bitis: '2026-11-08' }, kapsam: { tur: 'projeler', kimlikler: ['PRJ-KUZEY', 'PRJ-MELTEM'] },
   ayrinti: 'standart', odak: 'dengeli', notlar: 'dahil', karsilastirma: 'ozel_donem', karsilastirma_donemi: { baslangic: '2026-10-10', bitis: '2026-10-19' }
 });
+export const S09_UNEQUAL_REQUEST = Object.freeze({
+  ...S09_REQUEST,
+  karsilastirma_donemi: { baslangic: '2026-10-10', bitis: '2026-10-18' }
+});
 export const S09_MANDATORY = Object.freeze([
   { id: 'Z1', olgu: 'On günlük özel dönem (30 Ekim – 8 Kasım) eşit uzunluktaki 10–19 Ekim dönemiyle karşılaştırılır.', anahtarlar: [['30 ekim'], ['8 kasım'], ['10', '19 ekim']] },
   { id: 'Z2', olgu: 'Saha prototipi mekanik montajı dönemde tamamlandı; saha testi henüz başlamadı.', anahtarlar: [['montaj'], ['saha test']] }
@@ -724,11 +779,19 @@ function recountCharacters(pkg) {
 }
 
 /**
- * Kıyasa özgü, önceden çıkarılmış belge parçalarını ve yönetici ek bilgi beyanını pakete ekler. 4I-F'nin gerçek
- * yükleme yolu değildir; kökeni (`kaynak_belge`, `bolum`, `koken`) ayrıca işaretlenir ve metin güvenilmez veridir.
+ * Kıyasa özgü, önceden çıkarılmış belge parçalarını, yönetici ek bilgi beyanını ve (S04/S34 gibi çok düzeyli
+ * örgüt senaryolarında) yetkili sentetik örgüt kırılımı ölçülerini pakete ekler. 4I-F'nin gerçek yükleme yolu
+ * değildir; kökeni (`kaynak_belge`, `bolum`, `koken`) ayrıca işaretlenir ve metin güvenilmez veridir.
  */
 function attachSupplementary(pkg, spec) {
   const items = [
+    ...(spec.orgOlculeri || []).map((metric) => ({
+      tur: 'olcu', kaynak: 'rota_task_analytics', olcu: metric.olcu, deger: metric.deger,
+      ...(metric.mudurluk ? { mudurluk: metric.mudurluk } : {}),
+      ...(metric.birim ? { birim: metric.birim } : {}),
+      ...(metric.ust_duzey_toplamina_dahil ? { ust_duzey_toplamina_dahil: true } : {}),
+      donem: structuredClone(pkg.istek.donem), tamlik: 'complete'
+    })),
     ...(spec.belgeler || []).map((doc) => ({
       tur: 'belge', kaynak: 'gecici_yukleme', dosya_turu: doc.dosya_turu, kaynak_belge: doc.kaynak_belge, bolum: doc.bolum,
       koken: 'yuklenen_belge', metin: doc.metin, rapor_kapsami: structuredClone(pkg.istek.kapsam), kayit_zamani: '2026-11-09T08:20:00+03:00',
@@ -783,7 +846,11 @@ export async function buildWriterPackageSet() {
       } else if (scenario.id === 'S09') {
         const pkg = await build(seedModule.executiveReportBenchmarkSeed(), seedModule.REPORT_BENCH_USERS.YONETICI, S09_REQUEST,
           seedModule.REPORT_BENCH_NOW, seedModule.REPORT_BENCH_TODAY);
-        entries.push({ senaryo: 'S09', kaynak: 'kanit_kurucusu:4I-A_kiyas_tohumu', paket: pkg, zorunlu_olgular: structuredClone(S09_MANDATORY), yetkisiz_varliklar: [] });
+        entries.push({
+          senaryo: 'S09', kaynak: 'kanit_kurucusu:4I-A_kiyas_tohumu', paket: pkg,
+          zorunlu_olgular: structuredClone(S09_MANDATORY), yetkisiz_varliklar: [],
+          esit_olmayan_donem_denetimi: '4I-A_istek_reddi_ve_yuzdesiz_yazar_sinamasi'
+        });
       } else {
         const spec = WRITER_SCENARIOS.find((item) => item.id === scenario.id);
         if (!spec) throw new Error(`Senaryo evreni tanımlı değil: ${scenario.id}`);

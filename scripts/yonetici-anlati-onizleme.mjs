@@ -11,25 +11,58 @@
  * Yeni taslak üretmek için önce koşu yapılır (ör. `node scripts/report-writer-qualification.mjs kosu --tasiyici vekil
  * --senaryolar S12 --cikti kosu.jsonl`).
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
 
 registerServerOnlyShim();
 const { renderReportDraftText } = await import('../src/domain/ai/report/reportDraft.js');
 const { loadBenchmarkFixture } = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
 
+function canonicalPath(filePath) {
+  const resolved = path.resolve(filePath);
+  if (existsSync(resolved)) {
+    try { return realpathSync(resolved); } catch { return resolved; }
+  }
+  const parent = path.dirname(resolved);
+  try {
+    return path.join(realpathSync(parent), path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
+function sameFile(a, b) {
+  if (canonicalPath(a) === canonicalPath(b)) return true;
+  if (existsSync(a) && existsSync(b)) {
+    try {
+      const sa = statSync(a);
+      const sb = statSync(b);
+      if (sa.dev === sb.dev && sa.ino === sb.ino) return true;
+    } catch { /* dosya bilgisi okunamadı */ }
+  }
+  return false;
+}
+
 const ALLOWED = new Set(['--girdi', '--senaryolar', '--cikti']);
 const args = process.argv.slice(2);
 const options = {};
 for (let i = 0; i < args.length; i += 2) {
-  if (!ALLOWED.has(args[i]) || args[i + 1] === undefined) {
+  const flag = args[i];
+  const value = args[i + 1];
+  // Tanınan bir başka seçenek değeri yerine geçemez; başında tire olan gerçek dosya adları korunur.
+  if (!ALLOWED.has(flag) || value === undefined || ALLOWED.has(value)) {
     process.stderr.write('Kullanım: node scripts/yonetici-anlati-onizleme.mjs --girdi kosu.jsonl [--senaryolar S01,S12] [--cikti onizleme.md]\n');
     process.exit(2);
   }
-  options[args[i].slice(2)] = args[i + 1];
+  options[flag.slice(2)] = value;
 }
 if (!options.girdi) {
   process.stderr.write('--girdi gerekli.\n');
+  process.exit(2);
+}
+if (options.cikti && sameFile(options.girdi, options.cikti)) {
+  process.stderr.write('Çıktı yolu girdi koşu dosyasının kendisi olamaz.\n');
   process.exit(2);
 }
 
@@ -41,7 +74,22 @@ for (const line of readFileSync(options.girdi, 'utf8').split('\n')) {
   const record = JSON.parse(line);
   records.set(record.senaryo, record);
 }
-const wanted = options.senaryolar ? options.senaryolar.split(',').map((id) => id.trim()) : [...records.keys()].sort();
+
+let wanted;
+if (options.senaryolar !== undefined) {
+  wanted = options.senaryolar.split(',').map((id) => id.trim()).filter(Boolean);
+  if (!wanted.length) {
+    process.stderr.write('--senaryolar boş olamaz.\n');
+    process.exit(2);
+  }
+  const unknown = wanted.filter((id) => !scenarios.has(id));
+  if (unknown.length) {
+    process.stderr.write(`Bilinmeyen senaryo: ${unknown.join(', ')}\n`);
+    process.exit(2);
+  }
+} else {
+  wanted = [...records.keys()].sort();
+}
 
 const out = [
   '# Yönetici raporu anlatı önizlemesi',
@@ -53,7 +101,11 @@ const out = [
 for (const id of wanted) {
   const record = records.get(id);
   const scenario = scenarios.get(id);
-  if (!record || !scenario) continue;
+  if (!scenario) continue;
+  if (!record) {
+    out.push(`## ${id} — ${scenario.durum}`, '', '_Bu senaryo koşu kaydında yer almıyor (koşulmadı)._', '');
+    continue;
+  }
   const model = Array.isArray(record.model?.bildirilen) ? record.model.bildirilen.join(', ') : record.model?.bildirilen ?? '-';
   out.push(`## ${id} — ${scenario.durum}`, '');
   out.push(`- Sınanan: ${scenario.sinanan}`);

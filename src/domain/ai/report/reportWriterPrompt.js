@@ -1,4 +1,4 @@
-import { REPORT_EVIDENCE_SCHEMA } from './reportRequest.js';
+import { REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } from './reportRequest.js';
 import { REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan.js';
 
 /**
@@ -35,7 +35,7 @@ export function buildReportWriterClosingMessage(plan) {
   return [
     'Bütün kanıt iletileri verildi. Şimdi bölüm planındaki bölümleri yaz ve yanıt olarak yalnızca aşağıdaki iskelete uyan tek JSON nesnesini döndür.',
     `Bölümler tam olarak şu kimliklerle ve bu sırayla yazılır: ${plan.bolumler.map((section) => section.kimlik).join(', ')}. Her bölümde "paragraflar" dizisine plandaki paragraf aralığı kadar paragraf yazılır; bölüm ve paragraf nesnelerine başka alan eklenmez.`,
-    '"iddialar" dizisi zorunludur ve boş bırakılmaz; her öğenin "paragraf" değeri o bölümde yazdığın paragraflardan birinin sırasıdır.',
+    '"iddialar" dizisi zorunludur ve boş bırakılmaz; her öğenin "paragraf" değeri o bölümde yazdığın paragraflardan birinin 1\'den başlayan sırası veya (o bölümde yazıldıysa) "one_cikan_tespit"tir.',
     `İSKELET: {"sozlesme":"4i-yazim-1","bolumler":[${sections.join(',')}],"iddialar":[{"bolum":"…","paragraf":1,"alinti":"…","sinif":"nesnel_olgu","kanitlar":["E…"]}]}`
   ].join('\n');
 }
@@ -181,7 +181,7 @@ export function buildReportWriterSystemPrompt(style) {
       'Bölüm nesnesinde YALNIZCA "kimlik", "paragraflar" ve (yalnızca yonetici_degerlendirmesi için) "one_cikan_tespit" alanları bulunur; paragraf nesnesinde yalnızca "metin" ve "kanitlar". Plan iletisindeki alanlar (baslik, sozcuk_araligi, paragraf_araligi, odak_kanitlar, yonerge, zorunlu_aciklamalar) çıktıya yazılmaz; not ya da açıklama alanı eklenmez.',
       '"one_cikan_tespit" yalnızca yonetici_degerlendirmesi bölümünde ve en çok bir kez bulunur; tek cümlelik, kanıta dayalı en önemli tespittir.',
       'Her paragrafın "kanitlar" dizisi o paragrafın dayandığı kanıt kimliklerini (yalnızca iletilerdeki E# ve F#) listeler.',
-      '"iddialar" ekinde düzyazıdaki HER nesnel olguyu (her sayı, tarih, durum ve adlandırılmış olay) ve önemli desteklenen yorumları listelersin: "paragraf" o bölümde gerçekten yazdığın paragraflardan birinin 1\'den başlayan sıra numarasıdır (bölümdeki paragraf sayısını aşamaz), "alinti" o paragraftan birebir kısa bir parçadır.',
+      '"iddialar" ekinde düzyazıdaki HER nesnel olguyu (her sayı, tarih, durum ve adlandırılmış olay) ve önemli desteklenen yorumları listelersin: "paragraf" o bölümde gerçekten yazdığın paragraflardan birinin 1\'den başlayan sıra numarasıdır (bölümdeki paragraf sayısını aşamaz) veya öne çıkan tespitte geçen olgular için "one_cikan_tespit"tir; "alinti" o metinden birebir kısa bir parçadır.',
       'JSON geçerli olmalıdır: metin içindeki çift tırnak kaçışlanır, paragraf metninde satır sonu kullanılmaz.'
     ])
   ].join('\n');
@@ -198,9 +198,17 @@ function taskReferenceMap(kanitlar) {
   return map;
 }
 
-function projectTaskRef(value, refs) {
+/**
+ * Görev başvurusunu kanıt kimliğine çevirir; pakette görev kaydı bulunmayan farklı görevler
+ * belirlenimci, paket-yerel opak takma adlarla ayrıştırılır (iç UUID asla yansıtılmaz).
+ */
+function projectTaskRef(value, refs, omittedRefs) {
   if (typeof value !== 'string') return value ?? null;
-  return refs.get(value) ?? 'pakette_olmayan_gorev';
+  if (refs.has(value)) return refs.get(value);
+  if (!omittedRefs.has(value)) {
+    omittedRefs.set(value, `pakette_olmayan_gorev_${omittedRefs.size + 1}`);
+  }
+  return omittedRefs.get(value);
 }
 
 /**
@@ -216,39 +224,44 @@ function calendarDaysBetween(fromDay, toDay) {
   return Number.isFinite(from) && Number.isFinite(to) ? Math.round((to - from) / DAY_MS) : null;
 }
 
-function projectEvidenceItem(item, refs, snapshotDay) {
+function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
   if (!isPlainObject(item)) return item;
   const out = {};
   for (const [key, value] of Object.entries(item)) {
     if (key === 'gorev') {
       if (item.tur === 'gorev') continue;
-      out.gorev_kaniti = projectTaskRef(value, refs);
+      out.gorev_kaniti = projectTaskRef(value, refs, omittedRefs);
     } else if (key === 'bagimliliklar' && isPlainObject(value)) {
       out.bagimliliklar = Object.fromEntries(Object.entries(value).map(([kind, list]) => [
-        kind, Array.isArray(list) ? list.map((ref) => projectTaskRef(ref, refs)) : list
+        kind, Array.isArray(list) ? list.map((ref) => projectTaskRef(ref, refs, omittedRefs)) : list
       ]));
     } else {
       out[key] = value;
     }
   }
-  // Aritmetik sunucunundur: açık ve hedefi veri anından önce kalmış görevin gecikmesi takvim günüyle verilir; model
-  // gün farkını kendisi hesaplamaz. Değer yalnızca pakette zaten bulunan iki tarihten türetilir.
+  // Aritmetik sunucunundur: açık, kesit tutarlı ve hedefi veri anından önce kalmış görevin gecikmesi takvim günüyle verilir;
+  // model gün farkını kendisi hesaplamaz. Kesit sonrası değişmiş görevler anlık gecikme değeri almaz.
   const target = typeof item.hedef_bitis === 'string' ? item.hedef_bitis.slice(0, 10) : null;
-  if (item.tur === 'gorev' && item.durum !== 'tamamlandi' && target && snapshotDay && target < snapshotDay) {
+  if (item.tur === 'gorev' && item.durum !== 'tamamlandi' && item.kesit_sonrasi_degisti !== true && target && snapshotDay && target < snapshotDay) {
     const days = calendarDaysBetween(target, snapshotDay);
     if (Number.isSafeInteger(days) && days > 0) out.veri_anina_gore_gecikme_takvim_gunu = days;
   }
   return out;
 }
 
-function projectConflict(conflict, refs) {
+function projectConflict(conflict, refs, omittedRefs) {
   if (!isPlainObject(conflict)) return conflict;
   const out = {};
   for (const [key, value] of Object.entries(conflict)) {
-    if (key === 'gorev') out.gorev_kaniti = projectTaskRef(value, refs);
+    if (key === 'gorev') out.gorev_kaniti = projectTaskRef(value, refs, omittedRefs);
     else out[key] = value;
   }
   return out;
+}
+
+function resolvedSnapshotDay(veriAni) {
+  return snapshotBusinessDay(veriAni)
+    ?? (typeof veriAni === 'string' && /^\d{4}-\d{2}-\d{2}/u.test(veriAni) ? veriAni.slice(0, 10) : null);
 }
 
 /**
@@ -260,6 +273,7 @@ export function projectEvidencePackageForWriter(evidencePackage) {
     throw new ReportPromptError('EVIDENCE_INVALID');
   }
   const refs = taskReferenceMap(evidencePackage.kanitlar);
+  const omittedRefs = new Map();
   const tamlik = isPlainObject(evidencePackage.tamlik)
     ? Object.fromEntries(Object.entries(evidencePackage.tamlik).filter(([key]) => !SERVER_ONLY_TAMLIK_KEYS.has(key)))
     : null;
@@ -267,12 +281,11 @@ export function projectEvidencePackageForWriter(evidencePackage) {
   for (const [key, value] of Object.entries(evidencePackage)) {
     if (SERVER_ONLY_ROOT_KEYS.has(key) || key === 'kanitlar') continue;
     if (key === 'tamlik') header.tamlik = tamlik;
-    else if (key === 'celiskiler') header.celiskiler = Array.isArray(value) ? value.map((c) => projectConflict(c, refs)) : [];
+    else if (key === 'celiskiler') header.celiskiler = Array.isArray(value) ? value.map((c) => projectConflict(c, refs, omittedRefs)) : [];
     else header[key] = value;
   }
-  const snapshotDay = typeof evidencePackage.veri_ani === 'string' && /^\d{4}-\d{2}-\d{2}/u.test(evidencePackage.veri_ani)
-    ? evidencePackage.veri_ani.slice(0, 10) : null;
-  return { header, kanitlar: evidencePackage.kanitlar.map((item) => projectEvidenceItem(item, refs, snapshotDay)) };
+  const snapshotDay = resolvedSnapshotDay(evidencePackage.veri_ani);
+  return { header, kanitlar: evidencePackage.kanitlar.map((item) => projectEvidenceItem(item, refs, omittedRefs, snapshotDay)) };
 }
 
 function reportMeta(pkg) {
@@ -281,16 +294,22 @@ function reportMeta(pkg) {
   const comparison = istek.karsilastirma && istek.karsilastirma !== 'yok' && isPlainObject(istek.karsilastirma_donemi)
     ? formatTurkishRange(istek.karsilastirma_donemi.baslangic, istek.karsilastirma_donemi.bitis)
     : null;
+  const hasNoteEvidence = Array.isArray(pkg.kanitlar) && pkg.kanitlar.some((item) => isPlainObject(item) && item.tur === 'not');
+  const noteSummary = istek.notlar !== 'dahil'
+    ? 'Görev notları bu rapora dahil edilmedi; notlara dayanan hiçbir iddia kurulmaz.'
+    : (hasNoteEvidence
+      ? 'Rapor için açık rıza verildi; görev notları kanıttadır.'
+      : 'Rapor için açık rıza verildi ancak bu kapsam ve dönemde kayıtlı görev notu bulunmuyor.');
   return {
     rapor_turu: PERIOD_LABELS[istek.rapor_turu] ?? 'Yönetim Raporu',
     donem: formatTurkishRange(istek.donem?.baslangic, istek.donem?.bitis),
     donem_adi: typeof istek.donem?.ad === 'string' ? istek.donem.ad : null,
-    veri_ani: formatTurkishDay(String(pkg.veri_ani ?? '').slice(0, 10)),
+    veri_ani: formatTurkishDay(resolvedSnapshotDay(pkg.veri_ani)),
     kapsam_turu: SCOPE_LABELS[kapsam.tur] ?? null,
     kapsam: Array.isArray(kapsam.kimlikler) ? [...kapsam.kimlikler] : [],
     odak: FOCUS_LABELS[istek.odak] ?? 'dengeli',
     karsilastirma_donemi: comparison,
-    notlar: istek.notlar === 'dahil' ? 'Rapor için açık rıza verildi; görev notları kanıttadır.' : 'Görev notları bu rapora dahil edilmedi; notlara dayanan hiçbir iddia kurulmaz.'
+    notlar: noteSummary
   };
 }
 

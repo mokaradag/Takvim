@@ -197,15 +197,17 @@ function requireToolMessages(messages) {
  * sınır vermediyse sınırlı bir varsayılan kullanılır; istek hiçbir zaman
  * sınırsız gitmez.
  */
-function outputTokenLimit(requested, route) {
+export function computeEffectiveOutputTokenLimit(requested, route = {}) {
   const asked = Number.isSafeInteger(requested) && requested > 0 ? requested : null;
   return Math.min(
-    asked ?? route.maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
-    route.maxOutputTokens ?? Infinity,
-    route.contextTokens ?? Infinity,
+    asked ?? route?.maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
+    route?.maxOutputTokens ?? Infinity,
+    route?.contextTokens ?? Infinity,
     AI_MAX_OUTPUT_TOKENS
   );
 }
+
+const outputTokenLimit = computeEffectiveOutputTokenLimit;
 
 /** Anahtar kaynaklı sonuçlar hangi anahtarın reddedildiğini söyler; kurumsal anahtar için kullanıcıya yönlendirme yapılır. */
 function annotateCredentialFailure(failure, source) {
@@ -423,7 +425,7 @@ export function createAiGateway({
    * olduğunu söyler: sağlayıcının 400/413/422 yanıtı kullanıcı hatası değil,
    * yapılandırma hatasıdır.
    */
-  async function completeChat({ profile, messages, maxOutputTokens = null, signal = null, requireText = false, callerInput = true }) {
+  async function completeChat({ profile, messages, maxOutputTokens = null, signal = null, requireText = false, callerInput = true, beforeDispatch = null }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     let lease = null;
@@ -453,6 +455,7 @@ export function createAiGateway({
       context.source = credential.source;
       const result = await callProvider({
         operation: 'ai.provider.chat',
+        beforeDispatch,
         deadline,
         context,
         source: credential.source,
@@ -477,7 +480,15 @@ export function createAiGateway({
             recordEmptyCompletion({ profile: route.profile, model: route.model, diagnostics: emptyCompletionDiagnostics({
               final: completion, startedAt: attemptStartedAt, at: now(), textChars: String(completion.text ?? '').length
             }) });
-            throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, { details: { reason: 'EMPTY_COMPLETION' } });
+            const safeFinishReason = ['stop', 'end_turn', 'length', 'content_filter', 'tool_calls', 'function_call'].includes(completion.finishReason)
+              ? completion.finishReason
+              : (typeof completion.finishReason === 'string' && completion.finishReason ? 'other' : null);
+            throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
+              details: {
+                reason: 'EMPTY_COMPLETION',
+                ...(safeFinishReason ? { finishReason: safeFinishReason } : {})
+              }
+            });
           }
           return completion;
         }

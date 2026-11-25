@@ -404,11 +404,20 @@ export function createOpenAiCompatibleProvider({
   return {
     kind: 'openai-compatible',
 
-    async chatCompletion({ baseUrl, apiKey, model, messages, maxOutputTokens = null, signal }) {
+    async chatCompletion({ baseUrl, apiKey, model, messages, maxOutputTokens = null, sampling = null, signal }) {
+      const samplingFields = {};
+      if (sampling && typeof sampling === 'object') {
+        if (typeof sampling.temperature === 'number' && Number.isFinite(sampling.temperature) && sampling.temperature >= 0 && sampling.temperature <= 2) {
+          samplingFields.temperature = sampling.temperature;
+        }
+        if (typeof sampling.topP === 'number' && Number.isFinite(sampling.topP) && sampling.topP > 0 && sampling.topP <= 1) {
+          samplingFields.top_p = sampling.topP;
+        }
+      }
       const response = await send(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: requestHeaders(apiKey, { json: true }),
-        body: JSON.stringify({ model, messages, stream: false, ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}) })
+        body: JSON.stringify({ model, messages, stream: false, ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}), ...samplingFields })
       }, signal);
       if (!response.ok) {
         await discardBody(response);

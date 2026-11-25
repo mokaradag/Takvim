@@ -1662,12 +1662,27 @@ export async function buildExecutiveReportEvidence({
       return findings;
     };
 
-    // Sayısal Sicil ve ham kontrol karakteri (\u001F) model paketine sızmaz; okunur etiketler yayımlanır.
+    // Sayısal Sicil, proje UUID'si ve ham kontrol karakteri (\u001F) model paketine sızmaz; okunur etiketler yayımlanır.
+    const projectScopeLabels = () => {
+      const seen = new Set();
+      const labels = [];
+      for (const id of resolvedScope.projectIds) {
+        const label = clampModelSafeLabel(projectDisplayCode(projects.get(id), id), REPORT_REQUEST_LIMITS.maxIdentifierLength) || id;
+        const key = label.toLocaleLowerCase('tr-TR');
+        if (!seen.has(key)) {
+          seen.add(key);
+          labels.push(label);
+        }
+      }
+      return labels;
+    };
     const modelSafeScopeIds = resolvedScope.tur === 'kisi'
       ? [targetPersonLabel]
       : ORG_LEVEL_META[resolvedScope.tur]
         ? [resolvedScope.orgUnitLabel]
-        : [...normalizedRequest.kapsam.kimlikler];
+        : (resolvedScope.tur === 'proje' || resolvedScope.tur === 'projeler') && resolvedScope.projectIds.length > 0
+          ? projectScopeLabels()
+          : [...normalizedRequest.kapsam.kimlikler];
 
     // 13. Kanonik paketi sınırlar içinde oluştur.
     const evidencePackage = finalizeBoundedPackage({

@@ -31,7 +31,7 @@ const target = path.join(ROOT, WRITER_PACKAGES_PATH);
 const text = `${JSON.stringify(set, null, 1)}\n`;
 if (args.includes('--denetle')) {
   const current = readFileSync(target, 'utf8');
-  const same = current === text;
+  const same = current.replace(/\r\n/gu, '\n') === text;
   process.stdout.write(same ? `Dondurulmuş küme güncel (${set.paketler.length} paket, özet ${set.ozet_sha256.slice(0, 16)}).\n` : 'Dondurulmuş küme üretimle aynı değil.\n');
   process.exit(same ? 0 : 1);
 }

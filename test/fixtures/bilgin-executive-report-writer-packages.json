@@ -689,7 +689,9 @@
      ]
     }
    ],
-   "yetkisiz_varliklar": [],
+   "yetkisiz_varliklar": [
+    "S02_RIZASIZ_NOT_ORNEGI"
+   ],
    "paket_ozeti_sha256": "a966c80542b7ba8e279b611f528c984c477b17461c3ba638c6015b99a4308c24"
   },
   {
@@ -1056,15 +1058,18 @@
       "tur": "olcu",
       "kaynak": "rota_task_analytics",
       "olcu": "tamamlanan",
-      "deger": 6,
+      "deger": 7,
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "kapsam": [
        "PRJ-DENGE",
+       "PRJ-DORUK",
+       "PRJ-ISIK",
        "PRJ-KUZEY",
        "PRJ-LIMAN",
        "PRJ-MELTEM",
        "PRJ-PUSULA",
-       "PRJ-UFUK"
+       "PRJ-UFUK",
+       "PRJ-YILDIZ"
       ],
       "donem": {
        "baslangic": "2026-10-01",
@@ -1077,15 +1082,18 @@
       "tur": "olcu",
       "kaynak": "rota_activity_search",
       "olcu": "hareket",
-      "deger": 8,
+      "deger": 9,
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "kapsam": [
        "PRJ-DENGE",
+       "PRJ-DORUK",
+       "PRJ-ISIK",
        "PRJ-KUZEY",
        "PRJ-LIMAN",
        "PRJ-MELTEM",
        "PRJ-PUSULA",
-       "PRJ-UFUK"
+       "PRJ-UFUK",
+       "PRJ-YILDIZ"
       ],
       "donem": {
        "baslangic": "2026-10-01",
@@ -1099,15 +1107,18 @@
       "tur": "olcu",
       "kaynak": "rota_task_analytics",
       "olcu": "acik",
-      "deger": 7,
+      "deger": 9,
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "kapsam": [
        "PRJ-DENGE",
+       "PRJ-DORUK",
+       "PRJ-ISIK",
        "PRJ-KUZEY",
        "PRJ-LIMAN",
        "PRJ-MELTEM",
        "PRJ-PUSULA",
-       "PRJ-UFUK"
+       "PRJ-UFUK",
+       "PRJ-YILDIZ"
       ],
       "veri_ani": "2026-11-09T08:30:00+03:00",
       "tamlik": "complete"
@@ -1121,11 +1132,14 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "kapsam": [
        "PRJ-DENGE",
+       "PRJ-DORUK",
+       "PRJ-ISIK",
        "PRJ-KUZEY",
        "PRJ-LIMAN",
        "PRJ-MELTEM",
        "PRJ-PUSULA",
-       "PRJ-UFUK"
+       "PRJ-UFUK",
+       "PRJ-YILDIZ"
       ],
       "veri_ani": "2026-11-09T08:30:00+03:00",
       "tamlik": "complete"
@@ -1139,11 +1153,14 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "kapsam": [
        "PRJ-DENGE",
+       "PRJ-DORUK",
+       "PRJ-ISIK",
        "PRJ-KUZEY",
        "PRJ-LIMAN",
        "PRJ-MELTEM",
        "PRJ-PUSULA",
-       "PRJ-UFUK"
+       "PRJ-UFUK",
+       "PRJ-YILDIZ"
       ],
       "veri_ani": "2026-11-09T08:30:00+03:00",
       "tamlik": "complete"
@@ -1157,11 +1174,14 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "kapsam": [
        "PRJ-DENGE",
+       "PRJ-DORUK",
+       "PRJ-ISIK",
        "PRJ-KUZEY",
        "PRJ-LIMAN",
        "PRJ-MELTEM",
        "PRJ-PUSULA",
-       "PRJ-UFUK"
+       "PRJ-UFUK",
+       "PRJ-YILDIZ"
       ],
       "veri_ani": "2026-11-09T08:30:00+03:00",
       "kayit_kapsami": "complete",
@@ -1176,11 +1196,14 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "kapsam": [
        "PRJ-DENGE",
+       "PRJ-DORUK",
+       "PRJ-ISIK",
        "PRJ-KUZEY",
        "PRJ-LIMAN",
        "PRJ-MELTEM",
        "PRJ-PUSULA",
-       "PRJ-UFUK"
+       "PRJ-UFUK",
+       "PRJ-YILDIZ"
       ],
       "donem": {
        "baslangic": "2026-09-01",
@@ -1195,11 +1218,14 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "kapsam": [
        "PRJ-DENGE",
+       "PRJ-DORUK",
+       "PRJ-ISIK",
        "PRJ-KUZEY",
        "PRJ-LIMAN",
        "PRJ-MELTEM",
        "PRJ-PUSULA",
-       "PRJ-UFUK"
+       "PRJ-UFUK",
+       "PRJ-YILDIZ"
       ],
       "donem": {
        "baslangic": "2026-10-01",
@@ -1207,9 +1233,9 @@
       },
       "kayit_kapsami": "complete",
       "donem_ozeti": {
-       "toplam_hareket": 8,
-       "etkilenen_gorev": 7,
-       "tamamlanan_gorev": 6,
+       "toplam_hareket": 9,
+       "etkilenen_gorev": 8,
+       "tamamlanan_gorev": 7,
        "olusturulan_gorev": 0,
        "silinen_gorev": 0,
        "yeniden_acilan_gorev": 0,
@@ -1285,9 +1311,9 @@
       "tur": "olcu",
       "kaynak": "rota_task_analytics",
       "olcu": "tamamlanan",
-      "deger": 0,
+      "deger": 1,
       "kapsam": [
-       "PRJ-DENGE"
+       "PRJ-YILDIZ"
       ],
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "donem": {
@@ -1303,7 +1329,7 @@
       "olcu": "tamamlanan",
       "deger": 0,
       "kapsam": [
-       "PRJ-LIMAN"
+       "PRJ-DORUK"
       ],
       "mudurluk": "Sistem Geliştirme Müdürlüğü",
       "donem": {
@@ -1314,6 +1340,54 @@
      },
      {
       "id": "E15",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 0,
+      "kapsam": [
+       "PRJ-DENGE"
+      ],
+      "mudurluk": "Sistem Geliştirme Müdürlüğü",
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E16",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 0,
+      "kapsam": [
+       "PRJ-LIMAN"
+      ],
+      "mudurluk": "Sistem Geliştirme Müdürlüğü",
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E17",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 0,
+      "kapsam": [
+       "PRJ-ISIK"
+      ],
+      "mudurluk": "Sistem Geliştirme Müdürlüğü",
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E18",
       "tur": "gorev",
       "kaynak": "rota_task_search",
       "gorev": "71000000-0000-4000-8000-000000000001",
@@ -1330,7 +1404,7 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E16",
+      "id": "E19",
       "tur": "gorev",
       "kaynak": "rota_task_search",
       "gorev": "71000000-0000-4000-8000-000000000003",
@@ -1347,7 +1421,7 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E17",
+      "id": "E20",
       "tur": "gorev",
       "kaynak": "rota_task_search",
       "gorev": "71000000-0000-4000-8000-000000000002",
@@ -1364,10 +1438,27 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E18",
+      "id": "E21",
       "tur": "gorev",
       "kaynak": "rota_task_search",
       "gorev": "71000000-0000-4000-8000-000000000007",
+      "proje": "PRJ-YILDIZ",
+      "proje_adi": "Yıldız",
+      "baslik": "Görüntüleme kalibrasyon doğrulaması",
+      "durum": "tamamlandi",
+      "oncelik": "medium",
+      "kilometre_tasi": false,
+      "hedef_bitis": "2026-10-23",
+      "gerceklesen_bitis": "2026-10-22",
+      "donemde_tamamlandi": true,
+      "donemde_hareketli": true,
+      "mudurluk": "Sistem Geliştirme Müdürlüğü"
+     },
+     {
+      "id": "E22",
+      "tur": "gorev",
+      "kaynak": "rota_task_search",
+      "gorev": "71000000-0000-4000-8000-00000000000a",
       "proje": "PRJ-KUZEY",
       "proje_adi": "Kuzey",
       "baslik": "Kuzey tasarım güncellemesi 1",
@@ -1381,10 +1472,10 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E19",
+      "id": "E23",
       "tur": "gorev",
       "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-000000000008",
+      "gorev": "71000000-0000-4000-8000-00000000000b",
       "proje": "PRJ-KUZEY",
       "proje_adi": "Kuzey",
       "baslik": "Kuzey tasarım güncellemesi 2",
@@ -1398,10 +1489,10 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E20",
+      "id": "E24",
       "tur": "gorev",
       "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-000000000009",
+      "gorev": "71000000-0000-4000-8000-00000000000c",
       "proje": "PRJ-KUZEY",
       "proje_adi": "Kuzey",
       "baslik": "Kuzey tasarım güncellemesi 3",
@@ -1415,7 +1506,7 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E21",
+      "id": "E25",
       "tur": "gorev",
       "kaynak": "rota_task_search",
       "gorev": "71000000-0000-4000-8000-000000000004",
@@ -1432,7 +1523,7 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E22",
+      "id": "E26",
       "tur": "gorev",
       "kaynak": "rota_task_search",
       "gorev": "71000000-0000-4000-8000-000000000005",
@@ -1447,7 +1538,7 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E23",
+      "id": "E27",
       "tur": "gorev",
       "kaynak": "rota_task_search",
       "gorev": "71000000-0000-4000-8000-000000000006",
@@ -1462,10 +1553,40 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E24",
+      "id": "E28",
       "tur": "gorev",
       "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-00000000000c",
+      "gorev": "71000000-0000-4000-8000-000000000009",
+      "proje": "PRJ-ISIK",
+      "proje_adi": "Işık",
+      "baslik": "Işık kontrol paneli doğrulaması",
+      "durum": "baslamadi",
+      "oncelik": "medium",
+      "kilometre_tasi": false,
+      "hedef_bitis": "2026-11-20",
+      "gerceklesen_bitis": null,
+      "mudurluk": "Sistem Geliştirme Müdürlüğü"
+     },
+     {
+      "id": "E29",
+      "tur": "gorev",
+      "kaynak": "rota_task_search",
+      "gorev": "71000000-0000-4000-8000-000000000008",
+      "proje": "PRJ-DORUK",
+      "proje_adi": "Doruk",
+      "baslik": "Doruk saha iletişim testi",
+      "durum": "devam_ediyor",
+      "oncelik": "medium",
+      "kilometre_tasi": false,
+      "hedef_bitis": "2026-11-18",
+      "gerceklesen_bitis": null,
+      "mudurluk": "Sistem Geliştirme Müdürlüğü"
+     },
+     {
+      "id": "E30",
+      "tur": "gorev",
+      "kaynak": "rota_task_search",
+      "gorev": "71000000-0000-4000-8000-00000000000f",
       "proje": "PRJ-UFUK",
       "proje_adi": "Ufuk",
       "baslik": "Ufuk veri işi 1",
@@ -1477,10 +1598,10 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E25",
+      "id": "E31",
       "tur": "gorev",
       "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-00000000000d",
+      "gorev": "71000000-0000-4000-8000-000000000010",
       "proje": "PRJ-UFUK",
       "proje_adi": "Ufuk",
       "baslik": "Ufuk veri işi 2",
@@ -1492,10 +1613,10 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E26",
+      "id": "E32",
       "tur": "gorev",
       "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-00000000000e",
+      "gorev": "71000000-0000-4000-8000-000000000011",
       "proje": "PRJ-UFUK",
       "proje_adi": "Ufuk",
       "baslik": "Ufuk veri işi 3",
@@ -1507,10 +1628,10 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E27",
+      "id": "E33",
       "tur": "gorev",
       "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-00000000000f",
+      "gorev": "71000000-0000-4000-8000-000000000012",
       "proje": "PRJ-UFUK",
       "proje_adi": "Ufuk",
       "baslik": "Ufuk veri işi 4",
@@ -1522,10 +1643,10 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E28",
+      "id": "E34",
       "tur": "gorev",
       "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-00000000000a",
+      "gorev": "71000000-0000-4000-8000-00000000000d",
       "proje": "PRJ-KUZEY",
       "proje_adi": "Kuzey",
       "baslik": "Eylül tasarım kalemi 1",
@@ -1537,10 +1658,10 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E29",
+      "id": "E35",
       "tur": "gorev",
       "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-00000000000b",
+      "gorev": "71000000-0000-4000-8000-00000000000e",
       "proje": "PRJ-KUZEY",
       "proje_adi": "Kuzey",
       "baslik": "Eylül tasarım kalemi 2",
@@ -1552,7 +1673,7 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E30",
+      "id": "E36",
       "tur": "not",
       "kaynak": "MR_AuditLog",
       "gorev": "71000000-0000-4000-8000-000000000001",
@@ -1571,7 +1692,7 @@
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
      },
      {
-      "id": "E31",
+      "id": "E37",
       "tur": "not",
       "kaynak": "MR_AuditLog",
       "gorev": "71000000-0000-4000-8000-000000000004",
@@ -1588,6 +1709,62 @@
       "metin_turu": "kayitli_kullanici_metni",
       "olay_tarihi_ayri": true,
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
+     },
+     {
+      "id": "E38",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 4,
+      "birim": "Sistem Tasarım Birimi",
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E39",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "birim": "Veri ve Entegrasyon Birimi",
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E40",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "birim": "Yazılım Mimarisi Birimi",
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E41",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "birim": "Test ve Doğrulama Birimi",
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
      }
     ],
     "turetilmis": [
@@ -1599,10 +1776,10 @@
        "E7"
       ],
       "deger": {
-       "mevcut": 6,
+       "mevcut": 7,
        "onceki": 2,
-       "fark": 4,
-       "yuzde_degisim": 200
+       "fark": 5,
+       "yuzde_degisim": 250
       },
       "kosul": "tamamlanmış önceki eşdeğer dönem"
      },
@@ -1615,8 +1792,8 @@
       ],
       "deger": {
        "geciken": 1,
-       "acik": 7,
-       "oran_yuzde": 14.3
+       "acik": 9,
+       "oran_yuzde": 11.1
       },
       "kosul": "tam yetkili açık görev nüfusu"
      }
@@ -1624,22 +1801,22 @@
     "tamlik": {
      "kapsam_gorunurlugu": "complete",
      "projeler": {
-      "tam": 6,
+      "tam": 9,
       "okuma": 0,
       "kismi": 0
      },
      "gorevler": {
-      "toplam_uygun": 15,
-      "dahil": 15,
+      "toplam_uygun": 18,
+      "dahil": 18,
       "disarida_kalan": 0,
       "kesildi": false
      },
-     "notlar": "2 not; 13 görev notsuz",
+     "notlar": "2 not; 16 görev notsuz",
      "not_ozeti": {
       "riza": true,
       "dahil": 2,
       "disarida_kalan": 0,
-      "notsuz_gorev": 13,
+      "notsuz_gorev": 16,
       "kirpilan": 0,
       "denetim_kesik": false
      },
@@ -1648,7 +1825,7 @@
      "tarihsiz_tamamlanan": 0,
      "paket_kesildi": false,
      "disarida_kalan_kanit": 0,
-     "karakter_sayisi": 11477
+     "karakter_sayisi": 14381
     },
     "celiskiler": [],
     "sinirlar": {
@@ -1684,7 +1861,7 @@
     }
    ],
    "yetkisiz_varliklar": [],
-   "paket_ozeti_sha256": "939f9144335ea90844565bd945beee9d582b443679332eb44154c215b3d48f2b"
+   "paket_ozeti_sha256": "8b890d3da182ce7c26b37002df7bad0d3d4103177614a24a5de5f143366f76bf"
   },
   {
    "senaryo": "S05",
@@ -5144,6 +5321,7 @@
     }
    ],
    "yetkisiz_varliklar": [],
+   "esit_olmayan_donem_denetimi": "4I-A_istek_reddi_ve_yuzdesiz_yazar_sinamasi",
    "paket_ozeti_sha256": "272eb4d3aace992a2b38f09a259bb49f4a4a2d6531280559e9a2336f217e26a9"
   },
   {
@@ -5895,7 +6073,8 @@
       "baslik": "Saha prototipi mekanik montajı",
       "durum": "tamamlandi",
       "gerceklesen_bitis": "2026-11-05",
-      "sorumlu": "Can Ertem"
+      "sorumlu": "Can Ertem",
+      "donemde_tamamlandi": true
      },
      {
       "id": "E2",
@@ -5972,7 +6151,7 @@
     }
    ],
    "yetkisiz_varliklar": [],
-   "paket_ozeti_sha256": "f16af70346a19ae36c3b5ff9d79a4944cb6e99bedd030cf76f11862ef7ed8fc3"
+   "paket_ozeti_sha256": "b53682e0215215cd485c436a5e9857e5a57afa90673d1b9cb439766dc671196c"
   },
   {
    "senaryo": "S13",
@@ -9527,7 +9706,8 @@
       "baslik": "Veri akışı ölçüm sonuçları",
       "durum": "tamamlandi",
       "gerceklesen_bitis": "2026-11-04",
-      "ekip": "Veri Akışı Ekibi"
+      "ekip": "Veri Akışı Ekibi",
+      "donemde_tamamlandi": true
      },
      {
       "id": "E4",
@@ -9538,7 +9718,8 @@
       "baslik": "Yük testi ortamı hazırlığı",
       "durum": "tamamlandi",
       "gerceklesen_bitis": "2026-11-06",
-      "ekip": "Veri Akışı Ekibi"
+      "ekip": "Veri Akışı Ekibi",
+      "donemde_tamamlandi": true
      }
     ],
     "turetilmis": [],
@@ -9553,7 +9734,7 @@
       "riza": true,
       "dahil": 0
      },
-     "hareket": "complete",
+     "hareket": "partial",
      "tarihsiz_tamamlanan": 0,
      "paket_kesildi": false,
      "projeler": {
@@ -9585,7 +9766,7 @@
    "yetkisiz_varliklar": [
     "PRJ-ATLAS"
    ],
-   "paket_ozeti_sha256": "6a1c1136262d77d5e236ceda9360d24d236462360e77909f66d187447e2de51e"
+   "paket_ozeti_sha256": "02a10a50547ede4cc7db2ca98bd9abaedc5721721c4fd182a39287010451ee35"
   },
   {
    "senaryo": "S26",
@@ -9889,7 +10070,7 @@
    "zorunlu_olgular": [
     {
      "id": "Z1",
-     "olgu": "Kapsamdaki iki müdürlükte iki görev tamamlandı; proje planı yeniden takvimlemesi hedefini aştı.",
+     "olgu": "Yetkili direktörlük kapsamında iki görev tamamlandı; proje planı yeniden takvimlemesi hedefini aştı.",
      "anahtarlar": [
       [
        "yeniden takvim"
@@ -10360,6 +10541,21 @@
       "id": "E8",
       "tur": "gorev",
       "kaynak": "rota_task_search",
+      "gorev": "71000000-0000-4000-8000-000000000001",
+      "proje": "PRJ-DENGE",
+      "proje_adi": "Denge",
+      "baslik": "Kontrol yazılımı modül testleri",
+      "durum": "devam_ediyor",
+      "oncelik": "high",
+      "kilometre_tasi": false,
+      "hedef_bitis": "2026-11-27",
+      "gerceklesen_bitis": null,
+      "donemde_hareketli": true
+     },
+     {
+      "id": "E9",
+      "tur": "gorev",
+      "kaynak": "rota_task_search",
       "gorev": "71000000-0000-4000-8000-000000000002",
       "proje": "PRJ-DENGE",
       "proje_adi": "Denge",
@@ -10368,21 +10564,6 @@
       "oncelik": "medium",
       "kilometre_tasi": false,
       "hedef_bitis": "2026-11-26",
-      "gerceklesen_bitis": null,
-      "donemde_hareketli": true
-     },
-     {
-      "id": "E9",
-      "tur": "gorev",
-      "kaynak": "rota_task_search",
-      "gorev": "71000000-0000-4000-8000-000000000001",
-      "proje": "PRJ-DENGE",
-      "proje_adi": "Denge",
-      "baslik": "Kontrol yazılımı modül testleri",
-      "durum": "devam_ediyor",
-      "oncelik": "medium",
-      "kilometre_tasi": false,
-      "hedef_bitis": "2026-11-27",
       "gerceklesen_bitis": null,
       "donemde_hareketli": true
      },
@@ -10429,7 +10610,7 @@
      "tarihsiz_tamamlanan": 0,
      "paket_kesildi": false,
      "disarida_kalan_kanit": 0,
-     "karakter_sayisi": 3260
+     "karakter_sayisi": 3258
     },
     "celiskiler": [],
     "sinirlar": {
@@ -10460,7 +10641,7 @@
     }
    ],
    "yetkisiz_varliklar": [],
-   "paket_ozeti_sha256": "f16365083476850d8a5d532f061c38315ee664cb0d81bb064a3b88bc2fae32e7"
+   "paket_ozeti_sha256": "611d7c51d101ab3acf0eaa6f6914e49b371f3c2728067fc1cc6cc1801252598f"
   },
   {
    "senaryo": "S30",
@@ -11268,7 +11449,8 @@
     },
     {
      "id": "Z2",
-     "olgu": "Uzak izleme yazılımı hedef tarihini aştı; notta lisans sorunu nedeniyle kurulumun durduğu belirtiliyor.",
+     "bolum": "yonetici_degerlendirmesi",
+     "olgu": "Başarı odağına rağmen uzak izleme yazılımının gecikmesi ve lisans sorunu Yönetici Değerlendirmesi bölümünde en az bir kez anılır.",
      "anahtarlar": [
       [
        "uzak izleme"
@@ -11614,7 +11796,9 @@
        "entegrasyon test"
       ],
       [
-       "13 kasım",
+       "13 kasım"
+      ],
+      [
        "12 kasım"
       ]
      ]
@@ -12365,6 +12549,171 @@
       "metin_turu": "kayitli_kullanici_metni",
       "olay_tarihi_ayri": true,
       "direktorluk": "Mühendislik Direktörlüğü"
+     },
+     {
+      "id": "E19",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "mudurluk": "Sistem Geliştirme Müdürlüğü",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E20",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "mudurluk": "Proje Yönetim ve Planlama Müdürlüğü",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E21",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "mudurluk": "Doğrulama ve Kalite Müdürlüğü",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E22",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "birim": "Veri ve Entegrasyon Birimi",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E23",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "birim": "Süreç ve Planlama Birimi",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E24",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "birim": "Test ve Doğrulama Birimi",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E25",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 0,
+      "birim": "Sistem Tasarım Birimi",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E26",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 0,
+      "birim": "Altyapı ve Güvenlik Birimi",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E27",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 0,
+      "birim": "Yazılım Mimarisi Birimi",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E28",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 0,
+      "birim": "Saha Destek ve Devreye Alma Birimi",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E29",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 0,
+      "birim": "Yapılandırma ve Sürüm Birimi",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
      }
     ],
     "turetilmis": [
@@ -12427,7 +12776,7 @@
      "tarihsiz_tamamlanan": 0,
      "paket_kesildi": false,
      "disarida_kalan_kanit": 0,
-     "karakter_sayisi": 6989
+     "karakter_sayisi": 9748
     },
     "celiskiler": [],
     "sinirlar": {
@@ -12457,10 +12806,22 @@
        "aralık"
       ]
      ]
+    },
+    {
+     "id": "Z3",
+     "olgu": "Direktörlük genelinde 3 görev tamamlandı; müdürlük ve birim alt toplamları bu üst toplamla örtüşür, toplanarak şişirilmez.",
+     "anahtarlar": [
+      [
+       "3 görev",
+       "3 tamamlan",
+       "üç görev",
+       "üç tamamlan"
+      ]
+     ]
     }
    ],
    "yetkisiz_varliklar": [],
-   "paket_ozeti_sha256": "6112589b3027bea1c5b24fe76f2ebcb64d6352bf45c0a698a537cc8dee3e4ffa"
+   "paket_ozeti_sha256": "0b9eb0226e37edadfa2c48937ad9e356cb485ee487635e311ec4afb53725062b"
   },
   {
    "senaryo": "S35",
@@ -12742,7 +13103,7 @@
    "zorunlu_olgular": [
     {
      "id": "Z1",
-     "olgu": "Denge projesi iki birimin işini içerir; ortak görev çift sayılmaz (üç tamamlanan görev).",
+     "olgu": "Denge projesi iki birimin işini içerir; iki sorumlulu tamamlanan görev çift sayılmaz (üç tamamlanan görev).",
      "anahtarlar": [
       [
        "denge"
@@ -13226,7 +13587,7 @@
       "kaynak_belge": "Liman proje durum özeti (sentetik)",
       "bolum": "Takvim",
       "koken": "yuklenen_belge",
-      "metin": "Kontrol merkezi kabul testi 19 Kasım 2026 tarihinde yapılacaktır.",
+      "metin": "Kontrol merkezi kabul testinin hedef bitiş tarihi 19 Kasım 2026 olarak belirlenmiştir.",
       "rapor_kapsami": {
        "tur": "projeler",
        "kimlikler": [
@@ -13285,7 +13646,7 @@
      "tarihsiz_tamamlanan": 0,
      "paket_kesildi": false,
      "disarida_kalan_kanit": 0,
-     "karakter_sayisi": 4312
+     "karakter_sayisi": 4333
     },
     "celiskiler": [],
     "sinirlar": {
@@ -13297,7 +13658,7 @@
    "zorunlu_olgular": [
     {
      "id": "Z1",
-     "olgu": "Belgede kabul testi 19 Kasım, görev kaydında hedef 26 Kasım; kaynaklar arası çelişki açıkça işlenir.",
+     "olgu": "Belgede kabul testi hedef bitiş tarihi 19 Kasım, görev kaydında hedef bitiş 26 Kasım; kaynaklar arası tarih çelişkisi açıkça işlenir.",
      "anahtarlar": [
       [
        "19 kasım"
@@ -13309,7 +13670,7 @@
     }
    ],
    "yetkisiz_varliklar": [],
-   "paket_ozeti_sha256": "8db89543f5689893d5dadfb698abd9f4a7b782a57be9e2db333955841429c1a3"
+   "paket_ozeti_sha256": "986777a81e8f38ee8f5588b4b6186cb6333835c5fa020e02896bf7c19ddd4e3f"
   },
   {
    "senaryo": "S38",
@@ -15167,7 +15528,8 @@
        "sistem testi"
       ],
       [
-       "teyit"
+       "teyit",
+       "teyid"
       ]
      ]
     }
@@ -16155,10 +16517,11 @@
    ],
    "yetkisiz_varliklar": [
     "PRJ-DORUK",
-    "Doruk"
+    "Doruk",
+    "DORUK_YETKISI_KALDIRILAN_NOT"
    ],
    "paket_ozeti_sha256": "375c58baaa09ce012735ad396821985204e29464847d2526f520b054c9a1bbe5"
   }
  ],
- "ozet_sha256": "7b9450648d666e8887b5d854e02c4ba8b6e47cb14852acc7c641a5f27a71ce9a"
+ "ozet_sha256": "d77494f36dbbf66d3cc9e55aeb035bb4f5a759685f93bec887c6d2b8130d8cba"
 }

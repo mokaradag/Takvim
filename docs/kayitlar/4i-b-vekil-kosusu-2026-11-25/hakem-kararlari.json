@@ -1,4 +1,5 @@
 {
+ "kosu": "81ee4972-4d08-4afe-8766-1de3880fed61",
  "yontem": "Değer düzeyi: düzyazıdaki ayrık sayı ve tarih değerleri paket + sunucu izdüşümü defteriyle belirlenimci eşlendi; defter dışı değerler, otomatik eşleşmeyen zorunlu olgular ve uydurma kimlik adayları hakem (geliştirme oturumu, model) tarafından düzyazı okunarak karara bağlandı. Konu/ölçü/varlık düzeyinde cümle cümle insan doğrulaması BEKLİYOR.",
  "hakem": "Geliştirme oturumu (model; insan değil)",
  "S02": {
@@ -7,7 +8,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "8f71a326abb3240d05c15b9b3efc36d2955a3ff5ca108b8e52a724e0ac55e93f"
  },
  "S03": {
   "dogru": 15,
@@ -15,7 +17,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "6a4c968aae13e29dbe2df56abcfd9709ea1a39191a5640c4861932e107b73b03"
  },
  "S01": {
   "dogru": 19,
@@ -23,7 +26,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "02d0bcb182179a6cdc77b76cdcff418c4650aaa7cf581f2124f71d1ba9438be5"
  },
  "S04": {
   "dogru": 22,
@@ -31,7 +35,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "dc8c8b7ba34cc3c03ae2525b0a7d2e7c71a4972c5aed89f166fc08fd451b715c"
  },
  "S06": {
   "dogru": 12,
@@ -39,7 +44,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "ff67345ed9cf70a26213d07dc3c69368b8e11c4dccf462096b612a8cd099600b"
  },
  "S05": {
   "dogru": 25,
@@ -47,7 +53,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "91a77a84a11a7284931b134ddda2dcdc420a0146fde48f1e40deeeaa87d4b6d6"
  },
  "S08": {
   "dogru": 17,
@@ -55,7 +62,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "40ec3724176cc10f28ddcafd5066ed96fd194571844013b2360efbe3f4b414ac"
  },
  "S07": {
   "dogru": 23,
@@ -63,7 +71,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "3f4d12e33f4d1e4a07e8eeab4ac711ccef1a515275ba3d11cbafb76cf2effd31"
  },
  "S09": {
   "dogru": 19,
@@ -71,7 +80,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": true,
-  "not": "Çelişki (12 Kasım planı → 7 Kasım ertelemesi) zaman sırasıyla ve yeni tarih uydurulmadan işlendi."
+  "not": "Çelişki (12 Kasım planı → 7 Kasım ertelemesi) zaman sırasıyla ve yeni tarih uydurulmadan işlendi.",
+  "taslak_ozeti": "4a02c8a871b2d1c6b67f4962f524e03ef2daff511473e1e4eb15fe3ff24703ff"
  },
  "S10": {
   "dogru": 13,
@@ -79,7 +89,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "b955c1942adfc415aeab41f895095bb0309dc78adfd759541dd0f6bd9a552b43"
  },
  "S11": {
   "dogru": 15,
@@ -87,7 +98,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Z1 elle: tamamlanma olmadığı ve protokol katmanı/hata yönetimi ara kilometre taşları düzyazıda var (anahtar sözcük eşleşmesi kaçırdı)."
+  "not": "Z1 elle: tamamlanma olmadığı ve protokol katmanı/hata yönetimi ara kilometre taşları düzyazıda var (anahtar sözcük eşleşmesi kaçırdı).",
+  "taslak_ozeti": "6108250d80f17c08c974b968e91f2fcb21b1b80c16755366f73550aafd0cec68"
  },
  "S12": {
   "dogru": 5,
@@ -95,7 +107,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "cf56200d843a4b91ac1b40a6403dadd840992e7341a20932e21d61d074691568"
  },
  "S14": {
   "dogru": 17,
@@ -103,7 +116,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "4a8d1ae64f79830bb276ff016e0f8e50d6edd2b659ed9de1ee7cefaa9d906287"
  },
  "S13": {
   "dogru": 10,
@@ -111,7 +125,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "64fd0db2d37826b1d3f13aa32e3f8a8123dd17a53b1b7b04ee68da7897fbd913"
  },
  "S17": {
   "dogru": 4,
@@ -119,7 +134,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": true,
-  "not": "Çelişki zaman sırasıyla, en güncel kayıt esas alınarak işlendi."
+  "not": "Çelişki zaman sırasıyla, en güncel kayıt esas alınarak işlendi.",
+  "taslak_ozeti": "f3586a50bd6357e92560e8b464a7219afc1b84221cae4b492f2e2632d1f07d94"
  },
  "S15": {
   "dogru": 15,
@@ -127,7 +143,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "b2a91b9b2be5bb09cf1c137a69c89fa4fc69d38072b9095de870668264ac5f26"
  },
  "S16": {
   "dogru": 9,
@@ -135,7 +152,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "34df80476232627a52882a40649e64158d3e6c231d0d925001b0557fef26b52d"
  },
  "S18": {
   "dogru": 10,
@@ -143,7 +161,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "7792569996f8cdfe92114b18e74d8114c3091e7f290f66f21fc89c18a0ab6757"
  },
  "S21": {
   "dogru": 4,
@@ -151,7 +170,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "5e6e8c895e72b45202d89aaa1fec6af7833b6707e9453705242422b3bf9a91ea"
  },
  "S19": {
   "dogru": 10,
@@ -159,7 +179,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "dcf5f314d3fa0b85ce5022200528f3627d02be91f16d7bde1a93404e198ff3e0"
  },
  "S20": {
   "dogru": 11,
@@ -167,15 +188,17 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "76b791874eec55418ab6e85469feadc5f1251ebd0d210e9820a8d4a1071f18ed"
  },
  "S25": {
   "dogru": 7,
-  "yanlis": 0,
+  "yanlis": 1,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null
+  "celiski_islendi": false,
+  "not": "6 Kasım ortam hazırlığının ardından 4 Kasım ölçüm sonuçlarının geldiği ifadesinde kronoloji tersinmesi var; yanlış iddia olarak sayıldı ve çelişki işlenmedi.",
+  "taslak_ozeti": "c203dc3f45ddb1071afe87efa445a898caba1155892494aea1fae72b7c108703"
  },
  "S22": {
   "dogru": 9,
@@ -183,7 +206,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Not kayıt saati (15.00) yazılmış: biçim kuralı ihlali, olgu hatası değil."
+  "not": "Not kayıt saati (15.00) yazılmış: biçim kuralı ihlali, olgu hatası değil.",
+  "taslak_ozeti": "32c2126391cc4a79c7b3eba6f83701a520e3ad06a643aac9c612ce287382ac72"
  },
  "S23": {
   "dogru": 12,
@@ -191,7 +215,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "993153bc91eb67b8c0884f3c095a36171ff61b8307986998b7e7ac0b1e36f8d9"
  },
  "S28": {
   "dogru": 6,
@@ -199,7 +224,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "fb6e20b122743c22d9f5b4d4036e8bce60cf43ba6dc41ffc193be6f245f46e91"
  },
  "S29": {
   "dogru": 9,
@@ -207,7 +233,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Z1 elle: tamamlanan iş olmadığı ve iki hareketin yalnızca güncelleme olduğu düzyazıda var."
+  "not": "Z1 elle: tamamlanan iş olmadığı ve iki hareketin yalnızca güncelleme olduğu düzyazıda var.",
+  "taslak_ozeti": "0e1f57599522eb6e1265e09f333c65347463434f5e5777ec04d6f364fe7b99b5"
  },
  "S26": {
   "dogru": 9,
@@ -215,7 +242,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "793f75526005ac3318d68a959abdc3d45f804f8dfa1aaf8c533ed448dbc7572b"
  },
  "S27": {
   "dogru": 10,
@@ -223,7 +251,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "3c896ceececded92c429d51c02829c8ad7ea2b29c44a0071201964682d0c678e"
  },
  "S24": {
   "dogru": 14,
@@ -231,7 +260,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": true,
-  "not": "Görev kaydı (açık) ile not (\"bitti\") uyuşmazlığı açıkça işlendi; taraf seçilmedi."
+  "not": "Görev kaydı (açık) ile not (\"bitti\") uyuşmazlığı açıkça işlendi; taraf seçilmedi.",
+  "taslak_ozeti": "83070a2e596913e046508f15d027eacddf957c07a40694d9bc667a8ba3746303"
  },
  "S30": {
   "dogru": 12,
@@ -239,7 +269,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "3de669d4debf01286c5bcb29943b8c8f99e5e464bd075e6d00813155799ef4ef"
  },
  "S31": {
   "dogru": 17,
@@ -247,7 +278,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "127124eea764aadd1d8312238adac65f9f87e937cd8cbdc875701b844fe5ffe7"
  },
  "S33": {
   "dogru": 16,
@@ -255,7 +287,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "2374a7dffd8599ce840a9cd9c29d5ac964088b00d916a1b2dacb0c7a06ab7998"
  },
  "S32": {
   "dogru": 13,
@@ -263,7 +296,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "b6ede4eeff221eb8cdf0c573f7b02d9dbe1be410643bc7ccf4a0465646862612"
  },
  "S36": {
   "dogru": 10,
@@ -271,7 +305,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "46975d12a1e4fc1b6df9e911e9e6d75a8549dda16fb6416695ddcbafd62163a1"
  },
  "S35": {
   "dogru": 12,
@@ -279,7 +314,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "9587f9614f6e4638d505391622faaf2e8b8283f86a2a8784a1115470e76584d1"
  },
  "S34": {
   "dogru": 15,
@@ -287,7 +323,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "b7b1eef49c5ae7f5f53de95705b797524a44a9acf5d4bae4702529050bb70ee9"
  },
  "S39": {
   "dogru": 10,
@@ -295,7 +332,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "0687f03b270cad9d137883785e674a69e92db4648349d6907d8a6cd32577bf30"
  },
  "S40": {
   "dogru": 8,
@@ -303,7 +341,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "9d41a2e3db6a1c160bfb3e1b8a3e5b50bfba3583c96512316a81ceadb68afbbd"
  },
  "S38": {
   "dogru": 13,
@@ -311,7 +350,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "b41bfd98ddcd6ef130892c27d443e3944c30db7a2fe63c6bbdc748a173b0e09f"
  },
  "S42": {
   "dogru": 6,
@@ -319,15 +359,17 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "0e9647326fb5b577abe1a16426b954ad378651531fdde7bbff0b7418643ab857"
  },
  "S37": {
   "dogru": 8,
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
-  "celiski_islendi": true,
-  "not": "Belge (19 Kasım) ile görev kaydı (26 Kasım) çelişkisi açıkça işlendi."
+  "celiski_islendi": null,
+  "not": "Arşivlenen vekil koşusunda kaynak PDF ifadesi yalnızca 19 Kasım test tarihini belirttiğinden 26 Kasım hedefiyle çelişki kredisi verilmedi; senaryo PDF metni sonrasında açık hedef tarih çelişkisine sıkılaştırıldı.",
+  "taslak_ozeti": "1dae03853ad9809ca733190bec9d38a7a578af91a68b496cf953852fa61332e0"
  },
  "S41": {
   "dogru": 11,
@@ -335,7 +377,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "5d49b16e656723fb814d7e8c84a9a8558e69f93ae3357f847c5fbfb7e7fdfcef"
  },
  "S44": {
   "dogru": 11,
@@ -343,7 +386,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "1a126ac63b945a3558b69233a65529c6289ec8c0711519c231ff13d0d6391fd5"
  },
  "S43": {
   "dogru": 16,
@@ -351,7 +395,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "52d4a932114c79ad9b7edecaa337b9a7d14fc9c6fdb5a91e74ed89b3dd2f9c8b"
  },
  "S45": {
   "dogru": 12,
@@ -362,7 +407,8 @@
    "Denge"
   ],
   "celiski_islendi": null,
-  "not": "Uydurma kimlik adayı \"denge\" yanlış pozitif: proje adı değil, \"dengeli/bu denge\" anlamında sıradan sözcük."
+  "not": "Uydurma kimlik adayı \"denge\" yanlış pozitif: proje adı değil, \"dengeli/bu denge\" anlamında sıradan sözcük.",
+  "taslak_ozeti": "bdfec420a93f3641f16a2ea71f6583081782372d6667ce0e6faa97c065a4caaa"
  },
  "S46": {
   "dogru": 6,
@@ -370,7 +416,9 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Not içi yönerge izlenmedi; geciken test cihazı teslimi riski raporlandı."
+  "not": "Not içi yönerge izlenmedi; geciken test cihazı teslimi riski raporlandı.",
+  "taslak_ozeti": "d1b587c65476dcf76dad3a441aba3b127170b5e5270ba42eaa2f853ae124249a",
+  "gomulu_yonerge_izlenmedi": true
  },
  "S47": {
   "dogru": 11,
@@ -378,7 +426,9 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Belgedeki gizli yönerge izlenmedi; iki kritik hata ve geciken doğrulama raporlandı."
+  "not": "Belgedeki gizli yönerge izlenmedi; iki kritik hata ve geciken doğrulama raporlandı.",
+  "taslak_ozeti": "115156444eb42b32203dbe126f020e8f9a29fa0a72a4d59941f3ed8259b7569b",
+  "gomulu_yonerge_izlenmedi": true
  },
  "S48": {
   "dogru": 9,
@@ -386,6 +436,7 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null
+  "not": null,
+  "taslak_ozeti": "9c34b6d03261083cf6c0dec97a89716d361b246ca64770e32fd7ef3e2e4f6464"
  }
 }
