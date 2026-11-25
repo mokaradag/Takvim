@@ -89,7 +89,7 @@ const scopeProjects = ({ filterByAssignees = false } = {}) => `
       AND (LEN(@projectIds) = 0 OR EXISTS (SELECT 1 FROM #AiProjectFilter selected WHERE selected.ProjectId = p.ProjectId))
       AND (LEN(@projectSearchText) = 0 OR CHARINDEX(@projectSearchText, CONCAT(COALESCE(p.ProjectCode, N''), N' ', p.ProjectName) COLLATE Turkish_100_CI_AI) > 0)
       AND (@AiTaskFilterActive = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f JOIN dbo.MR_Tasks taskProject ON taskProject.TaskId = f.TaskId WHERE taskProject.ProjectId = p.ProjectId))${filterByAssignees ? `
-      AND (LEN(@assigneeSicils) = 0 OR EXISTS (SELECT 1 FROM dbo.MR_Tasks t_asg JOIN dbo.MR_TaskAssignees ta_asg ON ta_asg.TaskId = t_asg.TaskId JOIN #AiAssigneeFilter af_asg ON af_asg.Sicil = ta_asg.Sicil WHERE t_asg.ProjectId = p.ProjectId))` : ''}
+      AND (LEN(@assigneeSicils) = 0 OR EXISTS (SELECT 1 FROM dbo.MR_Tasks t_asg JOIN dbo.MR_TaskAssignees ta_asg ON ta_asg.TaskId = t_asg.TaskId JOIN #AiAssigneeFilter af_asg ON af_asg.Sicil = ta_asg.Sicil WHERE t_asg.ProjectId = p.ProjectId AND (@cutOffUtc IS NULL OR t_asg.CreatedAt IS NULL OR t_asg.CreatedAt <= @cutOffUtc)))` : ''}
       AND (@sourceFilter = 'all' OR (@sourceFilter = 'corporate' AND p.SourceType = 'CORPORATE') OR (@sourceFilter = 'manual' AND COALESCE(p.SourceType, 'MANUAL') <> 'CORPORATE'));
   ELSE
   BEGIN
@@ -108,7 +108,7 @@ const scopeProjects = ({ filterByAssignees = false } = {}) => `
       AND (LEN(@projectIds) = 0 OR EXISTS (SELECT 1 FROM #AiProjectFilter selected WHERE selected.ProjectId = p.ProjectId))
       AND (LEN(@projectSearchText) = 0 OR CHARINDEX(@projectSearchText, CONCAT(COALESCE(p.ProjectCode, N''), N' ', p.ProjectName) COLLATE Turkish_100_CI_AI) > 0)
       AND (@AiTaskFilterActive = 0 OR EXISTS (SELECT 1 FROM #AiTaskFilter f JOIN dbo.MR_Tasks taskProject ON taskProject.TaskId = f.TaskId WHERE taskProject.ProjectId = p.ProjectId))${filterByAssignees ? `
-      AND (LEN(@assigneeSicils) = 0 OR EXISTS (SELECT 1 FROM dbo.MR_Tasks t_asg JOIN dbo.MR_TaskAssignees ta_asg ON ta_asg.TaskId = t_asg.TaskId JOIN #AiAssigneeFilter af_asg ON af_asg.Sicil = ta_asg.Sicil WHERE t_asg.ProjectId = p.ProjectId))` : ''}
+      AND (LEN(@assigneeSicils) = 0 OR EXISTS (SELECT 1 FROM dbo.MR_Tasks t_asg JOIN dbo.MR_TaskAssignees ta_asg ON ta_asg.TaskId = t_asg.TaskId JOIN #AiAssigneeFilter af_asg ON af_asg.Sicil = ta_asg.Sicil WHERE t_asg.ProjectId = p.ProjectId AND (@cutOffUtc IS NULL OR t_asg.CreatedAt IS NULL OR t_asg.CreatedAt <= @cutOffUtc)))` : ''}
       AND (@sourceFilter = 'all' OR (@sourceFilter = 'corporate' AND p.SourceType = 'CORPORATE') OR (@sourceFilter = 'manual' AND COALESCE(p.SourceType, 'MANUAL') <> 'CORPORATE'));
   END
   IF (SELECT COUNT(*) FROM #AiScopeProjects) >= @analysisMaxRows
@@ -544,13 +544,40 @@ ${TEAM_ROSTER}
           ) THEN 1 ELSE 0 END
           ELSE 0
         END = 1
-    ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffDeletion;
+    ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffDeletion,
+    CAST(CASE WHEN (@projectId IS NOT NULL OR LEN(@projectIds) > 0) AND EXISTS (
+      SELECT 1
+      FROM dbo.MR_AuditLog m
+      OUTER APPLY (
+        SELECT
+          MAX(CASE WHEN mj.[key] COLLATE Latin1_General_100_BIN2 IN (N'ProjectId', N'projectId') AND mj.[type] = 1 THEN TRY_CONVERT(uniqueidentifier, mj.[value]) END) AS BeforeProjectId
+        FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('m.BeforeJson')} THEN m.BeforeJson END) mj
+        WHERE mj.[key] COLLATE Latin1_General_100_BIN2 IN (N'ProjectId', N'projectId')
+      ) bm
+      JOIN dbo.MR_Projects bp ON bp.ProjectId = bm.BeforeProjectId AND bp.IsActive = 1
+      WHERE m.EntityType = 'TASK'
+        AND m.ActionCode = 'UPDATE'
+        AND m.OccurredAt > @cutOffUtc
+        AND bm.BeforeProjectId IS NOT NULL
+        AND bm.BeforeProjectId <> m.ProjectId
+        AND ((@projectId IS NOT NULL AND bp.ProjectId = @projectId)
+          OR (LEN(@projectIds) > 0 AND EXISTS (SELECT 1 FROM #AiProjectFilter pf WHERE pf.ProjectId = bp.ProjectId)))
+        AND NOT EXISTS (SELECT 1 FROM #AiFacts f WHERE f.TaskId = TRY_CONVERT(uniqueidentifier, m.EntityId))
+        AND (
+          @isAdmin = 1
+          OR EXISTS (SELECT 1 FROM #AiPostCutoffGrants pg WHERE pg.ProjectId = bp.ProjectId)
+          OR EXISTS (SELECT 1 FROM #AiScopeTaskIds st WHERE st.TaskId = TRY_CONVERT(uniqueidentifier, m.EntityId))
+        )
+    ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffScopeMove;
 
-    -- Anlık görüntü kesitine kadar canlı görevlerin yetkili tamamlama ve yeniden açılma denetim zamanları.
+    -- Anlık görüntü kesitine kadar canlı görevlerin yetkili tamamlama, yeniden açılma ve hedef bitiş değişim denetim zamanları.
     SELECT
       f.TaskId,
       MAX(CASE WHEN statusCheck.IsCompletion = 1 THEN a.OccurredAt END) AS LastCompletedAuditAt,
-      MAX(CASE WHEN statusCheck.IsReopen = 1 THEN a.OccurredAt END) AS LastReopenAt
+      MAX(CASE WHEN statusCheck.IsReopen = 1 THEN a.OccurredAt END) AS LastReopenAt,
+      MAX(CASE WHEN statusCheck.IsReopen = 1 THEN a.AuditId END) AS LastReopenAuditId,
+      MAX(CASE WHEN tf.IsTargetFinishChange = 1 THEN a.OccurredAt END) AS LastTargetFinishChangeAt,
+      MAX(CASE WHEN tf.IsTargetFinishChange = 1 THEN a.AuditId END) AS LastTargetFinishChangeAuditId
     FROM #AiFacts f
     JOIN dbo.MR_AuditLog a
       ON a.EntityType = 'TASK'
@@ -563,6 +590,29 @@ ${TEAM_ROSTER}
         ${SAFE_JSON_STATUS_SQL('a.BeforeJson')} AS BeforeStatus,
         ${SAFE_JSON_STATUS_SQL('a.AfterJson')} AS AfterStatus
     ) st
+    OUTER APPLY (
+      SELECT
+        MAX(CASE WHEN bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') AND bj.[type] = 1 THEN LEFT(bj.[value], 10) END) AS BeforeTargetFinish,
+        MAX(CASE WHEN bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') THEN 1 ELSE 0 END) AS HasBeforeTargetFinish
+      FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('a.BeforeJson')} THEN a.BeforeJson END) bj
+      WHERE bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish')
+    ) btf
+    OUTER APPLY (
+      SELECT
+        MAX(CASE WHEN aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') AND aj.[type] = 1 THEN LEFT(aj.[value], 10) END) AS AfterTargetFinish,
+        MAX(CASE WHEN aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') THEN 1 ELSE 0 END) AS HasAfterTargetFinish
+      FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('a.AfterJson')} THEN a.AfterJson END) aj
+      WHERE aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish')
+    ) atf
+    CROSS APPLY (
+      SELECT
+        CASE
+          WHEN a.ActionCode = 'UPDATE'
+            AND (COALESCE(btf.HasBeforeTargetFinish, 0) = 1 OR COALESCE(atf.HasAfterTargetFinish, 0) = 1)
+            AND COALESCE(btf.BeforeTargetFinish, N'') <> COALESCE(atf.AfterTargetFinish, N'')
+          THEN 1 ELSE 0
+        END AS IsTargetFinishChange
+    ) tf
     CROSS APPLY (
       SELECT
         CASE
@@ -583,7 +633,7 @@ ${TEAM_ROSTER}
           THEN 1 ELSE 0
         END AS IsReopen
     ) statusCheck
-    WHERE (statusCheck.IsCompletion = 1 OR statusCheck.IsReopen = 1)
+    WHERE (statusCheck.IsCompletion = 1 OR statusCheck.IsReopen = 1 OR tf.IsTargetFinishChange = 1)
       AND (
         @isAdmin = 1
         OR a.ProjectId = f.ProjectId
@@ -1147,7 +1197,7 @@ ${visibleTasks()}
       ELSE SUBSTRING(parsed.BeforeSpan COLLATE Latin1_General_100_CI_AS_SC, 1, 1601)
     END AS BeforeDescription,
     CASE
-      WHEN parsed.AfterMalformed = 1 OR parsed.AfterStart = 0 THEN NULL
+      WHEN parsed.AfterMalformed = 1 OR parsed.AfterRepeatsUnauthorizedOrigin = 1 OR parsed.AfterStart = 0 THEN NULL
       ELSE SUBSTRING(parsed.AfterSpan COLLATE Latin1_General_100_CI_AS_SC, 1, 1601)
     END AS AfterDescription,
     CASE
@@ -1155,11 +1205,11 @@ ${visibleTasks()}
       ELSE CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(parsed.BeforeSpan AS nvarchar(max))), 2)
     END AS BeforeDescHash,
     CASE
-      WHEN parsed.AfterMalformed = 1 OR parsed.AfterStart = 0 THEN NULL
+      WHEN parsed.AfterMalformed = 1 OR parsed.AfterRepeatsUnauthorizedOrigin = 1 OR parsed.AfterStart = 0 THEN NULL
       ELSE CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(parsed.AfterSpan AS nvarchar(max))), 2)
     END AS AfterDescHash,
     CAST(CASE WHEN parsed.BeforeMalformed = 0 AND parsed.BeforeOriginUnauthorized = 0 THEN 1 ELSE 0 END AS bit) AS BeforeReadable,
-    CAST(CASE WHEN parsed.AfterMalformed = 0 THEN 1 ELSE 0 END AS bit) AS AfterReadable,
+    CAST(CASE WHEN parsed.AfterMalformed = 0 AND parsed.AfterRepeatsUnauthorizedOrigin = 0 THEN 1 ELSE 0 END AS bit) AS AfterReadable,
     CAST(parsed.BeforeOriginUnauthorized AS bit) AS BeforeOriginUnauthorized,
     CAST(CASE WHEN parsed.BeforeMalformed = 1 OR parsed.AfterMalformed = 1 THEN 1 ELSE 0 END AS bit) AS SnapshotMalformed
   FROM dbo.MR_AuditLog a
@@ -1218,6 +1268,25 @@ ${visibleTasks()}
         ) THEN 0
         ELSE 1
       END AS BeforeOriginUnauthorized
+  ) originParsed
+  CROSS APPLY (
+    SELECT
+      originParsed.BeforeMalformed,
+      originParsed.AfterMalformed,
+      originParsed.BeforeStart,
+      originParsed.AfterStart,
+      originParsed.BeforeSpan,
+      originParsed.AfterSpan,
+      originParsed.BeforeOriginUnauthorized,
+      CASE
+        WHEN originParsed.BeforeOriginUnauthorized = 1
+          AND originParsed.BeforeMalformed = 0
+          AND originParsed.AfterMalformed = 0
+          AND originParsed.BeforeStart > 0
+          AND originParsed.AfterStart > 0
+          AND originParsed.BeforeSpan COLLATE Latin1_General_100_BIN2 = originParsed.AfterSpan COLLATE Latin1_General_100_BIN2
+        THEN 1 ELSE 0
+      END AS AfterRepeatsUnauthorizedOrigin
   ) parsed
   WHERE a.EntityType = 'TASK'
     AND a.ActionCode IN ('CREATE', 'UPDATE')
@@ -1334,26 +1403,26 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
     WHERE (
         @rosterMode = 'all'
         OR (@rosterMode = 'person_sicil' AND r.Sicil = @rosterSicil)
-        OR (@rosterMode = 'person_name' AND r.DisplayName IS NOT NULL AND r.DisplayName COLLATE Turkish_100_CI_AI = @rosterText)
+        OR (@rosterMode = 'person_name' AND r.DisplayName IS NOT NULL AND r.DisplayName COLLATE Turkish_100_CI_AI_WS = @rosterText)
         OR (@rosterMode = 'team_level')
         OR (@rosterMode = 'team_name' AND (
-          (r.Team IS NOT NULL AND r.Team COLLATE Turkish_100_CI_AI = @rosterText)
+          (r.Team IS NOT NULL AND r.Team COLLATE Turkish_100_CI_AI_WS = @rosterText)
           OR (
-            NOT EXISTS (SELECT 1 FROM EligibleRoster tm WHERE tm.Team IS NOT NULL AND tm.Team COLLATE Turkish_100_CI_AI = @rosterText)
-            AND r.Unit IS NOT NULL AND r.Unit COLLATE Turkish_100_CI_AI = @rosterText
+            NOT EXISTS (SELECT 1 FROM EligibleRoster tm WHERE tm.Team IS NOT NULL AND tm.Team COLLATE Turkish_100_CI_AI_WS = @rosterText)
+            AND r.Unit IS NOT NULL AND r.Unit COLLATE Turkish_100_CI_AI_WS = @rosterText
           )
         ))
         OR (@rosterMode = 'org_unit' AND (
           (LEN(@rosterHierarchyKey) > 0 AND CONCAT(COALESCE(r.Directorate, N'__unassigned__'), NCHAR(31), COALESCE(r.Department, N''), NCHAR(31), COALESCE(r.Unit, N'')) = @rosterHierarchyKey)
-          OR (LEN(@rosterHierarchyKey) = 0 AND r.Unit IS NOT NULL AND r.Unit COLLATE Turkish_100_CI_AI = @rosterText)
+          OR (LEN(@rosterHierarchyKey) = 0 AND r.Unit IS NOT NULL AND r.Unit COLLATE Turkish_100_CI_AI_WS = @rosterText)
         ))
         OR (@rosterMode = 'org_department' AND (
           (LEN(@rosterHierarchyKey) > 0 AND CONCAT(COALESCE(r.Directorate, N'__unassigned__'), NCHAR(31), COALESCE(r.Department, N'')) = @rosterHierarchyKey)
-          OR (LEN(@rosterHierarchyKey) = 0 AND r.Department IS NOT NULL AND r.Department COLLATE Turkish_100_CI_AI = @rosterText)
+          OR (LEN(@rosterHierarchyKey) = 0 AND r.Department IS NOT NULL AND r.Department COLLATE Turkish_100_CI_AI_WS = @rosterText)
         ))
         OR (@rosterMode = 'org_directorate' AND (
           (LEN(@rosterHierarchyKey) > 0 AND COALESCE(r.Directorate, N'__unassigned__') = @rosterHierarchyKey)
-          OR (LEN(@rosterHierarchyKey) = 0 AND r.Directorate IS NOT NULL AND r.Directorate COLLATE Turkish_100_CI_AI = @rosterText)
+          OR (LEN(@rosterHierarchyKey) = 0 AND r.Directorate IS NOT NULL AND r.Directorate COLLATE Turkish_100_CI_AI_WS = @rosterText)
         ))
       )
   ),
@@ -1562,6 +1631,7 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
     MAX(CompletionEvent) AS Completed,
     MAX(ReopenEvent) AS Reopened,
     MAX(CASE WHEN ReopenEvent = 1 THEN OccurredAt END) AS LastReopenAt,
+    MAX(CASE WHEN ReopenEvent = 1 THEN AuditId END) AS LastReopenAuditId,
     MAX(CASE WHEN Kind = 'deleted' THEN 1 ELSE 0 END) AS Deleted,
     MAX(CASE WHEN Kind = 'created' THEN 1 ELSE 0 END) AS Created,
     MAX(CASE WHEN CurrentTaskId IS NOT NULL THEN 1 ELSE 0 END) AS IsLive,
@@ -1571,13 +1641,14 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
   FROM #ReportActivityScope
   GROUP BY ActionGroup, EntityId, ActorSicil, ProjectId;
 
-  -- Her görev için dönemdeki en son tamamlama olayının projesini tek ve belirlenimci (OccurredAt DESC, AuditId DESC) olarak seç.
-  SELECT EntityId, ProjectId, IsLive
+  -- Her görev için dönemdeki en son tamamlama olayının projesini ve gününü tek ve belirlenimci (OccurredAt DESC, AuditId DESC) olarak seç.
+  SELECT EntityId, ProjectId, OccurredAt AS CompletedAt, IsLive
   INTO #ReportActivityLatestCompletion
   FROM (
     SELECT
       EntityId,
       ProjectId,
+      OccurredAt,
       CASE WHEN CurrentTaskId IS NOT NULL THEN 1 ELSE 0 END AS IsLive,
       ROW_NUMBER() OVER (PARTITION BY EntityId ORDER BY OccurredAt DESC, AuditId DESC) AS rn
     FROM #ReportActivityScope
@@ -1597,7 +1668,20 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
     (SELECT COUNT(*) FROM (
       SELECT EntityId FROM #ReportActivityGroups GROUP BY EntityId
       HAVING MAX(Created) = 0 AND MAX(Deleted) = 0 AND MAX(Completed) = 0 AND MAX(Reopened) = 0
-    ) updatedOnly) AS UpdatedOnlyCount
+    ) updatedOnly) AS UpdatedOnlyCount,
+    CAST(CASE WHEN @cutOffUtc IS NOT NULL AND EXISTS (
+      SELECT 1
+      FROM #ReportActivityScope s
+      WHERE s.CurrentTaskId IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM dbo.MR_AuditLog d
+          WHERE d.EntityType = 'TASK'
+            AND d.ActionCode = 'DELETE'
+            AND d.EntityId = s.EntityId
+            AND d.OccurredAt > @cutOffUtc
+        )
+    ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffDeletion
   FROM #ReportActivityGroups g;
 
   SELECT
@@ -1605,8 +1689,10 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
     g.CurrentProjectId AS CurrentProjectId,
     CONVERT(char(10), MAX(CONVERT(date, g.OccurredAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time')), 23) AS LastActivityDay,
     MAX(g.Completed) AS CompletedInPeriod,
+    CONVERT(char(10), MAX(CONVERT(date, lc.CompletedAt AT TIME ZONE 'UTC' AT TIME ZONE 'Turkey Standard Time')), 23) AS CompletedInPeriodDay,
     MAX(CONVERT(varchar(36), lc.ProjectId)) AS CompletedProjectId,
-    MAX(g.LastReopenAt) AS LastReopenAt
+    MAX(g.LastReopenAt) AS LastReopenAt,
+    MAX(g.LastReopenAuditId) AS LastReopenAuditId
   FROM #ReportActivityGroups g
   LEFT JOIN #ReportActivityLatestCompletion lc ON lc.EntityId = g.EntityId AND lc.IsLive = 1
   WHERE g.IsLive = 1 AND g.CurrentTaskId IS NOT NULL

@@ -99,6 +99,38 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function ownProp(obj, key) {
+  return Object.hasOwn(obj, key) ? obj[key] : undefined;
+}
+
+const ISO_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/u;
+
+/** Geçerli ISO-8601 zaman damgasını milisaniye altı (nanosaniye) kesinlikte UTC BigInt değerine çevirir. */
+function parseIsoTimestampNanos(value) {
+  if (typeof value !== 'string') return null;
+  const match = ISO_TIMESTAMP_RE.exec(value);
+  if (!match) return null;
+  const [, datePart, hourStr, minStr, secStr, fracStr = '', tzPart, tzSign, offHStr, offMStr] = match;
+  if (!isIsoDay(datePart)) return null;
+  const hour = Number(hourStr);
+  const minute = Number(minStr);
+  const second = Number(secStr);
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  let offsetMinutes = 0;
+  if (tzPart !== 'Z') {
+    const offH = Number(offHStr);
+    const offM = Number(offMStr);
+    if (offH > 23 || offM > 59) return null;
+    offsetMinutes = (tzSign === '-' ? -1 : 1) * (offH * 60 + offM);
+  }
+  const [year, month, day] = datePart.split('-').map(Number);
+  const baseMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  if (!Number.isFinite(baseMs)) return null;
+  const utcSec = BigInt(Math.trunc(baseMs / 1000) - offsetMinutes * 60);
+  const nanos = BigInt(fracStr.padEnd(9, '0'));
+  return utcSec * 1000000000n + nanos;
+}
+
 function rejectUnknownFields(obj, allowed, prefix) {
   const unknown = Object.keys(obj).filter((key) => !allowed.has(key));
   if (unknown.length > 0) {
@@ -110,20 +142,31 @@ function rejectUnknownFields(obj, allowed, prefix) {
   }
 }
 
-/** Veri anı zaman damgasını doğrulanmış Date nesnesine çevirir; geçersizse ReportRequestError fırlatır. */
+/** Veri anı zaman damgasını doğrulanmış Date nesnesine çevirir; saat dilimi eksik metin veya geçersiz girdi fırlatır. */
 export function normalizeReportNow(value = new Date()) {
-  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
-  if (!Number.isFinite(date.getTime())) {
+  let date = null;
+  if (value instanceof Date) {
+    date = new Date(value.getTime());
+  } else if (typeof value === 'string') {
+    const nanos = parseIsoTimestampNanos(value);
+    if (nanos !== null) {
+      const ms = nanos >= 0n ? nanos / 1000000n : -((-nanos + 999999n) / 1000000n);
+      date = new Date(Number(ms));
+    }
+  } else if (typeof value === 'number' && Number.isFinite(value)) {
+    date = new Date(value);
+  }
+  if (!date || !Number.isFinite(date.getTime())) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST,
-      'Geçerli bir veri anı zaman damgası gereklidir.',
+      'Geçerli ve saat dilimi açık bir veri anı zaman damgası gereklidir.',
       ['$.now:invalid']
     );
   }
   return date;
 }
 
-/** Verilen anı Europe/Istanbul saat diliminde saat farkıyla ISO-8601 metnine çevirir. */
+/** Verilen anı Europe/Istanbul saat diliminde (tam dakika farkı yoksa UTC olarak) ISO-8601 metnine çevirir. */
 export function formatIstanbulTimestamp(value = new Date()) {
   const date = normalizeReportNow(value);
   const map = Object.fromEntries(
@@ -140,13 +183,19 @@ export function formatIstanbulTimestamp(value = new Date()) {
     Number(map.second)
   );
   const wholeSecUtcMs = Math.floor(date.getTime() / 1000) * 1000;
-  const offsetMinutes = Math.round((localUtcMs - wholeSecUtcMs) / 60000);
+  const offsetMs = localUtcMs - wholeSecUtcMs;
+  // Kesirli milisaniyeler sıfırdan farklıysa yayımlanan veri kesitinde korunur; tam saniyelerde eski biçim değişmez.
+  const ms = ((date.getTime() % 1000) + 1000) % 1000;
+  // Tarihsel saat dilimi farkı saniye bileşeni taşıyorsa tam anı korumak için UTC olarak yayımlanır.
+  if (offsetMs % 60000 !== 0) {
+    const iso = date.toISOString();
+    return ms === 0 ? iso.replace(/\.000Z$/u, 'Z') : iso;
+  }
+  const offsetMinutes = offsetMs / 60000;
   const sign = offsetMinutes >= 0 ? '+' : '-';
   const absMinutes = Math.abs(offsetMinutes);
   const offH = String(Math.floor(absMinutes / 60)).padStart(2, '0');
   const offM = String(absMinutes % 60).padStart(2, '0');
-  // Kesirli milisaniyeler sıfırdan farklıysa yayımlanan veri kesitinde korunur; tam saniyelerde eski biçim değişmez.
-  const ms = ((date.getTime() % 1000) + 1000) % 1000;
   const fraction = ms === 0 ? '' : `.${String(ms).padStart(3, '0')}`;
   return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}${fraction}${sign}${offH}:${offM}`;
 }
@@ -161,7 +210,8 @@ function parseExplicitRange(raw, fieldName, errorCode) {
     );
   }
   rejectUnknownFields(raw, ALLOWED_RANGE_FIELDS, `$.${fieldName}`);
-  const { baslangic, bitis } = raw;
+  const baslangic = ownProp(raw, 'baslangic');
+  const bitis = ownProp(raw, 'bitis');
   if (!isIsoDay(baslangic) || !isIsoDay(bitis)) {
     throw new ReportRequestError(
       errorCode,
@@ -273,7 +323,8 @@ function validateScope(rawKapsam) {
     );
   }
   rejectUnknownFields(rawKapsam, ALLOWED_SCOPE_FIELDS, '$.kapsam');
-  const { tur, kimlikler } = rawKapsam;
+  const tur = ownProp(rawKapsam, 'tur');
+  const kimlikler = ownProp(rawKapsam, 'kimlikler');
   if (typeof tur !== 'string' || !REPORT_SCOPE_TYPES.includes(tur)) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_SCOPE,
@@ -352,7 +403,7 @@ function resolveComparison(karsilastirma, rawCustomRange, reportRange, today) {
 
   if (karsilastirma === 'onceki_donem') {
     const prev = previousWindow(reportRange);
-    if (!prev || !comparableWindows(prev, reportRange)) {
+    if (!prev || !isIsoDay(prev.dateFrom) || !isIsoDay(prev.dateTo) || !comparableWindows(prev, reportRange)) {
       throw new ReportRequestError(
         REPORT_REQUEST_ERROR_CODES.INVALID_COMPARISON,
         'Önceki dönem bu rapor aralığıyla karşılaştırılabilir değil.',
@@ -432,7 +483,7 @@ export function validateExecutiveReportRequest(input, { now = undefined, today =
   }
   const closureDay = cutoffDay && cutoffDay < resolvedToday ? cutoffDay : resolvedToday;
 
-  const { rapor_turu: raporTuru } = input;
+  const raporTuru = ownProp(input, 'rapor_turu');
   if (typeof raporTuru !== 'string' || !REPORT_PERIOD_TYPES.includes(raporTuru)) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST,
@@ -441,7 +492,8 @@ export function validateExecutiveReportRequest(input, { now = undefined, today =
     );
   }
 
-  const ayrinti = input.ayrinti === undefined ? 'standart' : input.ayrinti;
+  const rawAyrinti = ownProp(input, 'ayrinti');
+  const ayrinti = rawAyrinti === undefined ? 'standart' : rawAyrinti;
   if (typeof ayrinti !== 'string' || !REPORT_DETAIL_LEVELS.includes(ayrinti)) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST,
@@ -450,7 +502,8 @@ export function validateExecutiveReportRequest(input, { now = undefined, today =
     );
   }
 
-  const odak = input.odak === undefined ? 'dengeli' : input.odak;
+  const rawOdak = ownProp(input, 'odak');
+  const odak = rawOdak === undefined ? 'dengeli' : rawOdak;
   if (typeof odak !== 'string' || !REPORT_FOCUS_OPTIONS.includes(odak)) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST,
@@ -459,8 +512,9 @@ export function validateExecutiveReportRequest(input, { now = undefined, today =
     );
   }
 
-  // Açık not rızası yoksa varsayılan her zaman hariçtir; beklenmeyen türler kapalı reddedilir.
-  const notlar = input.notlar === undefined ? 'haric' : input.notlar;
+  // Açık not rızası yalnızca kendi özelliğinden okunur; yoksa varsayılan her zaman hariçtir.
+  const rawNotlar = ownProp(input, 'notlar');
+  const notlar = rawNotlar === undefined ? 'haric' : rawNotlar;
   if (typeof notlar !== 'string' || !REPORT_NOTE_CONSENT.includes(notlar)) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_CONSENT,
@@ -469,7 +523,8 @@ export function validateExecutiveReportRequest(input, { now = undefined, today =
     );
   }
 
-  const karsilastirma = input.karsilastirma === undefined ? 'yok' : input.karsilastirma;
+  const rawKarsilastirma = ownProp(input, 'karsilastirma');
+  const karsilastirma = rawKarsilastirma === undefined ? 'yok' : rawKarsilastirma;
   if (typeof karsilastirma !== 'string' || !REPORT_COMPARISON_MODES.includes(karsilastirma)) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_COMPARISON,
@@ -478,9 +533,9 @@ export function validateExecutiveReportRequest(input, { now = undefined, today =
     );
   }
 
-  const kapsam = validateScope(input.kapsam);
-  const reportRange = resolveReportPeriod(raporTuru, input.donem, resolvedToday, closureDay);
-  const comparisonRange = resolveComparison(karsilastirma, input.karsilastirma_donemi, reportRange, closureDay);
+  const kapsam = validateScope(ownProp(input, 'kapsam'));
+  const reportRange = resolveReportPeriod(raporTuru, ownProp(input, 'donem'), resolvedToday, closureDay);
+  const comparisonRange = resolveComparison(karsilastirma, ownProp(input, 'karsilastirma_donemi'), reportRange, closureDay);
 
   return Object.freeze({
     rapor_turu: raporTuru,
@@ -505,33 +560,6 @@ const ALLOWED_SOURCES_BY_TYPE = Object.freeze({
 });
 const PERIOD_MEASURE_NAMES = new Set(['tamamlanan', 'hareket']);
 const SNAPSHOT_MEASURE_NAMES = new Set(['acik', 'geciken', 'yaklasan_7_gun', 'history.undatedDone']);
-const ISO_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/u;
-
-/** Geçerli ISO-8601 zaman damgasını milisaniye altı (nanosaniye) kesinlikte UTC BigInt değerine çevirir. */
-function parseIsoTimestampNanos(value) {
-  if (typeof value !== 'string') return null;
-  const match = ISO_TIMESTAMP_RE.exec(value);
-  if (!match) return null;
-  const [, datePart, hourStr, minStr, secStr, fracStr = '', tzPart, tzSign, offHStr, offMStr] = match;
-  if (!isIsoDay(datePart)) return null;
-  const hour = Number(hourStr);
-  const minute = Number(minStr);
-  const second = Number(secStr);
-  if (hour > 23 || minute > 59 || second > 59) return null;
-  let offsetMinutes = 0;
-  if (tzPart !== 'Z') {
-    const offH = Number(offHStr);
-    const offM = Number(offMStr);
-    if (offH > 23 || offM > 59) return null;
-    offsetMinutes = (tzSign === '-' ? -1 : 1) * (offH * 60 + offM);
-  }
-  const [year, month, day] = datePart.split('-').map(Number);
-  const baseMs = Date.UTC(year, month - 1, day, hour, minute, second);
-  if (!Number.isFinite(baseMs)) return null;
-  const utcSec = BigInt(Math.trunc(baseMs / 1000) - offsetMinutes * 60);
-  const nanos = BigInt(fracStr.padEnd(9, '0'));
-  return utcSec * 1000000000n + nanos;
-}
 
 /** Geçerli takvim günü, saat ve saat dilimi farkı taşıyan ISO-8601 zaman damgasını doğrular. */
 export function isValidIsoTimestamp(value) {
@@ -590,17 +618,28 @@ export function validateEvidencePackageContract(pkg) {
   if (!isPlainObject(pkg.istek)) {
     problems.push('istek:eksik');
   } else {
-    const raporTuru = pkg.istek.rapor_turu;
+    const raporTuru = ownProp(pkg.istek, 'rapor_turu');
     const validRaporTuru = typeof raporTuru === 'string' && REPORT_PERIOD_TYPES.includes(raporTuru);
     if (!validRaporTuru) {
       problems.push('istek:rapor_turu_gecersiz');
     }
 
-    if (!isPlainObject(pkg.istek.donem) || !isIsoDay(pkg.istek.donem.baslangic) || !isIsoDay(pkg.istek.donem.bitis)
-      || pkg.istek.donem.baslangic > pkg.istek.donem.bitis) {
+    const rawAyrinti = ownProp(pkg.istek, 'ayrinti');
+    if (rawAyrinti !== undefined && (typeof rawAyrinti !== 'string' || !REPORT_DETAIL_LEVELS.includes(rawAyrinti))) {
+      problems.push('istek:ayrinti_gecersiz');
+    }
+
+    const rawOdak = ownProp(pkg.istek, 'odak');
+    if (rawOdak !== undefined && (typeof rawOdak !== 'string' || !REPORT_FOCUS_OPTIONS.includes(rawOdak))) {
+      problems.push('istek:odak_gecersiz');
+    }
+
+    const rawDonem = ownProp(pkg.istek, 'donem');
+    if (!isPlainObject(rawDonem) || !isIsoDay(rawDonem.baslangic) || !isIsoDay(rawDonem.bitis)
+      || rawDonem.baslangic > rawDonem.bitis) {
       problems.push('istek:donem_gecersiz');
     } else {
-      const reportRange = { dateFrom: pkg.istek.donem.baslangic, dateTo: pkg.istek.donem.bitis };
+      const reportRange = { dateFrom: rawDonem.baslangic, dateTo: rawDonem.bitis };
       const reportLen = windowLength(reportRange);
       const periodMatchesType = reportLen <= REPORT_REQUEST_LIMITS.maxRangeDays
         && (raporTuru !== 'haftalik' || reportLen === 7)
@@ -608,19 +647,24 @@ export function validateEvidencePackageContract(pkg) {
       if (!periodMatchesType) {
         problems.push('istek:donem_gecersiz');
       } else {
-        reportPeriod = pkg.istek.donem;
+        reportPeriod = rawDonem;
+      }
+      const donemAd = ownProp(rawDonem, 'ad');
+      if (donemAd !== undefined && typeof donemAd !== 'string') {
+        problems.push('istek:donem_ad_gecersiz');
       }
     }
 
-    const karsilastirma = pkg.istek.karsilastirma === undefined ? 'yok' : pkg.istek.karsilastirma;
+    const rawKarsilastirma = ownProp(pkg.istek, 'karsilastirma');
+    const karsilastirma = rawKarsilastirma === undefined ? 'yok' : rawKarsilastirma;
     if (typeof karsilastirma !== 'string' || !REPORT_COMPARISON_MODES.includes(karsilastirma)) {
       problems.push('istek:karsilastirma_gecersiz');
     } else if (karsilastirma === 'yok') {
-      if (pkg.istek.karsilastirma_donemi !== undefined) {
+      if (ownProp(pkg.istek, 'karsilastirma_donemi') !== undefined) {
         problems.push('istek:karsilastirma_donemi_gecersiz');
       }
     } else {
-      const compObj = pkg.istek.karsilastirma_donemi;
+      const compObj = ownProp(pkg.istek, 'karsilastirma_donemi');
       const compFormatOk = isPlainObject(compObj)
         && isIsoDay(compObj.baslangic)
         && isIsoDay(compObj.bitis)
@@ -628,6 +672,10 @@ export function validateEvidencePackageContract(pkg) {
       if (!compFormatOk) {
         problems.push('istek:karsilastirma_donemi_gecersiz');
       } else {
+        const compAd = ownProp(compObj, 'ad');
+        if (compAd !== undefined && typeof compAd !== 'string') {
+          problems.push('istek:karsilastirma_donemi_ad_gecersiz');
+        }
         const compRange = { dateFrom: compObj.baslangic, dateTo: compObj.bitis };
         const compLen = windowLength(compRange);
         let compValid = compLen <= REPORT_REQUEST_LIMITS.maxRangeDays;
@@ -653,7 +701,7 @@ export function validateEvidencePackageContract(pkg) {
       }
     }
 
-    const scopeObj = pkg.istek.kapsam;
+    const scopeObj = ownProp(pkg.istek, 'kapsam');
     const scopeValid = (() => {
       if (!isPlainObject(scopeObj)) return false;
       if (Object.keys(scopeObj).some((key) => !ALLOWED_SCOPE_FIELDS.has(key))) return false;
@@ -678,7 +726,8 @@ export function validateEvidencePackageContract(pkg) {
     if (!scopeValid) {
       problems.push('istek:kapsam_gecersiz');
     }
-    if (typeof pkg.istek.notlar !== 'string' || !REPORT_NOTE_CONSENT.includes(pkg.istek.notlar)) {
+    const rawNotlar = ownProp(pkg.istek, 'notlar');
+    if (typeof rawNotlar !== 'string' || !REPORT_NOTE_CONSENT.includes(rawNotlar)) {
       problems.push('istek:notlar_gecersiz');
     }
   }
@@ -687,6 +736,14 @@ export function validateEvidencePackageContract(pkg) {
   const validVeriAni = cutOffNanos !== null;
   if (!validVeriAni) {
     problems.push('veri_ani:gecersiz');
+  } else if (reportPeriod) {
+    // Rapor dönemi veri anındaki İstanbul iş gününden önce kapanmış olmalıdır.
+    const cutOffMs = Number(cutOffNanos >= 0n ? cutOffNanos / 1000000n : -((-cutOffNanos + 999999n) / 1000000n));
+    const cutOffBusinessDay = businessDate(new Date(cutOffMs));
+    const periodPos = windowPosition({ dateFrom: reportPeriod.baslangic, dateTo: reportPeriod.bitis }, cutOffBusinessDay);
+    if (!periodPos || periodPos.position !== 'past' || periodPos.open) {
+      problems.push('istek:donem_acik');
+    }
   }
 
   const kanitlar = Array.isArray(pkg.kanitlar) ? pkg.kanitlar : null;
@@ -719,7 +776,7 @@ export function validateEvidencePackageContract(pkg) {
   const evidenceIds = new Set();
   const noteEvidenceIds = new Set();
   const noteItems = [];
-  const consentEnabled = pkg.istek?.notlar === 'dahil';
+  const consentEnabled = isPlainObject(pkg.istek) && ownProp(pkg.istek, 'notlar') === 'dahil';
   const matchesAllowedPeriod = (periodObj) => {
     if (!isPlainObject(periodObj) || !isIsoDay(periodObj.baslangic) || !isIsoDay(periodObj.bitis)
       || periodObj.baslangic > periodObj.bitis) {
@@ -752,9 +809,10 @@ export function validateEvidencePackageContract(pkg) {
       }
     }
 
-    // Ölçülerde dönem ve anlık kesit zaman kökenleri birbirine karışamaz; sonlu sayı veya açık null değer zorunludur.
+    // Ölçülerde dönem ve anlık kesit zaman kökenleri birbirine karışamaz; sayım değerleri negatif olmayan güvenli tam sayı veya açık null olmalıdır.
     if (item.tur === 'olcu') {
-      const validMeasureValue = item.deger === null || (typeof item.deger === 'number' && Number.isFinite(item.deger));
+      const validMeasureValue = item.deger === null
+        || (typeof item.deger === 'number' && Number.isSafeInteger(item.deger) && item.deger >= 0);
       if (!validMeasureValue) {
         problems.push(`olcu:deger_gecersiz:${item.id}`);
       }
@@ -814,6 +872,14 @@ export function validateEvidencePackageContract(pkg) {
       } else {
         problems.push(`not:kayit_zamani_gecersiz:${item.id}`);
       }
+      if (Object.hasOwn(item, 'sonraki_degisiklik_zamani') && item.sonraki_degisiklik_zamani !== undefined && item.sonraki_degisiklik_zamani !== null) {
+        const nextChangeNanos = parseIsoTimestampNanos(item.sonraki_degisiklik_zamani);
+        if (nextChangeNanos === null) {
+          problems.push(`not:sonraki_degisiklik_zamani_gecersiz:${item.id}`);
+        } else if (validVeriAni && nextChangeNanos > cutOffNanos) {
+          problems.push(`not:sonraki_degisiklik_zamani_kesiti_asiyor:${item.id}`);
+        }
+      }
     }
   }
 
@@ -862,11 +928,26 @@ export function validateEvidencePackageContract(pkg) {
   }
 
   if ((kanitlar || []).length > maxItems) problems.push('sinir:kanit_sayisi_asildi');
-  const serializedChars = JSON.stringify(pkg).length;
-  if (serializedChars > maxChars) problems.push('sinir:karakter_sayisi_asildi');
-  if (isPlainObject(pkg.tamlik) && Object.hasOwn(pkg.tamlik, 'karakter_sayisi') && pkg.tamlik.karakter_sayisi !== undefined) {
-    if (!Number.isSafeInteger(pkg.tamlik.karakter_sayisi) || pkg.tamlik.karakter_sayisi !== serializedChars) {
-      problems.push('tamlik:karakter_sayisi_uyumsuz');
+  let serializedChars = 0;
+  let serializable = true;
+  try {
+    const serialized = JSON.stringify(pkg);
+    if (typeof serialized !== 'string') {
+      serializable = false;
+    } else {
+      serializedChars = serialized.length;
+    }
+  } catch {
+    serializable = false;
+  }
+  if (!serializable) {
+    problems.push('paket:serilestirilemiyor');
+  } else {
+    if (serializedChars > maxChars) problems.push('sinir:karakter_sayisi_asildi');
+    if (isPlainObject(pkg.tamlik) && Object.hasOwn(pkg.tamlik, 'karakter_sayisi') && pkg.tamlik.karakter_sayisi !== undefined) {
+      if (!Number.isSafeInteger(pkg.tamlik.karakter_sayisi) || pkg.tamlik.karakter_sayisi !== serializedChars) {
+        problems.push('tamlik:karakter_sayisi_uyumsuz');
+      }
     }
   }
 

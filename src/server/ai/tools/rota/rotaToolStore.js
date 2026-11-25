@@ -119,10 +119,14 @@ export async function readTaskFacts(executor, scope, {
   const postCutoffRows = normalizedCutOff ? (sets[withRoster ? 4 : 3] || []) : [];
   const auditTransitionRows = normalizedCutOff ? (sets[withRoster ? 5 : 4] || []) : [];
   const hasPostCutoffDeletion = Boolean(postCutoffRows[0]?.HasPostCutoffDeletion);
+  const hasPostCutoffScopeMove = Boolean(postCutoffRows[0]?.HasPostCutoffScopeMove);
   const taskAuditTransitions = auditTransitionRows.map((row) => ({
     taskId: canonicalActualId(row.TaskId),
     lastCompletedAuditAt: row.LastCompletedAuditAt ? new Date(row.LastCompletedAuditAt).toISOString() : null,
-    lastReopenAt: row.LastReopenAt ? new Date(row.LastReopenAt).toISOString() : null
+    lastReopenAt: row.LastReopenAt ? new Date(row.LastReopenAt).toISOString() : null,
+    lastReopenAuditId: row.LastReopenAuditId != null && Number.isFinite(Number(row.LastReopenAuditId)) ? Number(row.LastReopenAuditId) : null,
+    lastTargetFinishChangeAt: row.LastTargetFinishChangeAt ? new Date(row.LastTargetFinishChangeAt).toISOString() : null,
+    lastTargetFinishChangeAuditId: row.LastTargetFinishChangeAuditId != null && Number.isFinite(Number(row.LastTargetFinishChangeAuditId)) ? Number(row.LastTargetFinishChangeAuditId) : null
   })).filter((row) => Boolean(row.taskId));
   const { rows, truncated } = capped(factRows, maxRows);
   const roster = withRoster ? capped(rosterRowsRead, rosterRows) : null;
@@ -130,6 +134,7 @@ export async function readTaskFacts(executor, scope, {
     facts: rows.map(factFromRow),
     truncated,
     hasPostCutoffDeletion,
+    hasPostCutoffScopeMove,
     taskAuditTransitions,
     projects: projectRows,
     assignees: assigneesByTask(assigneeRows),
@@ -404,19 +409,48 @@ const ISTANBUL_CLOCK = new Intl.DateTimeFormat('en-GB', {
   hourCycle: 'h23'
 });
 
+function istanbulDateParts(instantMs) {
+  const parts = Object.fromEntries(
+    ISTANBUL_CLOCK.formatToParts(new Date(instantMs))
+      .filter((part) => part.type !== 'literal')
+      .map(({ type, value }) => [type, value])
+  );
+  return {
+    day: `${parts.year}-${parts.month}-${parts.day}`,
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+    localUtcMs: Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second))
+  };
+}
+
 function istanbulMidnightUtc(isoDay, offsetDays = 0) {
   const wallTime = Date.parse(`${isoDay}T00:00:00Z`) + offsetDays * 86400000;
+  const targetDay = new Date(wallTime).toISOString().slice(0, 10);
   let instant = wallTime;
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const parts = Object.fromEntries(
-      ISTANBUL_CLOCK.formatToParts(new Date(instant))
-        .filter((part) => part.type !== 'literal')
-        .map(({ type, value }) => [type, value])
-    );
-    const local = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
-    instant = wallTime - (local - instant);
+    const info = istanbulDateParts(instant);
+    if (info.day === targetDay && info.hour === 0 && info.minute === 0 && info.second === 0) {
+      return new Date(instant);
+    }
+    instant = wallTime - (info.localUtcMs - instant);
   }
-  return new Date(instant);
+  const finalInfo = istanbulDateParts(instant);
+  if (finalInfo.day === targetDay && finalInfo.hour === 0 && finalInfo.minute === 0 && finalInfo.second === 0) {
+    return new Date(instant);
+  }
+  // Yaz saati geçişinde gece yarısı atlandıysa (ör. 1964-05-15) istenen yerel güne düşen ilk geçerli UTC anını bul.
+  let lowSec = Math.floor((wallTime - 14 * 3600000) / 1000);
+  let highSec = Math.ceil((wallTime + 14 * 3600000) / 1000);
+  while (lowSec < highSec) {
+    const midSec = Math.floor((lowSec + highSec) / 2);
+    if (istanbulDateParts(midSec * 1000).day >= targetDay) {
+      highSec = midSec;
+    } else {
+      lowSec = midSec + 1;
+    }
+  }
+  return new Date(lowSec * 1000);
 }
 
 /**
@@ -542,13 +576,16 @@ export async function readReportActivitySummary(executor, scope, {
     deleted: Number(counts.DeletedCount || 0),
     reopened: Number(counts.ReopenedCount || 0),
     updatedOnly: Number(counts.UpdatedOnlyCount || 0),
+    hasPostCutoffDeletion: Boolean(counts.HasPostCutoffDeletion),
     liveTasks: taskRows.map((row) => ({
       taskId: canonicalActualId(row.TaskId),
       projectId: canonicalActualId(row.CurrentProjectId),
       lastActivityDay: row.LastActivityDay ? String(row.LastActivityDay).slice(0, 10) : null,
       completedInPeriod: Boolean(row.CompletedInPeriod),
+      completedInPeriodDay: row.CompletedInPeriodDay ? String(row.CompletedInPeriodDay).slice(0, 10) : null,
       completedProjectId: canonicalActualId(row.CompletedProjectId),
-      lastReopenAt: row.LastReopenAt ? new Date(row.LastReopenAt).toISOString() : null
+      lastReopenAt: row.LastReopenAt ? new Date(row.LastReopenAt).toISOString() : null,
+      lastReopenAuditId: row.LastReopenAuditId != null && Number.isFinite(Number(row.LastReopenAuditId)) ? Number(row.LastReopenAuditId) : null
     })).filter((row) => row.taskId),
     contributingProjects: projectRows.map((row) => ({
       projectId: canonicalActualId(row.ProjectId),

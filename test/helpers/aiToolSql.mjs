@@ -157,6 +157,7 @@ function scopeOf(db, params, { restrictTasks = null, filterByAssignees = false }
   const assigneeFilter = filterByAssignees
     ? new Set(String(params.assigneeSicils || '').split(',').map((v) => Number(v.trim())).filter((n) => Number.isSafeInteger(n) && n > 0))
     : new Set();
+  const scopeCutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
   const projects = new Map();
   const projectIndex = new Map(db.projects.map((row) => [upper(row.ProjectId), row]));
   const activeProject = (id) => {
@@ -168,6 +169,7 @@ function scopeOf(db, params, { restrictTasks = null, filterByAssignees = false }
     if (projectFilters.size && !projectFilters.has(upper(project.ProjectId))) return null;
     if (filterActive && !db.tasks.some((task) => same(task.ProjectId, project.ProjectId) && allowedTasks.has(upper(task.TaskId)))) return null;
     if (assigneeFilter.size > 0 && !db.tasks.some((task) => same(task.ProjectId, project.ProjectId)
+      && (scopeCutOffMs == null || !task.CreatedAt || new Date(task.CreatedAt).getTime() <= scopeCutOffMs)
       && assigneesOf(db, task.TaskId).some((ta) => assigneeFilter.has(Number(ta.Sicil))))) {
       return null;
     }
@@ -411,9 +413,11 @@ function taskFacts(db, params) {
       const deletedAssignees = Array.isArray(snap?.assigneeIds)
         ? snap.assigneeIds.filter((v) => typeof v === 'number' || typeof v === 'string').map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
         : [];
+      const createdByVal = snap?.CreatedBySicil;
+      const createdBySicil = (typeof createdByVal === 'string' || typeof createdByVal === 'number') ? Number(createdByVal) : Number.NaN;
       const authorized = scope.isAdmin
         || fullOrRead.has(upper(proj.ProjectId))
-        || Number(snap?.CreatedBySicil) === scope.sicil
+        || createdBySicil === scope.sicil
         || deletedAssignees.some((id) => id === scope.sicil || executiveOf(db, scope.sicil, id));
       if (!authorized) return false;
       if (assigneeSicilsFilter.size > 0 && !deletedAssignees.some((id) => assigneeSicilsFilter.has(id))) return false;
@@ -422,7 +426,34 @@ function taskFacts(db, params) {
       if (params.assigneeMode === 'team' && !deletedAssignees.some((id) => teamMemberOf(db, params, scope.sicil, id))) return false;
       return true;
     });
-    results.push([{ HasPostCutoffDeletion: hasPostCutoffDeletion ? 1 : 0 }]);
+    const factTaskIds = new Set(facts.map((row) => upper(row.TaskId)));
+    const scopedTaskSet = new Set(String(params.scopeTasks || '').split(',').map((v) => v.trim()).filter(isGuid).map(upper));
+    const hasPostCutoffScopeMove = Boolean(projectFilter || projectFilters.size > 0) && (db.auditLog || []).some((row) => {
+      if (row.EntityType !== 'TASK' || row.ActionCode !== 'UPDATE') return false;
+      if (new Date(row.OccurredAt).getTime() <= cutOffMs) return false;
+      let snap = null;
+      try {
+        const parsed = typeof row.BeforeJson === 'string' ? JSON.parse(row.BeforeJson) : row.BeforeJson;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) snap = parsed;
+      } catch {
+        snap = null;
+      }
+      const rawBeforeProj = snap?.ProjectId ?? snap?.projectId ?? null;
+      if (typeof rawBeforeProj !== 'string' || !isGuid(rawBeforeProj)) return false;
+      const beforeProjId = upper(rawBeforeProj);
+      if (same(beforeProjId, row.ProjectId)) return false;
+      const bp = projectRow(db, beforeProjId);
+      if (!bp?.IsActive) return false;
+      if (projectFilter && !same(beforeProjId, projectFilter)) return false;
+      if (projectFilters.size > 0 && !projectFilters.has(beforeProjId)) return false;
+      const entityId = isGuid(row.EntityId) ? upper(row.EntityId) : null;
+      if (!entityId || factTaskIds.has(entityId)) return false;
+      return scope.isAdmin || fullOrRead.has(beforeProjId) || scopedTaskSet.has(entityId);
+    });
+    results.push([{
+      HasPostCutoffDeletion: hasPostCutoffDeletion ? 1 : 0,
+      HasPostCutoffScopeMove: hasPostCutoffScopeMove ? 1 : 0
+    }]);
     const factTaskProject = new Map(facts.map((row) => [upper(row.TaskId), upper(row.ProjectId)]));
     const transitionsByTask = new Map();
     for (const row of db.auditLog || []) {
@@ -446,25 +477,53 @@ function taskFacts(db, params) {
       };
       const scalarStatus = (obj) => {
         if (!obj) return null;
-        const raw = obj.Status !== undefined ? obj.Status : obj.status;
-        return (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') ? String(raw) : null;
+        const asScalar = (val) => ((typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') ? String(val) : null);
+        return asScalar(obj.Status) ?? asScalar(obj.status) ?? null;
+      };
+      const targetFinishField = (obj) => {
+        if (!obj) return { present: false, value: '' };
+        const hasUpper = Object.hasOwn(obj, 'TargetFinish');
+        const hasLower = Object.hasOwn(obj, 'targetFinish');
+        if (!hasUpper && !hasLower) return { present: false, value: '' };
+        const raw = typeof obj.TargetFinish === 'string' ? obj.TargetFinish : (typeof obj.targetFinish === 'string' ? obj.targetFinish : '');
+        return { present: true, value: raw ? raw.slice(0, 10) : '' };
       };
       const doneAliases = new Set(['done', 'completed', 'cancelled']);
-      const beforeStatus = scalarStatus(parseObj(row.BeforeJson));
-      const afterStatus = scalarStatus(parseObj(row.AfterJson));
+      const beforeObj = parseObj(row.BeforeJson);
+      const afterObj = parseObj(row.AfterJson);
+      const beforeStatus = scalarStatus(beforeObj);
+      const afterStatus = scalarStatus(afterObj);
       const isCompletion = afterStatus != null && doneAliases.has(afterStatus)
         && (row.ActionCode === 'CREATE' || (beforeStatus != null && !doneAliases.has(beforeStatus)));
       const isReopen = row.ActionCode === 'UPDATE'
         && beforeStatus != null && doneAliases.has(beforeStatus)
         && afterStatus != null && !doneAliases.has(afterStatus);
-      if (!isCompletion && !isReopen) continue;
-      const entry = transitionsByTask.get(taskId) || { TaskId: taskId, LastCompletedAuditAt: null, LastReopenAt: null };
+      const btf = targetFinishField(beforeObj);
+      const atf = targetFinishField(afterObj);
+      const isTargetFinishChange = row.ActionCode === 'UPDATE'
+        && (btf.present || atf.present)
+        && btf.value !== atf.value;
+      if (!isCompletion && !isReopen && !isTargetFinishChange) continue;
+      const entry = transitionsByTask.get(taskId) || {
+        TaskId: taskId,
+        LastCompletedAuditAt: null,
+        LastReopenAt: null,
+        LastReopenAuditId: null,
+        LastTargetFinishChangeAt: null,
+        LastTargetFinishChangeAuditId: null
+      };
       const occurredDate = new Date(occurredMs);
+      const auditId = Number(row.AuditId) || 0;
       if (isCompletion && (!entry.LastCompletedAuditAt || occurredMs > entry.LastCompletedAuditAt.getTime())) {
         entry.LastCompletedAuditAt = occurredDate;
       }
-      if (isReopen && (!entry.LastReopenAt || occurredMs > entry.LastReopenAt.getTime())) {
-        entry.LastReopenAt = occurredDate;
+      if (isReopen) {
+        if (!entry.LastReopenAt || occurredMs > entry.LastReopenAt.getTime()) entry.LastReopenAt = occurredDate;
+        if (entry.LastReopenAuditId == null || auditId > entry.LastReopenAuditId) entry.LastReopenAuditId = auditId;
+      }
+      if (isTargetFinishChange) {
+        if (!entry.LastTargetFinishChangeAt || occurredMs > entry.LastTargetFinishChangeAt.getTime()) entry.LastTargetFinishChangeAt = occurredDate;
+        if (entry.LastTargetFinishChangeAuditId == null || auditId > entry.LastTargetFinishChangeAuditId) entry.LastTargetFinishChangeAuditId = auditId;
       }
       transitionsByTask.set(taskId, entry);
     }
@@ -846,6 +905,11 @@ function reportNoteAudit(db, params) {
       ));
     if (!changed) continue;
 
+    const afterRepeatsUnauthorizedOrigin = beforeOriginUnauthorized
+      && !before.malformed && !after.malformed
+      && beforeNonEmpty && afterNonEmpty
+      && beforeSpan === afterSpan;
+
     rows.push({
       AuditId: Number(row.AuditId),
       OccurredAt: row.OccurredAt,
@@ -854,11 +918,11 @@ function reportNoteAudit(db, params) {
       ProjectId: upper(row.ProjectId),
       BeforeProjectId: (!before.malformed && !beforeOriginUnauthorized && before.projectId) ? before.projectId : null,
       BeforeDescription: (before.malformed || beforeOriginUnauthorized || !beforeNonEmpty) ? null : clipExcerpt(before.descRaw),
-      AfterDescription: (after.malformed || !afterNonEmpty) ? null : clipExcerpt(after.descRaw),
+      AfterDescription: (after.malformed || afterRepeatsUnauthorizedOrigin || !afterNonEmpty) ? null : clipExcerpt(after.descRaw),
       BeforeDescHash: (before.malformed || beforeOriginUnauthorized || !beforeNonEmpty) ? null : descriptionHash(before.descRaw),
-      AfterDescHash: (after.malformed || !afterNonEmpty) ? null : descriptionHash(after.descRaw),
+      AfterDescHash: (after.malformed || afterRepeatsUnauthorizedOrigin || !afterNonEmpty) ? null : descriptionHash(after.descRaw),
       BeforeReadable: (!before.malformed && !beforeOriginUnauthorized) ? 1 : 0,
-      AfterReadable: !after.malformed ? 1 : 0,
+      AfterReadable: (!after.malformed && !afterRepeatsUnauthorizedOrigin) ? 1 : 0,
       BeforeOriginUnauthorized: beforeOriginUnauthorized ? 1 : 0,
       SnapshotMalformed: (before.malformed || after.malformed) ? 1 : 0
     });
@@ -1081,6 +1145,10 @@ function reportActivitySummary(db, params) {
     const deletedSnap = deletion ? safeJson(deletion.BeforeJson) : { ok: false, obj: {} };
     const deletedAssignees = deletedSnap.ok ? validAssigneeIds(deletedSnap.obj.assigneeIds) : [];
 
+    const deletedCreatedByRaw = deletedSnap.ok ? deletedSnap.obj.CreatedBySicil : null;
+    const deletedCreatedBySicil = (typeof deletedCreatedByRaw === 'string' || typeof deletedCreatedByRaw === 'number')
+      ? Number(deletedCreatedByRaw)
+      : Number.NaN;
     const visible = Boolean(project?.IsActive) && (
       (isAdmin && (!liveTask || scope.projects.has(upper(liveTask.ProjectId))))
       || (!isAdmin && (
@@ -1088,7 +1156,7 @@ function reportActivitySummary(db, params) {
           && (!liveTask || visibleProjects.has(upper(liveTask.ProjectId)) || partialTasks.has(upper(liveTask.TaskId))))
         || (liveTask && same(liveTask.ProjectId, row.ProjectId) && partialTasks.has(upper(liveTask.TaskId)))
         || (!liveTask && deletedSnap.ok && (
-          Number(deletedSnap.obj.CreatedBySicil) === sicil
+          deletedCreatedBySicil === sicil
           || deletedAssignees.some(historicallyVisible)
         ))
       ))
@@ -1133,6 +1201,7 @@ function reportActivitySummary(db, params) {
       Completed: completionEvent ? 1 : 0,
       Reopened: reopenEvent ? 1 : 0,
       LastReopenAt: reopenEvent ? row.OccurredAt : null,
+      LastReopenAuditId: reopenEvent ? (Number(row.AuditId) || 0) : null,
       LiveTask: liveTask
     });
     if (scopedRows.length >= probeRows) {
@@ -1140,7 +1209,7 @@ function reportActivitySummary(db, params) {
     }
   }
 
-  // Her görev için dönemdeki en son tamamlama olayının projesini (OccurredAt DESC, AuditId DESC) tekilleştir.
+  // Her görev için dönemdeki en son tamamlama olayının projesini ve zamanını (OccurredAt DESC, AuditId DESC) tekilleştir.
   const latestCompletionByEntity = new Map();
   for (const row of scopedRows) {
     if (!row.Completed) continue;
@@ -1149,6 +1218,7 @@ function reportActivitySummary(db, params) {
     if (!prev || rowMs > prev.ms || (rowMs === prev.ms && row.AuditId > prev.auditId)) {
       latestCompletionByEntity.set(row.EntityId, {
         projectId: row.ProjectId,
+        occurredAt: row.OccurredAt,
         isLive: Boolean(row.LiveTask),
         ms: rowMs,
         auditId: row.AuditId
@@ -1169,6 +1239,7 @@ function reportActivitySummary(db, params) {
         Completed: row.Completed,
         Reopened: row.Reopened,
         LastReopenAt: row.LastReopenAt,
+        LastReopenAuditId: row.LastReopenAuditId,
         Deleted: row.Kind === 'deleted' ? 1 : 0,
         Created: row.Kind === 'created' ? 1 : 0,
         LiveTask: row.LiveTask
@@ -1179,6 +1250,9 @@ function reportActivitySummary(db, params) {
       if (row.Reopened) existing.Reopened = 1;
       if (row.LastReopenAt && (!existing.LastReopenAt || new Date(row.LastReopenAt).getTime() > new Date(existing.LastReopenAt).getTime())) {
         existing.LastReopenAt = row.LastReopenAt;
+      }
+      if (row.LastReopenAuditId != null && (existing.LastReopenAuditId == null || row.LastReopenAuditId > existing.LastReopenAuditId)) {
+        existing.LastReopenAuditId = row.LastReopenAuditId;
       }
       if (row.Kind === 'deleted') existing.Deleted = 1;
       if (row.Kind === 'created') existing.Created = 1;
@@ -1197,6 +1271,14 @@ function reportActivitySummary(db, params) {
       Reopened: prev.Reopened || g.Reopened
     });
   }
+  const hasPostCutoffDeletion = cutOffMs != null && scopedRows.some((row) => (
+    !row.LiveTask && (db.auditLog || []).some((d) => (
+      d.EntityType === 'TASK'
+      && d.ActionCode === 'DELETE'
+      && upper(d.EntityId) === row.EntityId
+      && new Date(d.OccurredAt).getTime() > cutOffMs
+    ))
+  ));
   const counts = [{
     Total: groupList.length,
     TaskCount: new Set(groupList.map((g) => g.EntityId)).size,
@@ -1206,7 +1288,8 @@ function reportActivitySummary(db, params) {
     CreatedCount: tasksOf((g) => g.Created).size,
     DeletedCount: tasksOf((g) => g.Deleted).size,
     ReopenedCount: tasksOf((g) => g.Reopened).size,
-    UpdatedOnlyCount: [...touched.values()].filter((f) => !f.Created && !f.Deleted && !f.Completed && !f.Reopened).length
+    UpdatedOnlyCount: [...touched.values()].filter((f) => !f.Created && !f.Deleted && !f.Completed && !f.Reopened).length,
+    HasPostCutoffDeletion: hasPostCutoffDeletion ? 1 : 0
   }];
 
   const istanbulFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -1231,23 +1314,32 @@ function reportActivitySummary(db, params) {
     const actDay = istanbulFmt.format(new Date(g.OccurredAt));
     const prev = liveByTask.get(tid);
     const winningProjectId = latestComp && latestComp.isLive ? latestComp.projectId : null;
+    const winningCompletedDay = latestComp && latestComp.isLive && latestComp.occurredAt
+      ? istanbulFmt.format(new Date(latestComp.occurredAt))
+      : null;
     if (!prev) {
       liveByTask.set(tid, {
         TaskId: upper(g.LiveTask.TaskId),
         CurrentProjectId: upper(g.LiveTask.ProjectId),
         LastActivityDay: actDay,
         CompletedInPeriod: g.Completed ? 1 : 0,
+        CompletedInPeriodDay: winningCompletedDay,
         CompletedProjectId: winningProjectId,
-        LastReopenAt: g.LastReopenAt || null
+        LastReopenAt: g.LastReopenAt || null,
+        LastReopenAuditId: g.LastReopenAuditId ?? null
       });
     } else {
       if (actDay > prev.LastActivityDay) prev.LastActivityDay = actDay;
       if (g.Completed) {
         prev.CompletedInPeriod = 1;
+        prev.CompletedInPeriodDay = winningCompletedDay;
         prev.CompletedProjectId = winningProjectId;
       }
       if (g.LastReopenAt && (!prev.LastReopenAt || new Date(g.LastReopenAt).getTime() > new Date(prev.LastReopenAt).getTime())) {
         prev.LastReopenAt = g.LastReopenAt;
+      }
+      if (g.LastReopenAuditId != null && (prev.LastReopenAuditId == null || g.LastReopenAuditId > prev.LastReopenAuditId)) {
+        prev.LastReopenAuditId = g.LastReopenAuditId;
       }
     }
   }
