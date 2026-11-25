@@ -138,18 +138,26 @@ if (unknownFlags.length > 0) {
       for (const key of targetKeys) {
         const spec = CASES[key];
         process.env.MERGEN_ROTA_DEV_SICIL = String(spec.sicil);
-        const { evidencePackage } = await buildExecutiveReportEvidence({
-          request: spec.request,
-          now: REPORT_BENCH_NOW,
-          today: REPORT_BENCH_TODAY
-        });
-        const preview = buildExecutiveEvidencePreview(evidencePackage, {
-          includeRawText,
-          syntheticContext: true
-        });
-        process.stdout.write(`\n[${key}] ${preview.ozet}\n`);
-        if (showJson) process.stdout.write(`${preview.paketJson}\n`);
-        if (!preview.gecerli) {
+        try {
+          const { evidencePackage } = await buildExecutiveReportEvidence({
+            request: spec.request,
+            now: REPORT_BENCH_NOW,
+            today: REPORT_BENCH_TODAY
+          });
+          const preview = buildExecutiveEvidencePreview(evidencePackage, {
+            includeRawText,
+            syntheticContext: true
+          });
+          process.stdout.write(`\n[${key}] ${preview.ozet}\n`);
+          if (showJson) process.stdout.write(`${preview.paketJson}\n`);
+          if (!preview.gecerli) {
+            process.exitCode = 1;
+          }
+        } catch (error) {
+          const safeCode = typeof error?.code === 'string' && error.code.trim()
+            ? error.code.trim()
+            : (typeof error?.name === 'string' && error.name.trim() ? error.name.trim() : 'PREVIEW_ERROR');
+          process.stderr.write(`\n[${key}] Kanıt paketi oluşturulamadı (${safeCode}).\n`);
           process.exitCode = 1;
         }
       }

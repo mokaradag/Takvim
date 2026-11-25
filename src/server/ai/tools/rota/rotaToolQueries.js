@@ -545,7 +545,7 @@ ${TEAM_ROSTER}
           ELSE 0
         END = 1
     ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffDeletion,
-    CAST(CASE WHEN (@projectId IS NOT NULL OR LEN(@projectIds) > 0) AND EXISTS (
+    CAST(CASE WHEN ((@projectId IS NOT NULL OR LEN(@projectIds) > 0) AND EXISTS (
       SELECT 1
       FROM dbo.MR_AuditLog m
       OUTER APPLY (
@@ -563,83 +563,158 @@ ${TEAM_ROSTER}
         AND ((@projectId IS NOT NULL AND bp.ProjectId = @projectId)
           OR (LEN(@projectIds) > 0 AND EXISTS (SELECT 1 FROM #AiProjectFilter pf WHERE pf.ProjectId = bp.ProjectId)))
         AND NOT EXISTS (SELECT 1 FROM #AiFacts f WHERE f.TaskId = TRY_CONVERT(uniqueidentifier, m.EntityId))
+        AND NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks t_chk WHERE t_chk.TaskId = TRY_CONVERT(uniqueidentifier, m.EntityId) AND t_chk.CreatedAt > @cutOffUtc)
         AND (
           @isAdmin = 1
           OR EXISTS (SELECT 1 FROM #AiPostCutoffGrants pg WHERE pg.ProjectId = bp.ProjectId)
           OR EXISTS (SELECT 1 FROM #AiScopeTaskIds st WHERE st.TaskId = TRY_CONVERT(uniqueidentifier, m.EntityId))
         )
-    ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffScopeMove;
+    )) OR ((@assigneeMode IN ('me', 'person', 'team') OR LEN(@assigneeSicils) > 0) AND EXISTS (
+      SELECT 1
+      FROM dbo.MR_AuditLog ma
+      JOIN dbo.MR_Projects map ON map.ProjectId = ma.ProjectId AND map.IsActive = 1
+      OUTER APPLY (
+        SELECT
+          MAX(CASE WHEN maj.[key] COLLATE Latin1_General_100_BIN2 = N'CreatedBySicil' AND maj.[type] IN (1, 2) THEN TRY_CONVERT(int, maj.[value]) END) AS CreatedBySicil,
+          MAX(CASE WHEN maj.[key] COLLATE Latin1_General_100_BIN2 = N'assigneeIds' AND maj.[type] = 4 THEN maj.[value] END) AS AssigneeIdsArrayJson
+        FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('ma.BeforeJson')} THEN ma.BeforeJson END) maj
+        WHERE maj.[key] COLLATE Latin1_General_100_BIN2 IN (N'CreatedBySicil', N'assigneeIds')
+      ) am
+      WHERE ma.EntityType = 'TASK'
+        AND ma.ActionCode = 'UPDATE'
+        AND ma.OccurredAt > @cutOffUtc
+        AND am.AssigneeIdsArrayJson IS NOT NULL
+        AND (@projectId IS NULL OR map.ProjectId = @projectId)
+        AND (LEN(@projectIds) = 0 OR EXISTS (SELECT 1 FROM #AiProjectFilter pf WHERE pf.ProjectId = map.ProjectId))
+        AND NOT EXISTS (SELECT 1 FROM #AiFacts f WHERE f.TaskId = TRY_CONVERT(uniqueidentifier, ma.EntityId))
+        AND NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks t_chk WHERE t_chk.TaskId = TRY_CONVERT(uniqueidentifier, ma.EntityId) AND t_chk.CreatedAt > @cutOffUtc)
+        AND (
+          @isAdmin = 1
+          OR EXISTS (SELECT 1 FROM #AiPostCutoffGrants pg WHERE pg.ProjectId = map.ProjectId)
+          OR EXISTS (SELECT 1 FROM #AiScopeTaskIds st WHERE st.TaskId = TRY_CONVERT(uniqueidentifier, ma.EntityId))
+          OR am.CreatedBySicil = @sicil
+          OR EXISTS (
+            SELECT 1 FROM OPENJSON(am.AssigneeIdsArrayJson) member
+            WHERE member.[type] IN (1, 2) AND (
+              TRY_CONVERT(int, member.[value]) = @sicil
+              OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = TRY_CONVERT(int, member.[value]))
+            )
+          )
+        )
+        AND (LEN(@assigneeSicils) = 0 OR EXISTS (
+          SELECT 1 FROM OPENJSON(am.AssigneeIdsArrayJson) member
+          JOIN #AiAssigneeFilter af ON member.[type] IN (1, 2) AND af.Sicil = TRY_CONVERT(int, member.[value])
+        ))
+        AND CASE @assigneeMode
+          WHEN 'any' THEN 1
+          WHEN 'me' THEN CASE WHEN EXISTS (
+            SELECT 1 FROM OPENJSON(am.AssigneeIdsArrayJson) member WHERE member.[type] IN (1, 2) AND TRY_CONVERT(int, member.[value]) = @sicil
+          ) THEN 1 ELSE 0 END
+          WHEN 'person' THEN CASE WHEN EXISTS (
+            SELECT 1 FROM OPENJSON(am.AssigneeIdsArrayJson) member WHERE member.[type] IN (1, 2) AND TRY_CONVERT(int, member.[value]) = @personSicil
+          ) THEN 1 ELSE 0 END
+          WHEN 'team' THEN CASE WHEN EXISTS (
+            SELECT 1 FROM OPENJSON(am.AssigneeIdsArrayJson) member
+            WHERE member.[type] IN (1, 2) AND (
+              (@withRoster = 1 AND EXISTS (SELECT 1 FROM #AiRosterStart r WHERE r.EmployeeSicil = TRY_CONVERT(int, member.[value])))
+              OR (@withRoster = 0 AND EXISTS (
+                SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+                WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = TRY_CONVERT(int, member.[value])
+                  AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)
+              ))
+            )
+          ) THEN 1 ELSE 0 END
+          ELSE 0
+        END = 1
+    )) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffScopeMove;
 
     -- Anlık görüntü kesitine kadar canlı görevlerin yetkili tamamlama, yeniden açılma ve hedef bitiş değişim denetim zamanları.
+    -- Zaman damgası ve AuditId çiftleri aynı denetim satırından (OccurredAt DESC, AuditId DESC) seçilir.
+    ;WITH TaskTransitions AS (
+      SELECT
+        f.TaskId,
+        a.OccurredAt,
+        a.AuditId,
+        statusCheck.IsCompletion,
+        statusCheck.IsReopen,
+        tf.IsTargetFinishChange,
+        CASE WHEN statusCheck.IsReopen = 1
+          THEN ROW_NUMBER() OVER (PARTITION BY f.TaskId, statusCheck.IsReopen ORDER BY a.OccurredAt DESC, a.AuditId DESC)
+        END AS ReopenRank,
+        CASE WHEN tf.IsTargetFinishChange = 1
+          THEN ROW_NUMBER() OVER (PARTITION BY f.TaskId, tf.IsTargetFinishChange ORDER BY a.OccurredAt DESC, a.AuditId DESC)
+        END AS TargetFinishRank
+      FROM #AiFacts f
+      JOIN dbo.MR_AuditLog a
+        ON a.EntityType = 'TASK'
+       AND a.ActionCode IN ('CREATE', 'UPDATE')
+       AND a.OccurredAt <= @cutOffUtc
+       AND TRY_CONVERT(uniqueidentifier, a.EntityId) = f.TaskId
+      JOIN dbo.MR_Projects ap ON ap.ProjectId = a.ProjectId AND ap.IsActive = 1
+      CROSS APPLY (
+        SELECT
+          ${SAFE_JSON_STATUS_SQL('a.BeforeJson')} AS BeforeStatus,
+          ${SAFE_JSON_STATUS_SQL('a.AfterJson')} AS AfterStatus
+      ) st
+      OUTER APPLY (
+        SELECT
+          MAX(CASE WHEN bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') AND bj.[type] = 1 THEN LEFT(bj.[value], 10) END) AS BeforeTargetFinish,
+          MAX(CASE WHEN bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') THEN 1 ELSE 0 END) AS HasBeforeTargetFinish
+        FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('a.BeforeJson')} THEN a.BeforeJson END) bj
+        WHERE bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish')
+      ) btf
+      OUTER APPLY (
+        SELECT
+          MAX(CASE WHEN aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') AND aj.[type] = 1 THEN LEFT(aj.[value], 10) END) AS AfterTargetFinish,
+          MAX(CASE WHEN aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') THEN 1 ELSE 0 END) AS HasAfterTargetFinish
+        FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('a.AfterJson')} THEN a.AfterJson END) aj
+        WHERE aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish')
+      ) atf
+      CROSS APPLY (
+        SELECT
+          CASE
+            WHEN a.ActionCode = 'UPDATE'
+              AND (COALESCE(btf.HasBeforeTargetFinish, 0) = 1 OR COALESCE(atf.HasAfterTargetFinish, 0) = 1)
+              AND COALESCE(btf.BeforeTargetFinish, N'') <> COALESCE(atf.AfterTargetFinish, N'')
+            THEN 1 ELSE 0
+          END AS IsTargetFinishChange
+      ) tf
+      CROSS APPLY (
+        SELECT
+          CASE
+            WHEN st.AfterStatus IS NOT NULL
+              AND st.AfterStatus COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
+              AND (
+                a.ActionCode = 'CREATE'
+                OR (st.BeforeStatus IS NOT NULL AND st.BeforeStatus COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL}))
+              )
+            THEN 1 ELSE 0
+          END AS IsCompletion,
+          CASE
+            WHEN a.ActionCode = 'UPDATE'
+              AND st.BeforeStatus IS NOT NULL
+              AND st.BeforeStatus COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
+              AND st.AfterStatus IS NOT NULL
+              AND st.AfterStatus COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL})
+            THEN 1 ELSE 0
+          END AS IsReopen
+      ) statusCheck
+      WHERE (statusCheck.IsCompletion = 1 OR statusCheck.IsReopen = 1 OR tf.IsTargetFinishChange = 1)
+        AND (
+          @isAdmin = 1
+          OR a.ProjectId = f.ProjectId
+          OR EXISTS (SELECT 1 FROM #AiPostCutoffGrants pg WHERE pg.ProjectId = a.ProjectId)
+        )
+    )
     SELECT
-      f.TaskId,
-      MAX(CASE WHEN statusCheck.IsCompletion = 1 THEN a.OccurredAt END) AS LastCompletedAuditAt,
-      MAX(CASE WHEN statusCheck.IsReopen = 1 THEN a.OccurredAt END) AS LastReopenAt,
-      MAX(CASE WHEN statusCheck.IsReopen = 1 THEN a.AuditId END) AS LastReopenAuditId,
-      MAX(CASE WHEN tf.IsTargetFinishChange = 1 THEN a.OccurredAt END) AS LastTargetFinishChangeAt,
-      MAX(CASE WHEN tf.IsTargetFinishChange = 1 THEN a.AuditId END) AS LastTargetFinishChangeAuditId
-    FROM #AiFacts f
-    JOIN dbo.MR_AuditLog a
-      ON a.EntityType = 'TASK'
-     AND a.ActionCode IN ('CREATE', 'UPDATE')
-     AND a.OccurredAt <= @cutOffUtc
-     AND TRY_CONVERT(uniqueidentifier, a.EntityId) = f.TaskId
-    JOIN dbo.MR_Projects ap ON ap.ProjectId = a.ProjectId AND ap.IsActive = 1
-    CROSS APPLY (
-      SELECT
-        ${SAFE_JSON_STATUS_SQL('a.BeforeJson')} AS BeforeStatus,
-        ${SAFE_JSON_STATUS_SQL('a.AfterJson')} AS AfterStatus
-    ) st
-    OUTER APPLY (
-      SELECT
-        MAX(CASE WHEN bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') AND bj.[type] = 1 THEN LEFT(bj.[value], 10) END) AS BeforeTargetFinish,
-        MAX(CASE WHEN bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') THEN 1 ELSE 0 END) AS HasBeforeTargetFinish
-      FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('a.BeforeJson')} THEN a.BeforeJson END) bj
-      WHERE bj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish')
-    ) btf
-    OUTER APPLY (
-      SELECT
-        MAX(CASE WHEN aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') AND aj.[type] = 1 THEN LEFT(aj.[value], 10) END) AS AfterTargetFinish,
-        MAX(CASE WHEN aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish') THEN 1 ELSE 0 END) AS HasAfterTargetFinish
-      FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('a.AfterJson')} THEN a.AfterJson END) aj
-      WHERE aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'TargetFinish', N'targetFinish')
-    ) atf
-    CROSS APPLY (
-      SELECT
-        CASE
-          WHEN a.ActionCode = 'UPDATE'
-            AND (COALESCE(btf.HasBeforeTargetFinish, 0) = 1 OR COALESCE(atf.HasAfterTargetFinish, 0) = 1)
-            AND COALESCE(btf.BeforeTargetFinish, N'') <> COALESCE(atf.AfterTargetFinish, N'')
-          THEN 1 ELSE 0
-        END AS IsTargetFinishChange
-    ) tf
-    CROSS APPLY (
-      SELECT
-        CASE
-          WHEN st.AfterStatus IS NOT NULL
-            AND st.AfterStatus COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
-            AND (
-              a.ActionCode = 'CREATE'
-              OR (st.BeforeStatus IS NOT NULL AND st.BeforeStatus COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL}))
-            )
-          THEN 1 ELSE 0
-        END AS IsCompletion,
-        CASE
-          WHEN a.ActionCode = 'UPDATE'
-            AND st.BeforeStatus IS NOT NULL
-            AND st.BeforeStatus COLLATE Latin1_General_100_BIN2 IN (${COMPLETED_AUDIT_STATUSES_SQL})
-            AND st.AfterStatus IS NOT NULL
-            AND st.AfterStatus COLLATE Latin1_General_100_BIN2 NOT IN (${COMPLETED_AUDIT_STATUSES_SQL})
-          THEN 1 ELSE 0
-        END AS IsReopen
-    ) statusCheck
-    WHERE (statusCheck.IsCompletion = 1 OR statusCheck.IsReopen = 1 OR tf.IsTargetFinishChange = 1)
-      AND (
-        @isAdmin = 1
-        OR a.ProjectId = f.ProjectId
-        OR EXISTS (SELECT 1 FROM #AiPostCutoffGrants pg WHERE pg.ProjectId = a.ProjectId)
-      )
-    GROUP BY f.TaskId;
+      TaskId,
+      MAX(CASE WHEN IsCompletion = 1 THEN OccurredAt END) AS LastCompletedAuditAt,
+      MAX(CASE WHEN ReopenRank = 1 THEN OccurredAt END) AS LastReopenAt,
+      MAX(CASE WHEN ReopenRank = 1 THEN AuditId END) AS LastReopenAuditId,
+      MAX(CASE WHEN TargetFinishRank = 1 THEN OccurredAt END) AS LastTargetFinishChangeAt,
+      MAX(CASE WHEN TargetFinishRank = 1 THEN AuditId END) AS LastTargetFinishChangeAuditId
+    FROM TaskTransitions
+    GROUP BY TaskId;
     DROP TABLE #AiPostCutoffGrants;
   END
   DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiAssigneeFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects, #AiRosterStart, #AiRosterEnd;`;

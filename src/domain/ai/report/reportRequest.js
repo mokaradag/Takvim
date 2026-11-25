@@ -142,15 +142,18 @@ function rejectUnknownFields(obj, allowed, prefix) {
   }
 }
 
-/** Veri anı zaman damgasını doğrulanmış Date nesnesine çevirir; saat dilimi eksik metin veya geçersiz girdi fırlatır. */
+export const MAX_PACKAGE_NESTING_DEPTH = 40;
+
+/** Veri anı zaman damgasını doğrulanmış Date nesnesine çevirir; saat dilimi eksik, milisaniye altı kesinlik taşıyan veya geçersiz girdi fırlatır. */
 export function normalizeReportNow(value = new Date()) {
   let date = null;
   if (value instanceof Date) {
     date = new Date(value.getTime());
   } else if (typeof value === 'string') {
     const nanos = parseIsoTimestampNanos(value);
-    if (nanos !== null) {
-      const ms = nanos >= 0n ? nanos / 1000000n : -((-nanos + 999999n) / 1000000n);
+    // SQL DateTime2 kesit sınırı JS Date (milisaniye) üzerinden taşındığından milisaniye altı kesirli anlar sessizce yuvarlanmaz.
+    if (nanos !== null && nanos % 1000000n === 0n) {
+      const ms = nanos / 1000000n;
       date = new Date(Number(ms));
     }
   } else if (typeof value === 'number' && Number.isFinite(value)) {
@@ -159,7 +162,7 @@ export function normalizeReportNow(value = new Date()) {
   if (!date || !Number.isFinite(date.getTime())) {
     throw new ReportRequestError(
       REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST,
-      'Geçerli ve saat dilimi açık bir veri anı zaman damgası gereklidir.',
+      'Geçerli, milisaniye hassasiyetinde ve saat dilimi açık bir veri anı zaman damgası gereklidir.',
       ['$.now:invalid']
     );
   }
@@ -282,6 +285,14 @@ function resolveReportPeriod(raporTuru, rawDonem, today, closureDay = today) {
     }
   } else {
     range = parseExplicitRange(rawDonem, 'donem', REPORT_REQUEST_ERROR_CODES.INVALID_PERIOD);
+  }
+
+  if (!isIsoDay(range.dateFrom) || !isIsoDay(range.dateTo)) {
+    throw new ReportRequestError(
+      REPORT_REQUEST_ERROR_CODES.INVALID_PERIOD,
+      'Rapor dönemi 1900–2100 takvim aralığında olmalıdır.',
+      ['$.donem:outside_supported_calendar']
+    );
   }
 
   const effectiveClosureDay = closureDay && closureDay < today ? closureDay : today;
@@ -579,14 +590,40 @@ function hasSparseHole(arr) {
   return false;
 }
 
-function findProtectedTextKeyPaths(value, prefix, out, visited = new Set()) {
+function exceedsMaxNestingDepth(value, maxDepth = MAX_PACKAGE_NESTING_DEPTH, ancestors = new WeakSet(), safeAtDepth = new WeakMap(), depth = 0) {
+  if (!value || typeof value !== 'object') return false;
+  if (depth > maxDepth) return true;
+  if (ancestors.has(value)) return false;
+  const prevSafeDepth = safeAtDepth.get(value);
+  if (prevSafeDepth !== undefined && prevSafeDepth >= depth) return false;
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index)) continue;
+        if (exceedsMaxNestingDepth(value[index], maxDepth, ancestors, safeAtDepth, depth + 1)) return true;
+      }
+    } else {
+      for (const key of Object.keys(value)) {
+        if (exceedsMaxNestingDepth(value[key], maxDepth, ancestors, safeAtDepth, depth + 1)) return true;
+      }
+    }
+    safeAtDepth.set(value, depth);
+    return false;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function findProtectedTextKeyPaths(value, prefix, out, visited = new Set(), depth = 0) {
   if (!value || typeof value !== 'object') return;
+  if (depth > MAX_PACKAGE_NESTING_DEPTH) return;
   if (visited.has(value)) return;
   visited.add(value);
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
       if (!Object.hasOwn(value, index)) continue;
-      findProtectedTextKeyPaths(value[index], `${prefix}[${index}]`, out, visited);
+      findProtectedTextKeyPaths(value[index], `${prefix}[${index}]`, out, visited, depth + 1);
     }
     return;
   }
@@ -595,7 +632,7 @@ function findProtectedTextKeyPaths(value, prefix, out, visited = new Set()) {
     if (PROTECTED_TEXT_KEY_SET.has(key)) {
       out.push(nextPath);
     } else {
-      findProtectedTextKeyPaths(value[key], nextPath, out, visited);
+      findProtectedTextKeyPaths(value[key], nextPath, out, visited, depth + 1);
     }
   }
 }
@@ -610,6 +647,10 @@ function findProtectedTextKeyPaths(value, prefix, out, visited = new Set()) {
 export function validateEvidencePackageContract(pkg) {
   const problems = [];
   if (!isPlainObject(pkg)) return { ok: false, problems: ['paket:nesne_degil'], serializedChars: 0 };
+  const tooDeep = exceedsMaxNestingDepth(pkg, MAX_PACKAGE_NESTING_DEPTH);
+  if (tooDeep) {
+    problems.push('paket:derinlik_siniri_asildi');
+  }
   if (pkg.sema !== REPORT_EVIDENCE_SCHEMA) problems.push('sema:gecersiz');
 
   // İstek üstverisinin temel alanları, rapor türü sınırları, karşılaştırma kipi ve kanonik kapsam yapısı doğrulanır.
@@ -635,19 +676,25 @@ export function validateEvidencePackageContract(pkg) {
     }
 
     const rawDonem = ownProp(pkg.istek, 'donem');
-    if (!isPlainObject(rawDonem) || !isIsoDay(rawDonem.baslangic) || !isIsoDay(rawDonem.bitis)
-      || rawDonem.baslangic > rawDonem.bitis) {
+    const donemBaslangic = isPlainObject(rawDonem) ? ownProp(rawDonem, 'baslangic') : undefined;
+    const donemBitis = isPlainObject(rawDonem) ? ownProp(rawDonem, 'bitis') : undefined;
+    if (!isPlainObject(rawDonem) || !isIsoDay(donemBaslangic) || !isIsoDay(donemBitis)
+      || donemBaslangic > donemBitis) {
       problems.push('istek:donem_gecersiz');
     } else {
-      const reportRange = { dateFrom: rawDonem.baslangic, dateTo: rawDonem.bitis };
+      const reportRange = { dateFrom: donemBaslangic, dateTo: donemBitis };
       const reportLen = windowLength(reportRange);
-      const periodMatchesType = reportLen <= REPORT_REQUEST_LIMITS.maxRangeDays
+      const donemGunSayisi = ownProp(rawDonem, 'gun_sayisi');
+      const gunSayisiOk = donemGunSayisi === undefined
+        || (Number.isSafeInteger(donemGunSayisi) && donemGunSayisi === reportLen);
+      const periodMatchesType = gunSayisiOk
+        && reportLen <= REPORT_REQUEST_LIMITS.maxRangeDays
         && (raporTuru !== 'haftalik' || reportLen === 7)
         && (raporTuru !== 'aylik' || windowKind(reportRange) === 'month');
       if (!periodMatchesType) {
         problems.push('istek:donem_gecersiz');
       } else {
-        reportPeriod = rawDonem;
+        reportPeriod = { baslangic: donemBaslangic, bitis: donemBitis };
       }
       const donemAd = ownProp(rawDonem, 'ad');
       if (donemAd !== undefined && typeof donemAd !== 'string') {
@@ -665,10 +712,12 @@ export function validateEvidencePackageContract(pkg) {
       }
     } else {
       const compObj = ownProp(pkg.istek, 'karsilastirma_donemi');
+      const compBaslangic = isPlainObject(compObj) ? ownProp(compObj, 'baslangic') : undefined;
+      const compBitis = isPlainObject(compObj) ? ownProp(compObj, 'bitis') : undefined;
       const compFormatOk = isPlainObject(compObj)
-        && isIsoDay(compObj.baslangic)
-        && isIsoDay(compObj.bitis)
-        && compObj.baslangic <= compObj.bitis;
+        && isIsoDay(compBaslangic)
+        && isIsoDay(compBitis)
+        && compBaslangic <= compBitis;
       if (!compFormatOk) {
         problems.push('istek:karsilastirma_donemi_gecersiz');
       } else {
@@ -676,9 +725,12 @@ export function validateEvidencePackageContract(pkg) {
         if (compAd !== undefined && typeof compAd !== 'string') {
           problems.push('istek:karsilastirma_donemi_ad_gecersiz');
         }
-        const compRange = { dateFrom: compObj.baslangic, dateTo: compObj.bitis };
+        const compRange = { dateFrom: compBaslangic, dateTo: compBitis };
         const compLen = windowLength(compRange);
-        let compValid = compLen <= REPORT_REQUEST_LIMITS.maxRangeDays;
+        const compGunSayisi = ownProp(compObj, 'gun_sayisi');
+        const compGunSayisiOk = compGunSayisi === undefined
+          || (Number.isSafeInteger(compGunSayisi) && compGunSayisi === compLen);
+        let compValid = compGunSayisiOk && compLen <= REPORT_REQUEST_LIMITS.maxRangeDays;
         if (compValid && reportPeriod) {
           const repRange = { dateFrom: reportPeriod.baslangic, dateTo: reportPeriod.bitis };
           if (compRange.dateTo >= repRange.dateFrom) {
@@ -694,7 +746,7 @@ export function validateEvidencePackageContract(pkg) {
           }
         }
         if (compValid) {
-          comparisonPeriod = compObj;
+          comparisonPeriod = { baslangic: compBaslangic, bitis: compBitis };
         } else {
           problems.push('istek:karsilastirma_donemi_gecersiz');
         }
@@ -705,18 +757,21 @@ export function validateEvidencePackageContract(pkg) {
     const scopeValid = (() => {
       if (!isPlainObject(scopeObj)) return false;
       if (Object.keys(scopeObj).some((key) => !ALLOWED_SCOPE_FIELDS.has(key))) return false;
-      if (typeof scopeObj.tur !== 'string' || !REPORT_SCOPE_TYPES.includes(scopeObj.tur)) return false;
-      if (!Array.isArray(scopeObj.kimlikler) || scopeObj.kimlikler.length === 0 || hasSparseHole(scopeObj.kimlikler)) return false;
-      if (scopeObj.tur !== 'projeler' && scopeObj.kimlikler.length !== 1) return false;
-      if (scopeObj.tur === 'projeler' && scopeObj.kimlikler.length > REPORT_REQUEST_LIMITS.maxProjectIds) return false;
-      const maxIdLen = ORG_SCOPE_TYPES.has(scopeObj.tur)
+      const scopeTur = ownProp(scopeObj, 'tur');
+      const scopeIds = ownProp(scopeObj, 'kimlikler');
+      if (typeof scopeTur !== 'string' || !REPORT_SCOPE_TYPES.includes(scopeTur)) return false;
+      if (!Array.isArray(scopeIds) || scopeIds.length === 0 || hasSparseHole(scopeIds)) return false;
+      if (scopeTur !== 'projeler' && scopeIds.length !== 1) return false;
+      if (scopeTur === 'projeler' && scopeIds.length > REPORT_REQUEST_LIMITS.maxProjectIds) return false;
+      const forbiddenControl = ORG_SCOPE_TYPES.has(scopeTur) ? FORBIDDEN_ORG_CONTROL : FORBIDDEN_GENERAL_CONTROL;
+      const maxIdLen = ORG_SCOPE_TYPES.has(scopeTur)
         ? REPORT_REQUEST_LIMITS.maxOrgPathLength
         : REPORT_REQUEST_LIMITS.maxIdentifierLength;
       const seen = new Set();
-      for (const rawId of scopeObj.kimlikler) {
+      for (const rawId of scopeIds) {
         if (typeof rawId !== 'string') return false;
         const trimmed = rawId.trim();
-        if (!trimmed || trimmed.length > maxIdLen || FORBIDDEN_GENERAL_CONTROL.test(trimmed)) return false;
+        if (!trimmed || trimmed.length > maxIdLen || forbiddenControl.test(trimmed)) return false;
         const key = trimmed.toLocaleLowerCase('tr-TR');
         if (seen.has(key)) return false;
         seen.add(key);
@@ -778,12 +833,15 @@ export function validateEvidencePackageContract(pkg) {
   const noteItems = [];
   const consentEnabled = isPlainObject(pkg.istek) && ownProp(pkg.istek, 'notlar') === 'dahil';
   const matchesAllowedPeriod = (periodObj) => {
-    if (!isPlainObject(periodObj) || !isIsoDay(periodObj.baslangic) || !isIsoDay(periodObj.bitis)
-      || periodObj.baslangic > periodObj.bitis) {
+    if (!isPlainObject(periodObj)) return false;
+    const start = ownProp(periodObj, 'baslangic');
+    const end = ownProp(periodObj, 'bitis');
+    if (!isIsoDay(start) || !isIsoDay(end) || start > end) {
       return false;
     }
     if (!reportPeriod) return false;
-    return samePeriodRange(periodObj, reportPeriod) || samePeriodRange(periodObj, comparisonPeriod);
+    const ownPeriod = { baslangic: start, bitis: end };
+    return samePeriodRange(ownPeriod, reportPeriod) || samePeriodRange(ownPeriod, comparisonPeriod);
   };
 
   for (const item of kanitlar || []) {
@@ -855,6 +913,7 @@ export function validateEvidencePackageContract(pkg) {
       if (item.kaynak === 'MR_Tasks' && (item.kayit_zamani !== null || item.kayit_zamani_durumu !== 'bilinmiyor')) {
         problems.push(`not:mr_tasks_kayit_zamani_uydurulmus:${item.id}`);
       }
+      let noteWriteNanos = null;
       if (item.kayit_zamani === null) {
         if (item.kayit_zamani_durumu !== 'bilinmiyor') {
           problems.push(`not:bilinmiyor_durumu_eksik:${item.id}`);
@@ -866,8 +925,11 @@ export function validateEvidencePackageContract(pkg) {
         const tsNanos = parseIsoTimestampNanos(item.kayit_zamani);
         if (tsNanos === null) {
           problems.push(`not:kayit_zamani_gecersiz:${item.id}`);
-        } else if (validVeriAni && tsNanos > cutOffNanos) {
-          problems.push(`not:kayit_zamani_kesiti_asiyor:${item.id}`);
+        } else {
+          noteWriteNanos = tsNanos;
+          if (validVeriAni && tsNanos > cutOffNanos) {
+            problems.push(`not:kayit_zamani_kesiti_asiyor:${item.id}`);
+          }
         }
       } else {
         problems.push(`not:kayit_zamani_gecersiz:${item.id}`);
@@ -878,13 +940,15 @@ export function validateEvidencePackageContract(pkg) {
           problems.push(`not:sonraki_degisiklik_zamani_gecersiz:${item.id}`);
         } else if (validVeriAni && nextChangeNanos > cutOffNanos) {
           problems.push(`not:sonraki_degisiklik_zamani_kesiti_asiyor:${item.id}`);
+        } else if (noteWriteNanos !== null && nextChangeNanos < noteWriteNanos) {
+          problems.push(`not:sonraki_degisiklik_zamani_not_oncesi:${item.id}`);
         }
       }
     }
   }
 
   // Rıza kapalıyken paketin herhangi bir iç içe alanında (türetilmiş, çelişki, tamlık dâhil) korunan metin anahtarı bulunamaz.
-  if (!consentEnabled) {
+  if (!consentEnabled && !tooDeep) {
     const leakedPaths = [];
     findProtectedTextKeyPaths(pkg, '', leakedPaths);
     for (const leakedPath of leakedPaths) {
@@ -929,20 +993,22 @@ export function validateEvidencePackageContract(pkg) {
 
   if ((kanitlar || []).length > maxItems) problems.push('sinir:kanit_sayisi_asildi');
   let serializedChars = 0;
-  let serializable = true;
-  try {
-    const serialized = JSON.stringify(pkg);
-    if (typeof serialized !== 'string') {
+  let serializable = !tooDeep;
+  if (!tooDeep) {
+    try {
+      const serialized = JSON.stringify(pkg);
+      if (typeof serialized !== 'string') {
+        serializable = false;
+      } else {
+        serializedChars = serialized.length;
+      }
+    } catch {
       serializable = false;
-    } else {
-      serializedChars = serialized.length;
     }
-  } catch {
-    serializable = false;
   }
-  if (!serializable) {
+  if (!tooDeep && !serializable) {
     problems.push('paket:serilestirilemiyor');
-  } else {
+  } else if (!tooDeep) {
     if (serializedChars > maxChars) problems.push('sinir:karakter_sayisi_asildi');
     if (isPlainObject(pkg.tamlik) && Object.hasOwn(pkg.tamlik, 'karakter_sayisi') && pkg.tamlik.karakter_sayisi !== undefined) {
       if (!Number.isSafeInteger(pkg.tamlik.karakter_sayisi) || pkg.tamlik.karakter_sayisi !== serializedChars) {

@@ -470,8 +470,10 @@ sentetik SQL ikizi işleyicileri ve kıyas verisi (`test/helpers/aiToolSql.mjs`,
   **10/10**, `ai-architecture-contract` **26/26**, `ai-model-registry` **25/25**; `npm run lint` uyarısız;
   `npm run build` başarılı (yeni HTTP/API ucu, yeni model görünür aracı, yeni kalıcı tablo/göç ya da yeni bağımlılık yok).
 - **Kapsam ve güvenlik özeti:** `Sicil`, `authorizationEpoch` ve proje erişim kararları `serverContext` içinde
-  sunucuda kalır; toplama sonunda yetki parmak izi yeniden doğrulanır; `notlar: haric` iken tek bir not/denetim SQL
-  sorgusu çalışmaz; `MR_AuditLog.OccurredAt` yalnızca yeni (`after`) sürüme atanır, `before` veya `MR_Tasks.UpdatedAt`
+  sunucuda kalır; toplama sonunda yetki parmak izi yeniden doğrulanır; `notlar: haric` iken güncel not ve not
+  geçmişi denetim sorguları (`readReportTaskNotes`, `readReportNoteAuditHistory`) hiç çalışmaz ve hiçbir açıklama
+  metni okunmaz (dönem ölçüsü ve durum geçişi için salt sayım/durum okuyan hareket ve görev-olgu denetim sorguları
+  çalışmaya devam eder); `MR_AuditLog.OccurredAt` yalnızca yeni (`after`) sürüme atanır, `before` veya `MR_Tasks.UpdatedAt`
   üzerinden kayıt zamanı uydurulmaz; bilinmeyen ölçüler (`history.undatedDone`, sıfır/kısmi paydalı yüzdeler) `null`
   kalır; Aşama H sohbet not sınırları (`NOTE_LIMITS.tasks = 10`, `TASK_NOTE_CHARS = 400`) değişmeden korundu.
 - **Bilinen sınırlar (canlı doğrulama bekliyor):** tüm SQL doğrulaması sentetik bellek içi ikizle yapıldı; canlı

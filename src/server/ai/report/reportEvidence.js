@@ -18,7 +18,8 @@ import {
 } from '../../../domain/organization/organizationHierarchy.js';
 import { getTrustedCurrentSicil } from '../../identity/currentUserProvider.js';
 import { ServerPersistenceError } from '../../errors.js';
-import { createAiDeadline } from '../aiDeadline.js';
+import { createAiDeadline, raceWithAbort } from '../aiDeadline.js';
+import { AiError } from '../aiErrors.js';
 import { createToolTurnContext } from '../tools/toolContext.js';
 import { TOOL_ERROR_CODES, ToolError } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
@@ -139,9 +140,12 @@ function formatModelSafeOrgLabel(raw) {
   return clampModelSafeLabel(joined, REPORT_REQUEST_LIMITS.maxOrgPathLength);
 }
 
-/** Model-görünür kapsam veya sorumlu etiketini paket sözleşmesindeki kod noktası sınırına kelepçeler. */
+// eslint-disable-next-line no-control-regex -- model-görünür kapsam etiketlerindeki geçersiz iç denetim karakterleri bilinçli olarak temizlenir
+const LABEL_CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]+/gu;
+
+/** Model-görünür kapsam veya sorumlu etiketini iç denetim karakterlerinden arındırır ve kod noktası sınırına kelepçeler. */
 function clampModelSafeLabel(raw, maxLen = REPORT_REQUEST_LIMITS.maxIdentifierLength) {
-  const text = String(raw || '').trim();
+  const text = String(raw || '').replace(LABEL_CONTROL_CHARS_RE, ' ').replace(/\s+/gu, ' ').trim();
   if (!text) return '';
   if (text.length <= maxLen) return text;
   const chars = Array.from(text);
@@ -449,19 +453,22 @@ function prioritizeTasks({
 }) {
   const scored = tasks.map((task) => {
     const completedInPeriod = completedInPeriodIds.has(task.id);
+    // Kesit sonrası değişen görevlerin güncel durumu kesit anını yansıtmaz; anlık durum sinyallerine (geciken/yaklaşan/açık kritik/tarihsiz) alınmaz.
+    const snapshotConsistentTask = !task._postCutoffModified;
+    const snapshotOpen = snapshotConsistentTask && task.status !== 'done';
     // Gelecek tarihli gerçekleşen bitişler temizlense de ham alanı doludur; tarihsiz tamamlanan önceliği almaz.
-    const undatedDone = task.status === 'done' && !(task._rawActualFinish ?? task.actualFinish);
+    const undatedDone = snapshotConsistentTask && task.status === 'done' && !(task._rawActualFinish ?? task.actualFinish);
     const activeInPeriod = activeTaskIds.has(task.id);
-    const openCritical = task.status !== 'done' && task.priority === 'critical';
-    const overdue = isOverdue(task, today);
-    const dueSoon = isDueWithin(task, today, 7);
+    const openCritical = snapshotOpen && task.priority === 'critical';
+    const overdue = snapshotOpen && isOverdue(task, today);
+    const dueSoon = snapshotOpen && isDueWithin(task, today, 7);
     const deps = dependencyMap.get(task.id);
     const hasDependencies = Boolean(deps && (deps.oncul.length > 0 || deps.ardil.length > 0));
 
     // Katman 1: Dönem ilgisi (0..3) — açık kritik görevler belgelenmiş 1. kademede yer alır.
     const periodRelevance = completedInPeriod
       ? 3
-      : (task.status !== 'done' && activeInPeriod)
+      : (snapshotOpen && activeInPeriod)
         ? 2
         : (undatedDone || openCritical || overdue || dueSoon || task.milestone || activeInPeriod)
           ? 1
@@ -476,12 +483,16 @@ function prioritizeTasks({
     if (dueSoon) managementImportance += 10;
     if (undatedDone) managementImportance += 12;
 
-    // Katman 3: Yenilik (tamamlananlarda nitelikli dönem tamamlama günü; hareketlilerde son hareket günü)
+    // Katman 3: Yenilik (denetim tamamlamalarında önce denetim günü; denetimsizlerde gerçekleşen bitiş yedeği)
+    const rawAuditDay = auditCompletedDayByTaskId.get(task.id);
+    const inPeriodAuditDay = rawAuditDay && rawAuditDay >= period.baslangic && rawAuditDay <= period.bitis
+      ? rawAuditDay
+      : null;
     const inPeriodFinish = task.actualFinish && task.actualFinish >= period.baslangic && task.actualFinish <= period.bitis
       ? task.actualFinish
       : null;
     const recencyDay = completedInPeriod
-      ? (inPeriodFinish || auditCompletedDayByTaskId.get(task.id) || activeTaskLastDay.get(task.id) || period.bitis)
+      ? (inPeriodAuditDay || inPeriodFinish || activeTaskLastDay.get(task.id) || period.bitis)
       : (activeInPeriod ? (activeTaskLastDay.get(task.id) || period.bitis) : (task.targetFinish || '0000-00-00'));
 
     return {
@@ -520,6 +531,7 @@ function finalizeBoundedPackage({
   activitySummaryItem,
   taskCandidates,
   noteCandidates,
+  collectorOmittedNoteTaskIds = new Set(),
   taskById,
   today,
   period,
@@ -566,7 +578,10 @@ function finalizeBoundedPackage({
     ...taskCandidates.slice(reservedTopTasks),
     ...notesBySelectionPriority
   ];
-  const allNoteTaskIds = new Set(noteCandidates.map((n) => n._taskId).filter(Boolean));
+  const allNoteTaskIds = new Set([
+    ...noteCandidates.map((n) => n._taskId).filter(Boolean),
+    ...(collectorOmittedNoteTaskIds || [])
+  ]);
 
   // Paket kurulumundan önce görev seçim sınırıyla dışarıda bırakılan görevler çift sayılmadan toplama eklenir.
   const preAssemblyOmittedTasks = Math.max(0, totalEligibleTasks - taskCandidates.length);
@@ -800,15 +815,6 @@ export async function buildExecutiveReportEvidence({
   const veriAni = formatIstanbulTimestamp(cutOffDate);
   const consentAtStart = normalizedRequest.notlar;
 
-  // 2. Güvenilir oturum kimliğini yalnızca sunucu oturum sağlayıcısından çöz; uyuşmayan dış Sicil kapalı reddedilir.
-  const trustedSicil = await getTrustedCurrentSicil();
-  if (!Number.isSafeInteger(trustedSicil) || trustedSicil <= 0) {
-    throw new ServerPersistenceError('UNAUTHORIZED', 'Geçerli oturum kimliği doğrulanamadı.');
-  }
-  if (sicil != null && Number(sicil) !== trustedSicil) {
-    throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum kimliği ile uyuşmayan Sicil parametresi reddedildi.');
-  }
-
   const effectiveToolLimits = { ...TOOL_LIMITS, ...toolLimits };
   const deadline = createAiDeadline({
     timeoutMs: effectiveToolLimits.maxToolPhaseMs,
@@ -817,22 +823,32 @@ export async function buildExecutiveReportEvidence({
   });
   const effectiveSignal = deadline.signal;
 
-  const turn = createToolTurnContext({
-    sicil: trustedSicil,
-    now: cutOffDate,
-    limits: effectiveToolLimits,
-    clock,
-    ...(getPool ? { getPool } : {}),
-    ...(loadAuthorization ? { loadAuthorization } : {}),
-    ...(gate ? { gate } : {})
-  });
-
   // Geçici tamponlar iptal veya yetki hatasında temizlenecektir.
   let taskFactsResult = null;
   let noteCollection = null;
 
   try {
     effectiveSignal.throwIfAborted();
+    // 2. Güvenilir oturum kimliğini yalnızca sunucu oturum sağlayıcısından çöz; bekleme iptal/süre sınırına duyarlıdır.
+    const trustedSicil = await raceWithAbort(() => getTrustedCurrentSicil(), effectiveSignal);
+    effectiveSignal.throwIfAborted();
+    if (!Number.isSafeInteger(trustedSicil) || trustedSicil <= 0) {
+      throw new ServerPersistenceError('UNAUTHORIZED', 'Geçerli oturum kimliği doğrulanamadı.');
+    }
+    if (sicil != null && Number(sicil) !== trustedSicil) {
+      throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum kimliği ile uyuşmayan Sicil parametresi reddedildi.');
+    }
+
+    const turn = createToolTurnContext({
+      sicil: trustedSicil,
+      now: cutOffDate,
+      limits: effectiveToolLimits,
+      clock,
+      ...(getPool ? { getPool } : {}),
+      ...(loadAuthorization ? { loadAuthorization } : {}),
+      ...(gate ? { gate } : {})
+    });
+
     turn.beginRound();
     const { auth, scope } = await turn.authorization(effectiveSignal);
     const initialEpoch = turn.authorizationEpoch();
@@ -939,6 +955,7 @@ export async function buildExecutiveReportEvidence({
     const auditCompletedDayByTaskId = new Map();
     const auditCompletedProjectByTaskId = new Map();
     const movedOutCompletedInPeriod = new Map();
+    const cappedOutCompletedInPeriod = new Map();
     const lastReopenAtByTaskId = new Map();
     const lastTargetFinishChangeByTaskId = new Map();
     const activityLiveTasksForRevalidation = new Map();
@@ -948,7 +965,9 @@ export async function buildExecutiveReportEvidence({
       if (!taskId || !occurredIso) return;
       const nextMs = Date.parse(occurredIso);
       if (!Number.isFinite(nextMs)) return;
-      const nextAuditId = Number.isFinite(Number(auditId)) ? Number(auditId) : null;
+      const nextAuditId = auditId !== null && auditId !== undefined && auditId !== '' && Number.isFinite(Number(auditId))
+        ? Number(auditId)
+        : null;
       const prev = map.get(taskId);
       if (!prev) {
         map.set(taskId, { occurredAt: occurredIso, auditId: nextAuditId });
@@ -998,6 +1017,14 @@ export async function buildExecutiveReportEvidence({
           && Boolean(ref.completedProjectId && requestedProjectIdSet.has(ref.completedProjectId));
         if (movedOutProjectCompletion) {
           movedOutCompletedInPeriod.set(ref.taskId, ref.completedProjectId);
+        } else if (!movedOutOfSelectedProjects && taskFactsResult.truncated) {
+          // Görev-olgu okuması satır sınırına takıldıysa denetimden bilinen tamamlama düşürülmez.
+          const attributedProjectId = ref.completedProjectId || ref.projectId || null;
+          const withinSelectedProjects = resolvedScope.projectIds.length === 0
+            || Boolean(attributedProjectId && requestedProjectIdSet.has(attributedProjectId));
+          if (ref.completedInPeriod && withinSelectedProjects) {
+            cappedOutCompletedInPeriod.set(ref.taskId, attributedProjectId);
+          }
         } else if (!movedOutOfSelectedProjects && !taskFactsResult.truncated) {
           activityAssigneeDiverged = true;
         }
@@ -1036,6 +1063,7 @@ export async function buildExecutiveReportEvidence({
     // Karşılaştırma dönemi istendiyse yeniden açılmış, taşınmış ve silinmiş tarihsel tamamlamaları yakalamak için hareket özeti de okunur.
     const auditCompletedInComparisonIds = new Set();
     const movedOutCompletedInComparison = new Set();
+    const cappedOutCompletedInComparison = new Set();
     let comparisonDeletedCompleted = 0;
     let comparisonActivityDiverged = false;
     let compActivityAgg = null;
@@ -1067,6 +1095,13 @@ export async function buildExecutiveReportEvidence({
             && Boolean(ref.completedProjectId && requestedProjectIdSet.has(ref.completedProjectId));
           if (movedOutProjectCompletion) {
             movedOutCompletedInComparison.add(ref.taskId);
+          } else if (!movedOutOfSelectedProjects && taskFactsResult.truncated) {
+            const attributedProjectId = ref.completedProjectId || ref.projectId || null;
+            const withinSelectedProjects = resolvedScope.projectIds.length === 0
+              || Boolean(attributedProjectId && requestedProjectIdSet.has(attributedProjectId));
+            if (ref.completedInPeriod && withinSelectedProjects) {
+              cappedOutCompletedInComparison.add(ref.taskId);
+            }
           } else if (!movedOutOfSelectedProjects && !taskFactsResult.truncated) {
             comparisonActivityDiverged = true;
           }
@@ -1127,6 +1162,7 @@ export async function buildExecutiveReportEvidence({
       || droppedDependencyEdges > 0
       || Boolean(taskFactsResult.truncated)
       || rosterTruncated
+      || hasPostCutoffScopeLoss
       || fullProjectIds.length < projects.size
       || !effectiveScopeSummary.completeProjectView
     )
@@ -1224,7 +1260,10 @@ export async function buildExecutiveReportEvidence({
     ) ? 'complete' : 'partial';
 
     const completedInPeriodTasks = visibleTasks.filter((task) => completedInPeriodIds.has(task.id));
-    const totalCompletedInPeriod = completedInPeriodTasks.length + movedOutCompletedInPeriod.size + periodActivitySummary.deletedCompleted;
+    const totalCompletedInPeriod = completedInPeriodTasks.length
+      + movedOutCompletedInPeriod.size
+      + cappedOutCompletedInPeriod.size
+      + periodActivitySummary.deletedCompleted;
     // Kesit sonrası değiştirilen görevlerin canlı durumu kesit anını yansıtmaz; anlık sayımlardan dışlanır.
     const snapshotConsistentTasks = visibleTasks.filter((task) => !task._postCutoffModified);
     const openTasks = snapshotConsistentTasks.filter((task) => task.status !== 'done');
@@ -1335,7 +1374,10 @@ export async function buildExecutiveReportEvidence({
           comparisonCompletedIds.add(task.id);
         }
       }
-      comparisonCompletedCount = comparisonCompletedIds.size + movedOutCompletedInComparison.size + comparisonDeletedCompleted;
+      comparisonCompletedCount = comparisonCompletedIds.size
+        + movedOutCompletedInComparison.size
+        + cappedOutCompletedInComparison.size
+        + comparisonDeletedCompleted;
       coreMetrics.push({
         _metricKey: 'comparison_completed',
         tur: 'olcu',
@@ -1349,7 +1391,7 @@ export async function buildExecutiveReportEvidence({
     }
 
     // Çok projeli kapsamlarda proje bazlı tamamlanan kırılımı ikincil ölçü olarak eklenir.
-    // Canlı görev bulunmasa bile yalnızca silinmiş veya taşınmış tamamlama katkısı olan yetkili projeler de kırılıma dâhil edilir.
+    // Canlı görev bulunmasa bile yalnızca silinmiş, taşınmış veya olgu sınırında düşmüş tamamlama katkısı olan yetkili projeler de kırılıma dâhil edilir.
     const secondaryMetrics = [];
     const deletedCompletedByProjectId = new Map();
     const contributingProjectById = new Map();
@@ -1362,6 +1404,11 @@ export async function buildExecutiveReportEvidence({
     }
     const movedOutCompletedByProjectId = new Map();
     for (const projectId of movedOutCompletedInPeriod.values()) {
+      if (!projectId) continue;
+      movedOutCompletedByProjectId.set(projectId, (movedOutCompletedByProjectId.get(projectId) || 0) + 1);
+    }
+    for (const projectId of cappedOutCompletedInPeriod.values()) {
+      if (!projectId) continue;
       movedOutCompletedByProjectId.set(projectId, (movedOutCompletedByProjectId.get(projectId) || 0) + 1);
     }
     const breakdownProjects = new Map(projects);
@@ -1579,9 +1626,13 @@ export async function buildExecutiveReportEvidence({
       }
 
       // Kilometre taşı toplamları yalnızca kesit anıyla tutarlı (kesit sonrası değişmemiş) görevlerden hesaplanır.
+      // Sınıflandırılmamış (silinmiş, taşınmış, olgu sınırında düşmüş veya kesit sonrası değişmiş) tamamlamalar varsa sıfır uydurulmaz (`null`).
       const snapshotMilestoneTasks = snapshotConsistentTasks.filter((task) => task.milestone);
       const periodCompletedMilestoneTasks = snapshotConsistentTasks.filter((task) => task.milestone && completedInPeriodIds.has(task.id));
-      const hasPostCutoffModifiedPeriodCompletion = visibleTasks.some((task) => task._postCutoffModified && completedInPeriodIds.has(task.id));
+      const hasUnclassifiedPeriodCompletion = visibleTasks.some((task) => task._postCutoffModified && completedInPeriodIds.has(task.id))
+        || periodActivitySummary.deletedCompleted > 0
+        || movedOutCompletedInPeriod.size > 0
+        || cappedOutCompletedInPeriod.size > 0;
       if (snapshotMilestoneTasks.length > 0 || periodCompletedMilestoneTasks.length > 0) {
         const milestoneInputs = [
           ...new Set([
@@ -1601,7 +1652,7 @@ export async function buildExecutiveReportEvidence({
               toplam: snapshotMilestoneTasks.length,
               acik: snapshotMilestoneTasks.filter((task) => task.status !== 'done').length,
               geciken: snapshotMilestoneTasks.filter((task) => isOverdue(task, snapshotDay)).length,
-              donemde_tamamlanan: hasPostCutoffModifiedPeriodCompletion ? null : periodCompletedMilestoneTasks.length
+              donemde_tamamlanan: hasUnclassifiedPeriodCompletion ? null : periodCompletedMilestoneTasks.length
             },
             kosul: snapshotCompletePopulation ? 'tam yetkili kapsam' : 'yetkili görünür görev alt kümesi'
           });
@@ -1653,6 +1704,7 @@ export async function buildExecutiveReportEvidence({
       activitySummaryItem,
       taskCandidates,
       noteCandidates,
+      collectorOmittedNoteTaskIds: noteCollection.omittedTaskIds,
       taskById,
       today: snapshotDay,
       period: normalizedRequest.donem,
@@ -1783,8 +1835,12 @@ export async function buildExecutiveReportEvidence({
     if (error instanceof ReportRequestError
       || error instanceof ToolError
       || error instanceof ServerPersistenceError
+      || error instanceof AiError
       || error?.name === 'AbortError') {
       throw error;
+    }
+    if (effectiveSignal.aborted) {
+      throw deadline.failure() || effectiveSignal.reason;
     }
     throw new ServerPersistenceError(
       'QUERY_FAILED',

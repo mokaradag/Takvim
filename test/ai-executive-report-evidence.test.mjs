@@ -32,6 +32,7 @@ const {
   REPORT_REQUEST_ERROR_CODES,
   ReportRequestError,
   formatIstanbulTimestamp,
+  normalizeReportNow,
   validateEvidencePackageContract,
   validateExecutiveReportRequest
 } = await import('../src/domain/ai/report/reportRequest.js');
@@ -44,15 +45,24 @@ const {
 } = await import('../src/server/ai/report/reportNotes.js');
 const { buildExecutiveReportEvidence } = await import('../src/server/ai/report/reportEvidence.js');
 const { NOTE_LIMITS } = await import('../src/server/ai/tools/analysisPlan.js');
-const { TASK_NOTE_CHARS, REPORT_TASK_NOTE_CHARS } = await import('../src/server/ai/tools/rota/rotaToolStore.js');
+const {
+  TASK_NOTE_CHARS,
+  REPORT_TASK_NOTE_CHARS,
+  readReportScopeRoster,
+  readTaskFacts
+} = await import('../src/server/ai/tools/rota/rotaToolStore.js');
 const {
   AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL,
   AI_TOOL_REPORT_TASK_NOTES_SQL,
+  AI_TOOL_TASK_FACTS_SQL,
   AI_TOOL_TASK_NOTES_SQL
 } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+const { buildRotaScope } = await import('../src/server/ai/tools/rota/rotaScope.js');
 const { getSqlPool } = await import('../src/server/db/pool.js');
 const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
 const { TOOL_ERROR_CODES, ToolError } = await import('../src/server/ai/tools/toolErrors.js');
+const { AiError } = await import('../src/server/ai/aiErrors.js');
+const { AI_ERROR_CODES } = await import('../src/domain/ai/aiErrorCatalog.js');
 
 const U = REPORT_BENCH_USERS;
 const P = REPORT_BENCH_PROJECTS;
@@ -773,9 +783,9 @@ test('güvenlik: toplama sırasında yetki değişirse bayat kanıt paketi kapal
     const revokingAuth = async (executor, opts) => {
       calls += 1;
       if (calls === 2) {
-        // Yetki iptali gerçekten not ve not denetim okumalarından SONRA gerçekleşmelidir.
-        assert.equal(stack.db.aiToolLog.some((entry) => entry.query === 'report-note-audit'), true,
-          'yetki iptali korumalı not denetim okumasından önce değil, tamamlandıktan sonra tetiklenmelidir');
+        // Yetki iptali gerçekten not ve not denetim okumaları başarıyla tamamlandıktan SONRA gerçekleşmelidir.
+        assert.equal(stack.db.aiToolLog.some((entry) => entry.query === 'report-note-audit' && entry.ok === true), true,
+          'yetki iptali korumalı not denetim okuması başarıyla tamamlandıktan sonra tetiklenmelidir');
         const project = stack.db.projects.find((item) => item.ProjectId === P.KUZEY);
         project.LeadSicil = U.DENIZ;
       }
@@ -1029,6 +1039,12 @@ test('tanı önizlemesi: varsayılan çıktıda ham not metni maskelenir, yalnı
     const blockedRaw = buildExecutiveEvidencePreview(evidencePackage, { includeRawText: true, syntheticContext: false });
     assert.equal(blockedRaw.ozet.includes('test cihazı yok'), false);
     assert.equal(blockedRaw.paketJson.includes('test cihazı yok'), false, 'syntheticContext olmadan paketJson da ham metin sızdırmamalıdır');
+
+    // includeRawText olmadan syntheticContext tek başına ham metni açamaz.
+    const blockedSyntheticOnly = buildExecutiveEvidencePreview(evidencePackage, { syntheticContext: true });
+    assert.equal(blockedSyntheticOnly.secimTanisi.hamMetinDahil, false);
+    assert.equal(blockedSyntheticOnly.ozet.includes('test cihazı yok'), false, 'yalnızca syntheticContext özette ham not sızdırmamalıdır');
+    assert.equal(blockedSyntheticOnly.paketJson.includes('test cihazı yok'), false, 'yalnızca syntheticContext paketJson içinde ham not sızdırmamalıdır');
 
     const syntheticPreview = buildExecutiveEvidencePreview(evidencePackage, { includeRawText: true, syntheticContext: true });
     assert.equal(syntheticPreview.secimTanisi.hamMetinDahil, true);
@@ -2450,7 +2466,8 @@ test('not kronolojisi birim kuralları: silme/geri yükleme, harf duyarlılığ�
     { id: 'E6', _taskId: 'T5', gorev: 'T5', _projectId: P.MELTEM, metin: 'Test ortamı hazır.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T12:10:00+03:00', kayit_zamani_durumu: 'biliniyor' },
     { id: 'E7', _taskId: 'T6', gorev: 'T6', _projectId: P.KUZEY, metin: 'Test ortamı hazırlanmaya başlandı.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T12:15:00+03:00', kayit_zamani_durumu: 'biliniyor' },
     { id: 'E8', _taskId: 'T7', gorev: 'T7', _projectId: P.KUZEY, metin: 'Test cihazı yok, henüz başlamadı.', surum_tipi: 'guncel', kayit_zamani: '2026-11-03T10:00:00+03:00', kayit_zamani_durumu: 'biliniyor' },
-    { id: 'E9', _taskId: 'T8', gorev: 'T8', _projectId: P.KUZEY, metin: 'Risk yok, plan ilerliyor.', surum_tipi: 'guncel', kayit_zamani: null, kayit_zamani_durumu: 'bilinmiyor' }
+    { id: 'E9', _taskId: 'T8', gorev: 'T8', _projectId: P.KUZEY, metin: 'Gecikme yok.', surum_tipi: 'guncel', kayit_zamani: null, kayit_zamani_durumu: 'bilinmiyor' },
+    { id: 'E13', _taskId: 'T11', gorev: 'T11', _projectId: P.KUZEY, metin: 'Gecikme yok.', surum_tipi: 'guncel', kayit_zamani: '2026-11-06T10:00:00+03:00', kayit_zamani_durumu: 'biliniyor' }
   ];
   const taskById = new Map([
     ['T1', { status: 'in-progress', projectId: P.KUZEY }],
@@ -2461,13 +2478,14 @@ test('not kronolojisi birim kuralları: silme/geri yükleme, harf duyarlılığ�
     ['T6', { status: 'in-progress', projectId: P.KUZEY }],
     // T7 2026-11-06'da tamamlandı; E8 ise 2026-11-03'te (tamamlanmadan önce) yazıldığı için çelişki sayılmamalı.
     ['T7', { status: 'done', actualFinish: '2026-11-06', projectId: P.KUZEY }],
-    // T8 gecikmiş; ancak E9 kayıt zamanı bilinmiyor olduğu için dönem öncesi varsayımıyla çelişki üretmemeli.
+    // T8 gecikmiş; ancak E9 kayıt zamanı bilinmiyor olduğu için hedef tarih sonrası varsayımıyla çelişki üretmemeli.
     ['T8', { status: 'in-progress', targetFinish: '2026-11-04', projectId: P.KUZEY }],
     ['T9', { status: 'in-progress', projectId: P.KUZEY }],
-    ['T10', { status: 'in-progress', projectId: P.KUZEY }]
+    ['T10', { status: 'in-progress', projectId: P.KUZEY }],
+    ['T11', { status: 'in-progress', targetFinish: '2026-11-04', projectId: P.KUZEY }]
   ]);
   const taskEvidenceIdByTaskId = new Map([
-    ['T1', 'E101'], ['T2', 'E102'], ['T3', 'E103'], ['T4', 'E104'], ['T5', 'E105'], ['T6', 'E106'], ['T7', 'E107'], ['T8', 'E108'], ['T9', 'E109'], ['T10', 'E110']
+    ['T1', 'E101'], ['T2', 'E102'], ['T3', 'E103'], ['T4', 'E104'], ['T5', 'E105'], ['T6', 'E106'], ['T7', 'E107'], ['T8', 'E108'], ['T9', 'E109'], ['T10', 'E110'], ['T11', 'E111']
   ]);
   const conflicts = detectNoteDuplicatesAndContradictions({
     noteEntries,
@@ -2498,7 +2516,9 @@ test('not kronolojisi birim kuralları: silme/geri yükleme, harf duyarlılığ�
   assert.equal(conflicts.some((c) => c.kanitlar.includes('E8') && c.tur === 'durum_not_uyusmazligi'), false,
     'tamamlanma gününden önce yazılan engel notu tamamlanmış görevle çelişki sayılmamalıdır');
   assert.equal(conflicts.some((c) => c.kanitlar.includes('E9') && c.tur === 'durum_not_uyusmazligi'), false,
-    'kayıt zamanı bilinmeyen "risk yok" notu gecikmiş görevle yanlış çelişki üretmemelidir');
+    'kayıt zamanı bilinmeyen "Gecikme yok." notu gecikmiş görevle yanlış çelişki üretmemelidir');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E13') && c.tur === 'durum_not_uyusmazligi'), true,
+    'hedef bitiş sonrası bilinen kayıt zamanlı "Gecikme yok." pozitif kontrolü çelişki üretmelidir');
 });
 
 test('not yineleme kimliği, dönem içi sürüm önceliği ve kesit sonrası geriye dönük tamamlama koruması', async () => {
@@ -3812,9 +3832,9 @@ test('Türkçe not yorumlama: sorular, koşullu hazırlık, bileşik cümleler, 
     // T_Q2: Soru biçimindeki gecikme yok ifadesi reddetme sayılmaz; T_Q2_POS pozitif kontrol.
     { id: 'E3', _taskId: 'T_Q2', gorev: 'T_Q2', _projectId: P.KUZEY, metin: 'Gecikme yok mu?', surum_tipi: 'guncel', kayit_zamani: '2026-11-06T10:00:00+03:00' },
     { id: 'E4', _taskId: 'T_Q2_POS', gorev: 'T_Q2_POS', _projectId: P.KUZEY, metin: 'Gecikme yok.', surum_tipi: 'guncel', kayit_zamani: '2026-11-06T10:00:00+03:00' },
-    // T_COND1 & T_COND2: Koşullu hazırlık pozitif sayılmaz → notlar_arasi_celiski üretmez.
+    // T_COND1 & T_COND2: Koşullu hazırlık olumsuz veya olumlu bildirim sayılmaz → olumlu "Test ortamı hazır." ile çelişki üretmez.
     { id: 'E5', _taskId: 'T_COND1', gorev: 'T_COND1', _projectId: P.MELTEM, metin: 'Test ortamı hazır değilse işlemi durdurun.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' },
-    { id: 'E6', _taskId: 'T_COND2', gorev: 'T_COND2', _projectId: P.MELTEM, metin: 'Test ortamı hazır değil.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' },
+    { id: 'E6', _taskId: 'T_COND2', gorev: 'T_COND2', _projectId: P.MELTEM, metin: 'Test ortamı hazır.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' },
     // T_COMP: Hazırlık ve görev durumu aynı tümcede: görev tamamlanmadı korunur.
     { id: 'E7', _taskId: 'T_COMP', gorev: 'T_COMP', _projectId: P.KUZEY, metin: 'Test ortamı hazır ama görev tamamlanmadı.', surum_tipi: 'guncel', kayit_zamani: '2026-11-06T10:00:00+03:00' },
     // T_RISK: Gecikme riski planın ertelendiği anlamına gelmez.
@@ -3870,7 +3890,18 @@ test('Türkçe not yorumlama: sorular, koşullu hazırlık, bileşik cümleler, 
   assert.equal(conflicts.some((c) => c.kanitlar.includes('E2') && c.tur === 'durum_not_uyusmazligi'), true);
   assert.equal(conflicts.some((c) => c.kanitlar.includes('E3')), false, 'gecikme sorusu reddetme sayılmamalıdır');
   assert.equal(conflicts.some((c) => c.kanitlar.includes('E4') && c.tur === 'durum_not_uyusmazligi'), true);
-  assert.equal(conflicts.some((c) => c.tur === 'notlar_arasi_celiski'), false, 'koşullu hazırlık karşıt not çelişkisi üretmemelidir');
+  assert.equal(conflicts.some((c) => c.tur === 'notlar_arasi_celiski'), false, 'koşullu hazırlık olumlu bildirimle karşıt not çelişkisi üretmemelidir');
+  const directNegControl = detectNoteDuplicatesAndContradictions({
+    noteEntries: [
+      { id: 'E5', _taskId: 'T_COND1', gorev: 'T_COND1', _projectId: P.MELTEM, metin: 'Test ortamı hazır değil.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' },
+      { id: 'E6', _taskId: 'T_COND2', gorev: 'T_COND2', _projectId: P.MELTEM, metin: 'Test ortamı hazır.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' }
+    ],
+    taskById,
+    taskEvidenceIdByTaskId,
+    today: '2026-11-09',
+    period: samplePeriod
+  });
+  assert.equal(directNegControl.some((c) => c.tur === 'notlar_arasi_celiski'), true, 'kesin olumsuz hazırlık olumlu bildirimle notlar_arasi_celiski üretmelidir');
   assert.equal(conflicts.some((c) => c.kanitlar.includes('E7') && c.tur === 'durum_not_uyusmazligi'), true, 'hazırlık ile aynı tümcedeki görev tamamlanmadı korunmalıdır');
   assert.equal(conflicts.some((c) => c.kanitlar.includes('E9') && c.tur === 'not_surum_celiskisi'), false, 'gecikme riski plan ertelemesi sayılmamalıdır');
   assert.equal(conflicts.some((c) => c.kanitlar.includes('E10') && c.tur === 'durum_not_uyusmazligi'), true, 'sonraki görev niteleyicisi bu görevi bastırmamalıdır');
@@ -4117,6 +4148,9 @@ test('yetki, kesit tutarlılığı ve kapsam uzlaşması: taşınan görev kayna
       today: REPORT_BENCH_TODAY
     });
     assert.equal(evidencePackage.tamlik.hareket, 'complete', 'yetkili projeye taşınan görev hareket tamlığını partial yapmamalıdır');
+    const movedActivity = evidencePackage.kanitlar.find((item) => item.tur === 'hareket');
+    assert.ok(movedActivity, 'taşınan görevin dönem içi güncellemesi hareket özetinde korunmalıdır');
+    assert.equal(movedActivity.donem_ozeti.etkilenen_gorev, 1, 'taşınan görevin dönem içi güncellemesi etkilenen_gorev sayımında kalmalıdır');
   });
 
   const postCutoffMovedOutId = '61000000-0000-4000-8000-000000009958';
@@ -4448,5 +4482,545 @@ test('yetki, kesit tutarlılığı ve kapsam uzlaşması: taşınan görev kayna
   });
 });
 
+test('sözleşme ve önizleme kök nedenleri: 1900 dışı varsayılan dönem, kalıtımlı tarih, gun_sayisi, kurumsal yol anahtarı, milisaniye altı now, derinlik sınırı ve güvenli tanı alanları', () => {
+  // 1. 1900-2100 takvim aralığı dışına taşan varsayılan aylık ve haftalık dönemler istek aşamasında reddedilir.
+  assert.throws(
+    () => validateExecutiveReportRequest({
+      rapor_turu: 'aylik',
+      kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] }
+    }, { today: '1900-01-15' }),
+    (err) => err instanceof ReportRequestError && err.code === REPORT_REQUEST_ERROR_CODES.INVALID_PERIOD
+  );
+  assert.throws(
+    () => validateExecutiveReportRequest({
+      rapor_turu: 'haftalik',
+      kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] }
+    }, { today: '1900-01-05' }),
+    (err) => err instanceof ReportRequestError && err.code === REPORT_REQUEST_ERROR_CODES.INVALID_PERIOD
+  );
 
+  // 2. Milisaniye altı kesirli now zaman damgası sessizce yuvarlanmaz; tam milisaniye kabul edilir.
+  assert.throws(
+    () => normalizeReportNow('2026-11-09T05:30:00.1239000Z'),
+    (err) => err instanceof ReportRequestError && err.code === REPORT_REQUEST_ERROR_CODES.INVALID_REQUEST
+  );
+  assert.equal(normalizeReportNow('2026-11-09T05:30:00.123Z').toISOString(), '2026-11-09T05:30:00.123Z');
+  assert.equal(normalizeReportNow('2026-11-09T05:30:00.1230000Z').toISOString(), '2026-11-09T05:30:00.123Z');
 
+  const basePkg = {
+    sema: REPORT_EVIDENCE_SCHEMA,
+    istek: {
+      rapor_turu: 'haftalik',
+      donem: { baslangic: '2026-11-02', bitis: '2026-11-08', ad: 'geçen hafta', gun_sayisi: 7 },
+      kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+      ayrinti: 'standart',
+      odak: 'dengeli',
+      notlar: 'dahil',
+      karsilastirma: 'ozel_donem',
+      karsilastirma_donemi: { baslangic: '2026-10-26', bitis: '2026-11-01', ad: 'önceki', gun_sayisi: 7 }
+    },
+    veri_ani: '2026-11-09T08:30:00+03:00',
+    kanitlar: [
+      {
+        id: 'E1',
+        tur: 'not',
+        kaynak: 'MR_AuditLog',
+        gorev: 'T1',
+        proje: 'PRJ-KUZEY',
+        kayit_zamani: '2026-11-06T10:00:00+03:00',
+        kayit_zamani_durumu: 'biliniyor',
+        sonraki_degisiklik_zamani: '2026-11-06T10:00:00+03:00',
+        metin: 'Sürüm kontrol notu.',
+        guvenilmez_veri: true
+      }
+    ],
+    turetilmis: [],
+    tamlik: { kapsam_gorunurlugu: 'complete', hareket: 'complete', tarihsiz_tamamlanan: 0, paket_kesildi: false, disarida_kalan_kanit: 0 },
+    celiskiler: [],
+    sinirlar: { kanit_sayisi_en_fazla: 120, karakter_en_fazla: 120000, not_karakter_en_fazla: 1600 }
+  };
+  assert.equal(validateEvidencePackageContract(basePkg).ok, true, 'geçerli temel paket doğrulamadan geçmelidir');
+
+  // 3. Kalıtımlı tarih alanları (own property değilse) ve tarihle uyuşmayan gun_sayisi reddedilir.
+  const inheritedPeriod = Object.create({ baslangic: '2026-11-02', bitis: '2026-11-08' });
+  const inheritedPkg = { ...basePkg, istek: { ...basePkg.istek, donem: inheritedPeriod } };
+  assert.equal(validateEvidencePackageContract(inheritedPkg).problems.includes('istek:donem_gecersiz'), true);
+
+  const badDaysPkg = { ...basePkg, istek: { ...basePkg.istek, donem: { baslangic: '2026-11-02', bitis: '2026-11-08', gun_sayisi: 30 } } };
+  assert.equal(validateEvidencePackageContract(badDaysPkg).problems.includes('istek:donem_gecersiz'), true);
+
+  const badCompDaysPkg = {
+    ...basePkg,
+    istek: { ...basePkg.istek, karsilastirma_donemi: { baslangic: '2026-10-26', bitis: '2026-11-01', gun_sayisi: 14 } }
+  };
+  assert.equal(validateEvidencePackageContract(badCompDaysPkg).problems.includes('istek:karsilastirma_donemi_gecersiz'), true);
+
+  // 4. Kurumsal kapsamda 0x1F hiyerarşi ayırıcısı paket doğrulayıcısında da kabul edilir; genel kapsamda reddedilir.
+  const orgKeyPkg = {
+    ...basePkg,
+    istek: { ...basePkg.istek, kapsam: { tur: 'birim', kimlikler: ['Ar-Ge\u001FYazılım\u001FÇekirdek'] } }
+  };
+  assert.equal(validateEvidencePackageContract(orgKeyPkg).problems.includes('istek:kapsam_gecersiz'), false);
+  const badProjectControlPkg = {
+    ...basePkg,
+    istek: { ...basePkg.istek, kapsam: { tur: 'proje', kimlikler: ['PRJ\u001FKUZEY'] } }
+  };
+  assert.equal(validateEvidencePackageContract(badProjectControlPkg).problems.includes('istek:kapsam_gecersiz'), true);
+
+  // 5. Not sonraki değişim zamanı yazım zamanından önceyse reddedilir; eşitse kabul edilir.
+  const reversedNextChangePkg = {
+    ...basePkg,
+    kanitlar: [{ ...basePkg.kanitlar[0], sonraki_degisiklik_zamani: '2026-11-05T10:00:00+03:00' }]
+  };
+  assert.equal(
+    validateEvidencePackageContract(reversedNextChangePkg).problems.includes('not:sonraki_degisiklik_zamani_not_oncesi:E1'),
+    true
+  );
+
+  // 6. Aşırı iç içe geçmiş paket hem doğrulayıcıda hem önizlemede yığın taşması olmadan SORUNLU döner.
+  let deepObj = { metin: 'GIZLI_DERIN_METIN' };
+  for (let i = 0; i < 120; i += 1) deepObj = { katman: deepObj };
+  for (const consentMode of ['haric', 'dahil']) {
+    const deepPkg = { ...basePkg, istek: { ...basePkg.istek, notlar: consentMode }, turetilmis: [{ id: 'F1', tur: 'ozel', girdiler: ['E1'], deger: deepObj }] };
+    const deepVal = validateEvidencePackageContract(deepPkg);
+    assert.equal(deepVal.ok, false);
+    assert.equal(deepVal.problems.includes('paket:derinlik_siniri_asildi'), true);
+    const deepPreview = buildExecutiveEvidencePreview(deepPkg);
+    assert.equal(deepPreview.gecerli, false);
+    assert.equal(deepPreview.sorunlar.includes('paket:derinlik_siniri_asildi'), true);
+    assert.equal(deepPreview.paketJson.includes('GIZLI_DERIN_METIN'), false);
+  }
+
+  // 7. Önizleme güvenliği: secimTanisi.disaridaKalanKanit nesne sızdırmaz, paylaşılan nesne null olmaz, constructor sayacı sayısaldır.
+  const sharedValue = { ozet: 'Ortak bulgu', metin: 'GIZLI_PAYLASILAN_NOT' };
+  const previewEdgePkg = {
+    ...basePkg,
+    kanitlar: [
+      ...basePkg.kanitlar,
+      { id: 'E2', tur: 'constructor', kaynak: 'rota_task_search' }
+    ],
+    turetilmis: [
+      { id: 'F1', tur: 'ozel', girdiler: ['E1'], deger: sharedValue },
+      { id: 'F2', tur: 'ozel', girdiler: ['E1'], deger: sharedValue }
+    ],
+    tamlik: { ...basePkg.tamlik, disarida_kalan_kanit: { metin: 'GIZLI_DISARIDA_NOT' } }
+  };
+  const edgePreview = buildExecutiveEvidencePreview(previewEdgePkg);
+  assert.equal(edgePreview.secimTanisi.disaridaKalanKanit, 0, 'bozuk disarida_kalan_kanit nesnesi secimTanisi içine sızmamalıdır');
+  assert.equal(JSON.stringify(edgePreview.secimTanisi).includes('GIZLI_DISARIDA_NOT'), false);
+  assert.equal(edgePreview.secimTanisi.kanitSayilari.constructor, 1, 'constructor kanıt türü sayısal 1 sayılmalıdır');
+  const parsedEdgeJson = JSON.parse(edgePreview.paketJson);
+  assert.equal(parsedEdgeJson.turetilmis[0].deger.ozet, 'Ortak bulgu');
+  assert.equal(parsedEdgeJson.turetilmis[1].deger.ozet, 'Ortak bulgu', 'paylaşılan nesnenin ikinci geçişi null yapılmamalıdır');
+  assert.equal(edgePreview.paketJson.includes('GIZLI_PAYLASILAN_NOT'), false);
+});
+
+test('Türkçe not yorumlama kök nedenleri: bağlaç ayrımı, başka görev öznesi, eksik AuditId, noktalı tarih, gecikmeden, hazır değildir, yeniden açılma ve okunamayan kaynak bastırması', () => {
+  const samplePeriod = { baslangic: '2026-11-02', bitis: '2026-11-08' };
+  const noteEntries = [
+    // 1. "Görev tamamlanmadı ama test ortamı hazır." → tamamlanmış görevle çelişki üretmeli.
+    { id: 'E1', _taskId: 'T_UNFIN', gorev: 'T_UNFIN', _projectId: P.KUZEY, metin: 'Görev tamamlanmadı ama test ortamı hazır.', surum_tipi: 'guncel', kayit_zamani: '2026-11-06T10:00:00+03:00' },
+    // 2. Başka görevin durumu ("Sonraki görev tamamlanmadı.") bu görevle çelişki üretmez; "Bu görev tamamlanmadı." üretir.
+    { id: 'E2', _taskId: 'T_OTHER', gorev: 'T_OTHER', _projectId: P.KUZEY, metin: 'Sonraki görev tamamlanmadı.', surum_tipi: 'guncel', kayit_zamani: '2026-11-06T10:00:00+03:00' },
+    { id: 'E3', _taskId: 'T_SELF', gorev: 'T_SELF', _projectId: P.KUZEY, metin: 'Bu görev tamamlanmadı.', surum_tipi: 'guncel', kayit_zamani: '2026-11-06T10:00:00+03:00' },
+    // 3. Eksik lastReopenAuditId (null) sıfıra çevrilmez → aynı milisaniyede kesin sıra yoksa çelişki üretmez.
+    { id: 'E4', _taskId: 'T_NULL_REOPEN_ID', gorev: 'T_NULL_REOPEN_ID', _projectId: P.KUZEY, _auditId: 11, metin: 'Görev tamamlandı.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00.123+03:00' },
+    // 4. "Risk yok." ardından "Test ertelendi." gerçek takvim planı olmadığı için not_surum_celiskisi üretmez.
+    { id: 'E5', _taskId: 'T_NO_PLAN', gorev: 'T_NO_PLAN', _projectId: P.KUZEY, metin: 'Risk yok.', surum_tipi: 'tarihsel', surum_sira: 1, kayit_zamani: '2026-11-03T10:00:00+03:00' },
+    { id: 'E6', _taskId: 'T_NO_PLAN', gorev: 'T_NO_PLAN', _projectId: P.KUZEY, metin: 'Test ertelendi.', surum_tipi: 'guncel', surum_sira: 2, kayit_zamani: '2026-11-05T10:00:00+03:00' },
+    // 5. Noktalı tarih ("12.11") bölünmeden plan iddiası olarak tanınır.
+    { id: 'E7', _taskId: 'T_DOTTED', gorev: 'T_DOTTED', _projectId: P.KUZEY, metin: 'Test 12.11 için planlandı ve ekip bilgilendirildi.', surum_tipi: 'tarihsel', surum_sira: 1, kayit_zamani: '2026-11-03T10:00:00+03:00' },
+    { id: 'E8', _taskId: 'T_DOTTED', gorev: 'T_DOTTED', _projectId: P.KUZEY, metin: 'Test ertelendi.', surum_tipi: 'guncel', surum_sira: 2, kayit_zamani: '2026-11-05T10:00:00+03:00' },
+    // 6. "gecikmeden" erteleme sayılmaz.
+    { id: 'E9', _taskId: 'T_NODELAY_ADV', gorev: 'T_NODELAY_ADV', _projectId: P.KUZEY, metin: 'Test 12 Kasım için planlandı.', surum_tipi: 'tarihsel', surum_sira: 1, kayit_zamani: '2026-11-03T10:00:00+03:00' },
+    { id: 'E10', _taskId: 'T_NODELAY_ADV', gorev: 'T_NODELAY_ADV', _projectId: P.KUZEY, metin: 'Test gecikmeden başlayacak.', surum_tipi: 'guncel', surum_sira: 2, kayit_zamani: '2026-11-05T10:00:00+03:00' },
+    // 7. "hazır değildir" olumsuz sayılır → "hazır değil" ile çelişmez, "hazır." ile çelişir.
+    { id: 'E11', _taskId: 'T_DEGILDIR_A', gorev: 'T_DEGILDIR_A', _projectId: P.MELTEM, metin: 'Test ortamı hazır değildir.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' },
+    { id: 'E12', _taskId: 'T_DEGILDIR_B', gorev: 'T_DEGILDIR_B', _projectId: P.MELTEM, metin: 'Test ortamı hazır değil.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' },
+    // 8. Yeniden açılmadan ÖNCE yazılan "Gecikme yok." çelişki üretmez; yeniden açılmadan SONRA yazılan üretir.
+    { id: 'E13', _taskId: 'T_REOPEN_BEFORE_ND', gorev: 'T_REOPEN_BEFORE_ND', _projectId: P.KUZEY, metin: 'Gecikme yok.', surum_tipi: 'guncel', kayit_zamani: '2026-11-06T10:00:00+03:00' },
+    { id: 'E14', _taskId: 'T_REOPEN_AFTER_ND', gorev: 'T_REOPEN_AFTER_ND', _projectId: P.KUZEY, metin: 'Gecikme yok.', surum_tipi: 'guncel', kayit_zamani: '2026-11-08T15:00:00+03:00' }
+  ];
+  const taskById = new Map([
+    ['T_UNFIN', { status: 'done', actualFinish: '2026-11-04', projectId: P.KUZEY }],
+    ['T_OTHER', { status: 'done', actualFinish: '2026-11-04', projectId: P.KUZEY }],
+    ['T_SELF', { status: 'done', actualFinish: '2026-11-04', projectId: P.KUZEY }],
+    ['T_NULL_REOPEN_ID', { status: 'in-progress', projectId: P.KUZEY, lastReopenAt: '2026-11-05T07:00:00.123Z', lastReopenAuditId: null }],
+    ['T_NO_PLAN', { status: 'in-progress', projectId: P.KUZEY }],
+    ['T_DOTTED', { status: 'in-progress', projectId: P.KUZEY }],
+    ['T_NODELAY_ADV', { status: 'in-progress', projectId: P.KUZEY }],
+    ['T_DEGILDIR_A', { status: 'in-progress', projectId: P.MELTEM }],
+    ['T_DEGILDIR_B', { status: 'in-progress', projectId: P.MELTEM }],
+    ['T_REOPEN_BEFORE_ND', { status: 'in-progress', targetFinish: '2026-11-04', projectId: P.KUZEY, lastReopenAt: '2026-11-08T09:00:00.000Z', lastReopenAuditId: 40 }],
+    ['T_REOPEN_AFTER_ND', { status: 'in-progress', targetFinish: '2026-11-04', projectId: P.KUZEY, lastReopenAt: '2026-11-08T09:00:00.000Z', lastReopenAuditId: 40 }]
+  ]);
+  const taskEvidenceIdByTaskId = new Map([...taskById.keys()].map((k, i) => [k, `E30${i}`]));
+  const conflicts = detectNoteDuplicatesAndContradictions({
+    noteEntries,
+    taskById,
+    taskEvidenceIdByTaskId,
+    today: '2026-11-09',
+    period: samplePeriod
+  });
+
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E1') && c.tur === 'durum_not_uyusmazligi'), true,
+    '"Görev tamamlanmadı ama test ortamı hazır." tamamlanmamış iş uyarısını korumalıdır');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E2')), false,
+    '"Sonraki görev tamamlanmadı." bu görevle çelişki üretmemelidir');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E3') && c.tur === 'durum_not_uyusmazligi'), true,
+    '"Bu görev tamamlanmadı." pozitif kontrolü çelişki üretmelidir');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E4')), false,
+    'eksik lastReopenAuditId (null) sıfıra çevrilip sahte sıra üretmemelidir');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E6') && c.tur === 'not_surum_celiskisi'), false,
+    'önceki notta takvim planı olmadan "Risk yok." → "Test ertelendi." çelişki üretmemelidir');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E7') && c.kanitlar.includes('E8') && c.tur === 'not_surum_celiskisi'), true,
+    'noktalı 12.11 tarihli plan ardından erteleme not_surum_celiskisi üretmelidir');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E10') && c.tur === 'not_surum_celiskisi'), false,
+    '"gecikmeden" ifadesi erteleme sayılmamalıdır');
+  assert.equal(conflicts.some((c) => c.tur === 'notlar_arasi_celiski'), false,
+    '"hazır değildir" ve "hazır değil" aynı olumsuz kutupta olup çelişki üretmemelidir');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E13')), false,
+    'yeniden açılmadan önce yazılan "Gecikme yok." notu çelişki üretmemelidir');
+  assert.equal(conflicts.some((c) => c.kanitlar.includes('E14') && c.tur === 'durum_not_uyusmazligi'), true,
+    'hem hedef bitiş hem yeniden açılma sonrası yazılan "Gecikme yok." çelişki üretmelidir');
+
+  // "hazır değildir" ile olumlu "hazır." pozitif kontrolü notlar_arasi_celiski üretir.
+  const degildirPosConflicts = detectNoteDuplicatesAndContradictions({
+    noteEntries: [
+      { id: 'E11', _taskId: 'T_DEGILDIR_A', gorev: 'T_DEGILDIR_A', _projectId: P.MELTEM, metin: 'Test ortamı hazır değildir.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' },
+      { id: 'E12', _taskId: 'T_DEGILDIR_B', gorev: 'T_DEGILDIR_B', _projectId: P.MELTEM, metin: 'Test ortamı hazır.', surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00' }
+    ],
+    taskById,
+    taskEvidenceIdByTaskId,
+    today: '2026-11-09',
+    period: samplePeriod
+  });
+  assert.equal(degildirPosConflicts.some((c) => c.tur === 'notlar_arasi_celiski'), true,
+    '"hazır değildir" olumlu "hazır." ile karşıt not çelişkisi üretmelidir');
+
+  // 9. Yetkisiz kaynak taşınma ardından okunamayan denetim satırı gelse de kaynak metin bastırması korunur.
+  const suppressedVersions = reconstructTaskNoteChronology({
+    task: { id: 'T_SUPPRESS', projectId: P.KUZEY },
+    auditEvents: [
+      { auditId: 1, occurredAt: '2026-11-02T09:00:00.000Z', actionCode: 'UPDATE', projectId: P.KUZEY, beforeReadable: false, beforeOriginUnauthorized: true, afterReadable: false },
+      { auditId: 2, occurredAt: '2026-11-03T09:00:00.000Z', actionCode: 'UPDATE', projectId: P.KUZEY, beforeReadable: false, afterReadable: false },
+      { auditId: 3, occurredAt: '2026-11-04T09:00:00.000Z', actionCode: 'UPDATE', projectId: P.KUZEY, beforeReadable: true, beforeDescription: 'YETKISIZ_KAYNAK_METNI_ASLA_ACILMAZ', afterReadable: true, afterDescription: 'Yetkili yeni not.' }
+    ],
+    period: samplePeriod
+  });
+  assert.equal(suppressedVersions.some((v) => v.metin.includes('YETKISIZ_KAYNAK_METNI_ASLA_ACILMAZ')), false,
+    'okunamayan ara denetim satırı yetkisiz kaynak metni bastırmasını düşürmemelidir');
+  assert.equal(suppressedVersions.some((v) => v.metin === 'Yetkili yeni not.'), true);
+});
+
+test('tarihsel nüfus, sıralama, kilometre taşı, not düşürme, etiket temizliği ve iptal/zaman aşımı kök nedenleri', async () => {
+  // 1. Kesit sonrası seçili kişiden başka kişiye atama çıkışı açık görev sayısını "complete: 0" göstermemeli ve bağımlılık tamlığını partial yapmalıdır.
+  const reassignedId = '61000000-0000-4000-8000-000000009971';
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: reassignedId, ProjectId: P.KUZEY, Title: 'Kesit sonrası başkasına devredilen görev',
+        Status: 'in-progress', Priority: 'high', TargetFinish: '2026-11-20',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-20T08:00:00.000Z', UpdatedAt: '2026-11-09T11:00:00.000Z'
+      }
+    ],
+    taskAssignees: [{ TaskId: reassignedId, Sicil: U.ECE }],
+    auditLog: [
+      {
+        AuditId: 9201, OccurredAt: '2026-11-09T11:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: reassignedId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress', CreatedBySicil: U.YONETICI, assigneeIds: [U.CAN] }),
+        AfterJson: JSON.stringify({ Status: 'in-progress', CreatedBySicil: U.YONETICI, assigneeIds: [U.ECE] })
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const pkg = (await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'kisi', kimlikler: ['Can Ertem'] },
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    })).evidencePackage;
+    assert.equal(pkg.tamlik.kesit_tutarli, false, 'kesit sonrası kişiden atama çıkışı kesit_tutarli: false olmalıdır');
+    assert.equal(pkg.tamlik.kapsam_gorunurlugu, 'partial');
+    assert.equal(pkg.tamlik.bagimliliklar, 'partial', 'kesit sonrası kapsam kaybı bağımlılık tamlığını partial yapmalıdır');
+  });
+
+  // 2. Kesit sonrası yeniden açılan tamamlanmış görev gecikmiş sıralama önceliği veya geciken_gun almaz;
+  //    denetim tamamlamaları audit gününe göre sıralanır; silinen kilometre taşı tamamlaması donemde_tamamlanan: null yapar;
+  //    maxNoteChars: 0 iken toplayıcıda düşen not görevde notlar_dusuruldu: true olarak işaretlenir.
+  const reopenedPostCutoffId = '61000000-0000-4000-8000-000000009972';
+  const genuinelyOverdueId = '61000000-0000-4000-8000-000000009973';
+  const auditEarlyTaskId = '61000000-0000-4000-8000-000000009974';
+  const auditLateTaskId = '61000000-0000-4000-8000-000000009975';
+  const openMilestoneId = '61000000-0000-4000-8000-000000009976';
+  const deletedMilestoneId = '61000000-0000-4000-8000-000000009977';
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: reopenedPostCutoffId, ProjectId: P.KUZEY, Title: 'Kesit sonrası yeniden açılan görev',
+        Status: 'in-progress', Priority: 'critical', TargetFinish: '2026-10-20',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T08:00:00.000Z', UpdatedAt: '2026-11-09T11:00:00.000Z'
+      },
+      {
+        TaskId: genuinelyOverdueId, ProjectId: P.KUZEY, Title: 'Gerçekten gecikmiş görev',
+        Status: 'in-progress', Priority: 'medium', TargetFinish: '2026-11-05',
+        Description: 'Bütçe sıfırken düşürülecek not.',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T08:00:00.000Z', UpdatedAt: '2026-11-06T08:00:00.000Z'
+      },
+      {
+        TaskId: openMilestoneId, ProjectId: P.KUZEY, Title: 'Açık kilometre taşı',
+        Status: 'in-progress', Priority: 'low', IsMilestone: 1, TargetFinish: '2026-11-25',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T08:00:00.000Z', UpdatedAt: '2026-11-01T08:00:00.000Z'
+      }
+    ],
+    auditLog: [
+      {
+        AuditId: 9210, OccurredAt: '2026-11-05T09:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'CREATE', EntityType: 'TASK', EntityId: deletedMilestoneId, ProjectId: P.KUZEY,
+        BeforeJson: null, AfterJson: JSON.stringify({ Status: 'done', IsMilestone: 1 })
+      },
+      {
+        AuditId: 9211, OccurredAt: '2026-11-06T09:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'DELETE', EntityType: 'TASK', EntityId: deletedMilestoneId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'done', IsMilestone: 1, CreatedBySicil: U.YONETICI, assigneeIds: [U.YONETICI] }),
+        AfterJson: null
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const pkg = (await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        notlar: 'dahil'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY,
+      limits: { maxNoteChars: 0 }
+    })).evidencePackage;
+    const tasks = pkg.kanitlar.filter((item) => item.tur === 'gorev');
+    const overdueIdx = tasks.findIndex((item) => item.gorev === genuinelyOverdueId);
+    const reopenedIdx = tasks.findIndex((item) => item.gorev === reopenedPostCutoffId);
+    assert.ok(overdueIdx >= 0 && reopenedIdx >= 0 && overdueIdx < reopenedIdx,
+      'kesit sonrası yeniden açılan görev gerçek geciken görevin önüne geçmemelidir');
+    assert.equal(tasks[reopenedIdx].geciken_gun, undefined,
+      'kesit sonrası değişen görev için geciken_gun yayımlanmamalıdır');
+    assert.equal(tasks[overdueIdx].notlar_dusuruldu, true,
+      'maxNoteChars: 0 nedeniyle toplayıcıda düşen not görev kanıtında notlar_dusuruldu: true taşımalıdır');
+    const ktFinding = pkg.turetilmis.find((f) => f.tur === 'kilometre_tasi_ozeti');
+    assert.ok(ktFinding, 'kilometre_tasi_ozeti üretilmelidir');
+    assert.equal(ktFinding.deger.donemde_tamamlanan, null,
+      'silinen tamamlamalar varken kilometre taşı dönem tamamlaması sıfır yerine null olmalıdır');
+  });
+
+  // 3. Denetim tamamlamaları audit gününe göre sıralanır (ActualFinish yanıltıcı olsa bile).
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: auditEarlyTaskId, ProjectId: P.KUZEY, Title: '2 Kasımda tamamlanan',
+        Status: 'done', Priority: 'medium', ActualFinish: '2026-11-08',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T08:00:00.000Z', UpdatedAt: '2026-11-02T10:00:00.000Z'
+      },
+      {
+        TaskId: auditLateTaskId, ProjectId: P.KUZEY, Title: '7 Kasımda tamamlanan',
+        Status: 'done', Priority: 'medium', ActualFinish: null,
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T08:00:00.000Z', UpdatedAt: '2026-11-07T10:00:00.000Z'
+      }
+    ],
+    auditLog: [
+      {
+        AuditId: 9220, OccurredAt: '2026-11-02T10:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: auditEarlyTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress' }), AfterJson: JSON.stringify({ Status: 'done' })
+      },
+      {
+        AuditId: 9221, OccurredAt: '2026-11-07T10:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: auditLateTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress' }), AfterJson: JSON.stringify({ Status: 'done' })
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const pkg = (await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY,
+      limits: { maxSelectedTasks: 1 }
+    })).evidencePackage;
+    const selectedTask = pkg.kanitlar.find((item) => item.tur === 'gorev');
+    assert.equal(selectedTask.gorev, auditLateTaskId, 'denetim tamamlama günü daha yeni olan görev seçilmelidir');
+  });
+
+  // 4. Görev-olgu okuması satır sınırına (maxAnalyzedTasks: 1) takılsa da denetimden bilinen dönem ve karşılaştırma tamamlamaları korunur.
+  const capOpenTaskId = '61000000-0000-4000-8000-000000000001';
+  const capDoneTaskId = '61000000-0000-4000-8000-000000009999';
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: capOpenTaskId, ProjectId: P.KUZEY, Title: 'Satır sınırında tutulan açık görev',
+        Status: 'in-progress', Priority: 'medium', TargetFinish: '2026-11-20',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T08:00:00.000Z', UpdatedAt: '2026-11-01T08:00:00.000Z'
+      },
+      {
+        TaskId: capDoneTaskId, ProjectId: P.KUZEY, Title: 'Satır sınırında düşen tamamlanan görev',
+        Status: 'done', Priority: 'medium', ActualFinish: '2026-11-05',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T08:00:00.000Z', UpdatedAt: '2026-11-05T08:00:00.000Z'
+      }
+    ],
+    auditLog: [
+      {
+        AuditId: 9230, OccurredAt: '2026-10-28T09:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: capDoneTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress' }), AfterJson: JSON.stringify({ Status: 'done' })
+      },
+      {
+        AuditId: 9231, OccurredAt: '2026-11-05T09:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: capDoneTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress' }), AfterJson: JSON.stringify({ Status: 'done' })
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const pkg = (await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        karsilastirma: 'onceki_donem',
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY,
+      toolLimits: { maxAnalyzedTasks: 1 }
+    })).evidencePackage;
+    const completedMetrics = pkg.kanitlar.filter((item) => item.tur === 'olcu' && item.olcu === 'tamamlanan');
+    const reportCompleted = completedMetrics.find((m) => m.donem?.baslangic === '2026-11-02');
+    const compCompleted = completedMetrics.find((m) => m.donem?.baslangic === '2026-10-26');
+    assert.equal(reportCompleted.deger, 1, 'olgu sınırında düşen tamamlanan görev dönem sayımında korunmalıdır');
+    assert.equal(reportCompleted.tamlik, 'partial');
+    assert.equal(compCompleted.deger, 1, 'olgu sınırında düşen tamamlanan görev karşılaştırma sayımında da korunmalıdır');
+    assert.equal(compCompleted.tamlik, 'partial');
+  });
+
+  // 5. Kişi rehber adında iç sekme (\t) varsa temizlenir ve paket sözleşmesinden geçer.
+  await withReportStack({}, U.YONETICI, async (stack) => {
+    const canRow = stack.db.people.find((p) => p.Sicil === U.CAN);
+    canRow.DisplayName = 'Can\tErtem';
+    const pkg = (await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'kisi', kimlikler: [String(U.CAN)] },
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    })).evidencePackage;
+    assert.equal(pkg.istek.kapsam.kimlikler[0], 'Can Ertem');
+    assert.equal(validateEvidencePackageContract(pkg).ok, true, 'iç kontrol karakteri temizlenen kişi etiketi sözleşmeden geçmelidir');
+  });
+
+  // 6. SQL okuma sırasında iptal veya süre aşımı QUERY_FAILED yerine sınıflandırılmış AiError olarak korunur.
+  await withReportStack({}, U.YONETICI, async () => {
+    const abortCtrl = new AbortController();
+    await assert.rejects(
+      () => buildExecutiveReportEvidence({
+        request: {
+          rapor_turu: 'haftalik',
+          donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+          kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+          notlar: 'haric'
+        },
+        now: REPORT_BENCH_NOW,
+        today: REPORT_BENCH_TODAY,
+        signal: abortCtrl.signal,
+        getPool: async () => {
+          abortCtrl.abort();
+          return new Promise(() => {});
+        }
+      }),
+      (err) => err instanceof AiError && err.code === AI_ERROR_CODES.AI_CANCELLED
+    );
+  });
+});
+
+test('SQL ve sentetik ikiz eşliği: aynı satırdan yeniden açılma/AuditId, sondaki boşluk, 4000 karakter JSON_VALUE, unassigned silme ve 500 karakter rosterText', async () => {
+  // 1. Üretim SQL sorgusu yeniden açılma ve hedef bitiş çiftlerini ROW_NUMBER ile aynı satırdan seçer.
+  assert.equal(AI_TOOL_TASK_FACTS_SQL.includes('ROW_NUMBER() OVER (PARTITION BY f.TaskId, statusCheck.IsReopen ORDER BY a.OccurredAt DESC, a.AuditId DESC)'), true);
+  assert.equal(AI_TOOL_TASK_FACTS_SQL.includes('ROW_NUMBER() OVER (PARTITION BY f.TaskId, tf.IsTargetFinishChange ORDER BY a.OccurredAt DESC, a.AuditId DESC)'), true);
+
+  const parityTaskId = '61000000-0000-4000-8000-000000009981';
+  const postDelTaskId = '61000000-0000-4000-8000-000000009982';
+  const longOrgUnit = 'U'.repeat(180);
+  await withReportStack({
+    tasks: [
+      {
+        TaskId: parityTaskId, ProjectId: P.KUZEY, Title: 'Eşlik denetim görevi',
+        Status: 'in-progress', Priority: 'high', TargetFinish: '2026-11-12',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-10-01T08:00:00.000Z', UpdatedAt: '2026-11-05T10:00:00.000Z'
+      }
+    ],
+    auditLog: [
+      // Daha eski zamanlı ama daha büyük AuditId (99): yeni zamanlı satırın AuditId (50) değerini ezmemelidir.
+      {
+        AuditId: 99, OccurredAt: '2026-11-03T10:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: parityTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'done ' }), AfterJson: JSON.stringify({ Status: 'in-progress' })
+      },
+      {
+        AuditId: 50, OccurredAt: '2026-11-05T10:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: parityTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'X'.repeat(4001), status: 'done ' }), AfterJson: JSON.stringify({ Status: 'in-progress' })
+      },
+      // Kesit sonrası silme: unassigned modunda 0, any modunda 1 dönmelidir.
+      {
+        AuditId: 120, OccurredAt: '2026-11-09T11:00:00.000Z', ActorSicil: U.YONETICI, ActorDisplayName: 'Selin Karahan',
+        ActionCode: 'DELETE', EntityType: 'TASK', EntityId: postDelTaskId, ProjectId: P.KUZEY,
+        BeforeJson: JSON.stringify({ Status: 'in-progress', CreatedBySicil: U.YONETICI, assigneeIds: [] }), AfterJson: null
+      }
+    ]
+  }, U.YONETICI, async (stack) => {
+    const canRow = stack.db.people.find((p) => p.Sicil === U.CAN);
+    canRow.Unit = longOrgUnit;
+    const pool = await getSqlPool();
+    const auth = await loadAuthorizationContext(pool, { sicil: U.YONETICI });
+    const scope = buildRotaScope(auth);
+    const factsAny = await readTaskFacts(pool, scope, {
+      projectId: P.KUZEY,
+      assigneeMode: 'any',
+      today: REPORT_BENCH_TODAY,
+      cutOffUtc: REPORT_BENCH_NOW,
+      maxRows: 50
+    });
+    const transition = factsAny.taskAuditTransitions.find((t) => t.taskId === parityTaskId);
+    assert.ok(transition, 'sondaki boşluk ve 4001 karakter Status yedeğiyle yeniden açılma yakalanmalıdır');
+    assert.equal(transition.lastReopenAt, '2026-11-05T10:00:00.000Z');
+    assert.equal(transition.lastReopenAuditId, 50, 'LastReopenAuditId en yeni yeniden açılma satırından (50) gelmelidir, 99 olmamalıdır');
+    assert.equal(factsAny.hasPostCutoffDeletion, true, 'any modunda kesit sonrası silme 1 dönmelidir');
+
+    const factsUnassigned = await readTaskFacts(pool, scope, {
+      projectId: P.KUZEY,
+      assigneeMode: 'unassigned',
+      today: REPORT_BENCH_TODAY,
+      cutOffUtc: REPORT_BENCH_NOW,
+      maxRows: 50
+    });
+    assert.equal(factsUnassigned.hasPostCutoffDeletion, false, 'unassigned modunda kesit sonrası silme SQL ELSE 0 kuralıyla 0 dönmelidir');
+
+    // 180 karakterlik düz birim adı NVarChar(500) bağlamasıyla eksiksiz eşleşir.
+    const roster = await readReportScopeRoster(pool, scope, {
+      mode: 'org_unit',
+      includeSelf: false,
+      text: longOrgUnit,
+      maxRows: 50
+    });
+    assert.equal(roster.members.some((m) => m.sicil === U.CAN), true);
+  });
+});

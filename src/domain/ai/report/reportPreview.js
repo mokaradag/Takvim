@@ -1,4 +1,4 @@
-import { PROTECTED_TEXT_KEYS, validateEvidencePackageContract } from './reportRequest.js';
+import { MAX_PACKAGE_NESTING_DEPTH, PROTECTED_TEXT_KEYS, validateEvidencePackageContract } from './reportRequest.js';
 
 /**
  * Bilgin Aşama 4I-A — Geliştirici ve sınama amaçlı yönetici kanıt paketi tanı önizlemesi (saf).
@@ -12,6 +12,10 @@ const PROTECTED_TEXT_KEY_SET = new Set(PROTECTED_TEXT_KEYS);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function ownProp(obj, key) {
+  return Object.hasOwn(obj, key) ? obj[key] : undefined;
 }
 
 function safeText(value, fallback = '-') {
@@ -30,24 +34,32 @@ function safeJson(value, fallback = '{}') {
   }
 }
 
-function redactProtectedKeysDeep(value, visited = new WeakSet()) {
+function redactProtectedKeysDeep(value, ancestors = new WeakSet(), depth = 0) {
   if (!value || typeof value !== 'object') return value;
-  if (visited.has(value)) return null;
-  visited.add(value);
-  if (Array.isArray(value)) return value.map((item) => redactProtectedKeysDeep(item, visited));
-  const cleaned = {};
-  let redactedAny = false;
-  for (const [key, val] of Object.entries(value)) {
-    if (PROTECTED_TEXT_KEY_SET.has(key)) {
-      redactedAny = true;
-      continue;
+  if (depth > MAX_PACKAGE_NESTING_DEPTH) return null;
+  // Yalnızca etkin çağrı yığınındaki atalar döngü sayılır; paylaşılan nesneler her geçtiği yerde tutarlı maskelenir.
+  if (ancestors.has(value)) return null;
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => redactProtectedKeysDeep(item, ancestors, depth + 1));
     }
-    cleaned[key] = redactProtectedKeysDeep(val, visited);
+    const cleaned = {};
+    let redactedAny = false;
+    for (const [key, val] of Object.entries(value)) {
+      if (PROTECTED_TEXT_KEY_SET.has(key)) {
+        redactedAny = true;
+        continue;
+      }
+      cleaned[key] = redactProtectedKeysDeep(val, ancestors, depth + 1);
+    }
+    if (redactedAny) {
+      cleaned.korunan_metin_gizlendi = true;
+    }
+    return cleaned;
+  } finally {
+    ancestors.delete(value);
   }
-  if (redactedAny) {
-    cleaned.korunan_metin_gizlendi = true;
-  }
-  return cleaned;
 }
 
 function sanitizePackageForPreview(pkg, { includeRawText = false } = {}) {
@@ -58,22 +70,24 @@ function sanitizePackageForPreview(pkg, { includeRawText = false } = {}) {
   for (const [key, val] of Object.entries(pkg)) {
     if (key === 'kanitlar') continue;
     if (PROTECTED_TEXT_KEY_SET.has(key)) continue;
-    sanitizedTop[key] = redactProtectedKeysDeep(val);
+    sanitizedTop[key] = redactProtectedKeysDeep(val, new WeakSet(), 1);
   }
   return {
     ...sanitizedTop,
     kanitlar: rawEntries.map((entry) => {
-      if (!isPlainObject(entry)) return redactProtectedKeysDeep(entry);
+      if (!isPlainObject(entry)) return redactProtectedKeysDeep(entry, new WeakSet(), 2);
       if (entry.tur === 'not') {
-        const cleaned = redactProtectedKeysDeep(entry);
-        delete cleaned.korunan_metin_gizlendi;
+        const cleaned = redactProtectedKeysDeep(entry, new WeakSet(), 2);
+        if (cleaned && typeof cleaned === 'object') {
+          delete cleaned.korunan_metin_gizlendi;
+        }
         return {
-          ...cleaned,
+          ...(cleaned || {}),
           metin_gizlendi: true,
           metin_karakter_sayisi: typeof entry.metin === 'string' ? Array.from(entry.metin).length : 0
         };
       }
-      return redactProtectedKeysDeep(entry);
+      return redactProtectedKeysDeep(entry, new WeakSet(), 2);
     })
   };
 }
@@ -90,7 +104,9 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
   const allowRawText = includeRawText === true && syntheticContext === true;
   const validation = validateEvidencePackageContract(evidencePackage);
   const unserializable = validation.problems.includes('paket:serilestirilemiyor');
-  const safePackage = unserializable
+  const depthExceeded = validation.problems.includes('paket:derinlik_siniri_asildi');
+  const rejectTreeWalk = unserializable || depthExceeded;
+  const safePackage = rejectTreeWalk
     ? null
     : sanitizePackageForPreview(evidencePackage, { includeRawText: allowRawText });
 
@@ -120,8 +136,12 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
   lines.push(`Boyut: ${rawKanitlar.length}/${safeText(sinirlar.kanit_sayisi_en_fazla)} kanıt | ${validation.serializedChars}/${safeText(sinirlar.karakter_en_fazla)} karakter`);
 
   const tamlik = isPlainObject(pkgObj.tamlik) ? pkgObj.tamlik : {};
+  const rawDisaridaKalan = ownProp(tamlik, 'disarida_kalan_kanit');
+  const safeDisaridaKalanKanit = Number.isSafeInteger(rawDisaridaKalan) && rawDisaridaKalan >= 0
+    ? rawDisaridaKalan
+    : 0;
   const tarihsizText = tamlik.tarihsiz_tamamlanan === null ? 'bilinmiyor' : safeText(tamlik.tarihsiz_tamamlanan);
-  lines.push(`Tamlık: kapsam=${safeText(tamlik.kapsam_gorunurlugu)}, hareket=${safeText(tamlik.hareket)}, tarihsiz_tamamlanan=${tarihsizText}, kesildi=${Boolean(tamlik.paket_kesildi)}, dışarıda_kalan=${safeText(tamlik.disarida_kalan_kanit, '0')}`);
+  lines.push(`Tamlık: kapsam=${safeText(tamlik.kapsam_gorunurlugu)}, hareket=${safeText(tamlik.hareket)}, tarihsiz_tamamlanan=${tarihsizText}, kesildi=${Boolean(tamlik.paket_kesildi)}, dışarıda_kalan=${safeDisaridaKalanKanit}`);
   if (tamlik.notlar) lines.push(`Not Tamlığı: ${safeText(tamlik.notlar)}`);
 
   lines.push('');
@@ -131,7 +151,13 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
     // Bozuk veya boş kanıt girdileri önizlemeyi düşürmez; doğrulama sorunları korunur.
     if (!isPlainObject(entry)) continue;
     const turKey = safeText(entry.tur, 'diger');
-    byType[turKey] = (byType[turKey] || 0) + 1;
+    const nextCount = (Object.hasOwn(byType, turKey) ? byType[turKey] : 0) + 1;
+    Object.defineProperty(byType, turKey, {
+      value: nextCount,
+      enumerable: true,
+      writable: true,
+      configurable: true
+    });
     const entryDonem = isPlainObject(entry.donem) ? entry.donem : null;
     const timeTag = entryDonem
       ? `dönem=${safeText(entryDonem.baslangic)}..${safeText(entryDonem.bitis)}`
@@ -185,8 +211,8 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
   }
 
   let paketJson;
-  if (unserializable) {
-    paketJson = JSON.stringify({ hata: 'paket:serilestirilemiyor' }, null, 2);
+  if (rejectTreeWalk) {
+    paketJson = JSON.stringify({ hata: unserializable ? 'paket:serilestirilemiyor' : 'paket:derinlik_siniri_asildi' }, null, 2);
   } else {
     try {
       paketJson = JSON.stringify(safePackage, null, 2) ?? 'null';
@@ -205,7 +231,7 @@ export function buildExecutiveEvidencePreview(evidencePackage, { includeRawText 
       turetimSayisi: safeTuretilmis.filter(isPlainObject).length,
       celiskiSayisi: safeCeliskiler.filter(isPlainObject).length,
       paketKesildi: Boolean(tamlik.paket_kesildi),
-      disaridaKalanKanit: tamlik.disarida_kalan_kanit ?? 0,
+      disaridaKalanKanit: safeDisaridaKalanKanit,
       karakterSayisi: validation.serializedChars,
       hamMetinDahil: allowRawText
     }

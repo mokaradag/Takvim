@@ -474,7 +474,7 @@ export async function readReportScopeRoster(executor, scope, {
   request.input('rosterIncludeSelf', sql.Bit, includeSelf ? 1 : 0);
   request.input('rosterMode', sql.VarChar(20), mode);
   request.input('rosterSicil', sql.Int, rosterSicil);
-  request.input('rosterText', sql.NVarChar(160), text || '');
+  request.input('rosterText', sql.NVarChar(500), text || '');
   request.input('rosterHierarchyKey', sql.NVarChar(500), hierarchyKey || '');
   request.input('rosterScopeType', sql.VarChar(20), scopeType || '');
   const [rosterRows = []] = recordsets(await request.query(AI_TOOL_REPORT_SCOPE_ROSTER_SQL));

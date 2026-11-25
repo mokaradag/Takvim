@@ -45,19 +45,21 @@ const NEGATED_ABSENCE_RE = /(?:engel|risk|sorun|gecikme|eksik|bloker|pürüz)\s+
 const PENDING_QUALIFIER_RE = /(?:bekleniyor|bekliyor|haftaya|ertelendi|sürüyor|devam\s+ediyor|eksik(?![\p{L}])|(?<![\p{L}])yok(?![\p{L}])|başlamad[ıi]|kesin\s+değil|planland[ıi])/iu;
 const OTHER_TASK_SUBJECT_RE = /(?:^|\s)(?:(?:bir\s+)?sonraki|sıradaki|diğer|başka|yeni|ikinci|üçüncü)\s+(?:görev|iş|adım|aşama|faz|paket|madde|kart|kalem)\p{L}*/iu;
 const BLOCKED_OR_NOT_DONE_RE = /(?:henüz\s+başlamad[ıi]|ertelendi|durduruldu|iptal\s+edildi|tamamlanmad[ıi]|bitmedi|teslim\s+edilmedi|hazır\s+değil)/iu;
-const SCHEDULED_DATE_RE = /(?:(?:\d{1,2}[./-]\d{1,2}|\d{4}-\d{2}-\d{2}|(?:ocak|şubat|mart|nisan|mayıs|haziran|temmuz|ağustos|eylül|ekim|kasım|aralık)|hafta|gün|tarih)[^.!?;,\n]{0,40}(?:planland[ıi]|hedeflendi|belirlendi)|(?:planland[ıi]|hedeflendi|belirlendi)(?=\s*(?:[.!?;,]|$))|risk\s+yok|gecikme\s+yok)/iu;
-// "gecikme yok / bulunmuyor / beklenmiyor / olmadı" ve "gecikme riski / olasılığı / ihtimali" erteleme sayılmaz.
-const POSTPONED_OR_NEGATED_RE = /(?:ertelendi|iptal\s+edildi|gecikti|gecikiyor|gecikme(?!\s+(?:yok|bulunmuyor|beklenmiyor|olmad[ıi]|risk\p{L}*|olas[ıi]l[ıi]\p{L}*|ihtimal\p{L}*|tehlike\p{L}*))|yeni\s+tarih\s+(?:ilan\s+edilmedi|belirsiz|yok))/iu;
+const SCHEDULED_DATE_RE = /(?:(?:\d{1,2}[./-]\d{1,2}|\d{4}-\d{2}-\d{2}|(?:ocak|şubat|mart|nisan|mayıs|haziran|temmuz|ağustos|eylül|ekim|kasım|aralık)|hafta|gün|tarih)[^.!?;,\n]{0,40}(?:planland[ıi]|hedeflendi|belirlendi)|(?:planland[ıi]|hedeflendi|belirlendi)(?=\s*(?:[.!?;,]|$)))/iu;
+// "gecikme yok / bulunmuyor / beklenmiyor / olmadı", "gecikmeden / gecikmeksizin" ve "gecikme riski / olasılığı / ihtimali" erteleme sayılmaz.
+const POSTPONED_OR_NEGATED_RE = /(?:ertelendi|iptal\s+edildi|gecikti|gecikiyor|gecikme(?!(?:\s+(?:yok|bulunmuyor|beklenmiyor|olmad[ıi]|risk\p{L}*|olas[ıi]l[ıi]\p{L}*|ihtimal\p{L}*|tehlike\p{L}*)|den(?![\p{L}])|ksizin(?![\p{L}])))|yeni\s+tarih\s+(?:ilan\s+edilmedi|belirsiz|yok))/iu;
 // Gecikmiş görev uyuşmazlığı yalnızca gecikmeyi açıkça reddeden ifadelerde kurulur; tek başına "risk yok" yeterli değildir.
 const EXPLICIT_NO_DELAY_CLAIM_RE = /(?:gecikme\s+(?:yok|bulunmuyor|beklenmiyor|olmad[ıi])|zamanında\s+(?:tamamlanacak|teslim\s+edilecek|ilerliyor)|takvimde\s+sapma\s+yok)/iu;
 const DELAY_ACKNOWLEDGED_RE = /(?:gecikti|gecikiyor|gecikme\s+var|ertelendi)/iu;
-// Tümce ve cümle ayırıcılar soru işaretini (?) sonda korur; böylece soru tümceleri olumlu bildirim sayılmaz.
-const SENTENCE_SPLIT_RE = /[.!;\n]+|(?<=\?)\s*/u;
-const CLAUSE_SPLIT_RE = /[.!;,\n]+|(?<=\?)\s*/u;
+// Tümce ve cümle ayırıcılar soru işaretini (?) sonda korur ve sayısal tarih içindeki noktaları (12.11) bölmez.
+const SENTENCE_SPLIT_RE = /(?:(?:\.(?!\d)|(?<!\d)\.)|[!;\n])+|(?<=\?)\s*/u;
+const CLAUSE_SPLIT_RE = /(?:(?:\.(?!\d)|(?<!\d)\.)|[!;,\n])+|(?<=\?)\s*/u;
+const CONTRASTIVE_CONJUNCTION_SPLIT_RE = /(?:^|\s)(?:ama|fakat|ancak|lakin)(?=\s|$)/iu;
 const TURKISH_QUESTION_PARTICLE_RE = /(?:^|\s)(?:m[ıiuü](?:d[ıiuü]r)?|acaba)(?=$|[\s?!.,;:])/iu;
 const TURKISH_CONDITIONAL_RE = /(?:^|\s)(?:eğer(?=$|[\s,])|ise(?![\p{L}])|(?:değil|hazır|olur|olmaz|kalır|kalmaz|gerekir|var|yok|tamamlanır|tamamlanmaz|biter|bitmez|gecik(?:ir|mez)|durur)s[ae](?:k|m|n|n[ıiuü]z|l[ae]r)?(?![\p{L}]))/iu;
-const READINESS_CLAUSE_RE = /(?:^|[\s:])((?:[\p{L}\d_-]+\s+){0,4}?)(?:(test|entegrasyon|üretim|canlı|staging|preprod|qa|uat|geliştirme|dev)\s+)?ortam(?:[ıi])?\s+hazır(?![\p{L}])(\s+değil(?![\p{L}]))?/iu;
-const READINESS_CLAUSE_GLOBAL_RE = /(?:^|[\s:])(?:(?:[\p{L}\d_-]+\s+){0,4}?)(?:(?:test|entegrasyon|üretim|canlı|staging|preprod|qa|uat|geliştirme|dev)\s+)?ortam(?:[ıi])?\s+hazır(?![\p{L}])(?:\s+değil(?![\p{L}]))?/giu;
+// "hazır değildir/değildi" olumsuz sayılır; "hazır" sonrasında herhangi bir "değil..." eki varsa olumlu eşleşmez.
+const READINESS_CLAUSE_RE = /(?:^|[\s:])((?:[\p{L}\d_-]+\s+){0,4}?)(?:(test|entegrasyon|üretim|canlı|staging|preprod|qa|uat|geliştirme|dev)\s+)?ortam(?:[ıi])?\s+hazır(?![\p{L}])(?:(\s+değil(?:d[ıiuü]r|di)?(?![\p{L}]))|(?!\s+değil))/iu;
+const READINESS_CLAUSE_GLOBAL_RE = /(?:^|[\s:])(?:(?:test|entegrasyon|üretim|canlı|staging|preprod|qa|uat|geliştirme|dev)\s+)?ortam(?:[ıi])?\s+hazır(?![\p{L}])(?:\s+değil(?:d[ıiuü]r|di)?(?![\p{L}]))?/giu;
 const GENERIC_SUBJECT_WORDS = new Set(['bu', 'şu', 'mevcut', 'ilgili', 'tüm', 'bütün', 'genel', 'ortak', 'test', 'entegrasyon', 'yeni', 'eski', 'diğer', 'için', 'ile', 've', 'veya', 'da', 'de']);
 
 function compareAscii(left, right) {
@@ -160,31 +162,41 @@ function duplicateKey(text) {
 function extractReadinessClaims(lowerText) {
   const claims = [];
   for (const clause of declarativeClauses(lowerText, CLAUSE_SPLIT_RE)) {
-    const match = READINESS_CLAUSE_RE.exec(clause);
-    if (!match) continue;
-    const prefixTokens = (match[1] || '')
-      .trim()
-      .split(/\s+/u)
-      .filter((token) => token.length > 0 && !GENERIC_SUBJECT_WORDS.has(token));
-    const envType = (match[2] || '').trim();
-    const subjectTokens = [...prefixTokens];
-    if (envType && !GENERIC_SUBJECT_WORDS.has(envType)) {
-      subjectTokens.push(envType);
+    for (const subClause of clause.split(CONTRASTIVE_CONJUNCTION_SPLIT_RE)) {
+      const part = subClause.trim();
+      if (!part) continue;
+      const match = READINESS_CLAUSE_RE.exec(part);
+      if (!match) continue;
+      const prefixTokens = (match[1] || '')
+        .trim()
+        .split(/\s+/u)
+        .filter((token) => token.length > 0 && !GENERIC_SUBJECT_WORDS.has(token));
+      const envType = (match[2] || '').trim();
+      const subjectTokens = [...prefixTokens];
+      if (envType && !GENERIC_SUBJECT_WORDS.has(envType)) {
+        subjectTokens.push(envType);
+      }
+      const subject = subjectTokens.join(' ');
+      const polarity = match[3] ? 'negative' : 'positive';
+      claims.push({ subject, polarity });
     }
-    const subject = subjectTokens.join(' ');
-    const polarity = match[3] ? 'negative' : 'positive';
-    claims.push({ subject, polarity });
   }
   return claims;
 }
 
-/** Görev düzeyinde olumsuz/tamamlanmamış iddia olup olmadığını yalnızca ortam hazırlığı parçasını dışlayarak denetler. */
+/** Görev düzeyinde olumsuz/tamamlanmamış iddia olup olmadığını yalnızca ortam hazırlığı ve başka görev öznelerini dışlayarak denetler. */
 function hasTaskLevelNotDoneClaim(lowerText) {
   for (const clause of declarativeClauses(lowerText, CLAUSE_SPLIT_RE)) {
-    // Ortam hazırlığı parçasını çıkarıp aynı tümcedeki bağımsız görev durumu bildirimini koru ("Test ortamı hazır ama görev tamamlanmadı.").
-    const withoutReadiness = clause.replace(READINESS_CLAUSE_GLOBAL_RE, ' ').trim();
-    if (!withoutReadiness) continue;
-    if (BLOCKED_OR_NOT_DONE_RE.test(withoutReadiness)) return true;
+    for (const subClause of clause.split(CONTRASTIVE_CONJUNCTION_SPLIT_RE)) {
+      const part = subClause.trim();
+      if (!part) continue;
+      // Başka bir görevin ("sonraki görev", "diğer görev") durumunu anlatan yan tümce bu görevle çelişki üretmez.
+      if (OTHER_TASK_SUBJECT_RE.test(part)) continue;
+      // Yalnızca ortam hazırlığı parçasını çıkar; aynı tümcedeki bağımsız görev durumu bildirimini koru.
+      const withoutReadiness = part.replace(READINESS_CLAUSE_GLOBAL_RE, ' ').trim();
+      if (!withoutReadiness) continue;
+      if (BLOCKED_OR_NOT_DONE_RE.test(withoutReadiness)) return true;
+    }
   }
   return false;
 }
@@ -409,7 +421,7 @@ export function reconstructTaskNoteChronology({
         afterUnauthorizedOriginMove = true;
         activeVersion = null;
       } else if (!after.readable || !after.text) {
-        afterUnauthorizedOriginMove = false;
+        if (after.readable) afterUnauthorizedOriginMove = false;
         activeVersion = null;
       } else {
         afterUnauthorizedOriginMove = false;
@@ -671,15 +683,20 @@ export function detectNoteDuplicatesAndContradictions({
     // Görev durumu ile yalnızca güncel olduğu doğrulanan ve kırpılmamış not arasında belirlenimci uyuşmazlık.
     if (task && taskEvidenceId && latest && latest.surum_tipi === 'guncel'
       && !latest.guvenilmez_yonerge_iceriyor && !latest.kirpildi) {
+      const parseOptionalAuditId = (value) => {
+        if (value === null || value === undefined || value === '') return null;
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
+      };
       const latestLower = latest.metin.toLocaleLowerCase('tr-TR');
       const latestDay = latest.kayit_zamani ? istanbulDay(latest.kayit_zamani) : null;
       const latestMs = latest.kayit_zamani ? Date.parse(latest.kayit_zamani) : Number.NaN;
-      const latestAuditId = Number.isFinite(Number(latest._auditId)) ? Number(latest._auditId) : null;
+      const latestAuditId = parseOptionalAuditId(latest._auditId);
       const rawReopen = lastReopenAtByTaskId?.get(taskId) ?? task.lastReopenAt ?? null;
       const reopenIso = typeof rawReopen === 'string' ? rawReopen : (rawReopen?.occurredAt || null);
-      const reopenAuditId = typeof rawReopen === 'object' && rawReopen !== null && Number.isFinite(Number(rawReopen.auditId))
-        ? Number(rawReopen.auditId)
-        : (Number.isFinite(Number(task.lastReopenAuditId)) ? Number(task.lastReopenAuditId) : null);
+      const reopenAuditId = typeof rawReopen === 'object' && rawReopen !== null
+        ? parseOptionalAuditId(rawReopen.auditId)
+        : parseOptionalAuditId(task.lastReopenAuditId);
       const reopenMs = reopenIso ? Date.parse(reopenIso) : Number.NaN;
       // Bilinen bir yeniden açılma varsa ve notun bu yeniden açılmadan SONRA yazıldığı (milisaniye veya AuditId ile) kanıtlanamıyorsa uyuşmazlık ilan edilmez.
       const notePostdatesKnownReopen = !Number.isFinite(reopenMs)
@@ -689,9 +706,9 @@ export function detectNoteDuplicatesAndContradictions({
         ));
       const rawTfChange = lastTargetFinishChangeByTaskId?.get(taskId) ?? task.lastTargetFinishChangeAt ?? null;
       const tfChangeIso = typeof rawTfChange === 'string' ? rawTfChange : (rawTfChange?.occurredAt || null);
-      const tfChangeAuditId = typeof rawTfChange === 'object' && rawTfChange !== null && Number.isFinite(Number(rawTfChange.auditId))
-        ? Number(rawTfChange.auditId)
-        : (Number.isFinite(Number(task.lastTargetFinishChangeAuditId)) ? Number(task.lastTargetFinishChangeAuditId) : null);
+      const tfChangeAuditId = typeof rawTfChange === 'object' && rawTfChange !== null
+        ? parseOptionalAuditId(rawTfChange.auditId)
+        : parseOptionalAuditId(task.lastTargetFinishChangeAuditId);
       const tfChangeMs = tfChangeIso ? Date.parse(tfChangeIso) : Number.NaN;
       // Not yazıldıktan SONRA hedef bitiş değiştirildiyse veya görev kesit sonrası değiştiyse mevcut hedef bitiş not anında yürürlükte sayılmaz.
       const deadlineEstablishedAtNoteTime = !task._postCutoffModified && (
@@ -711,7 +728,7 @@ export function detectNoteDuplicatesAndContradictions({
           gorev: task.code || taskId,
           aciklama: 'Görev kaydı açık görünürken görev notu işin tamamlandığını bildiriyor.'
         });
-      } else if (isTaskOverdue && deadlineEstablishedAtNoteTime && hasExplicitNoDelayClaim(latestLower)
+      } else if (isTaskOverdue && notePostdatesKnownReopen && deadlineEstablishedAtNoteTime && hasExplicitNoDelayClaim(latestLower)
         && Boolean(latestDay && task.targetFinish && latestDay > task.targetFinish)) {
         addConflict({
           tur: 'durum_not_uyusmazligi',
@@ -785,6 +802,7 @@ export async function collectReportNotes({
   if (consent !== 'dahil') {
     return {
       versions: [],
+      omittedTaskIds: new Set(),
       completeness: {
         riza: false,
         metin: 'hariç (rıza yok)',
@@ -807,6 +825,7 @@ export async function collectReportNotes({
     const emptyIncomplete = Boolean(tasksExcludedByTaskCap > 0 || factsTruncated);
     return {
       versions: [],
+      omittedTaskIds: new Set(),
       completeness: {
         riza: true,
         metin: tasksExcludedByTaskCap > 0
@@ -935,6 +954,7 @@ export async function collectReportNotes({
     ...version,
     _selectionOrder: index
   }));
+  const omittedTaskIds = new Set(prioritizedPool.slice(effectiveSelectedCap).map((version) => version.taskId).filter(Boolean));
 
   // Sunum sıralaması: görev önceliği korunarak aynı görevdeki sürümler kronolojik (eskiden yeniye) sıralanır.
   selected.sort((left, right) => {
@@ -987,6 +1007,7 @@ export async function collectReportNotes({
 
   return {
     versions: selected,
+    omittedTaskIds,
     completeness: {
       riza: true,
       metin: summaryParts.join('; '),
