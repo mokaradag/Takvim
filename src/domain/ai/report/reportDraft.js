@@ -105,7 +105,11 @@ function assertNoDuplicateJsonKeys(source) {
     }
     throw new ReportDraftError(REPORT_DRAFT_ERROR_CODES.NOT_JSON);
   };
-  const scanValue = (path) => {
+  const MAX_JSON_DEPTH = 64;
+  const scanValue = (path, depth = 0) => {
+    if (depth > MAX_JSON_DEPTH) {
+      throw new ReportDraftError(REPORT_DRAFT_ERROR_CODES.SCHEMA, path, 'max_depth');
+    }
     skipWs();
     if (pos >= len) return;
     const ch = source[pos];
@@ -127,7 +131,7 @@ function assertNoDuplicateJsonKeys(source) {
         skipWs();
         if (source[pos] === ':') pos += 1;
         const childPath = !FORBIDDEN_KEYS.has(key) && /^[a-z0-9_]+$/u.test(key) ? `${path}.${key}` : path;
-        scanValue(childPath);
+        scanValue(childPath, depth + 1);
         skipWs();
         if (source[pos] === ',') {
           pos += 1;
@@ -150,7 +154,7 @@ function assertNoDuplicateJsonKeys(source) {
       }
       let index = 0;
       while (pos < len) {
-        scanValue(`${path}[${index}]`);
+        scanValue(`${path}[${index}]`, depth + 1);
         index += 1;
         skipWs();
         if (source[pos] === ',') {
@@ -172,7 +176,7 @@ function assertNoDuplicateJsonKeys(source) {
     // Sayı, mantıksal değer ya da null belirteci.
     while (pos < len && !' \t\n\r,}]'.includes(source[pos])) pos += 1;
   };
-  scanValue('$');
+  scanValue('$', 0);
 }
 
 function requireText(value, maxChars, path) {

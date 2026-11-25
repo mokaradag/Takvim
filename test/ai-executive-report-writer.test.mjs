@@ -630,9 +630,11 @@ test('taslak gerileme: iki yönlü denetim, görünmez/yarım yedek metin, yinel
     return true;
   });
 
-  // Ham JSON içinde yinelenen anahtarlar (\u kaçışlı yazılış dahil) reddedilir.
+  // Ham JSON içinde yinelenen anahtarlar (\u kaçışlı yazılış dahil) ve aşırı iç içe geçmiş JSON yığın taşmadan reddedilir.
   const dupRaw = validDraftText(writerPlan).replace('"sozlesme":"4i-yazim-1"', '"sozlesme":"4i-yazim-1","sozles\\u006de":"4i-yazim-1"');
   assert.throws(() => parse(dupRaw), (error) => error instanceof draftModule.ReportDraftError && error.code === C.SCHEMA);
+  const deepJson = `${'{"a":'.repeat(5000)}1${'}'.repeat(5000)}`;
+  assert.throws(() => parse(deepJson), (error) => error instanceof draftModule.ReportDraftError && error.code === C.SCHEMA && error.reason === 'max_depth');
 
   // Boş iddialar dizisi reddedilir.
   assert.throws(() => parse(variant((d) => { d.iddialar = []; })),
@@ -1170,12 +1172,16 @@ test('nitelendirme ve önizleme betikleri gerileme: CLI doğrulama, homojen koş
   const gateDSummary = qual.summarizeRun(gateDRows);
   assert.equal(gateDSummary.yazar_sure_p95_standart_sn, 300);
 
-  // Koşu karşılaştırması girdi özeti ve eşzamanlılık farkını yakalar.
-  const sumA = qual.summarizeRun([makeRow()]);
-  const sumB = qual.summarizeRun([makeRow({ kosu: 'kosu-2', eszamanlilik: 2, girdi_iletileri_sha256: 'def' })]);
+  // Koşu karşılaştırması girdi özeti, eşzamanlılık ve etkin çıktı sınırı farkını yakalar.
+  const sumA = qual.summarizeRun([makeRow({ etkin_cikti_siniri: 50260 })]);
+  const sumB = qual.summarizeRun([makeRow({ kosu: 'kosu-2', eszamanlilik: 2, girdi_iletileri_sha256: 'def', etkin_cikti_siniri: 1000 })]);
   const cmp = qual.compareQualificationRuns(sumA, sumB);
   assert.equal(cmp.karsilastirilabilir, false);
-  assert.ok(cmp.uyusmazliklar.includes('eszamanlilik') && cmp.uyusmazliklar.includes('girdi_iletileri_sha256'));
+  assert.ok(cmp.uyusmazliklar.includes('eszamanlilik')
+    && cmp.uyusmazliklar.includes('girdi_iletileri_sha256')
+    && cmp.uyusmazliklar.includes('etkin_cikti_siniri'));
+  const sumBudgetOnly = qual.summarizeRun([makeRow({ kosu: 'kosu-3', etkin_cikti_siniri: 1000 })]);
+  assert.deepEqual(qual.compareQualificationRuns(sumA, sumBudgetOnly).uyusmazliklar, ['etkin_cikti_siniri']);
 
   // Çoklu insan B kapısı: 2 puanlayıcı >= 2 farkta 3. hakeme düşer ve genel_ortalama ölçüt ortalamalarının ortalamasıdır.
   const s28Item = entry('S28');
@@ -1195,6 +1201,44 @@ test('nitelendirme ve önizleme betikleri gerileme: CLI doğrulama, homojen koş
   assert.equal(twoHuman.editoryal.olcut_ortalamalari.E1, 3.75, 'S01 medyan(5,2,4)=4, S28 ort(3,4)=3.5 → E1 ort=3.75');
   assert.equal(twoHuman.editoryal.olcut_ortalamalari.E8, 4, 'S28 notsuz olduğu için E8 yalnız S01 üzerinden hesaplanır');
   assert.ok(qual.markdownSummary(twoHuman, [row1, s28Row]).includes('Editoryal (B kapısı'));
+
+  // 48 senaryonun tamamı iki insan puanlayıcıyla tamamlansa bile eşik altı aday B kapısından geçmez; eşik üstü aday geçer.
+  const all48Rows = packageSet.paketler.map((it) => {
+    const pl = plan.buildReportSectionPlan(it.paket, style);
+    const firstRef = it.paket.kanitlar[0]?.id ?? it.paket.turetilmis[0]?.id;
+    return makeRow({
+      senaryo: it.senaryo,
+      ayrinti: it.paket.istek.ayrinti,
+      paket_ozeti: it.paket_ozeti_sha256,
+      taslak: draftModule.parseReportDraft(validDraftText(pl, { ref: firstRef }), { plan: pl, evidencePackage: it.paket })
+    });
+  });
+  const all48Digests = Object.fromEntries(all48Rows.map((r) => [r.senaryo, qual.draftDigest(r)]));
+  const makeAll48Scores = (score, mekanik) => Object.fromEntries(packageSet.paketler.map((it) => {
+    const hasNotes = it.paket.kanitlar.some((k) => k.tur === 'not');
+    return [it.senaryo, { E1: score, E2: score, E3: score, E4: score, E5: score, E6: score, E7: score, E8: hasNotes ? score : null, E9: score, mekanik }];
+  }));
+  const failingGateB = qual.summarizeRun(all48Rows, {
+    editorial: {
+      kosu: 'kosu-1', taslak_ozetleri: all48Digests,
+      puanlayicilar: [{ tur: 'insan', puanlar: makeAll48Scores(1, true) }, { tur: 'insan', puanlar: makeAll48Scores(1, true) }]
+    }
+  });
+  assert.equal(failingGateB.editoryal.degerlendirme_tamamlandi, true);
+  assert.equal(failingGateB.editoryal.kapi_b_gecti, false);
+  assert.equal(failingGateB.editoryal.kapi_b_durumu, 'basarisiz');
+  assert.ok(failingGateB.editoryal.esik_ihlalleri.includes('genel_ortalama_4_alti')
+    && failingGateB.editoryal.esik_ihlalleri.includes('mekanik_orani_5_ustu'));
+
+  const passingGateB = qual.summarizeRun(all48Rows, {
+    editorial: {
+      kosu: 'kosu-1', taslak_ozetleri: all48Digests,
+      puanlayicilar: [{ tur: 'insan', puanlar: makeAll48Scores(4, false) }, { tur: 'insan', puanlar: makeAll48Scores(5, false) }]
+    }
+  });
+  assert.equal(passingGateB.editoryal.kapi_b_gecti, true);
+  assert.equal(passingGateB.editoryal.kapi_b_durumu, 'gecti');
+  assert.deepEqual(passingGateB.editoryal.esik_ihlalleri, []);
 
   // Kör puanlama paketi: çakışan tuzda yeni tuz dener, S28'de E8 uygulanmaz / S01'de kaynak notlarıyla uygulanır, HTML yorumları çitlenir.
   const htmlDraft = draftModule.parseReportDraft(JSON.stringify({

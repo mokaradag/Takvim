@@ -474,6 +474,11 @@ export function compareQualificationRuns(summaryA, summaryB) {
   if (bench.canonicalJson(a.girdi_iletileri_ozetleri ?? null) !== bench.canonicalJson(b.girdi_iletileri_ozetleri ?? null)) {
     mismatches.push('girdi_iletileri_sha256');
   }
+  const budgetsA = a.etkin_cikti_sinirlari ?? a.etkin_cikti_siniri ?? null;
+  const budgetsB = b.etkin_cikti_sinirlari ?? b.etkin_cikti_siniri ?? null;
+  if (bench.canonicalJson(budgetsA) !== bench.canonicalJson(budgetsB)) {
+    mismatches.push('etkin_cikti_siniri');
+  }
   return { karsilastirilabilir: mismatches.length === 0, uyusmazliklar: mismatches };
 }
 
@@ -634,18 +639,36 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
     ? applicableCriterionMeans.reduce((a, b) => a + b, 0) / applicableCriterionMeans.length
     : null;
   const mechanical = scoredEntries.filter(([, s]) => s.mekanik === true).map(([id]) => id);
+  const mechanicalRate = scoredEntries.length ? mechanical.length / scoredEntries.length : null;
   const fullCoverage = scoredEntries.length === validRows.length && incompleteRatings === 0 && unresolvedDisagreements.length === 0;
-  const gateBEligible = isMultiHuman && fullCoverage && validRows.length === packageByScenario.size;
+  const assessmentComplete = isMultiHuman && fullCoverage && validRows.length === packageByScenario.size;
+  // Kıyas çerçevesi §4 B kapısı eşikleri: genel ortalama >= 4,0; uygulanabilir her ölçüt >= 3,5; mekanik döküm <= %5.
+  const thresholdViolations = [];
+  if (assessmentComplete) {
+    if (!Number.isFinite(genelOrtalama) || genelOrtalama < 4.0) thresholdViolations.push('genel_ortalama_4_alti');
+    for (const c of EDITORIAL_CRITERIA) {
+      const avg = averages[c];
+      if (Number.isFinite(avg) && avg < 3.5) thresholdViolations.push(`olcut_3_5_alti:${c}`);
+    }
+    if (mechanicalRate === null || mechanicalRate > 0.05) thresholdViolations.push('mekanik_orani_5_ustu');
+  }
+  const gateBPassed = assessmentComplete ? thresholdViolations.length === 0 : null;
+  const gateBStatus = !isMultiHuman
+    ? 'gecici_insan_puani_bekliyor'
+    : (!assessmentComplete ? 'eksik_veya_uyusmazlik_bekliyor' : (gateBPassed ? 'gecti' : 'basarisiz'));
   return {
     degerlendirici: editorial.degerlendirici ?? null,
     puanlayici_sayisi: isMultiHuman ? editorial.puanlayicilar.length : 1,
-    nitelendirmeye_uygun: gateBEligible,
-    kapi_b_durumu: gateBEligible ? 'onayli' : (isMultiHuman ? 'eksik_veya_uyusmazlik_bekliyor' : 'gecici_insan_puani_bekliyor'),
+    degerlendirme_tamamlandi: assessmentComplete,
+    nitelendirmeye_uygun: assessmentComplete,
+    kapi_b_gecti: gateBPassed,
+    kapi_b_durumu: gateBStatus,
+    esik_ihlalleri: thresholdViolations,
     rapor_sayisi: scoredEntries.length,
     genel_ortalama: genelOrtalama,
     olcut_ortalamalari: averages,
     mekanik: mechanical,
-    mekanik_orani: scoredEntries.length ? mechanical.length / scoredEntries.length : null,
+    mekanik_orani: mechanicalRate,
     cozulmemis_uyusmazliklar: unresolvedDisagreements
   };
 }
@@ -797,6 +820,7 @@ export function summarizeRun(records, {
   const first = rescored[0];
   const reportedModels = [...new Set(rescored.flatMap(reportedModelsOf))];
   const inputDigests = Object.fromEntries(rescored.map((row) => [row.senaryo, row.girdi_iletileri_sha256 ?? null]));
+  const outputBudgets = Object.fromEntries(rescored.map((row) => [row.senaryo, row.etkin_cikti_siniri ?? row.cikti_siniri ?? null]));
   const isOnPrem = first.tasiyici === 'kurum-ici';
   const missingOnPremSettings = isOnPrem
     ? [
@@ -843,6 +867,7 @@ export function summarizeRun(records, {
       kanit_surumu_uyustu: allDigestsMatched,
       eszamanlilik: first.eszamanlilik ?? null,
       etkin_cikti_siniri: first.etkin_cikti_siniri ?? first.cikti_siniri ?? null,
+      etkin_cikti_sinirlari: outputBudgets,
       ornekleme: first.ornekleme ?? null,
       dusunme_kipi: first.dusunme_kipi ?? null,
       nicemleme: first.nicemleme ?? null,
