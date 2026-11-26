@@ -43,12 +43,17 @@ test('üretim komutu ve belgeler MERGEN Rota için 8008 portunu kullanır', () =
 test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
   for (const relativePath of DOC_AND_CONFIG_FILES) {
     const source = read(relativePath);
-    // Dağıtım komutu veya JSON yapılandırması olarak 8009 hiçbir yerde geçmez.
-    assert.doesNotMatch(source, /-p\s*8009/, relativePath);
-    assert.doesNotMatch(source, /"port"\s*:\s*"?8009"?/, relativePath);
-    // Ölçüm kayıtları ve özet dosyalarındaki rastlantısal 8009 dizeleri port başvurusu sayılmaz.
-    if (relativePath.startsWith('docs/') && /\.(sha256|json|jsonl|csv)$/i.test(relativePath)) continue;
-    const scannable = source.replace(/[0-9a-f]{64}/gi, '');
+    const isMeasurementData = relativePath.startsWith('docs/') && /\.(sha256|json|jsonl|csv)$/i.test(relativePath);
+    const isSha256Manifest = relativePath.startsWith('docs/kayitlar/') && relativePath.endsWith('.sha256');
+    // Ölçüm kayıtları ve özet dosyaları da dağıtım komutu, URL veya PORT ayarıyla 8009 taşıyamaz.
+    if (isMeasurementData) {
+      assert.doesNotMatch(source, /-p\s*8009\b/, relativePath);
+      assert.doesNotMatch(source, /"port"\s*:\s*"?8009"?/, relativePath);
+      assert.doesNotMatch(source, /\bPORT\s*=\s*8009\b/, relativePath);
+      assert.doesNotMatch(source, /https?:\/\/[^\s"'`]+:8009\b/i, relativePath);
+      continue;
+    }
+    const scannable = isSha256Manifest ? source.replace(/[0-9a-f]{64}/gi, ' ') : source;
     // Paragraf düzeyinde bakılır: cümle satır sonuna sarabilir.
     for (const paragraph of scannable.split(/\n\s*\n/)) {
       if (!paragraph.includes('8009')) continue;
@@ -59,6 +64,10 @@ test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
         `${relativePath}: 8009 yalnızca MERGEN Bilge bağlamında anılabilir → ${paragraph.trim().slice(0, 120)}`
       );
     }
+    assert.doesNotMatch(source, /-p\s*8009\b/, relativePath);
+    assert.doesNotMatch(source, /"port"\s*:\s*"?8009"?/, relativePath);
+    assert.doesNotMatch(source, /\bPORT\s*=\s*8009\b/, relativePath);
+    assert.doesNotMatch(source, /https?:\/\/[^\s"'`]+:8009\b/i, relativePath);
   }
 });
 
@@ -170,9 +179,11 @@ test('depoda gerçek sicil, gerçek jeton veya gerçek kurumsal adres bulunmaz',
     if (file === selfPath) continue;
     if (!statSync(file).isFile()) continue;
     const source = readFileSync(file, 'utf8');
-    const relative = path.relative(ROOT, file);
-    // SHA-256 özetlerindeki rastlantısal onaltılık eşleşmeler gerçek sicil sayılmaz.
-    const scannable = source.replace(/[0-9a-f]{64}/gi, '');
+    const relative = path.relative(ROOT, file).split(path.sep).join('/');
+    // Yalnızca kayıt SHA-256 özet dosyalarındaki 64 haneli onaltılık özetler gerçek sicil sayılmaz; boşlukla değiştirilerek komşu karakter birleşimi önlenir.
+    const scannable = relative.startsWith('docs/kayitlar/') && relative.endsWith('.sha256')
+      ? source.replace(/[0-9a-f]{64}/gi, ' ')
+      : source;
     // Kaldırılan gerçek sicil değerleri geri gelmemelidir.
     for (const sicil of ['10276', '18068', '23977', '17205']) {
       assert.equal(scannable.includes(sicil), false, `${relative}: gerçek sicil değeri (${sicil}) bulunmamalıdır`);
