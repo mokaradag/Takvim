@@ -1083,10 +1083,12 @@ test('kanıt, plan ve istem ek kök neden gerilemeleri: proje kodu çakışması
   const partialRiskPlan = plan.buildReportSectionPlan(partialRiskPkg, style);
   assert.ok(allDisclosures(partialRiskPlan).some((y) => y.yonerge.includes('görünür')));
 
-  // Tarihsiz çelişki notunda tarih sırası vurgulanmaz; tarihli çelişkide vurgulanır.
+  // Tarihli S17 çelişkisinde zaman sırası yönergesi verilir; kayit_zamani olmayan tarihsiz çelişkide zaman sırası uydurulmaz.
+  const datedPlan = plan.buildReportSectionPlan(pkgOf('S17'), style);
+  assert.ok(allDisclosures(datedPlan).some((y) => y.yonerge.includes('zaman sırasıyla açıkça anlat')));
   const undatedConflictPkg = pkgOf('S17');
   undatedConflictPkg.celiskiler = [{ tur: 'not_celiskisi', aciklama: 'İki not farklı durum bildiriyor', kanitlar: ['E1', 'E2'] }];
-  undatedConflictPkg.kanitlar = undatedConflictPkg.kanitlar.map((k) => ({ ...k, tarih: undefined, guncelleme: undefined }));
+  undatedConflictPkg.kanitlar = undatedConflictPkg.kanitlar.map((k) => ({ ...k, kayit_zamani: undefined, tarih: undefined, guncelleme: undefined }));
   const undatedPlan = plan.buildReportSectionPlan(undatedConflictPkg, style);
   assert.ok(allDisclosures(undatedPlan).some((y) => y.yonerge.includes('kesin bir zaman sırası bulunmuyor')));
 

@@ -388,11 +388,14 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   }
   const validConflicts = (pkg.celiskiler || []).filter((conflict) => isPlainObject(conflict) && Array.isArray(conflict.kanitlar));
   const itemById = new Map(pkg.kanitlar.filter((item) => isPlainObject(item) && typeof item.id === 'string').map((item) => [item.id, item]));
+  const isValidTimestamp = (ts) => typeof ts === 'string' && ts.trim().length >= 10 && isIsoDay(ts.trim().slice(0, 10));
   const hasOrderableConflictTime = (conflict) => {
+    const explicit = Array.isArray(conflict.kronoloji) ? conflict.kronoloji.filter(isValidTimestamp) : [];
+    if (explicit.length >= 2 && new Set(explicit).size >= 2) return true;
     const timestamps = conflict.kanitlar
       .map((id) => itemById.get(id))
-      .map((item) => (isPlainObject(item) ? (item.kayit_ani || item.zaman || item.tarih || null) : null))
-      .filter((ts) => typeof ts === 'string' && ts.trim().length >= 10 && isIsoDay(ts.slice(0, 10)));
+      .map((item) => (isPlainObject(item) ? (item.kayit_zamani || item.kayit_ani || item.zaman || item.tarih || null) : null))
+      .filter(isValidTimestamp);
     return timestamps.length >= 2 && new Set(timestamps).size >= 2;
   };
   const orderedConflictGuidance = 'Bu kanıtlar birbiriyle çelişiyor. Çelişkiyi zaman sırasıyla açıkça anlat ve en güncel kaydı esas al; değişikliği söyle, hangisinin doğru olduğuna kanıt ötesinde karar verme ve yeni tarih uydurma.';
