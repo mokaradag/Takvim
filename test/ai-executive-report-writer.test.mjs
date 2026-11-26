@@ -1961,4 +1961,39 @@ test('yakınsama kök neden gerilemeleri: proje etiket birliği, sözleşme sın
   const dengeProperDraft = { bolumler: [{ kimlik: 'yonetici_degerlendirmesi', paragraflar: [{ metin: 'Denge projesinde ilerleme var.' }] }] };
   const dengeProperCheck = bench.assessDraftObjectively({ draft: dengeProperDraft, pkg: pkgOf('S45'), fixture });
   assert.equal(dengeProperCheck.uydurma_kimlik.includes('Denge'), true, 'Büyük harfli "Denge" uydurma proje adı olarak yakalanmalıdır');
+
+  // Vekil koşusunda yanıt alamayan altyapı hatası (dusunme tanı alanı yok) homojen koşu özetini engellememelidir.
+  const proxyWithInfra = qual.selectHomogeneousRun([
+    { kosu: 'k2', senaryo: 'S01', tasiyici: 'vekil', durum: 'altyapi_hatasi', model: { beklenen: 'm' } },
+    { kosu: 'k2', senaryo: 'S02', tasiyici: 'vekil', durum: 'gecerli', dusunme: 'on', model: { beklenen: 'm' } }
+  ]);
+  assert.equal(proxyWithInfra.length, 2);
+
+  // Tarihsel paket uyuşmazlığı izniyle yeniden taranmayan satırlar sıfır ihlal değil taranmadı (null) sayılmalıdır.
+  const histEntry = packageSet.paketler.find((entry) => entry.senaryo === 'S01');
+  const histDraft = {
+    bolumler: [{ kimlik: 'yonetici_degerlendirmesi', baslik: 'Yönetici Değerlendirmesi', paragraflar: [{ metin: 'Özet metin.', kanitlar: ['E1'] }] }],
+    iddialar: []
+  };
+  const histSummary = qual.summarizeRun([
+    {
+      kosu: 'k-hist',
+      senaryo: 'S01',
+      tasiyici: 'vekil',
+      durum: 'gecerli',
+      ayrinti: 'standart',
+      sure_ms: 1000,
+      paket_kumesi_ozeti: 'eski-kume',
+      paket_ozeti: 'eski-paket',
+      model: { beklenen: 'm', bildirilen: ['m'], dogrulandi: true },
+      taslak: histDraft
+    }
+  ], { set: packageSet, fixture, allowHistoricalDigestMismatch: true });
+  assert.equal(histSummary.rapor[0].nesnel_tarama_durumu, 'taranmadi');
+  assert.equal(histSummary.rapor[0].yetkisiz_aciklama, null);
+  assert.equal(histSummary.rapor[0].uydurma_kimlik, null);
+  assert.equal(histSummary.rapor[0].uydurma_tarih, null);
+  assert.equal(histSummary.yetkisiz_aciklama_toplam, null);
+  assert.equal(histSummary.uydurma_kimlik_tarih_toplam, null);
+  assert.ok(histEntry);
 });
