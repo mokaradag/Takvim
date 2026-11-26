@@ -49,6 +49,8 @@ const INTEGER_SETTINGS = Object.freeze({
   [NAMES.PROVIDER_IDLE_TIMEOUT_MS]: { fallback: 45000, min: 100, max: ASSISTANT_TIMING.providerMaxMs }
 });
 
+export const AI_REQUEST_TIMEOUT_BOUNDS = Object.freeze({ ...INTEGER_SETTINGS[NAMES.REQUEST_TIMEOUT_MS] });
+
 function text(env, name) {
   const raw = env[name];
   return raw == null ? '' : String(raw).trim();
@@ -61,6 +63,13 @@ function parseBoolean(env, name, fallback, issues) {
   if (/^(0|false|no|hayir|hayır)$/i.test(raw)) return false;
   issues.push(name);
   return false;
+}
+
+/** Üretim ortam değişkeni mantıksal dilbilgisini (1/true/yes/evet, 0/false/no/hayir/hayır) çözümler. */
+export function parseAiBooleanFlag(env, name, fallback = false) {
+  const issues = [];
+  const value = parseBoolean(env || {}, name, fallback, issues);
+  return { ok: issues.length === 0, value };
 }
 
 function parseInteger(env, name, issues) {

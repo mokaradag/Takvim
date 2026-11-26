@@ -108,7 +108,13 @@ export function scenarioSeed(spec) {
     const status = t.s;
     const finished = status === 'done' ? (t.af === undefined ? t.tf : t.af) : null;
     const owners = t.as || [actorName];
-    const updatedCandidates = [t.olusturma || '2026-09-15', ...(finished ? [finished] : []), ...notes.map((n) => n.at), ...(t.guncelleme ? [t.guncelleme] : [])];
+    const updatedCandidates = [
+      t.olusturma || '2026-09-15',
+      ...(finished ? [finished] : []),
+      ...notes.map((n) => n.at),
+      ...(t.guncellemeler || []).map((change) => change.at),
+      ...(t.guncelleme ? [t.guncelleme] : [])
+    ];
     tasks.push({
       TaskId: id, ProjectId: projectId(t.p), Title: t.t, Status: status, Priority: t.pr || 'medium', IsMilestone: t.ms ? 1 : 0,
       TargetFinish: t.tf ?? null, ActualStart: t.ab ?? null, ActualFinish: finished ?? null,
@@ -193,7 +199,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { k: 'h', p: 'Kuzey', t: 'Veri kalite raporu şablonu', s: 'planned', tf: '2026-11-27', as: ['Can Ertem'] }
     ],
     zorunlu: [
-      { id: 'Z1', olgu: 'Dönemde üç görev tamamlandı (doğrulama kuralları, hata kayıtlarının sınıflandırılması, örnekleme betiği).', anahtarlar: [['3 görev', '3 iş', 'üç görev', '3 tamamlanan'], ['doğrulama kural'], ['örnekleme betiği', 'örnekleme']] },
+      { id: 'Z1', olgu: 'Dönemde üç görev tamamlandı (doğrulama kuralları, hata kayıtlarının sınıflandırılması, örnekleme betiği).', anahtarlar: [['3 görev', '3 iş', 'üç görev', '3 tamamlanan'], ['doğrulama kural'], ['hata kayıt', 'sınıflandır'], ['örnekleme betiği', 'örnekleme']] },
       { id: 'Z2', olgu: 'Gece aktarım işinin yeniden tasarımı sürüyor; notta kaynak sunucu kapasitesinin net olmadığı belirtiliyor.', anahtarlar: [['gece aktarım'], ['kapasite']] }
     ]
   },
@@ -434,7 +440,7 @@ export const WRITER_SCENARIOS = Object.freeze([
   {
     id: 'S18', aktor: 'yonetici', istek: req('aylik', MONTH, ekip('Veri Akışı Ekibi'), { odak: 'riskler' }),
     gorevler: [
-      { p: 'Ufuk', t: 'Gerçek zamanlı akış motoru', s: 'in-progress', pr: 'critical', tf: '2026-10-20', as: ['Can Ertem'],
+      { p: 'Ufuk', t: 'Gerçek zamanlı akış motoru', s: 'in-progress', pr: 'critical', olusturma: '2026-08-01', tf: '2026-10-20', as: ['Can Ertem'],
         notlar: [{ at: at('2026-08-04', '11:00'), metin: 'risk yok, plana uygun ilerliyor' }] },
       { p: 'Ufuk', t: 'Akış motoru performans testi', s: 'planned', pr: 'high', tf: '2026-11-10', as: ['Ece Tunalı'] },
       { p: 'Kuzey', t: 'Saha veri toplayıcı', s: 'done', tf: '2026-10-15', af: '2026-10-14', as: ['Ece Tunalı'] }
@@ -621,7 +627,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Denge', t: 'Denge ortak entegrasyon görevi', s: 'in-progress', pr: 'high', tf: '2026-11-18', as: ['Can Ertem', 'Mert Yalçıner'] },
       { p: 'Kuzey', t: 'Kuzey kart üretim dosyaları', s: 'done', tf: '2026-10-15', af: '2026-10-14', as: ['Ece Tunalı'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Denge projesi iki birimin işini içerir; iki sorumlulu tamamlanan görev çift sayılmaz (üç tamamlanan görev).', anahtarlar: [['denge'], ['3 görev', 'üç görev', '3 tamamlan', 'üç tamamlan']] }]
+    zorunlu: [{ id: 'Z1', olgu: 'Müdürlük genelinde 3 görev tamamlandı (Denge projesinde 2, Kuzey projesinde 1); iki sorumlulu görev üretici tarafında tekilleştirilerek çift sayılmaz.', anahtarlar: [['denge'], ['3 görev', 'üç görev', '3 tamamlan', 'üç tamamlan']] }]
   },
   {
     id: 'S36', aktor: 'yonetici', istek: req('haftalik', WEEK, proje('Pusula')),
@@ -747,7 +753,7 @@ export const WRITER_SCENARIOS = Object.freeze([
 export const REPRESENTATIVE_MANDATORY_KEYS = Object.freeze({
   R1: { Z1: [['montaj'], ['5 kasım']], Z2: [['test cihaz'], ['saha test']] },
   R2: { Z1: [['18'], ['ufuk'], ['pusula']], Z2: [['harici onay', 'entegrasyon plan'], ['4 kasım', 'hedef tarih']] },
-  R3: { Z1: [['18']], Z2: [['52'], ['14'], ['geciken', 'gecikmiş']] },
+  R3: { Z1: [['18']], Z2: [['52'], ['14'], ['7 geciken', '7 gecikmiş', 'geciken 7', 'gecikmiş 7', '7 görev gecik', '7 iş gecik', 'geciken görev sayısı 7']] },
   R4: { Z1: [['12 kasım'], ['ertelen']] },
   R5: { Z1: [['doğrulama rapor'], ['kayıtlı değil', 'kayıtlı olmadığ', 'tarihi yok', 'tarihi bulunmu', 'bilinmiyor', 'tarihsiz', 'kaydedilmemiş']] },
   R6: { Z1: [['sürüm paket'], ['devam', 'sürüyor', 'açık']], Z2: [['test cihaz'], ['5 kasım', 'hedef tarih']] },
@@ -765,7 +771,7 @@ export const S09_UNEQUAL_REQUEST = Object.freeze({
   karsilastirma_donemi: { baslangic: '2026-10-10', bitis: '2026-10-18' }
 });
 export const S09_MANDATORY = Object.freeze([
-  { id: 'Z1', olgu: 'On günlük özel dönem (30 Ekim – 8 Kasım) eşit uzunluktaki 10–19 Ekim dönemiyle karşılaştırılır.', anahtarlar: [['30 ekim'], ['8 kasım'], ['10', '19 ekim']] },
+  { id: 'Z1', olgu: 'On günlük özel dönem (30 Ekim – 8 Kasım) eşit uzunluktaki 10–19 Ekim dönemiyle karşılaştırılır.', anahtarlar: [['30 ekim'], ['8 kasım'], ['10 ekim'], ['19 ekim']] },
   { id: 'Z2', olgu: 'Saha prototipi mekanik montajı dönemde tamamlandı; saha testi henüz başlamadı.', anahtarlar: [['montaj'], ['saha test']] }
 ]);
 

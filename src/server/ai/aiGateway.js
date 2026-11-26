@@ -425,7 +425,7 @@ export function createAiGateway({
    * olduğunu söyler: sağlayıcının 400/413/422 yanıtı kullanıcı hatası değil,
    * yapılandırma hatasıdır.
    */
-  async function completeChat({ profile, messages, maxOutputTokens = null, signal = null, requireText = false, callerInput = true, beforeDispatch = null }) {
+  async function completeChat({ profile, messages, maxOutputTokens = null, sampling = null, signal = null, requireText = false, callerInput = true, beforeDispatch = null }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     let lease = null;
@@ -470,6 +470,7 @@ export function createAiGateway({
               model: route.model,
               messages: safeMessages,
               maxOutputTokens: outputLimit,
+              ...(sampling ? { sampling } : {}),
               signal: attemptSignal
             });
           } catch (error) {

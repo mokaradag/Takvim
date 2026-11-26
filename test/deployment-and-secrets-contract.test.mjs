@@ -43,8 +43,9 @@ test('üretim komutu ve belgeler MERGEN Rota için 8008 portunu kullanır', () =
 test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
   for (const relativePath of DOC_AND_CONFIG_FILES) {
     const source = read(relativePath);
-    // Dağıtım komutu olarak 8009 hiçbir yerde geçmez.
+    // Dağıtım komutu veya JSON yapılandırması olarak 8009 hiçbir yerde geçmez.
     assert.doesNotMatch(source, /-p\s*8009/, relativePath);
+    assert.doesNotMatch(source, /"port"\s*:\s*"?8009"?/, relativePath);
     // Ölçüm kayıtları ve özet dosyalarındaki rastlantısal 8009 dizeleri port başvurusu sayılmaz.
     if (relativePath.startsWith('docs/') && /\.(sha256|json|jsonl|csv)$/i.test(relativePath)) continue;
     const scannable = source.replace(/[0-9a-f]{64}/gi, '');

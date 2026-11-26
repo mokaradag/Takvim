@@ -324,9 +324,10 @@ Bağlayıcı kurallar:
   geçersiz paragraf göndergesi, denetim ve çift yönlü metin karakterleri reddedilir. İsteğe bağlı bölüm eksikliği, sıra
   düzeltmesi, alıntısı paragrafta bulunmayan iddia, düzyazıda kanıt kimliği, ISO tarih ve madde işareti uyarıdır.
 - **Yürütme:** Taslak başına en çok 1 yazım çağrısı (`REPORT_WRITER_CALLS_PER_DRAFT`); yeniden deneme, başka profile
-  geçiş ya da sınır yükseltmesi yoktur. `finishReason: length` kısmi çıktıdır ve reddedilir. Bildirilen model kimliği
-  yapılandırılan modelden ve kayıtta onun için bildirilen yanıt adlarından (`reportedModels`) farklıysa taslak reddedilir;
-  kimlik bildirilmemişse taslak doğrulanmamış işaretlenir. Çıktı belirteci isteği akıl yürüten modellerin düşünme payını
+  geçiş ya da sınır yükseltmesi yoktur. `finishReason: length` kısmi çıktıdır ve reddedilir. Sohbet modellerinde kayıt
+  takma ad (`reportedModels`) tanımlamadığından bildirilen model kimliği yapılandırılan model adıyla bire bir
+  eşleşmelidir; farklıysa taslak reddedilir, kimlik bildirilmemişse taslak doğrulanmamış işaretlenir. Çıktı belirteci
+  isteği akıl yürüten modellerin düşünme payını
   içerir (vekil koşuda düşük efor bile 20–42 bin düşünme belirteci harcadı) ve ağ geçidinde profil sınırıyla daraltılır.
   İçerik ancak çağıranın verdiği `revalidate` denetimi açıkça `true` dönerse döner; yoksa `AUTHORIZATION_CHANGED`.
 - **Stil belgesinin çalışma zamanı okuması (§16):** Yazar ayrıştırılmış stil belgesini parametre olarak alır; `src`

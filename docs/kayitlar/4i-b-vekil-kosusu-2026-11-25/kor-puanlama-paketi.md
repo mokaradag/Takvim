@@ -7,6 +7,9 @@ Her taslağı kıyas çerçevesinin §4 ölçütüyle (E1–E9, 1–5) puanlayı
 gizlenmemesi için düz metin çitinde birebir sunulur. E8 (not dönüşümü) yalnızca dondurulmuş kanıt paketinde en az bir görev notu
 bulunan taslaklarda uygulanır ve uygulanabilirlik her taslak altında doğrudan belirtilir.
 
+> **Arşiv ve dağıtım uyarısı:** Bu dosya geliştirme arşiv kopyasıdır. Kör insan puanlamasında puanlayıcılara `kosu-kaydi.jsonl`
+> içeren bu arşiv dizini verilmez; koordinatör yalnızca `insan-paketi` komutuyla yalıtılmış bir dizine üretilen paket ve çizelgeyi paylaşır.
+
 ## K-083FEB
 
 İstek: aylik · mudurluk · ayrıntı standart · odak riskler · notlar dahil

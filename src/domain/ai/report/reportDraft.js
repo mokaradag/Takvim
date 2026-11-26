@@ -43,12 +43,14 @@ const ROOT_KEYS = new Set(['sozlesme', 'bolumler', 'iddialar']);
 const SECTION_KEYS = new Set(['kimlik', 'paragraflar', 'one_cikan_tespit']);
 const PARAGRAPH_KEYS = new Set(['metin', 'kanitlar']);
 const CLAIM_KEYS = new Set(['bolum', 'paragraf', 'alinti', 'sinif', 'kanitlar']);
+const KNOWN_SCHEMA_KEYS = new Set([...ROOT_KEYS, ...SECTION_KEYS, ...PARAGRAPH_KEYS, ...CLAIM_KEYS]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-const REF_PATTERN = /^[EF][1-9]\d{0,4}$/u;
-// Paragraf içinde yalnızca yazdırılabilir metin; satır sonu dışındaki denetim karakterleri ve bütün Unicode
-// çift yönlü metin denetimleri (`Bidi_Control`, U+200F dâhil) reddedilir.
+// Paket sözleşmesi (`reportRequest.js`) ile aynı kanıt kimliği dilbilgisi; üyelik denetimi `known.has(ref)` ile kapalıdır.
+const REF_PATTERN = /^[EF][1-9]\d*$/u;
+// Paragraf içinde yalnızca yazdırılabilir metin; satır sonu dışındaki C0/C1 denetim karakterleri (U+0085 dâhil)
+// ve bütün Unicode çift yönlü metin denetimleri (`Bidi_Control`, U+200F dâhil) reddedilir.
 // eslint-disable-next-line no-control-regex -- güvenilmez model metnindeki denetim karakterleri bilinçli olarak eşleştirilir
-const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\p{Bidi_Control}]/u;
+const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\p{Bidi_Control}]/u;
 // Görünür/çizilebilir en az bir temel karakter gerektirir (yalnızca boşluk, sıfır genişlikli ya da birleşen işaret kabul edilmez).
 const RENDERABLE_CHAR = /[^\s\p{C}\p{M}]/u;
 const FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/u;
@@ -130,7 +132,8 @@ function assertNoDuplicateJsonKeys(source) {
         seenKeys.add(key);
         skipWs();
         if (source[pos] === ':') pos += 1;
-        const childPath = !FORBIDDEN_KEYS.has(key) && /^[a-z0-9_]+$/u.test(key) ? `${path}.${key}` : path;
+        // Hata yoluna yalnızca şemada bilinen alan adları eklenir; modelin ürettiği yabancı anahtar adı sızmaz.
+        const childPath = KNOWN_SCHEMA_KEYS.has(key) ? `${path}.${key}` : path;
         scanValue(childPath, depth + 1);
         skipWs();
         if (source[pos] === ',') {
@@ -225,7 +228,7 @@ function styleWarnings(text, path) {
   if (/\b[EF][1-9]\d*\b/u.test(text)) warnings.push({ kod: 'duzyazida_kanit_kimligi', yol: path });
   if (/\b\d{4}-\d{2}-\d{2}\b/u.test(text)) warnings.push({ kod: 'iso_tarih', yol: path });
   if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/iu.test(text)) warnings.push({ kod: 'ic_tanimlayici', yol: path });
-  if (/[\r\n]/u.test(text)) warnings.push({ kod: 'paragraf_ici_satir_sonu', yol: path });
+  if (/[\r\n\u2028\u2029]/u.test(text)) warnings.push({ kod: 'paragraf_ici_satir_sonu', yol: path });
   return warnings;
 }
 
@@ -283,14 +286,14 @@ export function parseReportDraft(rawText, { plan, evidencePackage }) {
       return Object.freeze({ metin, kanitlar: requireRefs(paragraph.kanitlar, known, `${ppath}.kanitlar`) });
     });
     let highlight = null;
-    if (section.one_cikan_tespit !== undefined && section.one_cikan_tespit !== null) {
+    if (Object.hasOwn(section, 'one_cikan_tespit') && section.one_cikan_tespit !== undefined) {
       if (!planSection.one_cikan_tespit) throw new ReportDraftError(REPORT_DRAFT_ERROR_CODES.SECTION, `${path}.one_cikan_tespit`);
       closedObject(section.one_cikan_tespit, PARAGRAPH_KEYS, `${path}.one_cikan_tespit`);
       const highlightText = requireText(section.one_cikan_tespit.metin, REPORT_DRAFT_LIMITS.maxHighlightChars, `${path}.one_cikan_tespit.metin`);
       warnings.push(...styleWarnings(highlightText, `${section.kimlik}#${HIGHLIGHT_CLAIM_LOCATION}`));
       highlight = Object.freeze({
         metin: highlightText,
-        kanitlar: requireRefs(section.one_cikan_tespit.kanitlar, known, `${path}.one_cikan_tespit.kanitlar`)
+        kanitlar: requireRefs(section.one_cikan_tespit.kanitlar, known, `${path}.one_cikan_tespit.kanitlar`, { allowEmpty: false })
       });
     }
     sections.push({ planIndex, value: Object.freeze({ kimlik: section.kimlik, baslik: planSection.baslik, paragraflar: Object.freeze(paragraphs), one_cikan_tespit: highlight }) });

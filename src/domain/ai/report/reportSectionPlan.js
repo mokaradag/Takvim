@@ -1,3 +1,4 @@
+import { isIsoDay } from '../isoDay.js';
 import { REPORT_DETAIL_LEVELS, REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } from './reportRequest.js';
 
 /**
@@ -13,6 +14,11 @@ import { REPORT_DETAIL_LEVELS, REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } fro
 export const REPORT_WRITING_CONTRACT = '4i-yazim-1';
 /** Bölüm başına izin verilen en çok paragraf sayısı (planlayıcı ve taslak ayrıştırıcısında ortak sınır). */
 export const MAX_PARAGRAPHS_PER_SECTION = 14;
+/**
+ * Stil belgesindeki toplam sözcük bütçesi için üst tavan: taslak ayrıştırıcısının ham karakter (200.000)
+ * ve bölüm başı paragraf×karakter (14×4.000) sınırlarına sığmayan ulaşılamaz bütçeleri reddeder.
+ */
+export const MAX_STYLE_WORD_BUDGET = 12_000;
 
 /** Sunucunun yazdığı (modelin yazmadığı) bölümler yazar planına hiç girmez. */
 const MODEL_OWNER = 'model';
@@ -64,8 +70,11 @@ function own(obj, key) {
   return isPlainObject(obj) && Object.hasOwn(obj, key) ? obj[key] : undefined;
 }
 
-function wordRange(value) {
-  return Array.isArray(value) && value.length === 2 && value.every((n) => Number.isSafeInteger(n) && n > 0) && value[0] <= value[1];
+function wordRange(value, maxUpper = Infinity) {
+  return Array.isArray(value)
+    && value.length === 2
+    && value.every((n) => Number.isSafeInteger(n) && n > 0 && n <= maxUpper)
+    && value[0] <= value[1];
 }
 
 function stringList(value) {
@@ -100,7 +109,7 @@ export function requireWriterStyle(style) {
     || !wordRange(own(paragraph, 'cumle_araligi')) || !wordRange(own(paragraph, 'ortak_sozcuk_araligi'))) {
     throw new ReportPlanError('STYLE_INVALID', 'anlati');
   }
-  if (!REPORT_DETAIL_LEVELS.every((level) => wordRange(own(budgets, level)) && typeof own(own(anlati, 'ayrinti_duzeyi'), level) === 'string')) {
+  if (!REPORT_DETAIL_LEVELS.every((level) => wordRange(own(budgets, level), MAX_STYLE_WORD_BUDGET) && typeof own(own(anlati, 'ayrinti_duzeyi'), level) === 'string')) {
     throw new ReportPlanError('STYLE_INVALID', 'anlati.bolum_plani.sozcuk_butcesi');
   }
   const sections = own(own(style, 'yapi'), 'bolumler');
@@ -189,7 +198,9 @@ export function resolveWriterStyle(style) {
 }
 
 function evidenceDay(value) {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/u.test(value) ? value.slice(0, 10) : null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}/u.test(value)) return null;
+  const day = value.slice(0, 10);
+  return isIsoDay(day) ? day : null;
 }
 
 function addDays(day, count) {
@@ -204,7 +215,8 @@ function snapshotDay(veriAni) {
 }
 
 function hasHighPriority(value) {
-  const raw = String(value ?? '').trim();
+  if (typeof value !== 'string') return false;
+  const raw = value.trim();
   if (!raw) return false;
   return HIGH_PRIORITIES.has(raw.toLocaleLowerCase('en-US')) || HIGH_PRIORITIES.has(raw.toLocaleLowerCase('tr-TR'));
 }
@@ -375,11 +387,25 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     });
   }
   const validConflicts = (pkg.celiskiler || []).filter((conflict) => isPlainObject(conflict) && Array.isArray(conflict.kanitlar));
-  const conflictGuidance = 'Bu kanıtlar birbiriyle çelişiyor. Çelişkiyi zaman sırasıyla açıkça anlat ve en güncel kaydı esas al; değişikliği söyle, hangisinin doğru olduğuna kanıt ötesinde karar verme ve yeni tarih uydurma.';
+  const itemById = new Map(pkg.kanitlar.filter((item) => isPlainObject(item) && typeof item.id === 'string').map((item) => [item.id, item]));
+  const hasOrderableConflictTime = (conflict) => {
+    const timestamps = conflict.kanitlar
+      .map((id) => itemById.get(id))
+      .map((item) => (isPlainObject(item) ? (item.kayit_ani || item.zaman || item.tarih || null) : null))
+      .filter((ts) => typeof ts === 'string' && ts.trim().length >= 10 && isIsoDay(ts.slice(0, 10)));
+    return timestamps.length >= 2 && new Set(timestamps).size >= 2;
+  };
+  const orderedConflictGuidance = 'Bu kanıtlar birbiriyle çelişiyor. Çelişkiyi zaman sırasıyla açıkça anlat ve en güncel kaydı esas al; değişikliği söyle, hangisinin doğru olduğuna kanıt ötesinde karar verme ve yeni tarih uydurma.';
+  const undatedConflictGuidance = 'Bu kanıtlar birbiriyle çelişiyor ancak kayıtlar arasında kesin bir zaman sırası bulunmuyor. Zaman sırası uydurmadan karşıt bildirimleri eşit mesafeyle aktar; kanıt ötesinde taraf seçme ve yeni tarih uydurma.';
   validConflicts.slice(0, MAX_INDIVIDUAL_CONFLICT_DISCLOSURES).forEach((conflict, index) => {
+    const ordered = hasOrderableConflictTime(conflict);
     out.push({
       kimlik: `celiski_${index + 1}`, bolum: 'faaliyetler', kanitlar: [...conflict.kanitlar],
-      yonerge: index === 0 ? conflictGuidance : 'Aynı çelişki kuralıyla bu kanıt çiftini de zaman sırasıyla ve taraf seçmeden işle.'
+      yonerge: index === 0
+        ? (ordered ? orderedConflictGuidance : undatedConflictGuidance)
+        : (ordered
+          ? 'Aynı çelişki kuralıyla bu kanıt çiftini de zaman sırasıyla ve taraf seçmeden işle.'
+          : 'Aynı çelişki kuralıyla bu kanıt çiftinde zaman sırası uydurmadan karşıt bildirimleri taraf seçmeden aktar.')
     });
   });
   if (validConflicts.length > MAX_INDIVIDUAL_CONFLICT_DISCLOSURES) {
@@ -387,7 +413,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     const remainingRefs = [...new Set(remaining.flatMap((c) => c.kanitlar))].slice(0, MAX_SECTION_EVIDENCE);
     out.push({
       kimlik: 'celiski_diger', bolum: 'faaliyetler', kanitlar: remainingRefs,
-      yonerge: `Pakette ayrıca ${remaining.length} çelişki kaydı daha var (toplam ${validConflicts.length}); bunların tamamını aynı çelişki kuralıyla zaman sırasıyla ve taraf seçmeden işle.`
+      yonerge: `Pakette ayrıca ${remaining.length} çelişki kaydı daha var (toplam ${validConflicts.length}); kayıt zamanı belirliyse zaman sırasıyla, değilse sıra uydurmadan ve taraf seçmeden işle.`
     });
   }
   const comparisonRequested = pkg.istek.karsilastirma && pkg.istek.karsilastirma !== 'yok';
@@ -403,10 +429,12 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     ...groups.gecikmePayi,
     ...validConflicts.flatMap((c) => c.kanitlar)
   ];
-  const noteOrDepRiskEvidence = [
-    ...notesFor(groups.oncelikli, noteTask, groups.not),
-    ...groups.acikBagimli
-  ];
+  const priorityNotes = notesFor(groups.oncelikli, noteTask, groups.not);
+  const openDepEvidence = groups.acikBagimli;
+  const noteOrDepRiskEvidence = [...priorityNotes, ...openDepEvidence];
+  const overdueMeasure = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'geciken');
+  const overdueUnknown = Boolean(overdueMeasure && (overdueMeasure.deger === null || overdueMeasure.tamlik === 'partial'));
+  const scopeRestricted = tamlik.kapsam_gorunurlugu === 'partial' || tamlik.paket_kesildi === true || tamlik.kesit_tutarli === false;
   const focus = pkg.istek.odak ?? 'dengeli';
   if (riskEvidence.length && (!riskSectionPlanned || focus === 'basarilar')) {
     out.push({
@@ -415,30 +443,49 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     });
   } else if (focus === 'riskler' && !riskSectionPlanned && !riskEvidence.length) {
     if (noteOrDepRiskEvidence.length > 0) {
+      const parts = ['Yapılandırılmış görev kayıtlarında gecikme ya da çelişki görünmüyor.'];
+      if (priorityNotes.length > 0) {
+        parts.push('Öncelikli işlere ait notlarda açıkça bir engel ya da risk bildiriliyorsa bunu kesinleşmiş olgu gibi değil yalnızca not bildirimi olarak kısaca aktar; olağan ilerleme bildiren notları risk gibi sunma.');
+      }
+      if (openDepEvidence.length > 0) {
+        parts.push('Açık bağımlılıkları kesinleşmiş engel değil bağımlılık gözlemi olarak ayrı ve ölçülü biçimde değerlendir.');
+      }
       out.push({
         kimlik: 'dengeli_sunum', bolum: 'yonetici_degerlendirmesi', kanitlar: [...new Set(noteOrDepRiskEvidence)].slice(0, 12),
-        yonerge: 'Yapılandırılmış görev kayıtlarında gecikme ya da çelişki görünmese de öncelikli iş notlarında veya açık bağımlılıklarda dikkat gerektiren bildirimler bulunuyor. Bunları kesinleşmiş olgu gibi değil not bildirimi ya da bağımlılık gözlemi olarak Yönetici Değerlendirmesi içinde kısaca değerlendir.'
+        yonerge: parts.join(' ')
+      });
+    } else if (overdueUnknown) {
+      out.push({
+        kimlik: 'risk_odagi_gecikme_bilinmiyor', bolum: 'yonetici_degerlendirmesi', kanitlar: [overdueMeasure.id],
+        yonerge: 'Rapor risk odağıyla istendi ancak geciken iş sayısı kanıtta bilinmiyor ya da kısmi durumda. Gecikme olmadığını varsayma; gecikme ölçüsünün belirlenemediğini açıkça belirt.'
       });
     } else {
+      const scopeQualifier = scopeRestricted
+        ? ' Bu saptamayı yalnızca görünür ve pakete giren kayıtlarla sınırla; görünmeyen işler hakkında risk olmadığı sonucu çıkarma.'
+        : '';
       out.push({
         kimlik: 'risk_odagi_risk_yok', bolum: 'yonetici_degerlendirmesi', kanitlar: [],
-        yonerge: groups.not.length > 0
-          ? 'Rapor risk odağıyla istendi ancak yapılandırılmış kayıtlarda gecikme ya da kayıtlı çelişki yok. Görev notlarında bildirilen bir engel de yoksa bunu açık ve kısa biçimde söyle; varsa yalnızca not bildirimi olarak aktar, odak tercihi nedeniyle risk üretme.'
-          : 'Rapor risk odağıyla istendi ancak kanıtta yönetim dikkati gerektiren gecikme, çelişki ya da kayıtlı engel yok. Bunu açık ve kısa biçimde söyle; odak tercihi nedeniyle risk üretme.'
+        yonerge: (groups.not.length > 0
+          ? 'Rapor risk odağıyla istendi ancak yapılandırılmış görünür kayıtlarda gecikme ya da kayıtlı çelişki yok. Görev notlarında bildirilen bir engel de yoksa bunu açık ve kısa biçimde söyle; varsa yalnızca not bildirimi olarak aktar, odak tercihi nedeniyle risk üretme.'
+          : 'Rapor risk odağıyla istendi ancak görünür kanıtta yönetim dikkati gerektiren gecikme, çelişki ya da kayıtlı engel yok. Bunu açık ve kısa biçimde söyle; odak tercihi nedeniyle risk üretme.')
+          + scopeQualifier
       });
     }
   }
   const completed = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'tamamlanan' && own(item.donem, 'baslangic') === pkg.istek.donem.baslangic);
   const activity = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'hareket' && own(item.donem, 'baslangic') === pkg.istek.donem.baslangic);
-  const completionConclusiveZero = completed
-    ? (completed.deger === 0 && completed.tamlik !== 'partial')
-    : (tamlik.paket_kesildi !== true && tamlik.kesit_tutarli !== false);
+  const completedExplicitZero = Boolean(completed && completed.deger === 0 && completed.tamlik !== 'partial');
+  const completionCompatibleWithZero = completed ? completedExplicitZero : true;
   if (activity && activity.deger === 0 && activity.kayit_kapsami !== 'partial'
     && tamlik.hareket !== 'partial' && tamlik.kapsam_gorunurlugu !== 'partial'
-    && completionConclusiveZero) {
+    && tamlik.paket_kesildi !== true && tamlik.kesit_tutarli !== false
+    && groups.tamamlanan.length === 0
+    && completionCompatibleWithZero) {
     out.push({
       kimlik: 'degisiklik_yok', bolum: 'yonetici_degerlendirmesi', kanitlar: [activity.id, ...(completed ? [completed.id] : [])],
-      yonerge: 'Dönemde kayda geçen değişiklik yok. Bunu dürüst ve kısa biçimde söyle; dolgu metni, uydurma etkinlik ya da varsayılan ilerleme yazma.'
+      yonerge: completedExplicitZero
+        ? 'Dönemde kayda geçen değişiklik ve tamamlanan görev yok. Bunu dürüst ve kısa biçimde söyle; dolgu metni, uydurma etkinlik ya da varsayılan ilerleme yazma.'
+        : 'Dönemde hareket kaydına geçen bir değişiklik bulunmuyor. Bunu dürüst ve kısa biçimde söyle; dolgu metni, uydurma etkinlik ya da varsayılan ilerleme yazma.'
     });
   }
   return out;
@@ -485,11 +532,11 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
     one_cikan_gelismeler: [...groups.tamamlanan, ...notesFor(groups.tamamlanan, noteTask, groups.not), ...groups.hareketli,
       ...notesFor(groups.hareketli, noteTask, groups.not), ...groups.belge, ...derivedIds(pkg, ['kilometre_tasi_ozeti', 'karsilastirma'])],
     faaliyetler: [...groups.olcu, ...groups.hareket, ...groups.gorev, ...groups.not, ...groups.belge],
-    // Açık kritik/yüksek öncelikli işlerin notları, açık bağımlılıklar ve pozitif gecikme ölçüsü risk bölümünü besler;
+    // Açık kritik/yüksek öncelikli işlerin notları, açık bağımlılıklar ve pozitif gecikme ölçüsü/payı risk bölümünü besler;
     // seçim yalnızca yapılandırılmış alanlara dayanır, not metni sunucu kararını yönlendirmez.
-    riskler: [...groups.geciken, ...groups.gecikenOlcu, ...notesFor(groups.geciken, noteTask, groups.not), ...conflictIds,
+    riskler: [...groups.geciken, ...groups.gecikenOlcu, ...groups.gecikmePayi, ...notesFor(groups.geciken, noteTask, groups.not), ...conflictIds,
       ...groups.acikBagimli, ...notesFor(groups.oncelikli, noteTask, groups.not),
-      ...derivedIds(pkg, ['gecikme_payi', 'tarihsiz_tamamlanma_uyarisi', 'kismi_gorunurluk_uyarisi'])],
+      ...derivedIds(pkg, ['tarihsiz_tamamlanma_uyarisi', 'kismi_gorunurluk_uyarisi'])],
     oncelikler: [...groups.yaklasan, ...groups.yaklasanOlcu, ...groups.oncelikli, ...groups.acikBagimli, ...notesFor(groups.yaklasan, noteTask, groups.not)],
     genel_sonuc: [...groups.olcu, ...derivedAll, ...groups.geciken, ...groups.yaklasan]
   };

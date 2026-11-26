@@ -23,6 +23,10 @@ import { AiError } from '../aiErrors.js';
 
 export const REPORT_WRITER_QUALITY = Object.freeze({ AUTOMATIC: 'otomatik', HIGH: 'yuksek_kalite' });
 export const REPORT_WRITER_CALLS_PER_DRAFT = 1;
+/** Nitelendirme ve üretim yazarı aynı örnekleme ayarını kullanır. */
+export const REPORT_WRITER_SAMPLING = Object.freeze({ temperature: 0.2, topP: 0.9 });
+/** Model yanıtı döndükten sonraki son yetki denetimi için bağımsız üst süre sınırı (ms). */
+export const REPORT_WRITER_REVALIDATION_TIMEOUT_MS = 15_000;
 const PROFILE_BY_QUALITY = Object.freeze({
   [REPORT_WRITER_QUALITY.AUTOMATIC]: AI_REPORT_PROFILES.WRITER,
   [REPORT_WRITER_QUALITY.HIGH]: AI_REPORT_PROFILES.WRITER_QUALITY
@@ -48,22 +52,50 @@ function cancelled(signal) {
   if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
 }
 
-/** İstemci iptal ettiğinde yavaş dönen yeniden doğrulamayı beklemeden iptal hatası fırlatır. */
-function raceWithCancel(run, signal) {
+/**
+ * İstemci iptali ya da bağımsız süre aşımı durumunda yavaş dönen yeniden doğrulamayı beklemeden keser;
+ * süreölçer ve dinleyicileri her yolda temizler.
+ */
+function raceWithCancel(run, signal, timeoutMs = null) {
   cancelled(signal);
-  if (!signal) return Promise.resolve().then(run);
+  const boundedTimeout = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : null;
+  if (!signal && boundedTimeout == null) return Promise.resolve().then(() => run(null));
+  const controller = new AbortController();
   return new Promise((resolve, reject) => {
-    const onAbort = () => reject(new AiError(AI_ERROR_CODES.AI_CANCELLED));
-    signal.addEventListener('abort', onAbort, { once: true });
+    let settled = false;
+    let timer = null;
+    const cleanup = () => {
+      if (timer != null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const onAbort = () => {
+      controller.abort();
+      finish(reject, new AiError(AI_ERROR_CODES.AI_CANCELLED));
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    if (boundedTimeout != null) {
+      timer = setTimeout(() => {
+        controller.abort();
+        finish(reject, writerFailure(AI_ERROR_CODES.AI_TIMEOUT, 'REPORT_WRITER_REVALIDATION_TIMEOUT'));
+      }, boundedTimeout);
+    }
     Promise.resolve()
-      .then(run)
-      .then(resolve, reject)
-      .finally(() => signal.removeEventListener('abort', onAbort));
+      .then(() => run(controller.signal))
+      .then((value) => finish(resolve, value), (error) => finish(reject, error));
   });
 }
 
-async function assertStillAuthorized(revalidate, signal) {
-  const stillAuthorized = await raceWithCancel(() => revalidate({ signal }), signal);
+async function assertStillAuthorized(revalidate, signal, timeoutMs = null) {
+  const stillAuthorized = await raceWithCancel((revalidationSignal) => revalidate({ signal: revalidationSignal ?? signal }), signal, timeoutMs);
   cancelled(signal);
   if (stillAuthorized !== true) {
     throw new ServerPersistenceError('AUTHORIZATION_CHANGED', 'Rapor yazımı sırasında yetki kapsamı değiştiği için taslak döndürülmedi.');
@@ -75,7 +107,7 @@ async function assertStillAuthorized(revalidate, signal) {
  * nitelendirme/vekil betiklerinde kullanılır, böylece bütün adaylar bayt bayt aynı istemi alır.
  *
  * @param {{ evidencePackage: object, style: object, quality?: string, kapaliBolumler?: string[] }} input - Girdiler.
- * @returns {{ plan: object, messages: object[], profile: string, maxOutputTokens: number, promptVersion: string }} İstek.
+ * @returns {{ plan: object, messages: object[], profile: string, maxOutputTokens: number, sampling: object, promptVersion: string }} İstek.
  */
 export function prepareReportWriterRequest({ evidencePackage, style, quality = REPORT_WRITER_QUALITY.AUTOMATIC, kapaliBolumler = [] }) {
   const profile = typeof quality === 'string' && Object.hasOwn(PROFILE_BY_QUALITY, quality) ? PROFILE_BY_QUALITY[quality] : null;
@@ -90,7 +122,14 @@ export function prepareReportWriterRequest({ evidencePackage, style, quality = R
     const plan = buildReportSectionPlan(evidencePackage, writerStyle, { kapaliBolumler });
     const messages = buildReportWriterMessages({ evidencePackage, plan, style: writerStyle });
     const maxOutputTokens = Math.min(MAX_REQUESTED_OUTPUT_TOKENS, plan.sozcuk_araligi[1] * TOKENS_PER_WORD + FIXED_OUTPUT_TOKENS + REASONING_HEADROOM_TOKENS);
-    return Object.freeze({ plan, messages, profile, maxOutputTokens, promptVersion: REPORT_WRITER_PROMPT_VERSION });
+    return Object.freeze({
+      plan,
+      messages,
+      profile,
+      maxOutputTokens,
+      sampling: REPORT_WRITER_SAMPLING,
+      promptVersion: REPORT_WRITER_PROMPT_VERSION
+    });
   } catch (error) {
     if (error instanceof ReportPlanError || error instanceof ReportPromptError) {
       throw writerFailure(AI_ERROR_CODES.AI_REQUEST_INVALID, `REPORT_WRITER_${error.code}`);
@@ -100,14 +139,13 @@ export function prepareReportWriterRequest({ evidencePackage, style, quality = R
 }
 
 /**
- * Model kimliğini değerlendirir. Bildirilen kimlik yapılandırılan modelden ve kayıtta onun için açıkça
- * bildirilmiş adlardan farklıysa yanıt başka modelindir: taslak reddedilir. Kimlik bildirilmemişse taslak
- * kullanılabilir ama doğrulanmamış olarak işaretlenir (nitelendirmede bu koşu GEÇERSİZ sayılır).
+ * Model kimliğini değerlendirir. Sohbet modellerinde kayıt takma ad (`reportedModels`) tanımlamadığından
+ * bildirilen kimlik yapılandırılan model adıyla bire bir eşleşmelidir; farklıysa taslak reddedilir.
+ * Kimlik bildirilmemişse taslak kullanılabilir ama doğrulanmamış olarak işaretlenir (nitelendirmede geçersiz).
  */
-export function assessReportWriterModelIdentity({ model = null, configuredModel = null, reportedModels = [] }) {
+export function assessReportWriterModelIdentity({ model = null, configuredModel = null }) {
   if (typeof model !== 'string' || !model) return { reported: null, configured: configuredModel, verified: false };
-  const accepted = new Set([configuredModel, ...(Array.isArray(reportedModels) ? reportedModels : [])].filter(Boolean));
-  if (!accepted.has(model)) {
+  if (!configuredModel || model !== configuredModel) {
     throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_WRITER_MODEL_MISMATCH');
   }
   return { reported: model, configured: configuredModel, verified: true };
@@ -152,10 +190,19 @@ export function finalizeReportWriterResponse({ text, finishReason = null, plan, 
  * @param {string} [input.quality] - `otomatik` ya da `yuksek_kalite`.
  * @param {string[]} [input.kapaliBolumler] - Kullanıcının kapattığı isteğe bağlı bölümler.
  * @param {AbortSignal|null} [input.signal] - İstemci iptali.
+ * @param {number} [input.revalidationTimeoutMs] - Üretim sonrası son yetki doğrulaması için üst süre sınırı (ms).
  * @returns {Promise<{ draft: object, plan: object, meta: object }>} Doğrulanmış taslak ve içeriksiz üstveri.
  */
 export async function writeExecutiveReportDraft({
-  evidencePackage, style, gateway, revalidate, quality = REPORT_WRITER_QUALITY.AUTOMATIC, kapaliBolumler = [], signal = null, now = Date.now
+  evidencePackage,
+  style,
+  gateway,
+  revalidate,
+  quality = REPORT_WRITER_QUALITY.AUTOMATIC,
+  kapaliBolumler = [],
+  signal = null,
+  revalidationTimeoutMs = REPORT_WRITER_REVALIDATION_TIMEOUT_MS,
+  now = Date.now
 }) {
   cancelled(signal);
   if (typeof gateway?.completeChat !== 'function') throw writerFailure(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, 'REPORT_WRITER_GATEWAY_MISSING');
@@ -175,6 +222,7 @@ export async function writeExecutiveReportDraft({
       profile: request.profile,
       messages: request.messages,
       maxOutputTokens: request.maxOutputTokens,
+      sampling: request.sampling,
       signal,
       requireText: true,
       // İletiler sunucunun ürettiği sabit istektir: sağlayıcının 4xx yanıtı kullanıcı değil yapılandırma hatasıdır.
@@ -194,8 +242,8 @@ export async function writeExecutiveReportDraft({
   cancelled(signal);
   const identity = assessReportWriterModelIdentity(result);
   const draft = finalizeReportWriterResponse({ text: result.text, finishReason: result.finishReason, plan: request.plan, evidencePackage: evidenceSnapshot });
-  // Uzun süren yazım sırasında yetki ya da rıza değişmiş olabilir: içerik ancak güncel denetimden sonra döner.
-  await assertStillAuthorized(revalidate, signal);
+  // Uzun süren yazım sırasında yetki ya da rıza değişmiş olabilir: içerik ancak bağımsız süre sınırlı güncel denetimden sonra döner.
+  await assertStillAuthorized(revalidate, signal, revalidationTimeoutMs);
   return Object.freeze({
     draft,
     plan: request.plan,

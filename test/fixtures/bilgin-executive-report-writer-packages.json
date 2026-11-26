@@ -407,6 +407,10 @@
        "doğrulama kural"
       ],
       [
+       "hata kayıt",
+       "sınıflandır"
+      ],
+      [
        "örnekleme betiği",
        "örnekleme"
       ]
@@ -5302,7 +5306,9 @@
        "8 kasım"
       ],
       [
-       "10",
+       "10 ekim"
+      ],
+      [
        "19 ekim"
       ]
      ]
@@ -13103,7 +13109,7 @@
    "zorunlu_olgular": [
     {
      "id": "Z1",
-     "olgu": "Denge projesi iki birimin işini içerir; iki sorumlulu tamamlanan görev çift sayılmaz (üç tamamlanan görev).",
+     "olgu": "Müdürlük genelinde 3 görev tamamlandı (Denge projesinde 2, Kuzey projesinde 1); iki sorumlulu görev üretici tarafında tekilleştirilerek çift sayılmaz.",
      "anahtarlar": [
       [
        "denge"
@@ -14869,8 +14875,13 @@
        "14"
       ],
       [
-       "geciken",
-       "gecikmiş"
+       "7 geciken",
+       "7 gecikmiş",
+       "geciken 7",
+       "gecikmiş 7",
+       "7 görev gecik",
+       "7 iş gecik",
+       "geciken görev sayısı 7"
       ]
      ]
     }
@@ -16523,5 +16534,5 @@
    "paket_ozeti_sha256": "375c58baaa09ce012735ad396821985204e29464847d2526f520b054c9a1bbe5"
   }
  ],
- "ozet_sha256": "d77494f36dbbf66d3cc9e55aeb035bb4f5a759685f93bec887c6d2b8130d8cba"
+ "ozet_sha256": "76d9528776e35369d72fd6948864bef5c831779a53bbd7f638233d85714912ff"
 }

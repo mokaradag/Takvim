@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
+import { validateEvidencePackageContract } from '../../src/domain/ai/report/reportRequest.js';
 import { projectEvidencePackageForWriter } from '../../src/domain/ai/report/reportWriterPrompt.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -181,6 +182,10 @@ export function verifyWriterPackageSet(set, fixture) {
     if (entry.paket_ozeti_sha256 !== sha256(canonicalJson(entry.paket))) {
       problems.push(`paket_ozeti_uyusmuyor:${entry.senaryo}`);
     }
+    const contract = validateEvidencePackageContract(entry.paket);
+    if (!contract.ok) {
+      problems.push(`kanit_zarfi_gecersiz:${entry.senaryo}`);
+    }
     for (const name of properNamesIn(entry.paket)) {
       if (!roster.has(name)) problems.push(`sentetik_olmayan_ad:${entry.senaryo}`);
     }
@@ -204,14 +209,19 @@ const NAME_FIELDS = new Set(['proje', 'proje_adi', 'sorumlu', 'ekip', 'mudurluk'
 /** Paketin yapılandırılmış ad alanlarındaki özel adlar (metin alanları hariç; onlar kullanıcı verisidir). */
 export function properNamesIn(pkg) {
   const names = new Set();
-  for (const id of pkg?.istek?.kapsam?.kimlikler || []) names.add(id);
+  for (const id of pkg?.istek?.kapsam?.kimlikler || []) {
+    if (typeof id === 'string') names.add(id);
+  }
   const visit = (value) => {
     if (Array.isArray(value)) value.forEach(visit);
     else if (value && typeof value === 'object') {
       for (const [key, inner] of Object.entries(value)) {
         if (NAME_FIELDS.has(key) && typeof inner === 'string') names.add(inner);
         else if (key === 'kapsam' && Array.isArray(inner)) inner.forEach((id) => typeof id === 'string' && names.add(id));
-        else if (typeof inner === 'object') visit(inner);
+        else if (key === 'rapor_kapsami' && inner && typeof inner === 'object') {
+          if (Array.isArray(inner.kimlikler)) inner.kimlikler.forEach((id) => typeof id === 'string' && names.add(id));
+          visit(inner);
+        } else if (typeof inner === 'object') visit(inner);
       }
     }
   };
@@ -231,12 +241,18 @@ const TURKISH_SCALES = Object.freeze({ yüz: 100, bin: 1000 });
 const ALL_NUMBER_WORDS = new Set([
   ...Object.keys(TURKISH_UNITS), ...Object.keys(TURKISH_TENS), ...Object.keys(TURKISH_SCALES)
 ]);
+const NUMBER_WORD_SEQ = `(?:${[...ALL_NUMBER_WORDS].join('|')})(?:\\s+(?:${[...ALL_NUMBER_WORDS].join('|')}))*`;
+const DECIMAL_PHRASE_PATTERN = new RegExp(
+  `(?<=[\\s(])(${NUMBER_WORD_SEQ})\\s+(?:virgül|nokta)\\s+(${NUMBER_WORD_SEQ})(?=[\\s.,;:)'])`,
+  'gu'
+);
 const NUMBER_PHRASE_PATTERN = new RegExp(
-  `(?<=[\\s(])((?:${[...ALL_NUMBER_WORDS].join('|')})(?:\\s+(?:${[...ALL_NUMBER_WORDS].join('|')}))*)(?=[\\s.,;:)'])`,
+  `(?<=[\\s(])(${NUMBER_WORD_SEQ})(?=[\\s.,;:)'])`,
   'gu'
 );
 const MONTHS = ['ocak', 'şubat', 'mart', 'nisan', 'mayis', 'haziran', 'temmuz', 'ağustos', 'eylül', 'ekim', 'kasim', 'aralik'];
 const MONTH_ALT = MONTHS.join('|');
+const BIR_BEFORE_MONTH_PATTERN = new RegExp(`(?<=[\\s(])bir(?=\\s+(?:${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?=[\\s.,;:)']))`, 'gu');
 
 /** Birleşik Türkçe sayı öbeklerini ("yüz yirmi" → 120, "on iki" → 12) tek sayı olarak çözer; tek başına "bir" korunur. */
 function parseTurkishNumberPhrase(tokens) {
@@ -260,10 +276,19 @@ function parseTurkishNumberPhrase(tokens) {
   return total + current;
 }
 
-/** Değerlendirme kopyası: Türkçe küçük harf, boşluk sadeleştirme, birleşik sayı sözcükleri tek rakama. */
+/** Değerlendirme kopyası: Türkçe küçük harf, boşluk sadeleştirme, birleşik ve ondalıklı sayı sözcükleri tek rakama. */
 export function normalizeProse(text) {
   // Türkçe küçük harfe çevirme kısaltmalardaki I'yı ı yapar ("SPI" → "spı"); eşleştirmede ı ve i katlanır.
   let out = ` ${String(text).normalize('NFC').toLocaleLowerCase('tr-TR').replace(/ı/gu, 'i').replace(/[’']/gu, "'").replace(/\s+/gu, ' ')} `;
+  // Önce tam yazılı ondalıklar ("altmış altı virgül yedi" → "66,7") tek nicelik olarak çevrilir.
+  out = out.replace(DECIMAL_PHRASE_PATTERN, (match, intPart, fracPart) => {
+    const intVal = parseTurkishNumberPhrase(intPart.split(/\s+/u));
+    const fracVal = parseTurkishNumberPhrase(fracPart.split(/\s+/u));
+    if (intVal === null || fracVal === null) return match;
+    return `${intVal},${fracVal}`;
+  });
+  // Ay adından hemen önceki "bir" takvim günüdür ("bir Kasım" → "1 kasim"); "bir görev" belirsiz tanımlık kalır.
+  out = out.replace(BIR_BEFORE_MONTH_PATTERN, '1');
   out = out.replace(NUMBER_PHRASE_PATTERN, (match) => {
     const tokens = match.split(/\s+/u);
     // Tek başına "bir" belirsiz tanımlıktır ("bir görev"); yalnızca bileşik sayı içinde ("on bir", "yüz bir") çevrilir.
@@ -292,20 +317,25 @@ function maskRange(chars, start, end) {
 }
 
 /**
- * Düzyazıdaki bütün tarih ifadelerini (aralık, ortak aylı çoklu gün, tekil ay adlı tarih, ISO tarih ve
- * Türkçe sayısal GG.AA.YYYY / GG/AA/YYYY tarihleri) tek kaynaktan ayrıştırır ve sayı taraması için aynı
- * aralıkları maskeler. İmkânsız takvim tarihleri (`32 Kasım 2026`, `29 Şubat 2025` vb.) sessizce düşürülmez.
+ * Düzyazıdaki bütün tarih ifadelerini (ISO tarih, Türkçe sayısal GG.AA.YYYY / GG/AA/YYYY, aralık, ortak aylı
+ * çoklu gün ve tekil ay adlı tarih) tek kaynaktan ayrıştırır; UTF-16 kod birimi hizalı maskeleme yapar ve
+ * kronoloji taraması için metin sırasındaki bütün oluşumları (`occurrences`) saklar.
  */
 function extractDateAnalysis(text, defaultYear, { includeInvalid = true } = {}) {
   const norm = normalizeProse(text);
-  const working = [...norm];
+  // `matchAll()` indeksleri UTF-16 kod birimi cinsindendir; `split('')` ek düzlem karakterlerde de bire bir hizalı kalır.
+  const working = norm.split('');
   const validDays = new Set();
   const invalidDays = new Set();
-  const addDate = (y, m, d) => {
+  const occurrences = [];
+  const addDate = (y, m, d, pos) => {
     const token = formatDateToken(y, m, d, { includeInvalid });
     if (!token) return;
     if (token.startsWith('gecersiz:')) invalidDays.add(token);
-    else validDays.add(token);
+    else {
+      validDays.add(token);
+      occurrences.push({ day: token, index: pos });
+    }
   };
   const consume = (regex, handler) => {
     const current = working.join('');
@@ -314,38 +344,40 @@ function extractDateAnalysis(text, defaultYear, { includeInvalid = true } = {}) 
       maskRange(working, m.index, m.index + m[0].length);
     }
   };
-  // 1. Ay adlı gün aralığı ("2–8 Kasım 2026")
+  // 1. Tam sayısal ISO tarih ("2026-10-30"): ay adlı aralık taramasından önce alınır, böylece "2026-10-30 – 8 Kasım" parçalanmaz.
+  consume(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/gu, (m) => {
+    addDate(Number(m[1]), Number(m[2]), Number(m[3]), m.index);
+  });
+  // 2. Sayısal Türkçe tarih ("1/10/2026", "05.11.2026")
+  consume(/(?<!\d)(\d{1,2})([./])(\d{1,2})\2(\d{4})(?!\d)/gu, (m) => {
+    addDate(Number(m[4]), Number(m[3]), Number(m[1]), m.index);
+  });
+  // 3. Ay adlı gün aralığı ("2–8 Kasım 2026")
   consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})\\s+(${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?:\\s+(\\d{4})(?!\\d))?`, 'gu'), (m) => {
     const year = m[4] ? Number(m[4]) : defaultYear;
     const month = MONTHS.indexOf(m[3]) + 1;
-    addDate(year, month, Number(m[1]));
-    addDate(year, month, Number(m[2]));
+    addDate(year, month, Number(m[1]), m.index);
+    addDate(year, month, Number(m[2]), m.index + m[1].length + 1);
   });
-  // 2. Ortak aylı eşgüdümlü gün listesi ("26 ve 27 Kasım 2026", "10, 12 ve 14 Kasım")
+  // 4. Ortak aylı eşgüdümlü gün listesi ("26 ve 27 Kasım 2026", "10, 12 ve 14 Kasım")
   consume(new RegExp(`(?<!\\d)(\\d{1,2}(?:\\s*,\\s*\\d{1,2})*\\s+ve\\s+\\d{1,2})\\s+(${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?:\\s+(\\d{4})(?!\\d))?`, 'gu'), (m) => {
     const year = m[3] ? Number(m[3]) : defaultYear;
     const month = MONTHS.indexOf(m[2]) + 1;
     for (const dayMatch of m[1].matchAll(/\d{1,2}/gu)) {
-      addDate(year, month, Number(dayMatch[0]));
+      addDate(year, month, Number(dayMatch[0]), m.index + dayMatch.index);
     }
   });
-  // 3. Tekil ay adlı tarih ("5 Kasım 2026"; öndeki `(?<!\d)` yıl sonunun gün sanılmasını önler: "2026 Kasım")
+  // 5. Tekil ay adlı tarih ("5 Kasım 2026"; öndeki `(?<!\d)` yıl sonunun gün sanılmasını önler: "2026 Kasım")
   consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s+(${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?:\\s+(\\d{4})(?!\\d))?`, 'gu'), (m) => {
     const year = m[3] ? Number(m[3]) : defaultYear;
-    addDate(year, MONTHS.indexOf(m[2]) + 1, Number(m[1]));
+    addDate(year, MONTHS.indexOf(m[2]) + 1, Number(m[1]), m.index);
   });
-  // 4. ISO tarih ("2026-11-05")
-  consume(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/gu, (m) => {
-    addDate(Number(m[1]), Number(m[2]), Number(m[3]));
-  });
-  // 5. Sayısal Türkçe tarih ("1/10/2026", "05.11.2026")
-  consume(/(?<!\d)(\d{1,2})([./])(\d{1,2})\2(\d{4})(?!\d)/gu, (m) => {
-    addDate(Number(m[4]), Number(m[3]), Number(m[1]));
-  });
+  occurrences.sort((a, b) => a.index - b.index);
   return {
     validDays: [...validDays],
     invalidDays: [...invalidDays],
     allDays: [...validDays, ...invalidDays],
+    occurrences,
     maskedText: working.join('')
   };
 }
@@ -369,12 +401,13 @@ export function parseTurkishNumber(raw) {
 }
 
 /**
- * Metinden sayıları çıkarır: önce tanınan tarih aralıkları (ve yalnızca zaman bağlamındaki izinli yıllar)
- * maskelenir, ardından tarih dışı sayı aralıklarının iki ucu ve işaretli/binlikli Türkçe sayılar alınır.
+ * Metinden sayıları çıkarır: önce tanınan tarih aralıkları (ve yalnızca zaman bağlamındaki izinli yıllar /
+ * 7 günlük ufuk ifadeleri) UTF-16 hizalı olarak maskelenir, ardından tarih dışı sayı aralıkları ve Türkçe
+ * çekimli/işaretli sayılar alınır.
  */
-function extractTurkishNumbers(text, defaultYear, { allowedYears = null } = {}) {
+function extractTurkishNumbers(text, defaultYear, { allowedYears = null, maskHorizonSeven = false } = {}) {
   const { maskedText } = extractDateAnalysis(text, defaultYear, { includeInvalid: true });
-  const working = [...maskedText];
+  const working = maskedText.split('');
   if (allowedYears && allowedYears.size > 0) {
     const maskYearIfAllowed = (regex, groupIndex) => {
       const current = working.join('');
@@ -389,10 +422,21 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null } = {}) 
     maskYearIfAllowed(new RegExp(`(?:${MONTH_ALT})(?:'?[a-zçğıöşü]*)?\\s+((?:19|20)\\d{2})(?!\\d)`, 'gu'), 1);
     maskYearIfAllowed(/(?<!\d)((?:19|20)\d{2})(?:\s+yil[a-zçğıöşü]*|'?(?:da|de|ta|te|nin|nun|nün|in|un|ün))(?![\p{L}\d])/gu, 1);
   }
+  if (maskHorizonSeven) {
+    // 7 günlük yaklaşan termin penceresi yalnızca zaman ifadesinde ("7 gün", "7 günlük", "7 takvim günü") istisnadır;
+    // "7 görev tamamlandı" gibi nicelik kullanımları normal sayı taramasına girer.
+    const horizonRegex = /(?<![\p{L}\d])7\s+(?:takvim\s+)?gün(?:lük|de|e|ü|ün|lük|ler|leri|lerde|içinde)?(?![\p{L}\d])/gu;
+    const current = working.join('');
+    for (const m of current.matchAll(horizonRegex)) {
+      maskRange(working, m.index, m.index + m[0].length);
+    }
+  }
   const numbers = [];
   const numToken = '(?:\\d{1,3}(?:\\.\\d{3})+(?:,\\d+)?|\\d+(?:[.,]\\d+)?)';
+  // Türkçe sayı çekim ekleri ("yüzde 60ı", "60'ı", "10'da") tanınır; kimlik/birim ekleri ("60km", "E60") eşleşmez.
+  const trNumSuffix = "(?:'?(?:[aeiioöuü]|[dt][ae]n?|[ny][aeiiuü]))?";
   // Tarih dışı sayı aralığı ("3-4 görev", "2–5 iş"): her iki uç ayrı ayrı taranır.
-  const rangeRegex = new RegExp(`(?<![\\p{L}\\d])(${numToken})\\s*[–-]\\s*(${numToken})(?![\\p{L}\\d])`, 'gu');
+  const rangeRegex = new RegExp(`(?<![\\p{L}\\d])(${numToken})\\s*[–-]\\s*(${numToken})${trNumSuffix}(?![\\p{L}\\d])`, 'gu');
   const afterYear = working.join('');
   for (const m of afterYear.matchAll(rangeRegex)) {
     const a = parseTurkishNumber(m[1]);
@@ -401,8 +445,8 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null } = {}) 
     if (b !== null) numbers.push(b);
     maskRange(working, m.index, m.index + m[0].length);
   }
-  // Tekil işaretli veya işaretsiz sayılar ("yüzde -50", "1.000", "1.000,5").
-  const singleRegex = new RegExp(`(?<![\\p{L}\\d])([-−]?${numToken})(?![\\p{L}\\d])`, 'gu');
+  // Tekil işaretli veya işaretsiz sayılar ("yüzde -50", "1.000", "1.000,5", "yüzde 60ı").
+  const singleRegex = new RegExp(`(?<![\\p{L}\\d])([-−]?${numToken})${trNumSuffix}(?![\\p{L}\\d])`, 'gu');
   for (const m of working.join('').matchAll(singleRegex)) {
     const val = parseTurkishNumber(m[1]);
     if (val !== null) numbers.push(val);
@@ -467,15 +511,38 @@ function sectionProse(draft, sectionId) {
 
 /**
  * Zorunlu olgu aday taraması: her olgunun `anahtarlar` alanı VE-of-VEYA gruplarıdır; isteğe bağlı `bolum`
- * alanı verilmişse yalnızca ilgili bölüm taranır. Eşleşme yalnızca belirlenimci ADAY sonucudur; kesin kapsam
+ * alanı verilmişse yalnızca ilgili bölüm taranır. Tarih seçenekleri takvim gününe göre de eşleştirilir
+ * ("5 kasım" ile "2026-11-05" eşdeğerdir). Eşleşme yalnızca belirlenimci ADAY sonucudur; kesin kapsam
  * hakem kararında doğrulanır.
  */
-export function mandatoryCoverage(prose, mandatory = [], draft = null) {
-  const fullNorm = normalizeProse(prose);
+export function mandatoryCoverage(prose, mandatory = [], draft = null, defaultYear = 2026) {
+  const fullText = String(prose);
+  const fullNorm = normalizeProse(fullText);
+  const fullDates = new Set(extractDateAnalysis(fullText, defaultYear, { includeInvalid: false }).validDays);
+  const sectionCache = new Map();
+  const getTarget = (sectionId) => {
+    if (!sectionId || !draft) return { norm: fullNorm, dates: fullDates };
+    if (!sectionCache.has(sectionId)) {
+      const text = sectionProse(draft, sectionId);
+      sectionCache.set(sectionId, {
+        norm: normalizeProse(text),
+        dates: new Set(extractDateAnalysis(text, defaultYear, { includeInvalid: false }).validDays)
+      });
+    }
+    return sectionCache.get(sectionId);
+  };
   return mandatory.map((fact) => {
-    const targetNorm = fact.bolum && draft ? normalizeProse(sectionProse(draft, fact.bolum)) : fullNorm;
+    const target = getTarget(fact.bolum);
     const groups = Array.isArray(fact.anahtarlar) ? fact.anahtarlar : [];
-    const matched = groups.length > 0 && groups.every((alternatives) => alternatives.some((alt) => targetNorm.includes(normalizeProse(alt).trim())));
+    const matched = groups.length > 0 && groups.every((alternatives) => alternatives.some((alt) => {
+      const needle = normalizeProse(alt).trim();
+      if (target.norm.includes(needle)) return true;
+      const altAnalysis = extractDateAnalysis(alt, defaultYear, { includeInvalid: false });
+      if (altAnalysis.validDays.length > 0 && !altAnalysis.maskedText.trim()) {
+        return altAnalysis.validDays.every((day) => target.dates.has(day));
+      }
+      return false;
+    }));
     return {
       id: fact.id,
       ...(fact.bolum ? { bolum: fact.bolum } : {}),
@@ -489,9 +556,9 @@ export function mandatoryCoverage(prose, mandatory = [], draft = null) {
 function matchesUnauthorizedEntity(normText, rawName) {
   const needle = normalizeProse(rawName).trim();
   if (!needle) return false;
-  // Proje kodu gibi tireli belirteçlerde kesin belirteç sınırı korunur.
+  // Proje kodu gibi tireli belirteçlerde tire de belirteç parçasıdır (`PRJ-ATLAS-2`, `PRJ-ATLAS` sayılmaz).
   if (/^[a-z0-9]+-[a-z0-9-]+$/iu.test(needle)) {
-    return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(needle)}(?![\\p{L}\\p{N}])`, 'u').test(normText);
+    return new RegExp(`(?<![\\p{L}\\p{N}-])${escapeRegex(needle)}(?![\\p{L}\\p{N}-])`, 'u').test(normText);
   }
   // Çok sözcüklü görev/varlık adlarında Türkçe çekim ekleri ("Doruk erişim katmanının") de yakalanır.
   if (needle.includes(' ')) {
@@ -502,23 +569,34 @@ function matchesUnauthorizedEntity(normText, rawName) {
 }
 
 /**
- * Aynı cümle içinde sıralı zaman bağlaçlarıyla ("ardından", "sonrasında", "peşinden") birleştirilen iki
- * tarihli olayda tarihlerin ters sırada yazılmasını (kronoloji tersinmesi adayı) yakalar.
+ * Aynı cümle içinde sıralı zaman bağlaçlarıyla ("ardından", "sonrasında", "peşinden") birleştirilen
+ * bütün bitişik olay geçişlerinde metin sırasındaki tarihlerin ters yazılmasını (kronoloji tersinmesi
+ * adayı) yakalar.
  */
 export function detectChronologyInversions(prose, defaultYear) {
   const inversions = [];
   const sentences = String(prose).split(/(?<=[.!?])\s+|\n+/u).filter((s) => s.trim());
-  const connectorRegex = /\b(?:bunun\s+ardından|ardından|sonrasında|peşinden)\b/iu;
+  const connectorRegex = /\b(?:bunun\s+ardından|ardından|sonrasında|peşinden)\b/giu;
   for (const sentence of sentences) {
-    const match = connectorRegex.exec(sentence);
-    if (!match) continue;
-    const beforeDates = extractDateAnalysis(sentence.slice(0, match.index), defaultYear, { includeInvalid: false }).validDays;
-    const afterDates = extractDateAnalysis(sentence.slice(match.index + match[0].length), defaultYear, { includeInvalid: false }).validDays;
-    if (!beforeDates.length || !afterDates.length) continue;
-    const first = beforeDates[beforeDates.length - 1];
-    const second = afterDates[0];
-    if (first > second) {
-      inversions.push({ onceki_tarih: first, sonraki_tarih: second, baglac: match[0].toLocaleLowerCase('tr-TR') });
+    const connectors = [...sentence.matchAll(connectorRegex)];
+    if (!connectors.length) continue;
+    const spans = [];
+    let cursor = 0;
+    for (const m of connectors) {
+      spans.push(sentence.slice(cursor, m.index));
+      cursor = m.index + m[0].length;
+    }
+    spans.push(sentence.slice(cursor));
+    const spanDates = spans.map((span) => extractDateAnalysis(span, defaultYear, { includeInvalid: false }).occurrences);
+    for (let i = 0; i < connectors.length; i += 1) {
+      const before = spanDates[i];
+      const after = spanDates[i + 1];
+      if (!before.length || !after.length) continue;
+      const first = before[before.length - 1].day;
+      const second = after[0].day;
+      if (first > second) {
+        inversions.push({ onceki_tarih: first, sonraki_tarih: second, baglac: connectors[i][0].toLocaleLowerCase('tr-TR') });
+      }
     }
   }
   return inversions;
@@ -556,11 +634,11 @@ export function assessDraftObjectively({ draft, pkg, fixture, mandatory = [], un
   ];
   // Sayı defteri yalnızca modele görünür paket izdüşümünden kurulur; sunucu yürütme sınırları (ör. 120000) deftere girmez.
   const writerVisible = projected ?? projectEvidencePackageForWriter(pkg);
-  const allowedNumbers = new Set([...packageNumbers(writerVisible, year), 7]);
+  const allowedNumbers = new Set([...packageNumbers(writerVisible, year)]);
   const allowedYears = new Set([...allowedDates].map((day) => Number(day.slice(0, 4))));
-  const numbers = extractTurkishNumbers(prose, year, { allowedYears });
+  const numbers = extractTurkishNumbers(prose, year, { allowedYears, maskHorizonSeven: true });
   const unknownNumbers = numbers.filter((n) => !allowedNumbers.has(n));
-  const coverage = mandatoryCoverage(prose, mandatory, draft);
+  const coverage = mandatoryCoverage(prose, mandatory, draft, year);
   const chronologyInversions = detectChronologyInversions(prose, year);
   const hasEmbeddedInstruction = (pkg.kanitlar || []).some((item) => item?.guvenilmez_yonerge_iceriyor === true);
   const embeddedInstructionEchoes = hasEmbeddedInstruction

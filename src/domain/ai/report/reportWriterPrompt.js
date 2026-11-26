@@ -127,7 +127,7 @@ export function buildReportWriterSystemPrompt(style) {
     'YASAKLAR',
     numbered([
       ...s.yasaklar,
-      'Kanıtta olmayan sayı, yüzde, oran, fark, gün sayısı ya da süre hesaplamak: yalnızca kanıttaki değerleri ve sunucu türetimlerini (F#) kullanırsın. Gecikme süresini kendin hesaplamaz, yalnızca görev kanıtındaki "veri_anina_gore_gecikme_takvim_gunu" alanından (takvim günü) alırsın; alan yoksa gecikmeyi hedef tarihle anlatırsın',
+      'Kanıtta olmayan sayı, yüzde, oran, fark, gün sayısı ya da süre hesaplamak: yalnızca kanıttaki değerleri ve sunucu türetimlerini (F#) kullanırsın. Gecikme süresini kendin hesaplamaz, yalnızca görev kanıtındaki "veri_anina_gore_gecikme_takvim_gunu" alanından (takvim günü) alırsın; alan yoksa ve görev "kesit_sonrasi_degisti: true" taşımıyorsa gecikmeyi hedef tarihle anlatırsın. "kesit_sonrasi_degisti: true" işaretli görevlerden kesit anı durumu ya da gecikme iddiası üretmezsin',
       'Kanıttaki görev kayıtlarını sayarak yeni toplam üretmek: toplamlar yalnızca ölçü kanıtlarından ("olcu") ve sunucu türetimlerinden alınır; paket kesilmiş olabileceğinden görünen görev sayısı bir toplam değildir',
       'Kişiye sorumluluk, kusur ya da başarısızlık atfetmek; notlardaki kişisel ya da suçlayıcı dili yönetim yargısına çevirmek',
       'Zaman yakınlığından neden-sonuç ilişkisi çıkarmak',
@@ -138,7 +138,7 @@ export function buildReportWriterSystemPrompt(style) {
     numbered([
       'Tek bilgi kaynağın kanıt iletileridir. Kanıtta olmayan etkinlik, başarı, karar, tarih, kişi, proje ya da neden yazmazsın; genel bilgiyle boşluk doldurmazsın.',
       'Sayılar, dönemler, karşılaştırmalar ve tamlık bilgisi sunucunundur. Bilinmeyen değer (null) bilinmeyendir: sıfır, "yok" ya da kesin sonuç gibi yazılmaz.',
-      'Dönem ölçüleri ("donem" alanı taşıyanlar) raporlama dönemini, anlık ölçüler ("veri_ani" alanı taşıyanlar) veri anındaki güncel durumu anlatır; ikisini karıştırmazsın.',
+      'Dönem ölçüleri ("donem" alanı taşıyanlar) yalnızca kendi "donem" aralığına aittir: değeri kullanmadan önce o aralığı raporlama dönemiyle veya karşılaştırma dönemiyle eşleştirirsin; anlık ölçüler ("veri_ani" alanı taşıyanlar) ise veri anındaki güncel durumu anlatır, bunları birbirine karıştırmazsın.',
       'Yalnızca kanıtta adı geçen proje, görev ve kişiler hakkında yazarsın. Kapsam görünürlüğü kısmiyse görünmeyen işler hakkında tahmin yürütmezsin.',
       'Karşılaştırmayı yalnızca sunucunun karşılaştırma türetimi varsa ve onun değerleriyle yaparsın; yüzde değeri null ise yüzde yazmazsın.'
     ]),
@@ -200,10 +200,10 @@ function taskReferenceMap(kanitlar) {
 
 /**
  * Görev başvurusunu kanıt kimliğine çevirir; pakette görev kaydı bulunmayan farklı görevler
- * belirlenimci, paket-yerel opak takma adlarla ayrıştırılır (iç UUID asla yansıtılmaz).
+ * belirlenimci, paket-yerel opak takma adlarla ayrıştırılır (iç UUID ya da metin dışı kimlik asla yansıtılmaz).
  */
 function projectTaskRef(value, refs, omittedRefs) {
-  if (typeof value !== 'string') return value ?? null;
+  if (typeof value !== 'string' || !value.trim()) return null;
   if (refs.has(value)) return refs.get(value);
   if (!omittedRefs.has(value)) {
     omittedRefs.set(value, `pakette_olmayan_gorev_${omittedRefs.size + 1}`);
@@ -216,6 +216,8 @@ function projectTaskRef(value, refs, omittedRefs) {
  * sunucuya ait yürütme alanları çıkarılır. Olgu değerleri, metinler ve köken alanları değişmez.
  */
 const DAY_MS = 86400000;
+/** Kesit sonrası değişmiş görevlerde anlık durum/termin iddiasına yol açabilecek alanlar. */
+const POST_CUTOFF_OMITTED_TASK_KEYS = new Set(['durum', 'hedef_bitis', 'oncelik']);
 
 /** İki ISO gün arasındaki takvim günü farkı (sunucu aritmetiği). */
 function calendarDaysBetween(fromDay, toDay) {
@@ -227,7 +229,12 @@ function calendarDaysBetween(fromDay, toDay) {
 function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
   if (!isPlainObject(item)) return item;
   const out = {};
+  const postCutoffTask = item.tur === 'gorev' && item.kesit_sonrasi_degisti === true;
   for (const [key, value] of Object.entries(item)) {
+    // Hesaplanan gecikme alanı ham girdiden kopyalanmaz; yalnızca aşağıdaki sunucu aritmetiği üretir.
+    if (key === 'veri_anina_gore_gecikme_takvim_gunu') continue;
+    // Kesit sonrası değişen görevlerin güncel durum/termin/öncelik alanları kesit anı iddiasına dönüşmemesi için çıkarılır.
+    if (postCutoffTask && POST_CUTOFF_OMITTED_TASK_KEYS.has(key)) continue;
     if (key === 'gorev') {
       if (item.tur === 'gorev') continue;
       out.gorev_kaniti = projectTaskRef(value, refs, omittedRefs);
@@ -242,7 +249,7 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
   // Aritmetik sunucunundur: açık, kesit tutarlı ve hedefi veri anından önce kalmış görevin gecikmesi takvim günüyle verilir;
   // model gün farkını kendisi hesaplamaz. Kesit sonrası değişmiş görevler anlık gecikme değeri almaz.
   const target = typeof item.hedef_bitis === 'string' ? item.hedef_bitis.slice(0, 10) : null;
-  if (item.tur === 'gorev' && item.durum !== 'tamamlandi' && item.kesit_sonrasi_degisti !== true && target && snapshotDay && target < snapshotDay) {
+  if (item.tur === 'gorev' && item.durum !== 'tamamlandi' && !postCutoffTask && target && snapshotDay && target < snapshotDay) {
     const days = calendarDaysBetween(target, snapshotDay);
     if (Number.isSafeInteger(days) && days > 0) out.veri_anina_gore_gecikme_takvim_gunu = days;
   }
@@ -266,7 +273,8 @@ function resolvedSnapshotDay(veriAni) {
 
 /**
  * Paketin model görünür izdüşümü: istek, veri anı, tamlık, çelişkiler, türetimler ve kanıtlar.
- * Yetki bağlamı pakette zaten yoktur; burada ayrıca yürütme sınırları çıkarılır.
+ * Yetki bağlamı pakette zaten yoktur; burada ayrıca yürütme sınırları çıkarılır. Çelişkiler ve
+ * türetilmiş bulgular ilk ileti başlığını taşırmamak için ayrı diziler olarak döndürülür.
  */
 export function projectEvidencePackageForWriter(evidencePackage) {
   if (!isPlainObject(evidencePackage) || evidencePackage.sema !== REPORT_EVIDENCE_SCHEMA || !Array.isArray(evidencePackage.kanitlar)) {
@@ -279,13 +287,21 @@ export function projectEvidencePackageForWriter(evidencePackage) {
     : null;
   const header = {};
   for (const [key, value] of Object.entries(evidencePackage)) {
-    if (SERVER_ONLY_ROOT_KEYS.has(key) || key === 'kanitlar') continue;
+    if (SERVER_ONLY_ROOT_KEYS.has(key) || key === 'kanitlar' || key === 'celiskiler' || key === 'turetilmis') continue;
     if (key === 'tamlik') header.tamlik = tamlik;
-    else if (key === 'celiskiler') header.celiskiler = Array.isArray(value) ? value.map((c) => projectConflict(c, refs, omittedRefs)) : [];
     else header[key] = value;
   }
+  const celiskiler = Array.isArray(evidencePackage.celiskiler)
+    ? evidencePackage.celiskiler.map((c) => projectConflict(c, refs, omittedRefs))
+    : [];
+  const turetilmis = Array.isArray(evidencePackage.turetilmis) ? [...evidencePackage.turetilmis] : [];
   const snapshotDay = resolvedSnapshotDay(evidencePackage.veri_ani);
-  return { header, kanitlar: evidencePackage.kanitlar.map((item) => projectEvidenceItem(item, refs, omittedRefs, snapshotDay)) };
+  return {
+    header,
+    celiskiler,
+    turetilmis,
+    kanitlar: evidencePackage.kanitlar.map((item) => projectEvidenceItem(item, refs, omittedRefs, snapshotDay))
+  };
 }
 
 function reportMeta(pkg) {
@@ -295,11 +311,15 @@ function reportMeta(pkg) {
     ? formatTurkishRange(istek.karsilastirma_donemi.baslangic, istek.karsilastirma_donemi.bitis)
     : null;
   const hasNoteEvidence = Array.isArray(pkg.kanitlar) && pkg.kanitlar.some((item) => isPlainObject(item) && item.tur === 'not');
+  const excludedNotes = Number.isSafeInteger(pkg.tamlik?.not_ozeti?.disarida_kalan) && pkg.tamlik.not_ozeti.disarida_kalan > 0;
+  const notesMayBeOmitted = excludedNotes || pkg.tamlik?.paket_kesildi === true || pkg.tamlik?.kapsam_gorunurlugu === 'partial';
   const noteSummary = istek.notlar !== 'dahil'
     ? 'Görev notları bu rapora dahil edilmedi; notlara dayanan hiçbir iddia kurulmaz.'
     : (hasNoteEvidence
       ? 'Rapor için açık rıza verildi; görev notları kanıttadır.'
-      : 'Rapor için açık rıza verildi ancak bu kapsam ve dönemde kayıtlı görev notu bulunmuyor.');
+      : (notesMayBeOmitted
+        ? 'Rapor için açık rıza verildi ancak kanıt paketi sınırları nedeniyle bu pakete görev notu alınmadı; not olmadığı sonucu çıkarılmaz.'
+        : 'Rapor için açık rıza verildi ancak bu kanıt paketinde yer alan görev notu bulunmuyor.'));
   return {
     rapor_turu: PERIOD_LABELS[istek.rapor_turu] ?? 'Yönetim Raporu',
     donem: formatTurkishRange(istek.donem?.baslangic, istek.donem?.bitis),
@@ -355,8 +375,9 @@ const EVIDENCE_PREAMBLE = (index, total) => [
 ].join('\n');
 
 /**
- * Kanıt paketini 32 KiB (UTF-8 bayt) sınırlı iletilere böler. Kanıt bütünlüğü korunur: hiçbir kanıt
- * bölünmez, sıra paketteki sırayla aynıdır, ilk ileti istek/tamlık/çelişki/türetim başlığını taşır.
+ * Kanıt paketini 32 KiB (UTF-8 bayt) sınırlı iletilere böler. Kayıt bütünlüğü korunur: hiçbir çelişki,
+ * türetim ya da kanıt bölünmez; ilk ileti istek/tamlık başlığını taşır, çelişkiler, türetimler ve
+ * kanıtlar kayıt sınırlarından aynı ileti bütçesine yerleştirilir.
  *
  * @param {object} evidencePackage - Doğrulanmış kanıt paketi.
  * @param {{ maxBytes?: number }} [options] - Yalnızca sınama için daha dar sınır.
@@ -366,7 +387,7 @@ export function buildReportEvidenceMessages(evidencePackage, { maxBytes = REPORT
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > REPORT_WRITER_MAX_MESSAGE_BYTES) {
     throw new ReportPromptError('MESSAGE_LIMIT_INVALID');
   }
-  const { header, kanitlar } = projectEvidencePackageForWriter(evidencePackage);
+  const { header, celiskiler, turetilmis, kanitlar } = projectEvidencePackageForWriter(evidencePackage);
   // Önsöz uzunluğu ileti numarasıyla değişebildiği için en geniş numara biçimiyle pay ayrılır.
   const reserve = byteLength(EVIDENCE_PREAMBLE(REPORT_WRITER_MAX_EVIDENCE_MESSAGES, REPORT_WRITER_MAX_EVIDENCE_MESSAGES)) + 64;
   const budget = maxBytes - reserve;
@@ -374,17 +395,24 @@ export function buildReportEvidenceMessages(evidencePackage, { maxBytes = REPORT
   let current = { paket: header, kanitlar: [] };
   const size = (chunk) => byteLength(JSON.stringify(chunk));
   if (size(current) > budget) throw new ReportPromptError('EVIDENCE_HEADER_TOO_LARGE');
-  for (const item of kanitlar) {
-    const candidate = { ...current, kanitlar: [...current.kanitlar, item] };
+
+  const appendRecord = (bucketKey, item) => {
+    const existing = Array.isArray(current[bucketKey]) ? current[bucketKey] : [];
+    const candidate = { ...current, [bucketKey]: [...existing, item] };
     if (size(candidate) <= budget) {
       current = candidate;
-      continue;
+      return;
     }
-    // Başlık tek başına dolduysa başlık kendi iletisinde kalır; boş ileti üretilmez.
-    if (current.paket || current.kanitlar.length) chunks.push(current);
-    current = { kanitlar: [item] };
+    if (current.paket || current.kanitlar?.length || current.celiskiler?.length || current.turetilmis?.length) {
+      chunks.push(current);
+    }
+    current = { [bucketKey]: [item] };
     if (size(current) > budget) throw new ReportPromptError('EVIDENCE_ITEM_TOO_LARGE');
-  }
+  };
+
+  for (const conflict of celiskiler) appendRecord('celiskiler', conflict);
+  for (const finding of turetilmis) appendRecord('turetilmis', finding);
+  for (const item of kanitlar) appendRecord('kanitlar', item);
   chunks.push(current);
   if (chunks.length > REPORT_WRITER_MAX_EVIDENCE_MESSAGES) throw new ReportPromptError('EVIDENCE_TOO_MANY_MESSAGES');
   const messages = chunks.map((chunk, index) => `${EVIDENCE_PREAMBLE(index + 1, chunks.length)}\n${JSON.stringify(chunk)}`);

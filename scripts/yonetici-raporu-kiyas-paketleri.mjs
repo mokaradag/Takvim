@@ -8,7 +8,7 @@
  *   node scripts/yonetici-raporu-kiyas-paketleri.mjs            # dosyayı yeniden üretir
  *   node scripts/yonetici-raporu-kiyas-paketleri.mjs --denetle  # dosya üretimle aynı değilse çıkış kodu 1
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,5 +35,15 @@ if (args.includes('--denetle')) {
   process.stdout.write(same ? `Dondurulmuş küme güncel (${set.paketler.length} paket, özet ${set.ozet_sha256.slice(0, 16)}).\n` : 'Dondurulmuş küme üretimle aynı değil.\n');
   process.exit(same ? 0 : 1);
 }
-writeFileSync(target, text, 'utf8');
+// Mevcut dondurulmuş fikstürü kesmeden önce aynı dizinde geçici dosyaya yazıp atomik olarak değiştir.
+const tmpPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+try {
+  writeFileSync(tmpPath, text, { encoding: 'utf8', flag: 'wx' });
+  renameSync(tmpPath, target);
+} catch (error) {
+  try {
+    rmSync(tmpPath, { force: true });
+  } catch { /* geçici dosya zaten oluşmamış olabilir */ }
+  throw error;
+}
 process.stdout.write(`${set.paketler.length} paket yazıldı (özet ${set.ozet_sha256.slice(0, 16)}).\n`);

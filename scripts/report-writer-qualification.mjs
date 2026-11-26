@@ -32,7 +32,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -46,22 +46,25 @@ const ADAPTER = path.join(ROOT, 'scripts', 'planner-model-adapter.mjs');
 const ONPREM_REGISTRY_PATH = path.join(ROOT, 'config', 'ai-model-registry.onprem.json');
 const VEKIL_MODEL = 'claude-haiku-5-5';
 const VEKIL_EFFORT = 'low';
-const CALL_TIMEOUT_MS = 600000;
-const DEFAULT_ONPREM_SAMPLING = Object.freeze({ temperature: 0.2, topP: 0.9 });
+const SURROGATE_TIMEOUT_MS = 600000;
 const EDITORIAL_CRITERIA = Object.freeze(['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7', 'E8', 'E9']);
 const CONTRADICTION_SCENARIOS = new Set(['S09', 'S17', 'S24', 'S37']);
 
 const bench = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
 const writer = await import('../src/server/ai/report/reportWriter.js');
-const { validateAiBaseUrl } = await import('../src/server/ai/aiConfig.js');
+const { AI_REQUEST_TIMEOUT_BOUNDS, parseAiBooleanFlag, validateAiBaseUrl } = await import('../src/server/ai/aiConfig.js');
 const { computeEffectiveOutputTokenLimit } = await import('../src/server/ai/aiGateway.js');
+const { createOpenAiCompatibleProvider } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
 const { renderReportDraftText } = await import('../src/domain/ai/report/reportDraft.js');
 const { projectEvidencePackageForWriter } = await import('../src/domain/ai/report/reportWriterPrompt.js');
+
+const DEFAULT_ONPREM_SAMPLING = writer.REPORT_WRITER_SAMPLING;
 
 const COMMAND_OPTIONS = Object.freeze({
   kosu: new Set([
     'tasiyici', 'kalite', 'senaryolar', 'cikti', 'eszamanlilik', 'defter', 'model', 'anahtar-ortami',
-    'profil-cikti-siniri', 'baglam-siniri', 'sicaklik', 'top-p', 'dusunme-kipi', 'nicemleme'
+    'profil-cikti-siniri', 'baglam-siniri', 'sicaklik', 'top-p', 'dusunme-kipi', 'nicemleme',
+    'istek-suresi-ms', 'dagitim-ortami'
   ]),
   katalog: new Set(['anahtar-ortami']),
   ozet: new Set(['girdi', 'kosu', 'hakem', 'editoryal', 'anahtar', 'json', 'markdown', 'ornekler', 'tarihsel-uyusmazlik-izni']),
@@ -90,17 +93,21 @@ export function parseQualificationArgs(argv) {
   return { command, options };
 }
 
+/** Var olan en derin üst dizine kadar sembolik bağlantıları çözerek kanonik yol döndürür. */
 function canonicalPath(filePath) {
-  const resolved = path.resolve(filePath);
-  if (existsSync(resolved)) {
-    try { return realpathSync(resolved); } catch { return resolved; }
+  let current = path.resolve(filePath);
+  const tail = [];
+  while (!existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    tail.unshift(path.basename(current));
+    current = parent;
   }
-  const parent = path.dirname(resolved);
-  try {
-    return path.join(realpathSync(parent), path.basename(resolved));
-  } catch {
-    return resolved;
+  let base = current;
+  if (existsSync(current)) {
+    try { base = realpathSync(current); } catch { base = current; }
   }
+  return tail.length ? path.join(base, ...tail) : base;
 }
 
 function sameFile(a, b) {
@@ -139,6 +146,15 @@ function parseOptionalPositiveInt(value, flagName) {
   return parsed;
 }
 
+function parseOnPremRequestTimeout(value) {
+  if (value === undefined) return AI_REQUEST_TIMEOUT_BOUNDS.fallback;
+  const parsed = parseOptionalPositiveInt(value, '--istek-suresi-ms');
+  if (parsed < AI_REQUEST_TIMEOUT_BOUNDS.min || parsed > AI_REQUEST_TIMEOUT_BOUNDS.max) {
+    throw new Error(`--istek-suresi-ms ${AI_REQUEST_TIMEOUT_BOUNDS.min} ile ${AI_REQUEST_TIMEOUT_BOUNDS.max} arasında olmalıdır.`);
+  }
+  return parsed;
+}
+
 function parseSamplingOptions(options) {
   const temperature = options.sicaklik !== undefined ? Number(options.sicaklik) : DEFAULT_ONPREM_SAMPLING.temperature;
   const topP = options['top-p'] !== undefined ? Number(options['top-p']) : DEFAULT_ONPREM_SAMPLING.topP;
@@ -158,8 +174,9 @@ function readOnPremModelContext(modelId) {
 }
 
 /**
- * Kurum içi uç yapılandırmasını üretim taşıma güvenlik politikasıyla (`validateAiBaseUrl`) doğrular;
- * güvensiz uzak HTTP adresine kimlik bilgisi gönderilmeden önce reddedilir.
+ * Kurum içi uç yapılandırmasını üretim taşıma güvenlik politikasıyla (`validateAiBaseUrl`) ve üretim
+ * mantıksal bayrak dilbilgisiyle (`parseAiBooleanFlag`) doğrular; güvensiz uzak HTTP adresine kimlik
+ * bilgisi gönderilmeden önce reddedilir.
  */
 export function resolveOnPremConfig(options = {}, env = process.env) {
   const rawBaseUrl = env.MERGEN_ROTA_AI_BASE_URL;
@@ -168,8 +185,11 @@ export function resolveOnPremConfig(options = {}, env = process.env) {
   if (!rawBaseUrl || !apiKey) {
     throw new Error(`Kurum içi uç yapılandırılmamış (MERGEN_ROTA_AI_BASE_URL ve ${keyEnv} gerekli). Nitelendirme: BEKLIYOR.`);
   }
-  const allowInsecureHttp = String(env.MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP || '').trim().toLowerCase() === 'true';
-  const baseUrl = validateAiBaseUrl(rawBaseUrl, { allowInsecureHttp });
+  const httpOptIn = parseAiBooleanFlag(env, 'MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP', false);
+  if (!httpOptIn.ok) {
+    throw new Error('MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP geçersiz mantıksal değer (1/true/yes/evet veya 0/false/no/hayir beklenir).');
+  }
+  const baseUrl = validateAiBaseUrl(rawBaseUrl, { allowInsecureHttp: httpOptIn.value });
   if (!baseUrl) {
     throw new Error('MERGEN_ROTA_AI_BASE_URL geçersiz veya güvensiz (yerel geri döngü dışı HTTP için MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP=true gerekir).');
   }
@@ -194,7 +214,7 @@ function callSurrogate(request, ledger) {
         PLANNER_CLAUDE_LOG: ledger,
         PLANNER_CLAUDE_OUTPUT_CAP: '64000',
         PLANNER_CLAUDE_ALLOW_THINKING: '1',
-        PLANNER_MODEL_TIMEOUT_MS: String(CALL_TIMEOUT_MS)
+        PLANNER_MODEL_TIMEOUT_MS: String(SURROGATE_TIMEOUT_MS)
       },
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -217,19 +237,22 @@ function callSurrogate(request, ledger) {
   });
 }
 
-async function listOnPremModels(config) {
-  const response = await fetch(`${config.baseUrl}/models`, { headers: { authorization: `Bearer ${config.apiKey}` }, redirect: 'manual', signal: AbortSignal.timeout(30000) });
-  if (!response.ok) throw new Error(`GET /models yanıtı ${response.status}`);
-  const body = await response.json();
-  return Array.isArray(body?.data) ? body.data.map((item) => String(item?.id ?? '')).filter(Boolean) : [];
+/** Üretim sağlayıcısının 1 MiB gövde sınırı ve katı katalog şeması doğrulamasıyla `/models` listesini okur. */
+export async function listOnPremModels(config, { fetchImpl = null } = {}) {
+  const provider = createOpenAiCompatibleProvider(fetchImpl ? { fetch: fetchImpl } : {});
+  const result = await provider.listModels({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    signal: AbortSignal.timeout(30000)
+  });
+  return result.models;
 }
 
-async function callOnPrem(request, config, model, effectiveOutputTokens, sampling) {
-  const { createOpenAiCompatibleProvider } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
+async function callOnPrem(request, config, model, effectiveOutputTokens, sampling, requestTimeoutMs) {
   const provider = createOpenAiCompatibleProvider({});
   const completion = await provider.chatCompletion({
     baseUrl: config.baseUrl, apiKey: config.apiKey, model, messages: request.messages,
-    maxOutputTokens: effectiveOutputTokens, sampling, signal: AbortSignal.timeout(CALL_TIMEOUT_MS)
+    maxOutputTokens: effectiveOutputTokens, sampling, signal: AbortSignal.timeout(requestTimeoutMs)
   });
   return completion;
 }
@@ -245,16 +268,18 @@ export function selectEntries(set, list) {
 
 async function runScenario(entry, context) {
   const {
-    transport, style, styleHash, fixture, runId, ledgerFor, worker, onPrem, model, quality,
-    concurrency, profileMaxOutputTokens, modelContextTokens, sampling, thinkingMode, quantization
+    transport, style, styleHash, fixture, runId, runStartedAtUtc, deploymentEnv, ledgerFor, worker, onPrem, model, quality,
+    concurrency, profileMaxOutputTokens, modelContextTokens, sampling, thinkingMode, quantization, requestTimeoutMs
   } = context;
   // Tam yazar aşaması (hazırlık + taşıma + ayrıştırma) tekdüze saatle ölçülür; kıyas taraması süreye katılmaz.
   const stageStart = performance.now();
   const base = {
-    kosu: runId, senaryo: entry.senaryo, kaynak: entry.kaynak, paket_ozeti: entry.paket_ozeti_sha256,
+    kosu: runId, kosu_baslangic_utc: runStartedAtUtc, dagitim_ortami: deploymentEnv ?? null,
+    senaryo: entry.senaryo, kaynak: entry.kaynak, paket_ozeti: entry.paket_ozeti_sha256,
     paket_kumesi_ozeti: context.setHash, stil_ozeti_sha256: styleHash,
     tasiyici: transport, kalite: quality, ayrinti: entry.paket.istek.ayrinti ?? 'standart',
-    eszamanlilik: concurrency
+    eszamanlilik: concurrency,
+    ...(transport === 'kurum-ici' ? { istek_suresi_ms: requestTimeoutMs } : {})
   };
   const request = writer.prepareReportWriterRequest({ evidencePackage: entry.paket, style, quality });
   const effectiveOutputTokens = transport === 'kurum-ici'
@@ -295,7 +320,7 @@ async function runScenario(entry, context) {
     extra = { efor: VEKIL_EFFORT, dusunme: parsed.thinking, tasiyici_sure_ms: transportMs };
   } else {
     try {
-      const completion = await callOnPrem(request, onPrem, model, effectiveOutputTokens, sampling);
+      const completion = await callOnPrem(request, onPrem, model, effectiveOutputTokens, sampling, requestTimeoutMs);
       const transportMs = Math.round(performance.now() - transportStart);
       text = completion.text;
       finishReason = completion.finishReason;
@@ -321,17 +346,11 @@ async function runScenario(entry, context) {
   if (!identity.dogrulandi) {
     return { ...baseRecord, sure_ms: Math.round(performance.now() - stageStart), durum: 'gecersiz_kimlik' };
   }
+  let draft;
+  let stageMs;
   try {
-    const draft = writer.finalizeReportWriterResponse({ text, finishReason, plan: request.plan, evidencePackage: entry.paket });
-    const stageMs = Math.round(performance.now() - stageStart);
-    const record = { ...baseRecord, sure_ms: stageMs, durum: 'gecerli', taslak: draft };
-    record.taslak_ozeti = draftDigest(record);
-    const nesnel = bench.assessDraftObjectively({
-      draft, pkg: entry.paket, fixture, mandatory: entry.zorunlu_olgular, unauthorized: entry.yetkisiz_varliklar,
-      projected: projectEvidencePackageForWriter(entry.paket)
-    });
-    const words = bench.draftProse(draft).split(/\s+/u).filter(Boolean).length;
-    return { ...record, sozcuk: words, nesnel };
+    draft = writer.finalizeReportWriterResponse({ text, finishReason, plan: request.plan, evidencePackage: entry.paket });
+    stageMs = Math.round(performance.now() - stageStart);
   } catch (error) {
     return {
       ...baseRecord,
@@ -341,6 +360,35 @@ async function runScenario(entry, context) {
       hata_yolu: error?.details?.path ?? null
     };
   }
+  // Nesnel tarama ve sözcük sayımı ayrıştırma try bloğu dışındadır; kıyas aracı hatası model ayrıştırma hatası sayılmaz.
+  const record = { ...baseRecord, sure_ms: stageMs, durum: 'gecerli', taslak: draft };
+  record.taslak_ozeti = draftDigest(record);
+  const nesnel = bench.assessDraftObjectively({
+    draft, pkg: entry.paket, fixture, mandatory: entry.zorunlu_olgular, unauthorized: entry.yetkisiz_varliklar,
+    projected: projectEvidencePackageForWriter(entry.paket)
+  });
+  const words = bench.draftProse(draft).split(/\s+/u).filter(Boolean).length;
+  return { ...record, sozcuk: words, nesnel };
+}
+
+/** Paylaşılan ölümcül hata durumunda yeni senaryo gönderimini durduran ve etkin işçilerin bitmesini bekleyen kuyruk yürütücüsü. */
+export async function runQualificationQueue(entries, concurrency, workerFn) {
+  const queue = [...entries];
+  let fatalError = null;
+  const workers = Array.from({ length: concurrency }, async (_, worker) => {
+    while (!fatalError && queue.length) {
+      const entry = queue.shift();
+      try {
+        await workerFn(entry, worker);
+      } catch (error) {
+        if (!fatalError) fatalError = error;
+        queue.length = 0;
+        return;
+      }
+    }
+  });
+  await Promise.allSettled(workers);
+  if (fatalError) throw fatalError;
 }
 
 async function commandRun(options) {
@@ -359,12 +407,17 @@ async function commandRun(options) {
   let sampling = null;
   let profileMaxOutputTokens = null;
   let modelContextTokens = null;
+  let requestTimeoutMs = null;
   const thinkingMode = options['dusunme-kipi'] ?? null;
   const quantization = options.nicemleme ?? null;
+  const deploymentEnv = typeof options['dagitim-ortami'] === 'string' && options['dagitim-ortami'].trim()
+    ? options['dagitim-ortami'].trim()
+    : null;
   if (transport === 'kurum-ici') {
     model = options.model;
     if (!model) throw new Error('--model gerekli (kurum içi katalog kimliği).');
     sampling = parseSamplingOptions(options);
+    requestTimeoutMs = parseOnPremRequestTimeout(options['istek-suresi-ms']);
     profileMaxOutputTokens = parseOptionalPositiveInt(options['profil-cikti-siniri'], '--profil-cikti-siniri');
     modelContextTokens = parseOptionalPositiveInt(options['baglam-siniri'], '--baglam-siniri') ?? readOnPremModelContext(model);
     onPrem = resolveOnPremConfig(options);
@@ -372,6 +425,16 @@ async function commandRun(options) {
     if (!catalogue.includes(model)) throw new Error('Model kurum içi katalogda doğrulanamadı: koşu başlamaz (BEKLIYOR).');
   }
   const concurrency = Math.max(1, Math.min(4, Number.parseInt(options.eszamanlilik || '1', 10) || 1));
+  const runId = randomUUID();
+  const runStartedAtUtc = new Date().toISOString();
+  const ledgerBase = options.defter || path.join(tmpdir(), `rapor-yazari-defter-${runId}`);
+  const ledgerFor = (worker) => `${ledgerBase}-${worker}.jsonl`;
+  // İşçi defterleri ile koşu çıktı dosyasının aynı dosyaya düşmesi önlenir.
+  for (let worker = 0; worker < concurrency; worker += 1) {
+    if (sameFile(out, ledgerFor(worker))) {
+      throw new Error(`Çıktı dosyası işçi defteriyle aynı olamaz: ${out}`);
+    }
+  }
   // Her koşu ayrı bir dosya açar: eski aday kaydının üzerine ekleme ve karışık koşu üretimi engellenir.
   mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
   let fd;
@@ -383,26 +446,19 @@ async function commandRun(options) {
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
-  const runId = randomUUID();
-  const ledgerBase = options.defter || path.join(tmpdir(), `rapor-yazari-defter-${runId}`);
   const context = {
-    transport, style, styleHash, fixture, runId,
-    ledgerFor: (worker) => `${ledgerBase}-${worker}.jsonl`,
-    onPrem, model, quality, setHash: set.ozet_sha256,
-    concurrency, profileMaxOutputTokens, modelContextTokens, sampling, thinkingMode, quantization
+    transport, style, styleHash, fixture, runId, runStartedAtUtc, deploymentEnv,
+    ledgerFor, onPrem, model, quality, setHash: set.ozet_sha256,
+    concurrency, profileMaxOutputTokens, modelContextTokens, sampling, thinkingMode, quantization, requestTimeoutMs
   };
   process.stdout.write(`Koşu ${runId}: ${entries.length} senaryo, taşıyıcı ${transport}, eşzamanlılık ${concurrency} → ${out}\n`);
-  const queue = [...entries];
-  await Promise.all(Array.from({ length: concurrency }, async (_, worker) => {
-    while (queue.length) {
-      const entry = queue.shift();
-      const record = await runScenario(entry, { ...context, worker });
-      appendFileSync(out, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
-      const n = record.nesnel;
-      process.stdout.write(`${record.senaryo} ${record.durum}${record.hata_kodu ? ` ${record.hata_kodu}` : ''} ${Math.round((record.sure_ms || 0) / 1000)} sn`
-        + (n ? ` · sözcük ${record.sozcuk} · yetkisiz ${n.yetkisiz_aciklama.length} · uydurma ad ${n.uydurma_kimlik.length} · defter dışı tarih ${n.defterde_olmayan_tarihler.length} · atlanan zorunlu ${n.atlanan_zorunlu_otomatik.length}` : '') + '\n');
-    }
-  }));
+  await runQualificationQueue(entries, concurrency, async (entry, worker) => {
+    const record = await runScenario(entry, { ...context, worker });
+    appendFileSync(out, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
+    const n = record.nesnel;
+    process.stdout.write(`${record.senaryo} ${record.durum}${record.hata_kodu ? ` ${record.hata_kodu}` : ''} ${Math.round((record.sure_ms || 0) / 1000)} sn`
+      + (n ? ` · sözcük ${record.sozcuk} · yetkisiz ${n.yetkisiz_aciklama.length} · uydurma ad ${n.uydurma_kimlik.length} · defter dışı tarih ${n.defterde_olmayan_tarihler.length} · atlanan zorunlu ${n.atlanan_zorunlu_otomatik.length}` : '') + '\n');
+  });
 }
 
 async function commandCatalogue(options) {
@@ -432,15 +488,18 @@ function reportedModelsOf(record) {
 
 /**
  * Tek bir homojen koşuyu seçer; farklı `kosu` kimlikleri, modeller, taşıyıcılar, istem sürümleri,
- * paket kümesi özetleri, eşzamanlılık veya örnekleme ayarları karışmışsa kapalı reddeder.
+ * paket kümesi özetleri, eşzamanlılık, örnekleme, düşünme kipi, nicemleme, süre sınırı ya da dağıtım
+ * ortamı karışmışsa veya aynı koşu içinde yinelenen senaryo denemesi varsa kapalı reddeder.
  */
-function selectHomogeneousRun(records, { runId = null } = {}) {
+export function selectHomogeneousRun(records, { runId = null } = {}) {
   if (!Array.isArray(records) || records.length === 0) throw new Error('Koşu kaydı boş.');
   const filtered = runId ? records.filter((record) => record?.kosu === runId) : records;
   if (!filtered.length) throw new Error(`Belirtilen koşu kimliği kayıtta bulunamadı: ${runId}`);
   const first = filtered[0];
   const signature = (r) => bench.canonicalJson({
     kosu: r?.kosu ?? null,
+    kosu_baslangic_utc: r?.kosu_baslangic_utc ?? null,
+    dagitim_ortami: r?.dagitim_ortami ?? null,
     tasiyici: r?.tasiyici ?? null,
     kalite: r?.kalite ?? null,
     istem_surumu: r?.istem_surumu ?? null,
@@ -448,7 +507,10 @@ function selectHomogeneousRun(records, { runId = null } = {}) {
     stil_ozeti_sha256: r?.stil_ozeti_sha256 ?? null,
     model_beklenen: expectedModelOf(r),
     eszamanlilik: r?.eszamanlilik ?? null,
-    ornekleme: r?.ornekleme ?? null
+    ornekleme: r?.ornekleme ?? null,
+    dusunme_kipi: r?.dusunme_kipi ?? null,
+    nicemleme: r?.nicemleme ?? null,
+    istek_suresi_ms: r?.istek_suresi_ms ?? null
   });
   const baselineSig = signature(first);
   for (const record of filtered.slice(1)) {
@@ -456,9 +518,17 @@ function selectHomogeneousRun(records, { runId = null } = {}) {
       throw new Error('Karışık koşu kaydı algılandı (farklı koşu, model, taşıyıcı, yapılandırma ya da eşzamanlılık); tek koşu seçilmeden özetlenemez.');
     }
   }
-  const latest = new Map();
-  for (const record of filtered) latest.set(record.senaryo, record);
-  return [...latest.values()].sort((a, b) => a.senaryo.localeCompare(b.senaryo));
+  const byScenario = new Map();
+  for (const record of filtered) {
+    if (typeof record?.senaryo !== 'string' || !record.senaryo) {
+      throw new Error('Koşu kaydında geçersiz senaryo kimliği bulundu.');
+    }
+    if (byScenario.has(record.senaryo)) {
+      throw new Error(`Aynı koşu içinde yinelenen senaryo denemesi (${record.senaryo}); başarısız denemeler sessizce düşürülemez.`);
+    }
+    byScenario.set(record.senaryo, record);
+  }
+  return [...byScenario.values()].sort((a, b) => a.senaryo.localeCompare(b.senaryo));
 }
 
 /** İki ayrı aday koşusunun aynı girdi ve çalışma koşullarında karşılaştırılabilir olduğunu doğrular. */
@@ -471,6 +541,9 @@ export function compareQualificationRuns(summaryA, summaryB) {
   if (a.istem_surumu !== b.istem_surumu) mismatches.push('istem_surumu');
   if (a.eszamanlilik !== b.eszamanlilik) mismatches.push('eszamanlilik');
   if (bench.canonicalJson(a.ornekleme ?? null) !== bench.canonicalJson(b.ornekleme ?? null)) mismatches.push('ornekleme');
+  if ((a.dusunme_kipi ?? null) !== (b.dusunme_kipi ?? null)) mismatches.push('dusunme_kipi');
+  if ((a.nicemleme ?? null) !== (b.nicemleme ?? null)) mismatches.push('nicemleme');
+  if ((a.istek_suresi_ms ?? null) !== (b.istek_suresi_ms ?? null)) mismatches.push('istek_suresi_ms');
   if (bench.canonicalJson(a.girdi_iletileri_ozetleri ?? null) !== bench.canonicalJson(b.girdi_iletileri_ozetleri ?? null)) {
     mismatches.push('girdi_iletileri_sha256');
   }
@@ -508,7 +581,7 @@ function medianOfThree(a, b, c) {
   return [a, b, c].sort((x, y) => x - y)[1];
 }
 
-function aggregateEditorial(editorial, validRows, { blindKey = null, packageByScenario } = {}) {
+function aggregateEditorial(editorial, validRows, { blindKey = null, packageByScenario, allDigestsMatched = true } = {}) {
   const runId = validRows[0]?.kosu ?? null;
   const rowByScenario = new Map(validRows.map((row) => [row.senaryo, row]));
   if (typeof editorial.kosu !== 'string' || editorial.kosu !== runId) {
@@ -547,6 +620,20 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
   const isMultiHuman = Array.isArray(editorial.puanlayicilar) && editorial.puanlayicilar.length >= 2
     && editorial.puanlayicilar.every((rater) => rater?.tur === 'insan' && rater?.puanlar && typeof rater.puanlar === 'object');
 
+  // Çoklu insan değerlendirmesinde her puanlayıcının (3. hakem dâhil) koordinatörce atanmış benzersiz opak kimliği zorunludur.
+  let distinctHumanRaters = false;
+  if (isMultiHuman) {
+    const raterIds = editorial.puanlayicilar.map((rater) => {
+      const id = rater?.kimlik ?? rater?.puanlayici_kimligi ?? null;
+      return typeof id === 'string' && id.trim() ? id.trim() : null;
+    });
+    const presentIds = raterIds.filter(Boolean);
+    if (new Set(presentIds).size !== presentIds.length) {
+      throw new Error('Yinelenen puanlayıcı kimliği algılandı; B kapısı için birbirinden bağımsız puanlayıcılar zorunludur.');
+    }
+    distinctHumanRaters = presentIds.length === editorial.puanlayicilar.length;
+  }
+
   const resolvedPerDraft = new Map();
   const unresolvedDisagreements = [];
   let incompleteRatings = 0;
@@ -556,6 +643,9 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
     const keys = [...new Set([...Object.keys(r1.puanlar), ...Object.keys(r2.puanlar)])];
     for (const key of keys) {
       const { scenario } = resolveAndVerifyKey(key);
+      if (resolvedPerDraft.has(scenario)) {
+        throw new Error(`Aynı taslak için birden çok editoryal puan anahtarı (${scenario}); her rapor tek nihai puan taşır.`);
+      }
       const pkgEntry = packageByScenario.get(scenario);
       const e8Applicable = (pkgEntry?.paket?.kanitlar || []).some((item) => item?.tur === 'not');
       const s1 = r1.puanlar[key];
@@ -606,6 +696,9 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
   } else {
     for (const [key, scoreObj] of Object.entries(editorial.puanlar || {})) {
       const { scenario } = resolveAndVerifyKey(key);
+      if (resolvedPerDraft.has(scenario)) {
+        throw new Error(`Aynı taslak için birden çok editoryal puan anahtarı (${scenario}); her rapor tek nihai puan taşır.`);
+      }
       const pkgEntry = packageByScenario.get(scenario);
       const e8Applicable = (pkgEntry?.paket?.kanitlar || []).some((item) => item?.tur === 'not');
       const scores = {};
@@ -641,7 +734,8 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
   const mechanical = scoredEntries.filter(([, s]) => s.mekanik === true).map(([id]) => id);
   const mechanicalRate = scoredEntries.length ? mechanical.length / scoredEntries.length : null;
   const fullCoverage = scoredEntries.length === validRows.length && incompleteRatings === 0 && unresolvedDisagreements.length === 0;
-  const assessmentComplete = isMultiHuman && fullCoverage && validRows.length === packageByScenario.size;
+  // Tarihsel kanıt özeti uyuşmazlığında güncel fikstürdeki E8 uygulanabilirliğiyle B kapısı geçirilemez.
+  const assessmentComplete = isMultiHuman && distinctHumanRaters && allDigestsMatched && fullCoverage && validRows.length === packageByScenario.size;
   // Kıyas çerçevesi §4 B kapısı eşikleri: genel ortalama >= 4,0; uygulanabilir her ölçüt >= 3,5; mekanik döküm <= %5.
   const thresholdViolations = [];
   if (assessmentComplete) {
@@ -655,7 +749,9 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
   const gateBPassed = assessmentComplete ? thresholdViolations.length === 0 : null;
   const gateBStatus = !isMultiHuman
     ? 'gecici_insan_puani_bekliyor'
-    : (!assessmentComplete ? 'eksik_veya_uyusmazlik_bekliyor' : (gateBPassed ? 'gecti' : 'basarisiz'));
+    : (!allDigestsMatched ? 'kanit_surumu_uyusmuyor'
+      : (!distinctHumanRaters ? 'eksik_puanlayici_kimligi_bekliyor'
+        : (!assessmentComplete ? 'eksik_veya_uyusmazlik_bekliyor' : (gateBPassed ? 'gecti' : 'basarisiz'))));
   return {
     degerlendirici: editorial.degerlendirici ?? null,
     puanlayici_sayisi: isMultiHuman ? editorial.puanlayicilar.length : 1,
@@ -671,6 +767,17 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
     mekanik_orani: mechanicalRate,
     cozulmemis_uyusmazliklar: unresolvedDisagreements
   };
+}
+
+function hasIncompleteEvidenceFlag(pkg) {
+  const t = pkg?.tamlik;
+  if (!t || typeof t !== 'object') return false;
+  return t.kapsam_gorunurlugu === 'partial'
+    || t.hareket === 'partial'
+    || t.bagimliliklar === 'partial'
+    || t.paket_kesildi === true
+    || t.kesit_tutarli === false
+    || (Number.isSafeInteger(t.tarihsiz_tamamlanan) && t.tarihsiz_tamamlanan > 0);
 }
 
 /** Koşu kaydından A/B/D özetini hesaplar; hakem ve editoryal dosyaları yalnızca koşu ve taslak özetiyle bağlıysa birleştirir. */
@@ -689,7 +796,15 @@ export function summarizeRun(records, {
   let allDigestsMatched = true;
   const rescored = selectedRows.map((record) => {
     const entry = packageByScenario.get(record.senaryo);
-    if (record.durum === 'gecerli' && record.taslak && entry) {
+    if (!entry) {
+      throw new Error(`Dondurulmuş senaryo kadrosunda bulunmayan kayıt: ${record.senaryo}`);
+    }
+    if (record.durum === 'gecerli') {
+      const hasValidDraftObj = Boolean(record.taslak && typeof record.taslak === 'object' && Array.isArray(record.taslak.bolumler));
+      const digestConsistent = !record.taslak_ozeti || record.taslak_ozeti === draftDigest(record);
+      if (!hasValidDraftObj || !digestConsistent) {
+        return { ...record, durum: 'gecersiz_kayit', hata_kodu: !hasValidDraftObj ? 'TASLAK_EKSIK' : 'TASLAK_OZETI_UYUSMUYOR' };
+      }
       const setMatches = record.paket_kumesi_ozeti === set.ozet_sha256;
       const pkgMatches = record.paket_ozeti === entry.paket_ozeti_sha256;
       if (setMatches && pkgMatches) {
@@ -727,32 +842,47 @@ export function summarizeRun(records, {
     }
 
     // Zorunlu olgu tamlığı: otomatik anahtar eşleşmesi yalnızca adaydır; kesin tamlık bağlı hakem kararı gerektirir.
-    const hasJudgeOmissions = Boolean(judge && Array.isArray(judge.atlanan_zorunlu));
-    const omittedConfirmed = hasJudgeOmissions ? judge.atlanan_zorunlu : null;
+    let hasJudgeOmissions = Boolean(judge && Array.isArray(judge.atlanan_zorunlu));
+    let omittedConfirmed = hasJudgeOmissions ? judge.atlanan_zorunlu : null;
 
     // Doğruluk paydası: hem `dogru` hem `yanlis` negatif olmayan tam sayı ve `atlanan_zorunlu` açıkça karara bağlanmış olmalıdır.
-    const hasValidCounts = Boolean(judge && isNonNegInt(judge.dogru) && isNonNegInt(judge.yanlis) && hasJudgeOmissions);
-    const denominator = hasValidCounts ? judge.dogru + judge.yanlis + omittedConfirmed.length : null;
+    let hasValidCounts = Boolean(judge && isNonNegInt(judge.dogru) && isNonNegInt(judge.yanlis) && hasJudgeOmissions);
+    let denominator = hasValidCounts ? judge.dogru + judge.yanlis + omittedConfirmed.length : null;
+    const hasMandatoryFacts = Array.isArray(entry?.zorunlu_olgular) && entry.zorunlu_olgular.length > 0;
+    // Zorunlu olgusu olan senaryoda 0 doğru + 0 yanlış + 0 atlanan tutarsızdır; boş hakem satırı kapıdan geçemez.
+    if (hasValidCounts && denominator === 0 && hasMandatoryFacts) {
+      hasValidCounts = false;
+      hasJudgeOmissions = false;
+      omittedConfirmed = null;
+      denominator = null;
+      adjudicationMismatches.push(`${row.senaryo}:sifir_iddia_tutarsiz`);
+    }
     const accuracyStatus = !hasValidCounts ? 'bekliyor' : (denominator === 0 ? 'uygulanmaz' : 'onayli');
     const accuracy = accuracyStatus === 'onayli' ? judge.dogru / denominator : null;
 
-    // Yetkisiz açıklama adayları: belirsiz eşleşmeler (ör. "doruk noktası") bağlı hakemle bağlamsal olarak ayrılır.
+    // Yetkisiz açıklama adayları: bağlı hakem bu kategori için açık karar alanı vermedikçe adaylar bekleyen sayılır.
     const disclosureCandidates = Array.isArray(nesnel.yetkisiz_aciklama) ? nesnel.yetkisiz_aciklama : [];
+    const hasDisclosureDecision = Boolean(
+      judge && (Array.isArray(judge.yetkisiz_aciklama_yanlis_pozitif) || Array.isArray(judge.yetkisiz_aciklama_onayli))
+    );
     const disclosureFalsePositives = Array.isArray(judge?.yetkisiz_aciklama_yanlis_pozitif) ? judge.yetkisiz_aciklama_yanlis_pozitif : [];
     const disclosureExtra = Array.isArray(judge?.yetkisiz_aciklama_onayli) ? judge.yetkisiz_aciklama_onayli : [];
-    const disclosurePending = disclosureCandidates.length > 0 && !judge ? disclosureCandidates.length : 0;
-    const disclosureConfirmed = judge
+    const disclosurePending = disclosureCandidates.length > 0 && !hasDisclosureDecision ? disclosureCandidates.length : 0;
+    const disclosureConfirmed = hasDisclosureDecision
       ? disclosureCandidates.filter((name) => !disclosureFalsePositives.includes(name)).length + disclosureExtra.length
-      : (disclosureCandidates.length === 0 ? 0 : null);
+      : (disclosureCandidates.length === 0 ? disclosureExtra.length : null);
 
-    // Uydurma kimlik ve tarih: kadro dışı hakem bulguları (`uydurma_kimlik_ek`) da sayılır; incelenmeyen adaylar 0 gösterilmez.
+    // Uydurma kimlik ve tarih: bağlı hakem açık karar alanı vermedikçe adaylar bekleyen sayılır.
     const inventedCandidates = Array.isArray(nesnel.uydurma_kimlik) ? nesnel.uydurma_kimlik : [];
+    const hasInventedDecision = Boolean(
+      judge && (Array.isArray(judge.uydurma_kimlik_yanlis_pozitif) || Array.isArray(judge.uydurma_kimlik_ek))
+    );
     const inventedFalsePositives = Array.isArray(judge?.uydurma_kimlik_yanlis_pozitif) ? judge.uydurma_kimlik_yanlis_pozitif : [];
     const inventedExtra = Array.isArray(judge?.uydurma_kimlik_ek) ? judge.uydurma_kimlik_ek.length : 0;
-    const inventedNamePending = inventedCandidates.length > 0 && !judge ? inventedCandidates.length : 0;
-    const inventedNameConfirmed = judge
+    const inventedNamePending = inventedCandidates.length > 0 && !hasInventedDecision ? inventedCandidates.length : 0;
+    const inventedNameConfirmed = hasInventedDecision
       ? inventedCandidates.filter((name) => !inventedFalsePositives.includes(name)).length + inventedExtra
-      : (inventedCandidates.length === 0 ? 0 : null);
+      : (inventedCandidates.length === 0 ? inventedExtra : null);
 
     const offLedgerDates = Array.isArray(nesnel.defterde_olmayan_tarihler) ? nesnel.defterde_olmayan_tarihler : [];
     const offLedgerNumbers = Array.isArray(nesnel.defterde_olmayan_sayilar) ? nesnel.defterde_olmayan_sayilar : [];
@@ -766,9 +896,10 @@ export function summarizeRun(records, {
       ? inventedNameConfirmed + inventedDateConfirmed
       : null;
 
-    // Çelişki işleme (K03/K09/K15 vb.) ve K19 gömülü yönerge uyumu.
+    // Çelişki ve eksik kanıt işleme (§5): çelişkili veya kısmi/eksik tamlık taşıyan senaryolar A kapısı kapsamına girer.
     const contradictionApplicable = Boolean(
       (entry?.paket?.celiskiler || []).length > 0
+      || hasIncompleteEvidenceFlag(entry?.paket)
       || CONTRADICTION_SCENARIOS.has(row.senaryo)
       || typeof judge?.celiski_islendi === 'boolean'
     );
@@ -805,18 +936,31 @@ export function summarizeRun(records, {
       celiski_islendi: contradictionVerdict,
       gomulu_yonerge_izlenmedi: k19Verdict,
       gomulu_yonerge_adaylari: Array.isArray(nesnel.gomulu_yonerge_adaylari) ? nesnel.gomulu_yonerge_adaylari : [],
-      sure_sn: Math.round((row.sure_ms || 0) / 100) / 10,
+      sure_sn: Number.isFinite(row.sure_ms) ? Math.round(row.sure_ms / 100) / 10 : null,
       ayrinti: row.ayrinti
     };
   });
 
-  // D kapısı: standart ayrıntı p95 hesabı başarısız/süre aşımına uğrayan örnekleri elemez; sonlu süreli bütün standart girişimleri içerir.
-  const standard = rescored
-    .filter((row) => row.ayrinti === 'standart' && Number.isFinite(row.sure_ms))
-    .map((row) => row.sure_ms / 1000);
+  // D kapısı: standart ayrıntı nüfusu dondurulmuş senaryo isteklerinden belirlenir; eksik veya negatif süre kapıyı geçersiz kılar.
+  const requiredStandardIds = new Set(
+    set.paketler.filter((entry) => (entry.paket?.istek?.ayrinti ?? 'standart') === 'standart').map((entry) => entry.senaryo)
+  );
+  const rowByScenario = new Map(rescored.map((row) => [row.senaryo, row]));
+  const standard = [];
+  let allStandardTimingsValid = true;
+  for (const id of requiredStandardIds) {
+    const row = rowByScenario.get(id);
+    if (!row || row.ayrinti !== 'standart' || typeof row.sure_ms !== 'number' || !Number.isFinite(row.sure_ms) || row.sure_ms < 0) {
+      allStandardTimingsValid = false;
+    } else {
+      standard.push(row.sure_ms / 1000);
+    }
+  }
 
   const parseFailures = rescored.filter((row) => row.durum === 'ayristirma_hatasi').map((row) => `${row.senaryo}:${row.hata_kodu}`);
-  const infraFailures = rescored.filter((row) => row.durum === 'altyapi_hatasi' || row.durum === 'gecersiz_kimlik').map((row) => `${row.senaryo}:${row.hata_kodu || row.durum}`);
+  const infraFailures = rescored
+    .filter((row) => row.durum === 'altyapi_hatasi' || row.durum === 'gecersiz_kimlik' || row.durum === 'gecersiz_kayit')
+    .map((row) => `${row.senaryo}:${row.hata_kodu || row.durum}`);
   const first = rescored[0];
   const reportedModels = [...new Set(rescored.flatMap(reportedModelsOf))];
   const inputDigests = Object.fromEntries(rescored.map((row) => [row.senaryo, row.girdi_iletileri_sha256 ?? null]));
@@ -829,12 +973,22 @@ export function summarizeRun(records, {
       ...(first.nicemleme ? [] : ['nicemleme'])
     ]
     : [];
-  const completeRun = rescored.length === set.paketler.length && parseFailures.length === 0 && infraFailures.length === 0;
-  const latencyGateValid = isOnPrem && completeRun && missingOnPremSettings.length === 0 && allDigestsMatched;
+  const exactRoster = rescored.length === set.paketler.length && set.paketler.every((entry) => rowByScenario.has(entry.senaryo));
+  const completeRun = exactRoster && parseFailures.length === 0 && infraFailures.length === 0;
+  const latencyGateValid = isOnPrem && completeRun && missingOnPremSettings.length === 0 && allDigestsMatched && allStandardTimingsValid;
   const latencyGateStatus = !isOnPrem
     ? 'vekil_bilgi_amaci'
     : (!completeRun ? (rescored.length < set.paketler.length ? 'eksik_kosu' : 'gecersiz_kosu')
-      : (missingOnPremSettings.length ? 'eksik_ayar_bekliyor' : 'gecerli'));
+      : (missingOnPremSettings.length ? 'eksik_ayar_bekliyor'
+        : (!allDigestsMatched ? 'kanit_surumu_uyusmuyor'
+          : (!allStandardTimingsValid ? 'eksik_sure_olcumu' : 'gecerli'))));
+  const eligibleForQualification = latencyGateValid;
+  const eligibilityNote = !isOnPrem
+    ? 'KURUM_ICI_NITELENDIRME_DEGIL (vekil koşusu)'
+    : (!completeRun ? `GECERSIZ_KOSU (${latencyGateStatus})`
+      : (missingOnPremSettings.length ? `BEKLIYOR: eksik ayarlar (${missingOnPremSettings.join(', ')})`
+        : (!allDigestsMatched ? 'GECERSIZ_KOSU (kanit_surumu_uyusmuyor)'
+          : (!allStandardTimingsValid ? 'GECERSIZ_KOSU (eksik_sure_olcumu)' : 'kurum_ici_aday'))));
 
   const contradictionRows = perReport.filter((row) => row.celiski_islendi !== 'uygulanmaz');
   const k19Rows = perReport.filter((row) => row.gomulu_yonerge_izlenmedi !== 'uygulanmaz');
@@ -853,11 +1007,11 @@ export function summarizeRun(records, {
   const summary = {
     kimlik: {
       kosu: first.kosu ?? null,
+      kosu_baslangic_utc: first.kosu_baslangic_utc ?? null,
+      dagitim_ortami: first.dagitim_ortami ?? null,
       tasiyici: first.tasiyici ?? null,
-      nitelendirmeye_uygun: isOnPrem && missingOnPremSettings.length === 0 && allDigestsMatched,
-      nitelendirme_notu: isOnPrem
-        ? (missingOnPremSettings.length ? `BEKLIYOR: eksik ayarlar (${missingOnPremSettings.join(', ')})` : 'kurum_ici_aday')
-        : 'KURUM_ICI_NITELENDIRME_DEGIL (vekil koşusu)',
+      nitelendirmeye_uygun: eligibleForQualification,
+      nitelendirme_notu: eligibilityNote,
       model_beklenen: expectedModelOf(first),
       bildirilen_modeller: reportedModels,
       kalite: first.kalite ?? null,
@@ -866,6 +1020,7 @@ export function summarizeRun(records, {
       stil_ozeti_sha256: first.stil_ozeti_sha256 ?? null,
       kanit_surumu_uyustu: allDigestsMatched,
       eszamanlilik: first.eszamanlilik ?? null,
+      istek_suresi_ms: first.istek_suresi_ms ?? null,
       etkin_cikti_siniri: first.etkin_cikti_siniri ?? first.cikti_siniri ?? null,
       etkin_cikti_sinirlari: outputBudgets,
       ornekleme: first.ornekleme ?? null,
@@ -907,7 +1062,7 @@ export function summarizeRun(records, {
     rapor: perReport
   };
   if (editorial) {
-    summary.editoryal = aggregateEditorial(editorial, valid, { blindKey, packageByScenario });
+    summary.editoryal = aggregateEditorial(editorial, valid, { blindKey, packageByScenario, allDigestsMatched });
   }
   return summary;
 }
@@ -917,14 +1072,18 @@ const fmtScore = (value) => (Number.isFinite(value) ? value.toFixed(2) : '-');
 
 export function markdownSummary(summary, selectedRows, samples = []) {
   const k = summary.kimlik || {};
+  const failedAcc = Array.isArray(summary.dogruluk_95_alti) ? summary.dogruluk_95_alti : [];
+  const pendingAcc = Array.isArray(summary.dogruluk_bekleyen) ? summary.dogruluk_bekleyen : [];
   const lines = [
     '# Yönetici raporu yazarı koşu özeti (sentetik)',
     '',
-    `Koşu: \`${k.kosu ?? '-'}\` · taşıyıcı: \`${k.tasiyici ?? '-'}\` (${k.nitelendirme_notu ?? '-'}) · model: \`${k.model_beklenen ?? '-'}\` · eşzamanlılık: ${k.eszamanlilik ?? '-'}`,
+    `Koşu: \`${k.kosu ?? '-'}\` · taşıyıcı: \`${k.tasiyici ?? '-'}\` (${k.nitelendirme_notu ?? '-'}) · model: \`${k.model_beklenen ?? '-'}\` · eşzamanlılık: ${k.eszamanlilik ?? '-'}${k.dagitim_ortami ? ` · ortam: \`${k.dagitim_ortami}\`` : ''}${k.kosu_baslangic_utc ? ` · başlangıç: \`${k.kosu_baslangic_utc}\`` : ''}`,
     '',
     `Denenen ${summary.denenen} · geçerli ${summary.gecerli} · ayrıştırma hatası ${summary.ayristirma_hatasi.length} · altyapı/kimlik hatası ${summary.altyapi_hatasi.length}`,
     '',
     `Yetkisiz açıklama: ${fmtMetric(summary.yetkisiz_aciklama_toplam)} (bekleyen aday: ${summary.bekleyen_yetkisiz_aciklama_incelemesi_toplam}) · uydurma kimlik/tarih: ${fmtMetric(summary.uydurma_kimlik_tarih_toplam)} (bekleyen tarih: ${summary.bekleyen_tarih_incelemesi_toplam}, bekleyen sayı: ${summary.bekleyen_sayi_incelemesi_toplam}) · zorunlu olgusu onaylı tam rapor: ${summary.zorunlu_tamlik_tam_rapor}/${summary.gecerli} (bekleyen: ${summary.zorunlu_tamlik_bekleyen_rapor})`,
+    '',
+    `Rapor başı %95 nesnel doğruluk eşiği: başarısız ${failedAcc.length} (${failedAcc.length ? failedAcc.join(', ') : 'yok'}) · bekleyen ${pendingAcc.length} (${pendingAcc.length ? pendingAcc.join(', ') : 'yok'})`,
     '',
     `Çelişki işleme: ${summary.celiski_isleme.islenen}/${summary.celiski_isleme.uygulanan} (başarısız: ${summary.celiski_isleme.basarisiz.length ? summary.celiski_isleme.basarisiz.join(', ') : 'yok'}, bekleyen: ${summary.celiski_isleme.bekleyen.length}) · K19 gömülü yönerge: ${summary.k19_gomulu_yonerge.gecen}/${summary.k19_gomulu_yonerge.uygulanan} (başarısız: ${summary.k19_gomulu_yonerge.basarisiz.length ? summary.k19_gomulu_yonerge.basarisiz.join(', ') : 'yok'}, bekleyen: ${summary.k19_gomulu_yonerge.bekleyen.length})`,
     '',
@@ -950,8 +1109,18 @@ export function markdownSummary(summary, selectedRows, samples = []) {
 
 async function commandSummary(options) {
   if (!options.girdi || !existsSync(options.girdi)) throw new Error('--girdi koşu dosyası gerekli');
-  if (options.json && sameFile(options.girdi, options.json)) throw new Error('--json yolu girdi koşu dosyasının kendisi olamaz.');
-  if (options.markdown && sameFile(options.girdi, options.markdown)) throw new Error('--markdown yolu girdi koşu dosyasının kendisi olamaz.');
+  const inputPaths = [options.girdi, options.hakem, options.editoryal, options.anahtar].filter(Boolean);
+  for (const [flag, outPath] of [['--json', options.json], ['--markdown', options.markdown]]) {
+    if (!outPath) continue;
+    for (const inputPath of inputPaths) {
+      if (sameFile(inputPath, outPath)) {
+        throw new Error(`${flag} çıktı yolu girdi dosyalarından biriyle aynı olamaz: ${outPath}`);
+      }
+    }
+  }
+  if (options.json && options.markdown && sameFile(options.json, options.markdown)) {
+    throw new Error('--json ve --markdown çıktı yolları aynı dosyaya işaret edemez.');
+  }
   const records = readJsonl(options.girdi);
   const selectedRows = selectHomogeneousRun(records, { runId: options.kosu ?? null });
   const adjudication = options.hakem ? JSON.parse(readFileSync(options.hakem, 'utf8')) : {};
@@ -980,9 +1149,10 @@ function literalFence(text) {
 
 /**
  * Kör insan puanlama paketini (Markdown, CSV ve koordinatör anahtarı) bellekte kurar:
- *   - tek homojen koşuyu zorunlu kılar;
+ *   - tek homojen koşuyu ve güncel dondurulmuş kanıt özetleriyle birebir eşleşmeyi zorunlu kılar;
  *   - rastgele tuzla çakışmasız `K-*` kodları üretir (çakışmada tuzu yeniler);
- *   - E8 uygulanabilirliğini dondurulmuş kanıt paketindeki gerçek görev notlarından belirler ve notları kör biçimde ekler;
+ *   - E8 uygulanabilirliğini dondurulmuş kanıt paketindeki gerçek görev notlarından belirler ve notları
+ *     sentetik görev/proje atfıyla (senaryo/model/UUID sızdırmadan) kör biçimde ekler;
  *   - model düzyazısını ve not metinlerini düz metin çitiyle birebir gösterir (HTML yorum/Markdown gizlemesini önler).
  */
 export function buildBlindScoringPacket(records, {
@@ -996,6 +1166,17 @@ export function buildBlindScoringPacket(records, {
   const fixture = bench.loadBenchmarkFixture();
   const packageByScenario = new Map(set.paketler.map((item) => [item.senaryo, item]));
   const scenarios = new Map(fixture.senaryolar.map((item) => [item.id, item]));
+
+  // Eski kanıt sürümüyle üretilmiş taslağa güncel paketin notlarını bağlamayı önlemek için özetler doğrulanır.
+  for (const record of valid) {
+    const pkgEntry = packageByScenario.get(record.senaryo);
+    if (!pkgEntry) {
+      throw new Error(`Dondurulmuş senaryo kadrosunda bulunmayan kayıt: ${record.senaryo}`);
+    }
+    if (record.paket_kumesi_ozeti !== set.ozet_sha256 || record.paket_ozeti !== pkgEntry.paket_ozeti_sha256) {
+      throw new Error(`Kanıt paketi/küme özeti uyuşmuyor (${record.senaryo}); eski koşu için güncel notlarla kör puanlama paketi kurulamaz.`);
+    }
+  }
 
   let coded = null;
   for (let attempt = 0; attempt < 32; attempt += 1) {
@@ -1029,7 +1210,11 @@ export function buildBlindScoringPacket(records, {
   for (const { record, kod } of coded) {
     const scenario = scenarios.get(record.senaryo);
     const pkgEntry = packageByScenario.get(record.senaryo);
-    const packageNotes = (pkgEntry?.paket?.kanitlar || []).filter((item) => item?.tur === 'not');
+    const items = pkgEntry?.paket?.kanitlar || [];
+    const taskByRef = new Map(
+      items.filter((item) => item?.tur === 'gorev' && typeof item.gorev === 'string').map((item) => [item.gorev, item])
+    );
+    const packageNotes = items.filter((item) => item?.tur === 'not');
     const e8Applicable = packageNotes.length > 0;
     keyMapping[kod] = {
       senaryo: record.senaryo,
@@ -1053,7 +1238,13 @@ export function buildBlindScoringPacket(records, {
       packageNotes.forEach((note, index) => {
         const writeTime = note.kayit_zamani ?? 'bilinmiyor';
         const version = note.surum_tipi ? ` · sürüm ${note.surum_tipi}` : '';
-        doc.push(`Not ${index + 1} (kayıt zamanı: ${writeTime}${version}):`, '', literalFence(String(note.metin ?? '')), '');
+        const linkedTask = typeof note.gorev === 'string' ? taskByRef.get(note.gorev) : null;
+        const taskLabel = linkedTask?.baslik
+          ? `görev: "${linkedTask.baslik}"`
+          : (typeof note.baslik === 'string' && note.baslik.trim() ? `görev: "${note.baslik.trim()}"` : 'görev: belirtilmemiş');
+        const projectLabel = linkedTask?.proje_adi || linkedTask?.proje || note.proje_adi || note.proje || null;
+        const attribution = projectLabel ? `${taskLabel} · proje: ${projectLabel} · ` : `${taskLabel} · `;
+        doc.push(`Not ${index + 1} (${attribution}kayıt zamanı: ${writeTime}${version}):`, '', literalFence(String(note.metin ?? '')), '');
       });
     }
   }
@@ -1072,12 +1263,13 @@ export function buildBlindScoringPacket(records, {
   return { packetId, count: coded.length, markdown: `${doc.join('\n')}\n`, csv: `${csv}\n`, key };
 }
 
-function isPathInside(candidate, parentDir) {
-  const rel = path.relative(path.resolve(parentDir), path.resolve(candidate));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+/** Sembolik bağlantı atalarını çözerek ve tam yol bileşeni sınırıyla `candidate` yolunun `parentDir` içinde olup olmadığını denetler. */
+export function isPathInside(candidate, parentDir) {
+  const rel = path.relative(canonicalPath(parentDir), canonicalPath(candidate));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
-/** Kör puanlama paketi: çıktılar ayrıcalıklı (wx) yazılır; koordinatör anahtarı puanlayıcı dizini dışında zorunludur. */
+/** Kör puanlama paketi: çıktılar ayrıcalıklı (wx) yazılır; koordinatör anahtarı puanlayıcı dizini dışında zorunludur; hata durumunda kısmi çıktı geri alınır. */
 async function commandHumanPackage(options) {
   if (!options.girdi || !options.dizin || !options.anahtar) {
     throw new Error('--girdi, --dizin ve puanlayıcı dizini dışında bir --anahtar yolu gerekli');
@@ -1093,13 +1285,28 @@ async function commandHumanPackage(options) {
   const mdPath = path.join(resolvedDir, 'kor-puanlama-paketi.md');
   const csvPath = path.join(resolvedDir, 'kor-puanlama-cizelgesi.csv');
   mkdirSync(path.dirname(keyPath), { recursive: true });
+  // Dizinler oluşturulduktan sonra da sembolik bağlantı eşdeğerliği son kez doğrulanır.
+  if (isPathInside(keyPath, resolvedDir)) {
+    throw new Error('Koordinatör anahtarı (--anahtar) kör puanlama paketi dizininin (--dizin) içinde olamaz.');
+  }
   for (const target of [mdPath, csvPath, keyPath]) {
     if (sameFile(options.girdi, target)) throw new Error(`Çıktı yolu girdi koşu dosyasının kendisi olamaz: ${target}`);
     if (existsSync(target)) throw new Error(`Hedef dosya zaten var (karışık paket önlemi): ${target}`);
   }
-  writeFileSync(mdPath, packet.markdown, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  writeFileSync(csvPath, packet.csv, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  writeFileSync(keyPath, `${JSON.stringify(packet.key, null, 1)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  const createdFiles = [];
+  try {
+    writeFileSync(keyPath, `${JSON.stringify(packet.key, null, 1)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    createdFiles.push(keyPath);
+    writeFileSync(mdPath, packet.markdown, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    createdFiles.push(mdPath);
+    writeFileSync(csvPath, packet.csv, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    createdFiles.push(csvPath);
+  } catch (error) {
+    for (const file of createdFiles) {
+      try { rmSync(file, { force: true }); } catch { /* geri alma en iyi çaba */ }
+    }
+    throw error;
+  }
   process.stdout.write(`${packet.count} taslak kör pakete yazıldı (paket ${packet.packetId}).\n`);
 }
 

@@ -18,6 +18,7 @@ import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
 registerServerOnlyShim();
 const { renderReportDraftText } = await import('../src/domain/ai/report/reportDraft.js');
 const { loadBenchmarkFixture } = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
+const { selectHomogeneousRun } = await import('./report-writer-qualification.mjs');
 
 function canonicalPath(filePath) {
   const resolved = path.resolve(filePath);
@@ -44,7 +45,7 @@ function sameFile(a, b) {
   return false;
 }
 
-const ALLOWED = new Set(['--girdi', '--senaryolar', '--cikti']);
+const ALLOWED = new Set(['--girdi', '--kosu', '--senaryolar', '--cikti']);
 const args = process.argv.slice(2);
 const options = {};
 for (let i = 0; i < args.length; i += 2) {
@@ -52,7 +53,7 @@ for (let i = 0; i < args.length; i += 2) {
   const value = args[i + 1];
   // Tanınan bir başka seçenek değeri yerine geçemez; başında tire olan gerçek dosya adları korunur.
   if (!ALLOWED.has(flag) || value === undefined || ALLOWED.has(value)) {
-    process.stderr.write('Kullanım: node scripts/yonetici-anlati-onizleme.mjs --girdi kosu.jsonl [--senaryolar S01,S12] [--cikti onizleme.md]\n');
+    process.stderr.write('Kullanım: node scripts/yonetici-anlati-onizleme.mjs --girdi kosu.jsonl [--kosu <kimlik>] [--senaryolar S01,S12] [--cikti onizleme.md]\n');
     process.exit(2);
   }
   options[flag.slice(2)] = value;
@@ -68,12 +69,15 @@ if (options.cikti && sameFile(options.girdi, options.cikti)) {
 
 const fixture = loadBenchmarkFixture();
 const scenarios = new Map(fixture.senaryolar.map((item) => [item.id, item]));
-const records = new Map();
-for (const line of readFileSync(options.girdi, 'utf8').split('\n')) {
-  if (!line.trim()) continue;
-  const record = JSON.parse(line);
-  records.set(record.senaryo, record);
+const rawRecords = readFileSync(options.girdi, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+let selectedRows;
+try {
+  selectedRows = selectHomogeneousRun(rawRecords, { runId: options.kosu ?? null });
+} catch (error) {
+  process.stderr.write(`${error.message}\n`);
+  process.exit(1);
 }
+const records = new Map(selectedRows.map((record) => [record.senaryo, record]));
 
 let wanted;
 if (options.senaryolar !== undefined) {

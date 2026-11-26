@@ -110,6 +110,50 @@ function projectDisplayCode(project, fallbackId) {
   return project?.code || fallbackId;
 }
 
+/**
+ * Seçili ya da ölçüme giren projeler için UUID sızdırmayan, çakışma durumunda
+ * paket içi kararlı sonekle (`#1`, `#2`) ayrıştırılmış tekil etiketler üretir.
+ */
+function buildModelSafeProjectLabels(projectIds, projects) {
+  const uniqueIds = [...new Set(projectIds)];
+  const rawById = new Map();
+  const groups = new Map();
+  for (const id of uniqueIds) {
+    const project = projects.get(id);
+    const base = clampModelSafeLabel(project?.code || project?.name || id, REPORT_REQUEST_LIMITS.maxIdentifierLength) || id;
+    rawById.set(id, base);
+    const key = base.toLocaleLowerCase('tr-TR');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(id);
+  }
+  const usedKeys = new Set();
+  const labels = new Map();
+  // Önce çakışmayan tekil etiketleri ayır; çakışanlar bunlarla da örtüşmesin.
+  for (const [key, ids] of groups.entries()) {
+    if (ids.length === 1) {
+      labels.set(ids[0], rawById.get(ids[0]));
+      usedKeys.add(key);
+    }
+  }
+  for (const ids of groups.values()) {
+    if (ids.length <= 1) continue;
+    const ordered = [...ids].sort(compareAscii);
+    let seq = 1;
+    for (const id of ordered) {
+      const base = rawById.get(id);
+      let candidate;
+      do {
+        const suffix = ` #${seq++}`;
+        const maxBase = Math.max(1, REPORT_REQUEST_LIMITS.maxIdentifierLength - suffix.length);
+        candidate = `${base.slice(0, maxBase).trimEnd()}${suffix}`;
+      } while (usedKeys.has(candidate.toLocaleLowerCase('tr-TR')));
+      usedKeys.add(candidate.toLocaleLowerCase('tr-TR'));
+      labels.set(id, candidate);
+    }
+  }
+  return labels;
+}
+
 function formatOrgMemberForHierarchy(member) {
   return {
     organization: {
@@ -1430,11 +1474,7 @@ export async function buildExecutiveReportEvidence({
 
     if (breakdownProjects.size > 1) {
       const sortedProjects = [...breakdownProjects.values()].sort((a, b) => compareAscii(a.projectId, b.projectId));
-      const codeCounts = new Map();
-      for (const project of sortedProjects) {
-        const code = projectDisplayCode(project, project.projectId);
-        codeCounts.set(code, (codeCounts.get(code) || 0) + 1);
-      }
+      const metricProjectLabels = buildModelSafeProjectLabels(sortedProjects.map((project) => project.projectId), breakdownProjects);
       for (const project of sortedProjects) {
         // Denetim tamamlaması farklı bir projede gerçekleştiyse tamamlama kaynak projeye yazılır; taşınmış ve silinmiş tamamlamalar da eklenir.
         const projCompleted = completedInPeriodTasks.filter((task) => {
@@ -1447,8 +1487,7 @@ export async function buildExecutiveReportEvidence({
           && factsComplete
           && snapshotConsistent
           && !activityAssigneeDiverged;
-        const displayCode = projectDisplayCode(project, project.projectId);
-        const hasCodeCollision = (codeCounts.get(displayCode) || 0) > 1;
+        const displayCode = metricProjectLabels.get(project.projectId) || projectDisplayCode(project, project.projectId);
         secondaryMetrics.push({
           _metricKey: `project_completed:${project.projectId}`,
           tur: 'olcu',
@@ -1456,7 +1495,6 @@ export async function buildExecutiveReportEvidence({
           olcu: 'tamamlanan',
           deger: projCompleted,
           kapsam: [displayCode],
-          ...(hasCodeCollision ? { proje_kimligi: project.projectId } : {}),
           ...(resolvedScope.tur === 'kisi' ? { sorumlu: targetPersonLabel } : {}),
           ...(resolvedScope.tur === 'ekip' ? { ekip: resolvedScope.teamLabel } : {}),
           ...(ORG_LEVEL_META[resolvedScope.tur] ? { [resolvedScope.tur]: resolvedScope.orgUnitLabel } : {}),
@@ -1662,19 +1700,10 @@ export async function buildExecutiveReportEvidence({
       return findings;
     };
 
-    // Sayısal Sicil, proje UUID'si ve ham kontrol karakteri (\u001F) model paketine sızmaz; okunur etiketler yayımlanır.
+    // Sayısal Sicil, proje UUID'si ve ham kontrol karakteri (\u001F) model paketine sızmaz; çakışan proje kodları düşürülmeden ayrıştırılır.
     const projectScopeLabels = () => {
-      const seen = new Set();
-      const labels = [];
-      for (const id of resolvedScope.projectIds) {
-        const label = clampModelSafeLabel(projectDisplayCode(projects.get(id), id), REPORT_REQUEST_LIMITS.maxIdentifierLength) || id;
-        const key = label.toLocaleLowerCase('tr-TR');
-        if (!seen.has(key)) {
-          seen.add(key);
-          labels.push(label);
-        }
-      }
-      return labels;
+      const labelById = buildModelSafeProjectLabels(resolvedScope.projectIds, projects);
+      return [...new Set(resolvedScope.projectIds)].map((id) => labelById.get(id));
     };
     const modelSafeScopeIds = resolvedScope.tur === 'kisi'
       ? [targetPersonLabel]
