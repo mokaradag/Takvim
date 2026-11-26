@@ -106,7 +106,7 @@ function ownProp(obj, key) {
 const ISO_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/u;
 
 /** Geçerli ISO-8601 zaman damgasını milisaniye altı (nanosaniye) kesinlikte UTC BigInt değerine çevirir. */
-function parseIsoTimestampNanos(value) {
+export function parseIsoTimestampNanos(value) {
   if (typeof value !== 'string') return null;
   const match = ISO_TIMESTAMP_RE.exec(value);
   if (!match) return null;
@@ -705,7 +705,7 @@ export function validateEvidencePackageContract(pkg) {
         reportPeriod = { baslangic: donemBaslangic, bitis: donemBitis };
       }
       const donemAd = ownProp(rawDonem, 'ad');
-      if (donemAd !== undefined && typeof donemAd !== 'string') {
+      if (donemAd !== undefined && (typeof donemAd !== 'string' || donemAd.length > REPORT_REQUEST_LIMITS.maxIdentifierLength || FORBIDDEN_GENERAL_CONTROL.test(donemAd))) {
         problems.push('istek:donem_ad_gecersiz');
       }
     }
@@ -730,7 +730,7 @@ export function validateEvidencePackageContract(pkg) {
         problems.push('istek:karsilastirma_donemi_gecersiz');
       } else {
         const compAd = ownProp(compObj, 'ad');
-        if (compAd !== undefined && typeof compAd !== 'string') {
+        if (compAd !== undefined && (typeof compAd !== 'string' || compAd.length > REPORT_REQUEST_LIMITS.maxIdentifierLength || FORBIDDEN_GENERAL_CONTROL.test(compAd))) {
           problems.push('istek:karsilastirma_donemi_ad_gecersiz');
         }
         const compRange = { dateFrom: compBaslangic, dateTo: compBitis };
@@ -852,7 +852,8 @@ export function validateEvidencePackageContract(pkg) {
   };
 
   for (const item of kanitlar || []) {
-    if (!isPlainObject(item) || typeof item.id !== 'string' || !/^E[1-9]\d*$/u.test(item.id)) {
+    // Kanıt kimliği uzunluğu plan iletisinde tekrarlandığında 32 KiB tavanını aşmaması için en çok 16 karakterle sınırlıdır.
+    if (!isPlainObject(item) || typeof item.id !== 'string' || !/^E[1-9]\d{0,14}$/u.test(item.id)) {
       problems.push('kanit:kimlik_gecersiz');
       continue;
     }
@@ -863,6 +864,18 @@ export function validateEvidencePackageContract(pkg) {
       problems.push(`kanit:tur_gecersiz:${item.id}`);
     } else if (!ALLOWED_SOURCES_BY_TYPE[item.tur].has(item.kaynak)) {
       problems.push(`kanit:kaynak_uyumsuz:${item.id}`);
+    }
+
+    // Bağımlılık alanı varsa yalnızca `oncul`/`ardil` anahtarlarını ve yoğun dizge dizilerini taşıyabilir; ham iç kimlik sızması önlenir.
+    if (Object.hasOwn(item, 'bagimliliklar') && item.bagimliliklar !== undefined) {
+      const deps = item.bagimliliklar;
+      const validDeps = isPlainObject(deps)
+        && Object.keys(deps).every((key) => key === 'oncul' || key === 'ardil')
+        && Object.values(deps).every((list) => Array.isArray(list) && !hasSparseHole(list)
+          && list.every((ref) => typeof ref === 'string' && ref.trim().length > 0));
+      if (!validDeps) {
+        problems.push(`kanit:bagimliliklar_gecersiz:${item.id}`);
+      }
     }
 
     if (!consentEnabled) {
@@ -977,7 +990,7 @@ export function validateEvidencePackageContract(pkg) {
 
   const findingIds = new Set();
   for (const finding of turetilmis || []) {
-    if (!isPlainObject(finding) || typeof finding.id !== 'string' || !/^F[1-9]\d*$/u.test(finding.id)) {
+    if (!isPlainObject(finding) || typeof finding.id !== 'string' || !/^F[1-9]\d{0,14}$/u.test(finding.id)) {
       problems.push('turetilmis:kimlik_gecersiz');
       continue;
     }

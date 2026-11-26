@@ -159,9 +159,10 @@ export function assessReportWriterModelIdentity({ model = null, configuredModel 
 const KNOWN_ABNORMAL_FINISH_REASONS = new Set(['content_filter', 'tool_calls', 'function_call']);
 
 export function finalizeReportWriterResponse({ text, finishReason = null, plan, evidencePackage }) {
-  if (finishReason === 'length') throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
-  if (typeof finishReason === 'string' && finishReason.trim() && !NORMAL_FINISH_REASONS.has(finishReason)) {
-    const safeReason = KNOWN_ABNORMAL_FINISH_REASONS.has(finishReason) ? finishReason : 'other';
+  const normalizedFinish = typeof finishReason === 'string' ? finishReason.trim().toLowerCase() : null;
+  if (normalizedFinish === 'length') throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
+  if (normalizedFinish && !NORMAL_FINISH_REASONS.has(normalizedFinish)) {
+    const safeReason = KNOWN_ABNORMAL_FINISH_REASONS.has(normalizedFinish) ? normalizedFinish : 'other';
     throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_INCOMPLETE_FINISH', { finishReason: safeReason });
   }
   try {
@@ -234,16 +235,16 @@ export async function writeExecutiveReportDraft({
     if (error instanceof AiError
       && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID
       && error.details?.reason === 'EMPTY_COMPLETION'
-      && error.details?.finishReason === 'length') {
+      && String(error.details?.finishReason || '').trim().toLowerCase() === 'length') {
       throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
     }
     throw error;
   }
   cancelled(signal);
+  // Uzun süren yazım sırasında yetki ya da rıza değişmiş olabilir: yanıt ayrıştırılmadan önce güncel yetki doğrulanır.
+  await assertStillAuthorized(revalidate, signal, revalidationTimeoutMs);
   const identity = assessReportWriterModelIdentity(result);
   const draft = finalizeReportWriterResponse({ text: result.text, finishReason: result.finishReason, plan: request.plan, evidencePackage: evidenceSnapshot });
-  // Uzun süren yazım sırasında yetki ya da rıza değişmiş olabilir: içerik ancak bağımsız süre sınırlı güncel denetimden sonra döner.
-  await assertStillAuthorized(revalidate, signal, revalidationTimeoutMs);
   return Object.freeze({
     draft,
     plan: request.plan,

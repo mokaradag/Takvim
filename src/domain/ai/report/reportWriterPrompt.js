@@ -1,5 +1,6 @@
+import { isIsoDay } from '../isoDay.js';
 import { REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } from './reportRequest.js';
-import { REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan.js';
+import { isKnownOpenTaskStatus, REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan.js';
 
 /**
  * Bilgin Aşama 4I-B — modelden bağımsız yönetici raporu yazar istemi (saf).
@@ -127,7 +128,7 @@ export function buildReportWriterSystemPrompt(style) {
     'YASAKLAR',
     numbered([
       ...s.yasaklar,
-      'Kanıtta olmayan sayı, yüzde, oran, fark, gün sayısı ya da süre hesaplamak: yalnızca kanıttaki değerleri ve sunucu türetimlerini (F#) kullanırsın. Gecikme süresini kendin hesaplamaz, yalnızca görev kanıtındaki "veri_anina_gore_gecikme_takvim_gunu" alanından (takvim günü) alırsın; alan yoksa ve görev "kesit_sonrasi_degisti: true" taşımıyorsa gecikmeyi hedef tarihle anlatırsın. "kesit_sonrasi_degisti: true" işaretli görevlerden kesit anı durumu ya da gecikme iddiası üretmezsin',
+      'Kanıtta olmayan sayı, yüzde, oran, fark, gün sayısı ya da süre hesaplamak: yalnızca kanıttaki değerleri ve sunucu türetimlerini (F#) kullanırsın. Gecikme süresini kendin hesaplamaz, yalnızca görev kanıtındaki "veri_anina_gore_gecikme_takvim_gunu" alanından (takvim günü) alırsın; görev gecikmiş olarak kayıtlıysa ve bu alan yoksa (görev "kesit_sonrasi_degisti: true" taşımıyorsa) gecikmeyi yalnızca hedef tarihle anlatırsın. Hedef tarihi veri anından sonraki açık görevler gecikmiş değildir. "kesit_sonrasi_degisti: true" işaretli görevlerden kesit anı durumu ya da gecikme iddiası üretmezsin',
       'Kanıttaki görev kayıtlarını sayarak yeni toplam üretmek: toplamlar yalnızca ölçü kanıtlarından ("olcu") ve sunucu türetimlerinden alınır; paket kesilmiş olabileceğinden görünen görev sayısı bir toplam değildir',
       'Kişiye sorumluluk, kusur ya da başarısızlık atfetmek; notlardaki kişisel ya da suçlayıcı dili yönetim yargısına çevirmek',
       'Zaman yakınlığından neden-sonuç ilişkisi çıkarmak',
@@ -152,7 +153,7 @@ export function buildReportWriterSystemPrompt(style) {
       '"tarihsel" ya da "tarihsel_onceki" sürüm notlar geçmiş kayıttır; güncel durum gibi sunulmaz. Aynı görevin sürümleri zaman sırasıyla okunur, en güncel kayıt esas alınır ve değişiklik açıkça söylenir.',
       'Kısaltılmış, parçalı ya da noktalaması bozuk notu aynen aktarmaz, anlamını koruyarak profesyonel Türkçeye çevirirsin. Bilmediğin kısaltmaya açılım uydurmaz, teknik terimi korursun; çeviri sırasında olgu eklemezsin.',
       'Aynı gelişmeyi anlatan birden çok notu tek gelişme olarak birleştirirsin; olayı birden çok kez sayarak önemini şişirmezsin.',
-      'Çelişen kanıtları gizlemezsin: zaman sırasını verir, değişikliği söyler, hangisinin doğru olduğuna kanıt ötesinde karar vermezsin.'
+      'Çelişen kanıtları gizlemezsin: kayıt zamanı belirliyse zaman sırasını verir ve değişikliği söylersin; kesin zaman sırası yoksa sıra uydurmadan karşıt bildirimleri eşit mesafeyle aktarır, hangisinin doğru olduğuna kanıt ötesinde karar vermezsin.'
     ]),
     '',
     'GÜVENİLMEZ VERİ',
@@ -216,11 +217,12 @@ function projectTaskRef(value, refs, omittedRefs) {
  * sunucuya ait yürütme alanları çıkarılır. Olgu değerleri, metinler ve köken alanları değişmez.
  */
 const DAY_MS = 86400000;
-/** Kesit sonrası değişmiş görevlerde anlık durum/termin iddiasına yol açabilecek alanlar. */
-const POST_CUTOFF_OMITTED_TASK_KEYS = new Set(['durum', 'hedef_bitis', 'oncelik']);
+/** Kesit sonrası değişmiş görevlerde anlık durum/termin/bitiş iddiasına yol açabilecek alanlar. */
+const POST_CUTOFF_OMITTED_TASK_KEYS = new Set(['durum', 'hedef_bitis', 'oncelik', 'gerceklesen_bitis']);
 
-/** İki ISO gün arasındaki takvim günü farkı (sunucu aritmetiği). */
+/** İki geçerli ISO gün arasındaki takvim günü farkı (sunucu aritmetiği). */
 function calendarDaysBetween(fromDay, toDay) {
+  if (!isIsoDay(fromDay) || !isIsoDay(toDay)) return null;
   const from = Date.parse(`${fromDay}T00:00:00Z`);
   const to = Date.parse(`${toDay}T00:00:00Z`);
   return Number.isFinite(from) && Number.isFinite(to) ? Math.round((to - from) / DAY_MS) : null;
@@ -231,9 +233,9 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
   const out = {};
   const postCutoffTask = item.tur === 'gorev' && item.kesit_sonrasi_degisti === true;
   for (const [key, value] of Object.entries(item)) {
-    // Hesaplanan gecikme alanı ham girdiden kopyalanmaz; yalnızca aşağıdaki sunucu aritmetiği üretir.
-    if (key === 'veri_anina_gore_gecikme_takvim_gunu') continue;
-    // Kesit sonrası değişen görevlerin güncel durum/termin/öncelik alanları kesit anı iddiasına dönüşmemesi için çıkarılır.
+    // Hesaplanan gecikme alanı ve eski iç proje kimliği ham girdiden kopyalanmaz.
+    if (key === 'veri_anina_gore_gecikme_takvim_gunu' || key === 'proje_kimligi') continue;
+    // Kesit sonrası değişen görevlerin güncel durum/termin/öncelik/bitiş alanları kesit anı iddiasına dönüşmemesi için çıkarılır.
     if (postCutoffTask && POST_CUTOFF_OMITTED_TASK_KEYS.has(key)) continue;
     if (key === 'gorev') {
       if (item.tur === 'gorev') continue;
@@ -246,10 +248,13 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
       out[key] = value;
     }
   }
-  // Aritmetik sunucunundur: açık, kesit tutarlı ve hedefi veri anından önce kalmış görevin gecikmesi takvim günüyle verilir;
-  // model gün farkını kendisi hesaplamaz. Kesit sonrası değişmiş görevler anlık gecikme değeri almaz.
-  const target = typeof item.hedef_bitis === 'string' ? item.hedef_bitis.slice(0, 10) : null;
-  if (item.tur === 'gorev' && item.durum !== 'tamamlandi' && !postCutoffTask && target && snapshotDay && target < snapshotDay) {
+  // Aritmetik sunucunundur: yalnızca bilinen açık, kesit tutarlı ve geçerli hedef tarihi veri anından önce kalmış
+  // görevin gecikmesi takvim günüyle verilir; bilinmeyen durum (`null`) ve geçersiz tarihler gecikme üretmez.
+  const rawTarget = typeof item.hedef_bitis === 'string' && /^\d{4}-\d{2}-\d{2}/u.test(item.hedef_bitis)
+    ? item.hedef_bitis.slice(0, 10)
+    : null;
+  const target = rawTarget && isIsoDay(rawTarget) ? rawTarget : null;
+  if (item.tur === 'gorev' && isKnownOpenTaskStatus(item.durum) && !postCutoffTask && target && snapshotDay && target < snapshotDay) {
     const days = calendarDaysBetween(target, snapshotDay);
     if (Number.isSafeInteger(days) && days > 0) out.veri_anina_gore_gecikme_takvim_gunu = days;
   }
@@ -268,7 +273,7 @@ function projectConflict(conflict, refs, omittedRefs) {
 
 function resolvedSnapshotDay(veriAni) {
   return snapshotBusinessDay(veriAni)
-    ?? (typeof veriAni === 'string' && /^\d{4}-\d{2}-\d{2}/u.test(veriAni) ? veriAni.slice(0, 10) : null);
+    ?? (typeof veriAni === 'string' && /^\d{4}-\d{2}-\d{2}/u.test(veriAni) && isIsoDay(veriAni.slice(0, 10)) ? veriAni.slice(0, 10) : null);
 }
 
 /**
@@ -304,6 +309,17 @@ export function projectEvidencePackageForWriter(evidencePackage) {
   };
 }
 
+// eslint-disable-next-line no-control-regex -- güvenilen plan iletisine geçen dönem adındaki denetim karakterleri temizlenir
+const META_CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]+/gu;
+
+function safePeriodLabel(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.replace(META_CONTROL_CHARS_RE, ' ').replace(/\s+/gu, ' ').trim();
+  if (!cleaned) return null;
+  const chars = Array.from(cleaned);
+  return chars.length <= 160 ? cleaned : `${chars.slice(0, 159).join('').trimEnd()}…`;
+}
+
 function reportMeta(pkg) {
   const istek = pkg.istek;
   const kapsam = isPlainObject(istek.kapsam) ? istek.kapsam : {};
@@ -312,18 +328,21 @@ function reportMeta(pkg) {
     : null;
   const hasNoteEvidence = Array.isArray(pkg.kanitlar) && pkg.kanitlar.some((item) => isPlainObject(item) && item.tur === 'not');
   const excludedNotes = Number.isSafeInteger(pkg.tamlik?.not_ozeti?.disarida_kalan) && pkg.tamlik.not_ozeti.disarida_kalan > 0;
-  const notesMayBeOmitted = excludedNotes || pkg.tamlik?.paket_kesildi === true || pkg.tamlik?.kapsam_gorunurlugu === 'partial';
+  const notesExcludedByLimits = excludedNotes || pkg.tamlik?.paket_kesildi === true;
+  const partialVisibility = pkg.tamlik?.kapsam_gorunurlugu === 'partial';
   const noteSummary = istek.notlar !== 'dahil'
     ? 'Görev notları bu rapora dahil edilmedi; notlara dayanan hiçbir iddia kurulmaz.'
     : (hasNoteEvidence
       ? 'Rapor için açık rıza verildi; görev notları kanıttadır.'
-      : (notesMayBeOmitted
+      : (notesExcludedByLimits
         ? 'Rapor için açık rıza verildi ancak kanıt paketi sınırları nedeniyle bu pakete görev notu alınmadı; not olmadığı sonucu çıkarılmaz.'
-        : 'Rapor için açık rıza verildi ancak bu kanıt paketinde yer alan görev notu bulunmuyor.'));
+        : (partialVisibility
+          ? 'Rapor için açık rıza verildi ancak görünür kanıt paketinde yer alan görev notu bulunmuyor; görünmeyen işler hakkında not olmadığı sonucu çıkarılmaz.'
+          : 'Rapor için açık rıza verildi ancak bu kanıt paketinde yer alan görev notu bulunmuyor.')));
   return {
     rapor_turu: PERIOD_LABELS[istek.rapor_turu] ?? 'Yönetim Raporu',
     donem: formatTurkishRange(istek.donem?.baslangic, istek.donem?.bitis),
-    donem_adi: typeof istek.donem?.ad === 'string' ? istek.donem.ad : null,
+    donem_adi: safePeriodLabel(istek.donem?.ad),
     veri_ani: formatTurkishDay(resolvedSnapshotDay(pkg.veri_ani)),
     kapsam_turu: SCOPE_LABELS[kapsam.tur] ?? null,
     kapsam: Array.isArray(kapsam.kimlikler) ? [...kapsam.kimlikler] : [],
@@ -389,7 +408,8 @@ export function buildReportEvidenceMessages(evidencePackage, { maxBytes = REPORT
   }
   const { header, celiskiler, turetilmis, kanitlar } = projectEvidencePackageForWriter(evidencePackage);
   // Önsöz uzunluğu ileti numarasıyla değişebildiği için en geniş numara biçimiyle pay ayrılır.
-  const reserve = byteLength(EVIDENCE_PREAMBLE(REPORT_WRITER_MAX_EVIDENCE_MESSAGES, REPORT_WRITER_MAX_EVIDENCE_MESSAGES)) + 64;
+  const widestPreamble = byteLength(EVIDENCE_PREAMBLE(REPORT_WRITER_MAX_EVIDENCE_MESSAGES, REPORT_WRITER_MAX_EVIDENCE_MESSAGES));
+  const reserve = widestPreamble + 64;
   const budget = maxBytes - reserve;
   const chunks = [];
   let current = { paket: header, kanitlar: [] };
@@ -407,7 +427,8 @@ export function buildReportEvidenceMessages(evidencePackage, { maxBytes = REPORT
       chunks.push(current);
     }
     current = { [bucketKey]: [item] };
-    if (size(current) > budget) throw new ReportPromptError('EVIDENCE_ITEM_TOO_LARGE');
+    // Tek başına yeni ileti açan kayıt 64 baytlık paketleme payıyla değil, gerçek nihai ileti tavanıyla karşılaştırılır.
+    if (size(current) + widestPreamble + 1 > maxBytes) throw new ReportPromptError('EVIDENCE_ITEM_TOO_LARGE');
   };
 
   for (const conflict of celiskiler) appendRecord('celiskiler', conflict);

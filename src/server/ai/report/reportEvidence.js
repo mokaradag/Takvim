@@ -106,8 +106,16 @@ function roundPercent(numerator, denominator) {
   return Math.round((numerator / denominator) * 1000) / 10;
 }
 
-function projectDisplayCode(project, fallbackId) {
-  return project?.code || fallbackId;
+/** UTF-16 kod birimi sınırını aşmadan ve vekil çifti (surrogate pair) bölmeden metni kırpar. */
+function sliceWithinUtf16Limit(text, maxUnits) {
+  let out = '';
+  let units = 0;
+  for (const ch of text) {
+    if (units + ch.length > maxUnits) break;
+    out += ch;
+    units += ch.length;
+  }
+  return out.trimEnd();
 }
 
 /**
@@ -115,12 +123,15 @@ function projectDisplayCode(project, fallbackId) {
  * paket içi kararlı sonekle (`#1`, `#2`) ayrıştırılmış tekil etiketler üretir.
  */
 function buildModelSafeProjectLabels(projectIds, projects) {
-  const uniqueIds = [...new Set(projectIds)];
+  const uniqueIds = [...new Set(projectIds.filter((id) => typeof id === 'string' && id.length > 0))];
   const rawById = new Map();
   const groups = new Map();
   for (const id of uniqueIds) {
     const project = projects.get(id);
-    const base = clampModelSafeLabel(project?.code || project?.name || id, REPORT_REQUEST_LIMITS.maxIdentifierLength) || id;
+    // Boşluktan oluşan kod proje adını gölgelememelidir; ikisi de yoksa ham UUID yerine paket-yerel opak etiket kullanılır.
+    const normalizedCode = clampModelSafeLabel(project?.code, REPORT_REQUEST_LIMITS.maxIdentifierLength);
+    const normalizedName = clampModelSafeLabel(project?.name, REPORT_REQUEST_LIMITS.maxIdentifierLength);
+    const base = normalizedCode || normalizedName || 'PRJ-ADSIZ';
     rawById.set(id, base);
     const key = base.toLocaleLowerCase('tr-TR');
     if (!groups.has(key)) groups.set(key, []);
@@ -145,7 +156,8 @@ function buildModelSafeProjectLabels(projectIds, projects) {
       do {
         const suffix = ` #${seq++}`;
         const maxBase = Math.max(1, REPORT_REQUEST_LIMITS.maxIdentifierLength - suffix.length);
-        candidate = `${base.slice(0, maxBase).trimEnd()}${suffix}`;
+        const prefix = sliceWithinUtf16Limit(base, maxBase) || 'PRJ-ADSIZ';
+        candidate = `${prefix}${suffix}`;
       } while (usedKeys.has(candidate.toLocaleLowerCase('tr-TR')));
       usedKeys.add(candidate.toLocaleLowerCase('tr-TR'));
       labels.set(id, candidate);
@@ -1255,16 +1267,36 @@ export async function buildExecutiveReportEvidence({
     effectiveSignal.throwIfAborted();
 
     // 9. Dönem ve anlık ölçüleri doğru payda, kesiklik, tarihsel proje kapsamı ve zaman kökeniyle hesapla.
+    // Paket genelinde (kapsam, ölçü kırılımı, görev ve notlar) aynı proje her yerde aynı ayrıştırılmış etiketi taşır.
+    const allPackageProjects = new Map(projects);
+    const registerPackageProject = (projectId, contrib = null) => {
+      if (!projectId || allPackageProjects.has(projectId)) return;
+      allPackageProjects.set(projectId, {
+        projectId,
+        code: contrib?.code ? dataText(contrib.code, 60) : null,
+        name: contrib?.name ? dataText(contrib.name, 160) : null
+      });
+    };
+    for (const proj of periodActivityAgg?.contributingProjects || []) registerPackageProject(proj?.projectId, proj);
+    for (const proj of compActivityAgg?.contributingProjects || []) registerPackageProject(proj?.projectId, proj);
+    for (const projectId of resolvedScope.projectIds) registerPackageProject(projectId);
+    for (const projectId of movedOutCompletedInPeriod.values()) registerPackageProject(projectId);
+    for (const projectId of cappedOutCompletedInPeriod.values()) registerPackageProject(projectId);
+    for (const projectId of auditCompletedProjectByTaskId.values()) registerPackageProject(projectId);
+    for (const task of prioritizedTasks) registerPackageProject(task.projectId);
+    for (const version of noteCollection.versions || []) registerPackageProject(version.projectId);
+    const packageProjectLabels = buildModelSafeProjectLabels([...allPackageProjects.keys()], allPackageProjects);
+    const projectLabelOf = (projectId) => packageProjectLabels.get(projectId) || 'PRJ-ADSIZ';
+
     const scopeCodes = resolvedScope.projectIds.length > 0
-      ? resolvedScope.projectIds.map((id) => projectDisplayCode(projects.get(id), id))
-      : [...projects.values()].map((project) => projectDisplayCode(project, project.projectId)).sort(compareAscii);
+      ? [...new Set(resolvedScope.projectIds)].map((id) => projectLabelOf(id))
+      : [...projects.values()].map((project) => projectLabelOf(project.projectId)).sort(compareAscii);
 
     const buildPeriodScopeCodes = (contributingProjects) => {
       if (resolvedScope.projectIds.length > 0) return scopeCodes;
       const codeSet = new Set(scopeCodes);
       for (const proj of contributingProjects || []) {
-        const known = projects.get(proj.projectId);
-        codeSet.add(known ? projectDisplayCode(known, proj.projectId) : (proj.code ? dataText(proj.code, 60) : proj.projectId));
+        if (proj?.projectId) codeSet.add(projectLabelOf(proj.projectId));
       }
       return [...codeSet].sort(compareAscii);
     };
@@ -1474,7 +1506,6 @@ export async function buildExecutiveReportEvidence({
 
     if (breakdownProjects.size > 1) {
       const sortedProjects = [...breakdownProjects.values()].sort((a, b) => compareAscii(a.projectId, b.projectId));
-      const metricProjectLabels = buildModelSafeProjectLabels(sortedProjects.map((project) => project.projectId), breakdownProjects);
       for (const project of sortedProjects) {
         // Denetim tamamlaması farklı bir projede gerçekleştiyse tamamlama kaynak projeye yazılır; taşınmış ve silinmiş tamamlamalar da eklenir.
         const projCompleted = completedInPeriodTasks.filter((task) => {
@@ -1487,7 +1518,7 @@ export async function buildExecutiveReportEvidence({
           && factsComplete
           && snapshotConsistent
           && !activityAssigneeDiverged;
-        const displayCode = metricProjectLabels.get(project.projectId) || projectDisplayCode(project, project.projectId);
+        const displayCode = projectLabelOf(project.projectId);
         secondaryMetrics.push({
           _metricKey: `project_completed:${project.projectId}`,
           tur: 'olcu',
@@ -1535,7 +1566,7 @@ export async function buildExecutiveReportEvidence({
         tur: 'gorev',
         kaynak: 'rota_task_search',
         gorev: task.id,
-        proje: projectDisplayCode(project, task.projectId),
+        proje: projectLabelOf(task.projectId),
         ...(project?.name ? { proje_adi: project.name } : {}),
         baslik: dataText(task.title, 160),
         durum: STATUS_TO_CANONICAL[task.status] || 'baslamadi',
@@ -1557,7 +1588,6 @@ export async function buildExecutiveReportEvidence({
 
     // 11. Zenginleştirilmiş not kanıtlarını kur (yalnızca rıza varsa dolu olur).
     const noteCandidates = (noteCollection.versions || []).map((version) => {
-      const project = projects.get(version.projectId);
       return {
         _taskId: version.taskId,
         _projectId: version.projectId,
@@ -1569,7 +1599,7 @@ export async function buildExecutiveReportEvidence({
         tur: 'not',
         kaynak: version.kaynak,
         gorev: version.taskId,
-        proje: projectDisplayCode(project, version.projectId),
+        proje: projectLabelOf(version.projectId),
         kayit_zamani: version.kayit_zamani,
         kayit_zamani_durumu: version.kayit_zamani_durumu,
         surum_tipi: version.surum_tipi,
@@ -1700,11 +1730,8 @@ export async function buildExecutiveReportEvidence({
       return findings;
     };
 
-    // Sayısal Sicil, proje UUID'si ve ham kontrol karakteri (\u001F) model paketine sızmaz; çakışan proje kodları düşürülmeden ayrıştırılır.
-    const projectScopeLabels = () => {
-      const labelById = buildModelSafeProjectLabels(resolvedScope.projectIds, projects);
-      return [...new Set(resolvedScope.projectIds)].map((id) => labelById.get(id));
-    };
+    // Sayısal Sicil, proje UUID'si ve ham kontrol karakteri (\u001F) model paketine sızmaz; çakışan proje kodları paket genelinde aynı etiketle ayrıştırılır.
+    const projectScopeLabels = () => [...new Set(resolvedScope.projectIds)].map((id) => projectLabelOf(id));
     const modelSafeScopeIds = resolvedScope.tur === 'kisi'
       ? [targetPersonLabel]
       : ORG_LEVEL_META[resolvedScope.tur]

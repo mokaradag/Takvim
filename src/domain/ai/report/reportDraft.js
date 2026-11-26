@@ -46,14 +46,14 @@ const CLAIM_KEYS = new Set(['bolum', 'paragraf', 'alinti', 'sinif', 'kanitlar'])
 const KNOWN_SCHEMA_KEYS = new Set([...ROOT_KEYS, ...SECTION_KEYS, ...PARAGRAPH_KEYS, ...CLAIM_KEYS]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // Paket sözleşmesi (`reportRequest.js`) ile aynı kanıt kimliği dilbilgisi; üyelik denetimi `known.has(ref)` ile kapalıdır.
-const REF_PATTERN = /^[EF][1-9]\d*$/u;
-// Paragraf içinde yalnızca yazdırılabilir metin; satır sonu dışındaki C0/C1 denetim karakterleri (U+0085 dâhil)
-// ve bütün Unicode çift yönlü metin denetimleri (`Bidi_Control`, U+200F dâhil) reddedilir.
+const REF_PATTERN = /^[EF][1-9]\d{0,14}$/u;
+// Paragraf içinde yalnızca yazdırılabilir metin; satır sonu dışındaki C0/C1 denetim karakterleri (U+0085 dâhil),
+// Unicode çift yönlü metin denetimleri (`Bidi_Control`, U+200F dâhil), görünmez biçim karakterleri ve etiket bloğu reddedilir.
 // eslint-disable-next-line no-control-regex -- güvenilmez model metnindeki denetim karakterleri bilinçli olarak eşleştirilir
-const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\p{Bidi_Control}]/u;
-// Görünür/çizilebilir en az bir temel karakter gerektirir (yalnızca boşluk, sıfır genişlikli ya da birleşen işaret kabul edilmez).
-const RENDERABLE_CHAR = /[^\s\p{C}\p{M}]/u;
-const FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/u;
+const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\uFEFF\u{E0000}-\u{E007F}\p{Bidi_Control}]/u;
+// Görünür/çizilebilir en az bir temel karakter gerektirir (boşluk, sıfır genişlikli, birleşen işaret ve boş Braille U+2800 kabul edilmez).
+const RENDERABLE_CHAR = /[^\s\p{C}\p{M}\u2800]/u;
+const FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu;
 const HIGHLIGHT_CLAIM_LOCATION = 'one_cikan_tespit';
 
 /** Taslak doğrulama hatası: kararlı kod, yol ve sabit neden taşır; model metnini ya da anahtar adını yansıtmaz. */
@@ -211,7 +211,7 @@ function requireRefs(value, known, path, { allowEmpty = true } = {}) {
 
 /** Model yanıtından JSON gövdesini çıkarır: düz JSON ya da tek bir kod çiti sarmalı; başka metin kabul edilmez. */
 function jsonBody(raw) {
-  const trimmed = raw.trim();
+  const trimmed = raw.replace(/^\uFEFF/u, '').trim();
   const fenced = FENCE.exec(trimmed);
   return fenced ? fenced[1].trim() : trimmed;
 }
@@ -278,6 +278,10 @@ export function parseReportDraft(rawText, { plan, evidencePackage }) {
       || section.paragraflar.length > REPORT_DRAFT_LIMITS.maxParagraphsPerSection) {
       throw new ReportDraftError(REPORT_DRAFT_ERROR_CODES.SECTION, `${path}.paragraflar`);
     }
+    if (Array.isArray(planSection.paragraf_araligi) && planSection.paragraf_araligi.length === 2
+      && (section.paragraflar.length < planSection.paragraf_araligi[0] || section.paragraflar.length > planSection.paragraf_araligi[1])) {
+      warnings.push({ kod: 'paragraf_sayisi_plan_disi', yol: section.kimlik });
+    }
     const paragraphs = section.paragraflar.map((paragraph, paragraphIndex) => {
       const ppath = `${path}.paragraflar[${paragraphIndex}]`;
       closedObject(paragraph, PARAGRAPH_KEYS, ppath);
@@ -288,13 +292,18 @@ export function parseReportDraft(rawText, { plan, evidencePackage }) {
     let highlight = null;
     if (Object.hasOwn(section, 'one_cikan_tespit') && section.one_cikan_tespit !== undefined) {
       if (!planSection.one_cikan_tespit) throw new ReportDraftError(REPORT_DRAFT_ERROR_CODES.SECTION, `${path}.one_cikan_tespit`);
-      closedObject(section.one_cikan_tespit, PARAGRAPH_KEYS, `${path}.one_cikan_tespit`);
-      const highlightText = requireText(section.one_cikan_tespit.metin, REPORT_DRAFT_LIMITS.maxHighlightChars, `${path}.one_cikan_tespit.metin`);
-      warnings.push(...styleWarnings(highlightText, `${section.kimlik}#${HIGHLIGHT_CLAIM_LOCATION}`));
-      highlight = Object.freeze({
-        metin: highlightText,
-        kanitlar: requireRefs(section.one_cikan_tespit.kanitlar, known, `${path}.one_cikan_tespit.kanitlar`, { allowEmpty: false })
-      });
+      if (section.one_cikan_tespit === null) {
+        // JSON isteğe bağlı yokluğu sıkça `null` olarak ifade eder; izinli bölümde yok sayılır ve uyarı kaydedilir.
+        warnings.push({ kod: 'one_cikan_tespit_bos', yol: section.kimlik });
+      } else {
+        closedObject(section.one_cikan_tespit, PARAGRAPH_KEYS, `${path}.one_cikan_tespit`);
+        const highlightText = requireText(section.one_cikan_tespit.metin, REPORT_DRAFT_LIMITS.maxHighlightChars, `${path}.one_cikan_tespit.metin`);
+        warnings.push(...styleWarnings(highlightText, `${section.kimlik}#${HIGHLIGHT_CLAIM_LOCATION}`));
+        highlight = Object.freeze({
+          metin: highlightText,
+          kanitlar: requireRefs(section.one_cikan_tespit.kanitlar, known, `${path}.one_cikan_tespit.kanitlar`, { allowEmpty: false })
+        });
+      }
     }
     sections.push({ planIndex, value: Object.freeze({ kimlik: section.kimlik, baslik: planSection.baslik, paragraflar: Object.freeze(paragraphs), one_cikan_tespit: highlight }) });
   });
@@ -327,13 +336,30 @@ export function parseReportDraft(rawText, { plan, evidencePackage }) {
     if (typeof claim.sinif !== 'string' || !CLAIM_CLASSES.has(claim.sinif)) throw new ReportDraftError(REPORT_DRAFT_ERROR_CODES.CLAIM, `${path}.sinif`);
     const alinti = requireText(claim.alinti, REPORT_DRAFT_LIMITS.maxQuoteChars, `${path}.alinti`);
     const kanitlar = requireRefs(claim.kanitlar, known, `${path}.kanitlar`);
-    const targetText = isHighlightClaim ? section.one_cikan_tespit.metin : section.paragraflar[claim.paragraf - 1].metin;
+    const targetBlock = isHighlightClaim ? section.one_cikan_tespit : section.paragraflar[claim.paragraf - 1];
+    const targetRefs = new Set(targetBlock.kanitlar);
+    // İddianın dayandığı her kanıt göndergesi, ait olduğu paragrafın veya öne çıkan tespitin `kanitlar` listesinde de bulunmalıdır.
+    if (kanitlar.some((ref) => !targetRefs.has(ref))) {
+      throw new ReportDraftError(REPORT_DRAFT_ERROR_CODES.CLAIM, `${path}.kanitlar`, 'claim_ref_not_in_paragraph');
+    }
+    const targetText = targetBlock.metin;
     const warningPath = `${claim.bolum}#${claim.paragraf}`;
-    const quoteFound = normalizeForQuote(targetText).includes(normalizeForQuote(alinti));
-    if (!quoteFound) warnings.push({ kod: 'iddia_alintisi_paragrafta_yok', yol: warningPath });
+    const verbatimFound = targetText.includes(alinti);
+    const normalizedFound = !verbatimFound && normalizeForQuote(targetText).includes(normalizeForQuote(alinti));
+    if (!verbatimFound) {
+      warnings.push({ kod: normalizedFound ? 'iddia_alintisi_birebir_degil' : 'iddia_alintisi_paragrafta_yok', yol: warningPath });
+    }
     if (claim.sinif === 'desteksiz_maddi_iddia') warnings.push({ kod: 'yazar_desteksiz_iddia_beyan_etti', yol: warningPath });
     if (claim.sinif === 'nesnel_olgu' && kanitlar.length === 0) warnings.push({ kod: 'nesnel_iddia_kanitsiz', yol: warningPath });
-    return Object.freeze({ bolum: claim.bolum, paragraf: claim.paragraf, alinti, sinif: claim.sinif, kanitlar, alinti_bulundu: quoteFound });
+    return Object.freeze({
+      bolum: claim.bolum,
+      paragraf: claim.paragraf,
+      alinti,
+      sinif: claim.sinif,
+      kanitlar,
+      alinti_bulundu: verbatimFound,
+      alinti_normal_eslesti: normalizedFound
+    });
   });
 
   return Object.freeze({

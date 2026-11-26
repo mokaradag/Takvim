@@ -1,5 +1,5 @@
 import { isIsoDay } from '../isoDay.js';
-import { REPORT_DETAIL_LEVELS, REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } from './reportRequest.js';
+import { parseIsoTimestampNanos, REPORT_DETAIL_LEVELS, REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } from './reportRequest.js';
 
 /**
  * Bilgin Aşama 4I-B — belirlenimci yönetici raporu bölüm planı (`4i-yazim-1`, saf).
@@ -36,7 +36,12 @@ const SECTION_GUIDANCE = Object.freeze({
   genel_sonuc: 'Raporu yeni olgu eklemeden, önceki bölümleri tekrarlamadan, yönetim için net bir değerlendirmeyle kısaca kapat.'
 });
 const SPARSE_GUIDANCE = 'Kanıt dar: bu bölümü tek kısa paragrafla yaz. Önceki bölümlerde söyleneni yineleme; bu bölüme özgü yeni bir değerlendirme yoksa ilgili konuyu tek cümleyle anlamına bağla.';
-const TASK_DONE = 'tamamlandi';
+/** Bilinen açık görev durumları; `null` veya bilinmeyen durumlar açık görev sayılmaz. */
+const KNOWN_OPEN_TASK_STATUSES = Object.freeze(new Set(['baslamadi', 'devam_ediyor', 'acik', 'beklemede', 'engelli']));
+/** Görev durumunun açık bir anlık durum olduğunu doğrular (planlayıcı ve istem izdüşümünde ortak kural). */
+export function isKnownOpenTaskStatus(value) {
+  return typeof value === 'string' && KNOWN_OPEN_TASK_STATUSES.has(value);
+}
 const HIGH_PRIORITIES = new Set(['critical', 'high', 'kritik', 'yuksek']);
 /** 4I-A `isDueWithin(..., 7)` ile aynı kapsayıcı 7 takvim günü penceresi (`bugün .. bugün + 6`). */
 const DUE_SOON_WINDOW_DAYS = 7;
@@ -78,7 +83,11 @@ function wordRange(value, maxUpper = Infinity) {
 }
 
 function stringList(value) {
-  return Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string' && item.trim());
+  if (!Array.isArray(value) || value.length === 0) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    if (!Object.hasOwn(value, i) || typeof value[i] !== 'string' || !value[i].trim()) return false;
+  }
+  return true;
 }
 
 /**
@@ -267,11 +276,11 @@ function classifyEvidence(pkg) {
 
     // Kesit sonrası değişen görevlerin güncel durumu kesit anını güvenilir biçimde yansıtmaz; anlık sınıflandırmaya girmez.
     if (item.kesit_sonrasi_degisti === true) continue;
-    const done = item.durum === TASK_DONE;
+    const knownOpen = isKnownOpenTaskStatus(item.durum);
     const target = evidenceDay(item.hedef_bitis);
-    if (!done && target && today && target < today) groups.geciken.push(item.id);
-    if (!done && target && today && horizon && target >= today && target <= horizon) groups.yaklasan.push(item.id);
-    if (!done && (hasHighPriority(item.oncelik) || item.kilometre_tasi === true)) {
+    if (knownOpen && target && today && target < today) groups.geciken.push(item.id);
+    if (knownOpen && target && today && horizon && target >= today && target <= horizon) groups.yaklasan.push(item.id);
+    if (knownOpen && (hasHighPriority(item.oncelik) || item.kilometre_tasi === true)) {
       groups.oncelikli.push(item.id);
     }
   }
@@ -281,10 +290,10 @@ function classifyEvidence(pkg) {
     if (!isPlainObject(item) || item.tur !== 'gorev' || !groups.bagimli.includes(item.id)) continue;
     if (item.kesit_sonrasi_degisti === true) continue;
     const deps = own(item, 'bagimliliklar');
-    const openSelf = item.durum !== TASK_DONE;
+    const openSelf = isKnownOpenTaskStatus(item.durum);
     const hasOpenSuccessor = Array.isArray(deps?.ardil) && deps.ardil.some((ref) => {
       const successor = typeof ref === 'string' ? tasksByRef.get(ref) : null;
-      return Boolean(successor && successor.durum !== TASK_DONE && successor.kesit_sonrasi_degisti !== true);
+      return Boolean(successor && isKnownOpenTaskStatus(successor.durum) && successor.kesit_sonrasi_degisti !== true);
     });
     if (openSelf || hasOpenSuccessor) groups.acikBagimli.push(item.id);
   }
@@ -344,11 +353,13 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     });
   }
   const partialActivity = tamlik.hareket === 'partial'
-    || pkg.kanitlar.some((item) => isPlainObject(item) && item.kayit_kapsami === 'partial');
+    || pkg.kanitlar.some((item) => isPlainObject(item)
+      && (item.kayit_kapsami === 'partial' || (item.tur === 'olcu' && item.olcu === 'hareket' && item.tamlik === 'partial')));
   if (partialActivity) {
     out.push({
       kimlik: 'kismi_hareket_kaydi', bolum: 'faaliyetler',
-      kanitlar: pkg.kanitlar.filter((item) => isPlainObject(item) && item.kayit_kapsami === 'partial').map((item) => item.id),
+      kanitlar: pkg.kanitlar.filter((item) => isPlainObject(item)
+        && (item.kayit_kapsami === 'partial' || (item.tur === 'olcu' && item.olcu === 'hareket' && item.tamlik === 'partial'))).map((item) => item.id),
       yonerge: 'Hareket kaydı kısmidir: hareket sayıları dönemin bütün etkinliğini göstermez. Bu sınırı belirt; kısmi kayıttan eğilim, düşüş ya da artış yorumu çıkarma.'
     });
   }
@@ -388,15 +399,26 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   }
   const validConflicts = (pkg.celiskiler || []).filter((conflict) => isPlainObject(conflict) && Array.isArray(conflict.kanitlar));
   const itemById = new Map(pkg.kanitlar.filter((item) => isPlainObject(item) && typeof item.id === 'string').map((item) => [item.id, item]));
-  const isValidTimestamp = (ts) => typeof ts === 'string' && ts.trim().length >= 10 && isIsoDay(ts.trim().slice(0, 10));
+  // Çelişki zamanları yalnızca geçerli ISO anı (nanosaniye) ya da kesin takvim günü (YYYY-AA-GG) olarak ayrıştırılır;
+  // aynı anın farklı saat dilimi yazımları (`Z` ve `+03:00`) tek anahtara indirgenir ve kuyruk çöpü reddedilir.
+  const parseConflictTimeKey = (ts) => {
+    if (typeof ts !== 'string') return null;
+    const trimmed = ts.trim();
+    if (!trimmed) return null;
+    if (isIsoDay(trimmed)) return `day:${trimmed}`;
+    const nanos = parseIsoTimestampNanos(trimmed);
+    return nanos !== null ? `ns:${nanos.toString()}` : null;
+  };
+  const hasDistinctTimes = (rawList) => {
+    const keys = rawList.map(parseConflictTimeKey).filter(Boolean);
+    return keys.length >= 2 && new Set(keys).size >= 2;
+  };
   const hasOrderableConflictTime = (conflict) => {
-    const explicit = Array.isArray(conflict.kronoloji) ? conflict.kronoloji.filter(isValidTimestamp) : [];
-    if (explicit.length >= 2 && new Set(explicit).size >= 2) return true;
-    const timestamps = conflict.kanitlar
+    if (Array.isArray(conflict.kronoloji) && hasDistinctTimes(conflict.kronoloji)) return true;
+    const writeTimes = conflict.kanitlar
       .map((id) => itemById.get(id))
-      .map((item) => (isPlainObject(item) ? (item.kayit_zamani || item.kayit_ani || item.zaman || item.tarih || null) : null))
-      .filter(isValidTimestamp);
-    return timestamps.length >= 2 && new Set(timestamps).size >= 2;
+      .map((item) => (isPlainObject(item) ? (item.kayit_zamani ?? null) : null));
+    return hasDistinctTimes(writeTimes);
   };
   const orderedConflictGuidance = 'Bu kanıtlar birbiriyle çelişiyor. Çelişkiyi zaman sırasıyla açıkça anlat ve en güncel kaydı esas al; değişikliği söyle, hangisinin doğru olduğuna kanıt ötesinde karar verme ve yeni tarih uydurma.';
   const undatedConflictGuidance = 'Bu kanıtlar birbiriyle çelişiyor ancak kayıtlar arasında kesin bir zaman sırası bulunmuyor. Zaman sırası uydurmadan karşıt bildirimleri eşit mesafeyle aktar; kanıt ötesinde taraf seçme ve yeni tarih uydurma.';
@@ -439,25 +461,30 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   const overdueUnknown = Boolean(overdueMeasure && (overdueMeasure.deger === null || overdueMeasure.tamlik === 'partial'));
   const scopeRestricted = tamlik.kapsam_gorunurlugu === 'partial' || tamlik.paket_kesildi === true || tamlik.kesit_tutarli === false;
   const focus = pkg.istek.odak ?? 'dengeli';
-  if (riskEvidence.length && (!riskSectionPlanned || focus === 'basarilar')) {
+  // Kanonik stil kuralı: maddi risk, gecikme ya da çelişki varsa Riskler bölümü açık olsa da Yönetici Değerlendirmesi'nde anılır.
+  if (riskEvidence.length) {
     out.push({
       kimlik: 'dengeli_sunum', bolum: 'yonetici_degerlendirmesi', kanitlar: [...new Set(riskEvidence)].slice(0, 12),
       yonerge: 'Kanıtta yönetim dikkati gerektiren risk, gecikme ya da çelişki var. Odak tercihi ya da kapatılan bölüm ne olursa olsun bu konuyu Yönetici Değerlendirmesi içinde en az bir kez açıkça an.'
     });
-  } else if (focus === 'riskler' && !riskSectionPlanned && !riskEvidence.length) {
-    if (noteOrDepRiskEvidence.length > 0) {
-      const parts = ['Yapılandırılmış görev kayıtlarında gecikme ya da çelişki görünmüyor.'];
-      if (priorityNotes.length > 0) {
-        parts.push('Öncelikli işlere ait notlarda açıkça bir engel ya da risk bildiriliyorsa bunu kesinleşmiş olgu gibi değil yalnızca not bildirimi olarak kısaca aktar; olağan ilerleme bildiren notları risk gibi sunma.');
-      }
-      if (openDepEvidence.length > 0) {
-        parts.push('Açık bağımlılıkları kesinleşmiş engel değil bağımlılık gözlemi olarak ayrı ve ölçülü biçimde değerlendir.');
-      }
-      out.push({
-        kimlik: 'dengeli_sunum', bolum: 'yonetici_degerlendirmesi', kanitlar: [...new Set(noteOrDepRiskEvidence)].slice(0, 12),
-        yonerge: parts.join(' ')
-      });
-    } else if (overdueUnknown) {
+  } else if (!riskSectionPlanned && noteOrDepRiskEvidence.length > 0) {
+    // Riskler bölümü kapalıyken not kaynaklı engel ya da açık bağımlılık odağa bakılmaksızın Yönetici Değerlendirmesi'ne taşınır.
+    const parts = overdueUnknown
+      ? ['Geciken iş sayısı kanıtta bilinmiyor ya da kısmi durumda; gecikme olmadığını varsayma ve bu sınırı açıkça belirt.']
+      : ['Yapılandırılmış görev kayıtlarında gecikme ya da çelişki görünmüyor.'];
+    if (priorityNotes.length > 0) {
+      parts.push('Öncelikli işlere ait notlarda açıkça bir engel ya da risk bildiriliyorsa bunu kesinleşmiş olgu gibi değil yalnızca not bildirimi olarak kısaca aktar; olağan ilerleme bildiren notları risk gibi sunma.');
+    }
+    if (openDepEvidence.length > 0) {
+      parts.push('Açık bağımlılıkları kesinleşmiş engel değil bağımlılık gözlemi olarak ayrı ve ölçülü biçimde değerlendir.');
+    }
+    const refs = [...new Set([...noteOrDepRiskEvidence, ...(overdueUnknown ? [overdueMeasure.id] : [])])].slice(0, 12);
+    out.push({
+      kimlik: 'dengeli_sunum', bolum: 'yonetici_degerlendirmesi', kanitlar: refs,
+      yonerge: parts.join(' ')
+    });
+  } else if (focus === 'riskler' && !riskSectionPlanned) {
+    if (overdueUnknown) {
       out.push({
         kimlik: 'risk_odagi_gecikme_bilinmiyor', bolum: 'yonetici_degerlendirmesi', kanitlar: [overdueMeasure.id],
         yonerge: 'Rapor risk odağıyla istendi ancak geciken iş sayısı kanıtta bilinmiyor ya da kısmi durumda. Gecikme olmadığını varsayma; gecikme ölçüsünün belirlenemediğini açıkça belirt.'
@@ -479,7 +506,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   const activity = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'hareket' && own(item.donem, 'baslangic') === pkg.istek.donem.baslangic);
   const completedExplicitZero = Boolean(completed && completed.deger === 0 && completed.tamlik !== 'partial');
   const completionCompatibleWithZero = completed ? completedExplicitZero : true;
-  if (activity && activity.deger === 0 && activity.kayit_kapsami !== 'partial'
+  if (activity && activity.deger === 0 && activity.kayit_kapsami !== 'partial' && activity.tamlik !== 'partial'
     && tamlik.hareket !== 'partial' && tamlik.kapsam_gorunurlugu !== 'partial'
     && tamlik.paket_kesildi !== true && tamlik.kesit_tutarli !== false
     && groups.tamamlanan.length === 0
@@ -536,10 +563,9 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
       ...notesFor(groups.hareketli, noteTask, groups.not), ...groups.belge, ...derivedIds(pkg, ['kilometre_tasi_ozeti', 'karsilastirma'])],
     faaliyetler: [...groups.olcu, ...groups.hareket, ...groups.gorev, ...groups.not, ...groups.belge],
     // Açık kritik/yüksek öncelikli işlerin notları, açık bağımlılıklar ve pozitif gecikme ölçüsü/payı risk bölümünü besler;
-    // seçim yalnızca yapılandırılmış alanlara dayanır, not metni sunucu kararını yönlendirmez.
+    // veri kalitesi/tamlık uyarıları kendi zorunlu bölümlerinde bildirildiğinden isteğe bağlı Riskler bölümünü tek başına açmaz.
     riskler: [...groups.geciken, ...groups.gecikenOlcu, ...groups.gecikmePayi, ...notesFor(groups.geciken, noteTask, groups.not), ...conflictIds,
-      ...groups.acikBagimli, ...notesFor(groups.oncelikli, noteTask, groups.not),
-      ...derivedIds(pkg, ['tarihsiz_tamamlanma_uyarisi', 'kismi_gorunurluk_uyarisi'])],
+      ...groups.acikBagimli, ...notesFor(groups.oncelikli, noteTask, groups.not)],
     oncelikler: [...groups.yaklasan, ...groups.yaklasanOlcu, ...groups.oncelikli, ...groups.acikBagimli, ...notesFor(groups.yaklasan, noteTask, groups.not)],
     genel_sonuc: [...groups.olcu, ...derivedAll, ...groups.geciken, ...groups.yaklasan]
   };
@@ -554,18 +580,19 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
   const disclosures = integrityDisclosures(pkg, classified, riskPlanned);
 
   const [styleMin, styleMax] = writerStyle.sozcukButcesi[detail];
-  // Bütçe kanıt yoğunluğuyla orantılıdır: dar kanıtta hem alt hem üst sınır düşer. Vekil koşuda seyrek paketlerde zorunlu
-  // bölümlere düşen sözcük tabanı bölümler arası tekrara, kayıt alanı anlatımına ve yöntem diline yol açtı.
+  // Bütçe kanıt yoğunluğuyla orantılıdır: dar kanıtta hem alt hem üst sınır düşer, ancak stil tavanını (`styleMax`) aşmaz.
   const richness = groups.gorev.length + groups.not.length + groups.belge.length + groups.hareket.length + derivedAll.length;
   const sparse = richness <= SPARSE_EVIDENCE_ITEMS;
-  const sectionFloor = sparse ? SPARSE_MIN_SECTION_WORDS : MIN_SECTION_WORDS;
-  const totalMin = Math.max(sectionFloor * 2, roundTo(styleMin * Math.min(1, (richness + 3) / RICH_EVIDENCE_ITEMS), 10));
-  let totalMax = Math.max(totalMin, MIN_TOTAL_WORDS, roundTo(styleMax * Math.min(1, (richness + 2) / RICH_EVIDENCE_ITEMS), 10));
+  const rawSectionFloor = sparse ? SPARSE_MIN_SECTION_WORDS : MIN_SECTION_WORDS;
+  const sectionFloor = Math.max(10, Math.min(rawSectionFloor, Math.floor(styleMax / Math.max(1, included.length))));
+  const totalMin = Math.min(styleMax, Math.max(sectionFloor * 2, roundTo(styleMin * Math.min(1, (richness + 3) / RICH_EVIDENCE_ITEMS), 10)));
+  const minTotalCap = Math.min(MIN_TOTAL_WORDS, styleMax);
+  let totalMax = Math.min(styleMax, Math.max(totalMin, minTotalCap, roundTo(styleMax * Math.min(1, (richness + 2) / RICH_EVIDENCE_ITEMS), 10)));
   const weightSum = included.reduce((sum, section) => sum + writerStyle.agirliklar[section.kimlik], 0);
   const [paraMin, paraMax] = writerStyle.paragrafSozcukAraligi;
 
   // Bölüm sözcük aralıkları ile toplam bütçenin çelişmemesi için yuvarlama ve taban farkları uzlaştırılır:
-  // sum(min) <= totalMax ve sum(max) >= totalMin değişmezleri her geçerli stilde korunur.
+  // sum(min) <= totalMax <= styleMax ve sum(max) >= totalMin değişmezleri her geçerli stilde korunur.
   const rawRanges = included.map((section) => {
     const share = writerStyle.agirliklar[section.kimlik] / weightSum;
     const min = Math.max(sectionFloor, roundTo(totalMin * share, 10));
@@ -591,14 +618,21 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
   const sections = rawRanges.map(({ section, min, max }) => {
     const paraLow = sparse ? 1 : Math.min(MAX_PARAGRAPHS_PER_SECTION, Math.max(1, Math.floor(min / paraMax)));
     const paraHigh = sparse ? 1 : Math.min(MAX_PARAGRAPHS_PER_SECTION, Math.max(paraLow, Math.ceil(max / paraMin)));
+    const focusEvidence = uniqueOrdered(allocation[section.kimlik], refOrder, itemTypeById);
+    const isEmptyMandatoryContentSection = section.zorunlu
+      && (section.kimlik === 'one_cikan_gelismeler' || section.kimlik === 'faaliyetler')
+      && focusEvidence.length === 0;
+    const baseGuidance = isEmptyMandatoryContentSection
+      ? `${writerStyle.bosBolum} Bu bölüm için görünür kanıtta aktarılacak bir gelişme ya da kayıt yok; bunu kapsam sınırını koruyarak tek kısa ifadeyle belirt ve yeni etkinlik uydurma.`
+      : SECTION_GUIDANCE[section.kimlik];
     return Object.freeze({
       kimlik: section.kimlik,
       baslik: scopeType === 'kisi' && section.baslikKisi ? section.baslikKisi : section.baslik,
       zorunlu: section.zorunlu,
       sozcuk_araligi: Object.freeze([min, max]),
       paragraf_araligi: Object.freeze([paraLow, paraHigh]),
-      yonerge: sparse ? `${SECTION_GUIDANCE[section.kimlik]} ${SPARSE_GUIDANCE}` : SECTION_GUIDANCE[section.kimlik],
-      odak_kanitlar: Object.freeze(uniqueOrdered(allocation[section.kimlik], refOrder, itemTypeById)),
+      yonerge: sparse ? `${baseGuidance} ${SPARSE_GUIDANCE}` : baseGuidance,
+      odak_kanitlar: Object.freeze(focusEvidence),
       zorunlu_aciklamalar: Object.freeze(disclosures.filter((entry) => entry.bolum === section.kimlik)
         .map((entry) => Object.freeze({ ...entry, kanitlar: Object.freeze([...new Set(entry.kanitlar)]) }))),
       one_cikan_tespit: section.kimlik === 'yonetici_degerlendirmesi'

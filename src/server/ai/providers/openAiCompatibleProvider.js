@@ -406,11 +406,20 @@ export function createOpenAiCompatibleProvider({
 
     async chatCompletion({ baseUrl, apiKey, model, messages, maxOutputTokens = null, sampling = null, signal }) {
       const samplingFields = {};
-      if (sampling && typeof sampling === 'object') {
-        if (typeof sampling.temperature === 'number' && Number.isFinite(sampling.temperature) && sampling.temperature >= 0 && sampling.temperature <= 2) {
+      if (sampling !== null && sampling !== undefined) {
+        if (typeof sampling !== 'object' || Array.isArray(sampling)) {
+          throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason: 'SAMPLING_INVALID' } });
+        }
+        if (Object.hasOwn(sampling, 'temperature') && sampling.temperature !== undefined) {
+          if (typeof sampling.temperature !== 'number' || !Number.isFinite(sampling.temperature) || sampling.temperature < 0 || sampling.temperature > 2) {
+            throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason: 'SAMPLING_INVALID' } });
+          }
           samplingFields.temperature = sampling.temperature;
         }
-        if (typeof sampling.topP === 'number' && Number.isFinite(sampling.topP) && sampling.topP > 0 && sampling.topP <= 1) {
+        if (Object.hasOwn(sampling, 'topP') && sampling.topP !== undefined) {
+          if (typeof sampling.topP !== 'number' || !Number.isFinite(sampling.topP) || sampling.topP <= 0 || sampling.topP > 1) {
+            throw new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason: 'SAMPLING_INVALID' } });
+          }
           samplingFields.top_p = sampling.topP;
         }
       }
