@@ -18,7 +18,7 @@ import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
 registerServerOnlyShim();
 const { renderReportDraftText } = await import('../src/domain/ai/report/reportDraft.js');
 const { loadBenchmarkFixture } = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
-const { selectHomogeneousRun } = await import('./report-writer-qualification.mjs');
+const { literalFence, selectHomogeneousRun } = await import('./report-writer-qualification.mjs');
 
 function canonicalPath(filePath) {
   const resolved = path.resolve(filePath);
@@ -115,7 +115,8 @@ for (const id of wanted) {
   out.push(`- Sınanan: ${scenario.sinanan}`);
   out.push(`- İstek: ${scenario.donem} · ${scenario.kapsam} · ayrıntı ${scenario.ayrinti} · odak ${scenario.odak} · notlar ${scenario.notlar} · karşılaştırma ${scenario.karsilastirma}`);
   out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${record.durum} · süre ${Math.round((record.sure_ms || 0) / 1000)} sn${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
-  if (record.durum === 'gecerli') out.push(renderReportDraftText(record.taslak), '');
+  // Model düzyazısı HTML yorumu ya da Markdown sözdizimiyle gizlenmemesi için düz metin çitinde birebir sunulur.
+  if (record.durum === 'gecerli') out.push(literalFence(renderReportDraftText(record.taslak)), '');
   else out.push(`_Taslak üretilemedi: ${record.hata_kodu || record.durum}._`, '');
 }
 const text = `${out.join('\n')}\n`;

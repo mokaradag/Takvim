@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
-import { validateEvidencePackageContract } from '../../src/domain/ai/report/reportRequest.js';
+import { snapshotBusinessDay, validateEvidencePackageContract } from '../../src/domain/ai/report/reportRequest.js';
 import { projectEvidencePackageForWriter } from '../../src/domain/ai/report/reportWriterPrompt.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -178,6 +178,15 @@ export function verifyWriterPackageSet(set, fixture) {
   const expectedHash = sha256(canonicalJson(packages));
   if (set?.ozet_sha256 !== expectedHash) problems.push('ozet_uyusmuyor');
   const roster = syntheticRoster(fixture);
+  const projectBaseLabels = new Set([
+    ...Object.keys(fixture?.sentetik_kadro?.projeler || {}),
+    ...Object.values(fixture?.sentetik_kadro?.projeler || {})
+  ]);
+  const isRecognizedSyntheticName = (name) => {
+    if (roster.has(name)) return true;
+    const aliasMatch = /^(.+) #[1-9]\d*$/u.exec(name);
+    return Boolean(aliasMatch && projectBaseLabels.has(aliasMatch[1]));
+  };
   for (const entry of packages) {
     if (entry.paket_ozeti_sha256 !== sha256(canonicalJson(entry.paket))) {
       problems.push(`paket_ozeti_uyusmuyor:${entry.senaryo}`);
@@ -187,7 +196,7 @@ export function verifyWriterPackageSet(set, fixture) {
       problems.push(`kanit_zarfi_gecersiz:${entry.senaryo}`);
     }
     for (const name of properNamesIn(entry.paket)) {
-      if (!roster.has(name)) problems.push(`sentetik_olmayan_ad:${entry.senaryo}`);
+      if (!isRecognizedSyntheticName(name)) problems.push(`sentetik_olmayan_ad:${entry.senaryo}`);
     }
   }
   return [...new Set(problems)];
@@ -280,15 +289,14 @@ function parseTurkishNumberPhrase(tokens) {
 export function normalizeProse(text) {
   // Türkçe küçük harfe çevirme kısaltmalardaki I'yı ı yapar ("SPI" → "spı"); eşleştirmede ı ve i katlanır.
   let out = ` ${String(text).normalize('NFC').toLocaleLowerCase('tr-TR').replace(/ı/gu, 'i').replace(/[’']/gu, "'").replace(/\s+/gu, ' ')} `;
-  // Önce tam yazılı ondalıklar ("altmış altı virgül yedi" → "66,7") tek nicelik olarak çevrilir.
+  // 1. Önce tam yazılı ondalıklar ("altmış altı virgül yedi" → "66,7") tek nicelik olarak çevrilir.
   out = out.replace(DECIMAL_PHRASE_PATTERN, (match, intPart, fracPart) => {
     const intVal = parseTurkishNumberPhrase(intPart.split(/\s+/u));
     const fracVal = parseTurkishNumberPhrase(fracPart.split(/\s+/u));
     if (intVal === null || fracVal === null) return match;
     return `${intVal},${fracVal}`;
   });
-  // Ay adından hemen önceki "bir" takvim günüdür ("bir Kasım" → "1 kasim"); "bir görev" belirsiz tanımlık kalır.
-  out = out.replace(BIR_BEFORE_MONTH_PATTERN, '1');
+  // 2. Bileşik sayı öbekleri ("yirmi bir", "on bir", "yüz yirmi") tek başına "bir" kuralından ÖNCE çevrilir.
   out = out.replace(NUMBER_PHRASE_PATTERN, (match) => {
     const tokens = match.split(/\s+/u);
     // Tek başına "bir" belirsiz tanımlıktır ("bir görev"); yalnızca bileşik sayı içinde ("on bir", "yüz bir") çevrilir.
@@ -296,6 +304,11 @@ export function normalizeProse(text) {
     const value = parseTurkishNumberPhrase(tokens);
     return value === null ? match : String(value);
   });
+  // 3. Kalan tek başına "bir": ay adından önce takvim günüdür ("bir Kasım" → "1 kasim"), "yüzde bir" açık niceliktir ("yüzde 1").
+  out = out.replace(BIR_BEFORE_MONTH_PATTERN, '1');
+  out = out.replace(/(?<=[\s(])yüzde\s+bir(?=[\s.,;:)'])/gu, 'yüzde 1');
+  // 4. Yazıyla belirtilen negatif işaret ("eksi 100", "yüzde eksi 100", "eksi 3,5") rakama bitişik işarete çevrilir.
+  out = out.replace(/(?<=[\s(])eksi\s+(?=\d)/gu, '-');
   return out;
 }
 
@@ -454,12 +467,21 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null, maskHor
   return [...new Set(numbers)];
 }
 
-/** Paketteki bütün geçerli tarih değerleri (kanıt alanları, dönem sınırları, veri anı, not kayıt zamanları, not metinleri). */
+/** Paketteki bütün geçerli tarih değerleri (kanıt alanları, dönem sınırları, İstanbul gününe çevrilmiş veri anı, notlar). */
 export function packageDates(pkg) {
   const days = new Set();
-  const defaultYear = Number(String(pkg?.veri_ani ?? '2026').slice(0, 4)) || 2026;
+  const rootSnapshotDay = snapshotBusinessDay(pkg?.veri_ani);
+  const defaultYear = Number(String(rootSnapshotDay ?? pkg?.veri_ani ?? '2026').slice(0, 4)) || 2026;
   const visit = (value, key = '') => {
     if (typeof value === 'string') {
+      // `veri_ani` alanı yazar bölüm planıyla tutarlı olarak İstanbul takvim gününe çevrilir.
+      if (key === 'veri_ani') {
+        const istanbulDay = snapshotBusinessDay(value);
+        if (istanbulDay) {
+          days.add(istanbulDay);
+          return;
+        }
+      }
       for (const m of value.matchAll(/(\d{4})-(\d{2})-(\d{2})/gu)) {
         const token = formatDateToken(Number(m[1]), Number(m[2]), Number(m[3]), { includeInvalid: false });
         if (token) days.add(token);
@@ -511,9 +533,8 @@ function sectionProse(draft, sectionId) {
 
 /**
  * Zorunlu olgu aday taraması: her olgunun `anahtarlar` alanı VE-of-VEYA gruplarıdır; isteğe bağlı `bolum`
- * alanı verilmişse yalnızca ilgili bölüm taranır. Tarih seçenekleri takvim gününe göre de eşleştirilir
- * ("5 kasım" ile "2026-11-05" eşdeğerdir). Eşleşme yalnızca belirlenimci ADAY sonucudur; kesin kapsam
- * hakem kararında doğrulanır.
+ * alanı verilmişse yalnızca ilgili bölüm taranır. Tarih seçenekleri alt dize yerine takvim gününe göre
+ * eşleştirilir ("15 Kasım" metni "5 Kasım" ile yanlış eşleşmez; "5 Kasım" ile "2026-11-05" eşdeğerdir).
  */
 export function mandatoryCoverage(prose, mandatory = [], draft = null, defaultYear = 2026) {
   const fullText = String(prose);
@@ -535,13 +556,13 @@ export function mandatoryCoverage(prose, mandatory = [], draft = null, defaultYe
     const target = getTarget(fact.bolum);
     const groups = Array.isArray(fact.anahtarlar) ? fact.anahtarlar : [];
     const matched = groups.length > 0 && groups.every((alternatives) => alternatives.some((alt) => {
-      const needle = normalizeProse(alt).trim();
-      if (target.norm.includes(needle)) return true;
+      // Yalnızca tarihten oluşan seçenekler alt dize değil takvim günü kümesiyle eşleştirilir.
       const altAnalysis = extractDateAnalysis(alt, defaultYear, { includeInvalid: false });
       if (altAnalysis.validDays.length > 0 && !altAnalysis.maskedText.trim()) {
         return altAnalysis.validDays.every((day) => target.dates.has(day));
       }
-      return false;
+      const needle = normalizeProse(alt).trim();
+      return needle.length > 0 && target.norm.includes(needle);
     }));
     return {
       id: fact.id,
@@ -566,6 +587,22 @@ function matchesUnauthorizedEntity(normText, rawName) {
   }
   // Tek sözcüklü adlarda kesme işaretli çekimler ("Atlas'ın", "Doruk'un") da yakalanır.
   return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(needle)}(?:'[\\p{L}]{1,8})?(?![\\p{L}\\p{N}])`, 'u').test(normText);
+}
+
+/**
+ * Uydurma kimlik aday taraması: tek sözcüklü özel adlar (ör. "Denge" proje adı) küçük harfli sıradan
+ * Türkçe sözcüklerle ("bu denge") yanlış eşleşmemesi için özgün metinde büyük harfle başlama veya
+ * kesme işaretli özel ad çekimi (`Denge'de`) gerektirir; kodlar ve çok sözcüklü adlar harf duyarsız kalır.
+ */
+function matchesInventedRosterEntity(rawProse, normText, rawName) {
+  const trimmed = String(rawName ?? '').trim();
+  if (!trimmed) return false;
+  if (trimmed.includes(' ') || /^[a-z0-9]+-[a-z0-9-]+$/iu.test(trimmed)) {
+    return matchesUnauthorizedEntity(normText, trimmed);
+  }
+  const normalizedProse = String(rawProse).normalize('NFC').replace(/[’']/gu, "'");
+  const normalizedName = trimmed.normalize('NFC');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(normalizedName)}(?:'[\\p{L}]{1,8})?(?![\\p{L}\\p{N}])`, 'u').test(normalizedProse);
 }
 
 /**
@@ -623,8 +660,9 @@ export function assessDraftObjectively({ draft, pkg, fixture, mandatory = [], un
   const disclosures = [...closed].filter((name) => matchesUnauthorizedEntity(norm, name));
   const invented = [...roster].filter((name) => !closed.has(name) && !inPackage.has(name)
     && !packageText.includes(normalizeProse(name).trim())
-    && matchesUnauthorizedEntity(norm, name));
-  const year = Number(String(pkg.veri_ani).slice(0, 4));
+    && matchesInventedRosterEntity(prose, norm, name));
+  const snapshotDay = snapshotBusinessDay(pkg.veri_ani);
+  const year = Number(String(snapshotDay ?? pkg.veri_ani).slice(0, 4));
   const allowedDates = packageDates(pkg);
   const dateAnalysis = extractDateAnalysis(prose, year, { includeInvalid: true });
   const dates = dateAnalysis.allDays;

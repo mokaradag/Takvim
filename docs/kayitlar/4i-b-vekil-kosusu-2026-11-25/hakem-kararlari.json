@@ -318,12 +318,12 @@
   "taslak_ozeti": "9587f9614f6e4638d505391622faaf2e8b8283f86a2a8784a1115470e76584d1"
  },
  "S34": {
-  "dogru": 15,
-  "yanlis": 0,
+  "dogru": 14,
+  "yanlis": 1,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null,
+  "celiski_islendi": false,
+  "not": "Öne çıkan gelişmelerde Doruk ve Kuzey projelerindeki 2 kapanan işin dönemin 3 tamamlanan işinin tamamını oluşturduğu ifadesi kendi iç çelişkisi (Ufuk dâhil 3 iş tamamlandı).",
   "taslak_ozeti": "b7b1eef49c5ae7f5f53de95705b797524a44a9acf5d4bae4702529050bb70ee9"
  },
  "S39": {
@@ -349,8 +349,8 @@
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
-  "celiski_islendi": null,
-  "not": null,
+  "celiski_islendi": true,
+  "not": "Yüklenen tablonun yalnızca kısmen okunabildiği ve sonraki satırların çıkarılamadığı açıkça belirtilmiş.",
   "taslak_ozeti": "b41bfd98ddcd6ef130892c27d443e3944c30db7a2fe63c6bbdc748a173b0e09f"
  },
  "S42": {

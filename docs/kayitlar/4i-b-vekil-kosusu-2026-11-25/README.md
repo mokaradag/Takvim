@@ -12,7 +12,7 @@
 | Yazım sözleşmesi / istem | `4i-yazim-1` / `yazar-istemi-4` (son yapılandırma; ara sürümler `ara-kosular-ozet.json`) |
 | Paket kümesi | `test/fixtures/bilgin-executive-report-writer-packages.json` (`7d2a13f` anlık görüntüsü; 48 paket, küme özeti `kosu-yapilandirma-ozetleri.sha256` içinde) |
 | Yapılandırma özetleri | `kosu-yapilandirma-ozetleri.sha256` (`7d2a13f` revizyonundaki yazar modülleri, stil belgesi ve paket kümesi; tarihsel doğrulama için `git archive 7d2a13f` veya ilgili revizyon üstünde `sha256sum -c` ile doğrulanır) |
-| Taşıyıcı | `vekil` (`scripts/report-writer-qualification.mjs`): yalıtılmış ev klasörü, araçsız, tek tur, model kimliği ve tek API çağrısı her yanıtta denetlenir; düşünme düşük efor düzeyinin kendi davranışına bırakılmış ve kaydedilmiştir |
+| Taşıyıcı | `vekil` (`scripts/report-writer-qualification.mjs`): yalıtılmış ev klasörü, araçsız, tek tur, model kimliği ve tek API çağrısı her yanıtta denetlenir; düşünme düşük efor düzeyinin kendi davranışına bırakılmış ve kaydedilmiştir (**karma arşiv notu:** 46 satırda `dusunme: "on"`, S25 ve S29 satırlarında `dusunme: "off"` kaydedilmiştir; güncel `selectHomogeneousRun` varsayılan olarak karma düşünme kipini reddeder) |
 | Bilinen sapma | Köprü rol ayrımlı kullanıcı iletilerini etiketli tek kullanıcı iletisine düzleştirir ve CLI kendi ortam notlarını ekler; sistem yönergesi bayt bayt aynen verilir. Örnekleme ayarları CLI varsayılanıdır |
 | Eşzamanlılık | 4 |
 
@@ -26,7 +26,7 @@
 | `hakem-kararlari.json` | Defter dışı değerler ve otomatik eşleşmeyen zorunlu olgular için elle verilen kararlar ve gerekçeleri (hakem: geliştirme oturumu; insan değil) |
 | `anlati-ornekleri.md` | Haftalık, aylık, başarı ve risk odaklı, dönem karşılaştırmalı, zengin not sentezi ve çelişkili kanıt örnekleri — gerçek yazar çıktısı, düzeltilmemiş |
 | `gecici-editoryal-degerlendirme.json` | İstem 4 taslaklarının, yazardan farklı ve kör bir model değerlendiricisince E1–E9 ve mekanik döküm puanları (**insan puanı değildir**, destekleyici kanıttır). Değerlendirici yönergesine istem 2 değerlendirmesine göre tek açıklama eklendi: durumun gerçekten küçük olduğu raporda yerinde kısalık kusur sayılmaz (ölçütün R7 beklentisiyle uyumlu); iki değerlendirme bu nedenle tam karşılaştırılabilir değildir |
-| `kor-puanlama-paketi.md`, `kor-puanlama-cizelgesi.csv` | Arşiv kopyası. **Kör dağıtım kuralı:** Gerçek insan puanlaması için bu depo arşiv dizini puanlayıcılara açılmaz (`kosu-kaydi.jsonl` aynı arşivde durduğundan model/senaryo eşleştirmesi yapılabilir); koordinatör `insan-paketi --dizin <yalitilmis-puanlayici-dizini> --anahtar <dis-yol>` komutuyla yalnızca `kor-puanlama-paketi.md` ve `kor-puanlama-cizelgesi.csv` dosyalarını ayrı bir dağıtım dizinine üretir (yeni üretilen paketler her E8 kaynak notunda sentetik görev ve proje atfını da içerir) |
+| `kor-puanlama-paketi.md`, `kor-puanlama-cizelgesi.csv` | Arşiv kopyası (§4 E1–E9 ölçüt tanımları ve her E8 kaynak notunda sentetik görev/proje atfıyla kanonik üreticiden yenilenmiştir). **Kör dağıtım kuralı:** Gerçek insan puanlaması için bu depo arşiv dizini puanlayıcılara açılmaz (`kosu-kaydi.jsonl` aynı arşivde durduğundan model/senaryo eşleştirmesi yapılabilir); koordinatör `insan-paketi --dizin <yalitilmis-puanlayici-dizini> --anahtar <dis-yol>` komutuyla yalnızca `kor-puanlama-paketi.md` ve `kor-puanlama-cizelgesi.csv` dosyalarını ayrı bir dağıtım dizinine üretir |
 
 Özet yeniden üretimi (arşivlenmiş 25.11.2026 vekil koşusu güncel kanıt kümesinden önceki özetle üretildiği için tarihsel bayrakla çağrılır):
 

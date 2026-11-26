@@ -290,8 +290,10 @@ kapanış anına (ertesi gün `00:00:00+03:00`) eşler; başka hiçbir değer de
 **Nesnel değerlendirme (A).** Düzyazının kendisinden yapılır; iddia eki kapsamı daraltmaz. Belirlenimci tarama
 (`assessDraftObjectively`): sentetik kadrodan pakette olmayan ad (uydurma kimlik), kapalı/yetkisiz varlık adı (yetkisiz
 açıklama), paket ve sunucu izdüşümü defterinde bulunmayan tarih ve sayı (hakem incelemesine gider) ve zorunlu olgu
-kapsamı. Defter dışı her değer ve otomatik eşleşmeyen her zorunlu olgu hakem tarafından elle karara bağlanır; hakem
-kararları ve gerekçeleri koşu kaydında tutulur. Bu tarama 4I-C nesnel doğrulayıcısı değildir.
+kapsamı. Defter dışı her değer ve her taslağın zorunlu olgu tamlığı hakem tarafından elle karara bağlanır; bütün anahtar
+grupları otomatik eşleşmiş olsa bile her taslak için bağlı `atlanan_zorunlu` kararı (`atlanan_zorunlu: []`, yalnızca hakem
+atlanan zorunlu olgu olmadığını doğruladığında) ve `dogru`/`yanlis` sayıları koşu kaydında tutulur. Bu tarama 4I-C nesnel
+doğrulayıcısı değildir.
 
 **Araçlar.** `scripts/report-writer-qualification.mjs`: `kosu` (taşıyıcı `vekil` ya da `kurum-ici`; aynı paket, plan,
 istem ve ayrıştırıcı), `katalog` (kurum içi `GET /models` ile aday kimlik doğrulaması), `ozet` (A/B/D özeti, en yakın
