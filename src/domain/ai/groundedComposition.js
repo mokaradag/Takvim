@@ -11,6 +11,7 @@ import {
   renderGroupRows
 } from './evidenceNarrative.js';
 import { escapedFactText, factPresentation } from './evidenceFacts.js';
+import { bindingMark, stripBindingMarks } from './evidenceCards.js';
 import { analystPropositions, singleSubjectPropositions, caveatPropositions, countProposition, taskCountLead, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tableLeadSentence, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 import { analyticalSynthesis, aspectTitle, framingSentence, nextStepSentence, synthesisNarrative, findingScope } from './analyticalFindings.js';
@@ -1421,7 +1422,43 @@ const citation = (ids) => [...new Set(ids)].map((id) => `【${id}】`).join('');
  * sunucu tarafından eklenir.
  * @returns {{ text: string, citedIds: string[], chart: string|null, charts: number, blocks: number, said: number, suppressed?: number, tables: number, notes: number, titled: boolean }}
  */
-export function renderComposition(composition, validated) {
+/**
+ * ICE: model düzeni kurulmadığında gösterilen doğrulanmış belirlenimci anlatımda görev sayımı bağı. Yalnızca düzen sayfasının
+ * ayrıntılarındaki görev araması gruplarının KENDİ sayım giriş cümlesi (`taskCountLead`) aranır: cümle anlatımda tam bir kez
+ * geçmeli ve başka hiçbir grubun cümlesiyle aynı olmamalıdır. Bulunan cümle, aynı parçalardan işaretli biçimiyle değiştirilir;
+ * işaretsiz biçim birebir korunur. Sayı ya da ad araması yapılmaz; koşul tutmazsa bağ yoktur.
+ * @returns {{ text: string, bindings: object[] } | null}
+ */
+export function bindNarrativeLeads(composition, text) {
+  const render = composition?.render;
+  if (!render?.details || typeof text !== 'string' || !text) return null;
+  const locale = render.locale;
+  const leads = [];
+  for (const detail of render.details.values()) {
+    const source = detail.source;
+    if (!source?.lead || source.group?.tool !== 'rota_task_search') continue;
+    const empty = (source.empty || []).includes(detail.evidenceId);
+    if (taskCountLead(source.group, locale, { empty }) !== source.lead) continue;
+    leads.push({ lead: source.lead, group: source.group, empty });
+  }
+  const bindings = [];
+  let out = text;
+  for (const item of leads) {
+    if (leads.filter((other) => other.lead === item.lead).length !== 1 || out.split(item.lead).length !== 2) continue;
+    const pending = [];
+    const marked = taskCountLead(item.group, locale, { empty: item.empty, mark: (spec) => {
+      const value = bindingMark(bindings.length + pending.length + 1);
+      if (value) pending.push(spec);
+      return value;
+    } });
+    if (!marked || marked === item.lead || stripBindingMarks(marked) !== item.lead) continue;
+    bindings.push(...pending);
+    out = out.replace(item.lead, () => marked);
+  }
+  return bindings.length ? { text: out, bindings } : null;
+}
+
+export function renderComposition(composition, validated, { bind = false } = {}) {
   const { render } = composition;
   const locale = render.locale;
   // Çizilen her parça bölümüyle tutulur: modelin yerleştirmediği ayrıntı kendi bölümünün içine girer (yanıtın sonuna değil).
@@ -1434,6 +1471,14 @@ export function renderComposition(composition, validated) {
     out.push({ text, part, rowBearing });
   };
   const cited = [];
+  // ICE: bağlı kalın değerlerin konum işaretleri ve bağları (yanıt başına; yalnızca `bind` istendiğinde). İşaretler teslimden
+  // önce sunucuda sökülür; işaretsiz çizim (varsayılan) bayt bayt eskisiyle aynıdır.
+  const bindings = [];
+  const mark = bind ? (spec) => {
+    const text = bindingMark(bindings.length + 1);
+    if (text) bindings.push(spec);
+    return text;
+  } : null;
   let chart = null;
   let charts = 0;
   let said = 0;
@@ -1489,7 +1534,7 @@ export function renderComposition(composition, validated) {
     return (detail.source.group.main?.entries || []).filter(({ fact }) => Object.hasOwn(totals, fact.semantic?.metric) && totals[fact.semantic.metric] === fact.value)
       .map(({ fact }) => fact.semantic.metric);
   };
-  const detailText = (detail) => {
+  const detailText = (detail, lead = detail.source?.lead ?? null) => {
     if (detail.silent && (stated.get(detail.evidenceId)?.size || 0) > 0) return '';
     const omit = new Set([...(stated.get(detail.evidenceId) || []), ...derived(detail)]);
     const entries = detail.source?.group?.main?.entries || [];
@@ -1497,8 +1542,21 @@ export function renderComposition(composition, validated) {
     for (const claim of claimed.get(detail.evidenceId) || []) {
       if (Object.entries(claim.values).every(([metric, value]) => valueOf(metric) === value)) omit.add(claim.metric);
     }
-    return omit.size && detail.source ? renderGroupDetails(detail.source.group, { locale, empty: detail.source.empty, layout: detail.source.layout, lead: detail.source.lead, criteriaStated: detail.source.criteriaStated, omitMetrics: omit })
+    return (omit.size || lead !== (detail.source?.lead ?? null)) && detail.source
+      ? renderGroupDetails(detail.source.group, { locale, empty: detail.source.empty, layout: detail.source.layout, lead, criteriaStated: detail.source.criteriaStated, ...(omit.size ? { omitMetrics: omit } : {}) })
       : detail.text;
+  };
+  // ICE: ayrıntının sayım giriş cümlesi (aynı kanıtın `taskCountLead`'i) işaretli biçimiyle yeniden çizilir; yalnızca işaretsiz
+  // biçim çizilmiş metinle birebir aynıysa kullanılır (metin araması yapılmaz, ayrıntı değişmez).
+  const markedDetail = (detail, text) => {
+    const source = detail.source;
+    if (!mark || !text || !source?.lead || source.group?.tool !== 'rota_task_search') return text;
+    const empty = (source.empty || []).includes(detail.evidenceId);
+    if (taskCountLead(source.group, locale, { empty }) !== source.lead) return text;
+    const lead = taskCountLead(source.group, locale, { empty, mark });
+    if (!lead || lead === source.lead) return text;
+    const candidate = detailText(detail, lead);
+    return stripBindingMarks(candidate) === text ? candidate : text;
   };
   const pending = [];
   const showDetail = (id, place = true) => {
@@ -1506,7 +1564,7 @@ export function renderComposition(composition, validated) {
     const detail = render.details.get(id);
     if (!detail) return;
     shown.add(id);
-    const text = detailText(detail);
+    const text = markedDetail(detail, detailText(detail));
     // Aşama F: ayrıntının söylediği toplu ölçüler de aynı kanıtın sonraki ayrıntısında yinelenmez (ör. genel görünümde
     // söylenen gecikmiş sayısı gecikme bölümünde yeniden yazılmaz). Aynı kanıtın aynı toplu ölçüsü tek değerdir.
     for (const { fact } of detail.source?.group?.main?.entries || []) {
@@ -1627,7 +1685,7 @@ export function renderComposition(composition, validated) {
         }
       }
       // Yanıtın paragrafları adlandırma durumunu paylaşır: önceki paragrafın söylediği olgu yinelenmez; boşalan paragraf çizilmez.
-      const text = entries.length ? fluentParagraph(entries, locale, discourse, emitted) : '';
+      const text = entries.length ? fluentParagraph(entries, locale, discourse, emitted, mark) : '';
       if (!text) continue;
       const sources = emitted.map((proposition) => proposition.evidenceId);
       said += emitted.length;
@@ -1643,7 +1701,7 @@ export function renderComposition(composition, validated) {
       const tones = new Set(items.map((item) => item.tone || 'info'));
       const tone = tones.size === 1 ? [...tones][0] : 'info';
       const emitted = [];
-      const sentence = fluentParagraph(items.flatMap((item) => [{ proposition: item }, ...(coveredBy.get(item.id)?.notices || []).map((text) => ({ text }))]), locale, discourse, emitted);
+      const sentence = fluentParagraph(items.flatMap((item) => [{ proposition: item }, ...(coveredBy.get(item.id)?.notices || []).map((text) => ({ text }))]), locale, discourse, emitted, mark);
       if (!sentence) continue;
       const sources = emitted.map((item) => item.evidenceId);
       said += emitted.length;
@@ -1770,6 +1828,7 @@ export function renderComposition(composition, validated) {
   const rowParts = [...new Set(out.filter((chunk) => chunk.rowBearing).map((chunk) => chunk.part))];
   // Doğrulanmış yinelenen olgular nitelendirmede temsil edilir; görünür önerme sayısı ve atıflar değişmez.
   return { text: out.map((chunk) => chunk.text).join('\n\n'), closing: conclusion || render.closing ? out.at(-1)?.text : null, citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length, said, tables, notes, titled, rowParts,
+    ...(bindings.length ? { bindings: Object.freeze(bindings) } : {}),
     ...(synthesis ? { findings: synthesis.findings.length } : {}),
     ...(saidIds.size > said ? { suppressed: saidIds.size - said } : {}),
     chartTypes: validated.blocks.filter((block) => block.type === 'chart' && fences.has(`${block.source}:${block.style}`)).map((block) => block.style),

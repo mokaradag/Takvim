@@ -10,6 +10,7 @@ import {
 import * as assistantApi from './assistantClient.js';
 import { assistantFailureView, effectiveAssistantSource, isSessionFailure } from './assistantPresentation.js';
 import { DEFAULT_ANSWER_DETAIL, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
+import { EVIDENCE_CARD_LIMITS, evidenceCardsExpired, normalizeEvidenceCards } from '../../../domain/ai/evidenceCards.js';
 
 /**
  * Rota AI'nin durum makinesi — React'ten bağımsız, saf JavaScript.
@@ -121,6 +122,34 @@ function initialState() {
   };
 }
 
+/**
+ * Geçici kanıt kartlarının (ICE) sınırlı yaşam döngüsü: yalnızca en yeni `maxLiveAnswers` yanıt ve süresi dolmamış kartlar
+ * tutulur. Kartlar yalnızca bellekteki tur nesnesindedir; kayıtlı iletiden kurulan turlar (konuşma açma, uzlaştırma)
+ * hiçbir zaman kart taşımaz.
+ */
+export function pruneEvidenceCards(turns = [], now = Date.now()) {
+  let kept = 0;
+  let changed = false;
+  const next = [...turns].reverse().map((turn) => {
+    const cards = turn.answer?.evidenceCards;
+    if (!cards) return turn;
+    if (kept < EVIDENCE_CARD_LIMITS.maxLiveAnswers && !evidenceCardsExpired(cards.receivedAt, now)) {
+      kept += 1;
+      return turn;
+    }
+    changed = true;
+    const { evidenceCards: _dropped, ...answer } = turn.answer;
+    return { ...turn, answer };
+  }).reverse();
+  return changed ? next : turns;
+}
+
+/** Oturum hatasında bütün geçici kartlar hemen silinir. */
+function withoutEvidenceCards(active) {
+  if (!active?.turns?.some((turn) => turn.answer?.evidenceCards)) return active;
+  return { ...active, turns: pruneEvidenceCards(active.turns, Number.POSITIVE_INFINITY) };
+}
+
 /** Kayıtlı iletileri turlara çevirir; yanıtı olmayan kullanıcı iletisi yanıtsız turdur. */
 export function turnsFromMessages(messages = []) {
   const turns = [];
@@ -202,7 +231,9 @@ export function createAssistantController({
   }
 
   function update(recipe) {
-    state = recipe(state);
+    const next = recipe(state);
+    // Panel düzeyindeki hata yalnızca oturum hatasıdır: gözlenen oturum/yetki geçersizliği geçici kartları hemen siler.
+    state = next.status === 'error' && next.active ? { ...next, active: withoutEvidenceCards(next.active) } : next;
     emit();
   }
 
@@ -353,11 +384,11 @@ export function createAssistantController({
     if (result.ok) {
       const { assistantMessage, conversation } = result.done;
       run.messageCount = conversation.messageCount;
-      update((current) => ({
-        ...current,
-        running: setRunning(current, run.key, null),
-        list: withListConversation(current.list, conversation),
-        active: patchTurn(current, run, (turn) => ({
+      // ICE: yalnızca bu üretimin doğrulanmış Rota yanıtının geçici kartları; kayıtlı iletiye ya da tarayıcı deposuna yazılmaz.
+      const cards = assistantMessage.rotaData === true ? normalizeEvidenceCards(result.done.evidenceCards) : null;
+      const receivedAt = Date.now();
+      update((current) => {
+        const active = patchTurn(current, run, (turn) => ({
           ...turn,
           user: { ...turn.user, pending: false },
           answer: {
@@ -370,11 +401,18 @@ export function createAssistantController({
             createdAt: assistantMessage.createdAt,
             evidence: Array.isArray(assistantMessage.evidence) ? assistantMessage.evidence : null,
             rotaData: assistantMessage.rotaData === true,
+            ...(cards ? { evidenceCards: { value: cards, receivedAt } } : {}),
             error: null
           }
-        })),
-        announcement: current.active?.key === run.key ? announce('Yanıt tamamlandı.') : current.announcement
-      }));
+        }));
+        return {
+          ...current,
+          running: setRunning(current, run.key, null),
+          list: withListConversation(current.list, conversation),
+          active: active === current.active ? active : { ...active, turns: pruneEvidenceCards(active.turns, receivedAt) },
+          announcement: current.active?.key === run.key ? announce('Yanıt tamamlandı.') : current.announcement
+        };
+      });
       return;
     }
     const failure = assistantFailureView(result);

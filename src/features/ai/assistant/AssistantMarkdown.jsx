@@ -4,7 +4,9 @@ import { Icons } from '../../../components/icons';
 import { ANSWER_CHART_FENCE, parseAnswerChart } from '../../../domain/ai/answerChart.js';
 import { AnswerChart } from './AnswerChart.jsx';
 import { copyTextToClipboard } from './assistantInteraction.js';
-import { createAssistantMarkdownParser } from './assistantMarkdown.js';
+import { createAssistantMarkdownParser, inlineText } from './assistantMarkdown.js';
+import { blockStrongStarts } from './evidenceCardAnchors.js';
+import { EvidenceReference } from './EvidenceCard.jsx';
 
 /**
  * Rota AI yanıtının çizimi. Ağaç `assistantMarkdown.js` tarafından üretilir;
@@ -41,8 +43,12 @@ function CodeBlock({ language, text }) {
   );
 }
 
-/** Satır içi düğümler → React öğeleri. */
-export function renderInline(nodes = [], keyPrefix = 'i', evidenceIds = null) {
+/**
+ * Satır içi düğümler → React öğeleri. `bindings` (yalnızca geçici kanıt kartı olan canlı yanıtta) kalın düğümleri çizim
+ * sırasıyla sayar; sunucunun bağladığı sıradaki düğüm, görünen metni bağın metniyle birebir aynıysa kart tetikleyicisine
+ * sarılır. Metin değişmez; uyuşmazlıkta düğüm olağan kalın metindir.
+ */
+export function renderInline(nodes = [], keyPrefix = 'i', evidenceIds = null, bindings = null) {
   return nodes.map((node, index) => {
     const key = `${keyPrefix}-${index}`;
     switch (node.type) {
@@ -52,21 +58,28 @@ export function renderInline(nodes = [], keyPrefix = 'i', evidenceIds = null) {
         return <br key={key} />;
       case 'code':
         return <code key={key} className="assistant-md-inline-code">{node.value}</code>;
-      case 'strong':
-        return <strong key={key}>{renderInline(node.children, key, evidenceIds)}</strong>;
+      case 'strong': {
+        // Sıra, çocuklardan ÖNCE alınır (sunucunun gezintisiyle aynı: önce düğüm, sonra çocukları).
+        const ordinal = bindings ? bindings.counter.next++ : -1;
+        const element = <strong key={key}>{renderInline(node.children, key, evidenceIds, bindings)}</strong>;
+        const anchor = bindings?.anchors.get(ordinal);
+        const card = anchor ? bindings.cards.get(anchor.card) : null;
+        if (!card || inlineText(node.children) !== anchor.text) return element;
+        return <EvidenceReference key={key} card={card} receivedAt={bindings.receivedAt} text={anchor.text}>{element}</EvidenceReference>;
+      }
       case 'em':
-        return <em key={key}>{renderInline(node.children, key, evidenceIds)}</em>;
+        return <em key={key}>{renderInline(node.children, key, evidenceIds, bindings)}</em>;
       case 'del':
-        return <del key={key}>{renderInline(node.children, key, evidenceIds)}</del>;
+        return <del key={key}>{renderInline(node.children, key, evidenceIds, bindings)}</del>;
       case 'link':
         return (
           <a key={key} href={node.href} target="_blank" rel="noopener noreferrer nofollow" referrerPolicy="no-referrer" title={node.href}>
             {node.image ? 'Görsel: ' : null}
-            {renderInline(node.children, key, evidenceIds)}
+            {renderInline(node.children, key, evidenceIds, bindings)}
           </a>
         );
       case 'group':
-        return <span key={key}>{renderInline(node.children, key, evidenceIds)}</span>;
+        return <span key={key}>{renderInline(node.children, key, evidenceIds, bindings)}</span>;
       case 'cite':
         // Yalnızca sunucunun bu yanıta bağladığı kanıt kimliği kaynak rozeti olur.
         if (!evidenceIds?.has(node.id)) return `【${node.id}】`;
@@ -84,13 +97,13 @@ function isNote(children = []) {
 }
 
 /** Blok düğümü → React öğesi. */
-export function renderBlock(block, key = 'b', evidenceIds = null) {
+export function renderBlock(block, key = 'b', evidenceIds = null, bindings = null) {
   switch (block.type) {
     case 'paragraph':
-      return <p key={key} className={isNote(block.children) ? 'assistant-md-note' : undefined}>{renderInline(block.children, key, evidenceIds)}</p>;
+      return <p key={key} className={isNote(block.children) ? 'assistant-md-note' : undefined}>{renderInline(block.children, key, evidenceIds, bindings)}</p>;
     case 'heading': {
       const Tag = HEADING_TAGS[block.level] || 'h5';
-      return <Tag key={key} className="assistant-md-heading">{renderInline(block.children, key, evidenceIds)}</Tag>;
+      return <Tag key={key} className="assistant-md-heading">{renderInline(block.children, key, evidenceIds, bindings)}</Tag>;
     }
     case 'code': {
       if (block.language === ANSWER_CHART_FENCE) {
@@ -105,7 +118,7 @@ export function renderBlock(block, key = 'b', evidenceIds = null) {
     case 'quote':
       return (
         <blockquote key={key} className={block.tone ? `assistant-md-callout is-${block.tone}` : undefined}>
-          {block.children.map((child, index) => renderBlock(child, `${key}-${index}`, evidenceIds))}
+          {block.children.map((child, index) => renderBlock(child, `${key}-${index}`, evidenceIds, bindings))}
         </blockquote>
       );
     case 'list': {
@@ -113,7 +126,7 @@ export function renderBlock(block, key = 'b', evidenceIds = null) {
       return (
         <Tag key={key} className={`assistant-md-list${block.tight ? ' is-tight' : ''}`} start={block.ordered && block.start !== 1 ? block.start : undefined}>
           {block.items.map((item, index) => (
-            <li key={`${key}-${index}`}>{item.map((child, childIndex) => renderBlock(child, `${key}-${index}-${childIndex}`, evidenceIds))}</li>
+            <li key={`${key}-${index}`}>{item.map((child, childIndex) => renderBlock(child, `${key}-${index}-${childIndex}`, evidenceIds, bindings))}</li>
           ))}
         </Tag>
       );
@@ -125,7 +138,7 @@ export function renderBlock(block, key = 'b', evidenceIds = null) {
             <thead>
               <tr>
                 {block.header.map((cell, index) => (
-                  <th key={index} scope="col" className={block.align[index] ? `is-${block.align[index]}` : undefined}>{renderInline(cell, `${key}-h${index}`, evidenceIds)}</th>
+                  <th key={index} scope="col" className={block.align[index] ? `is-${block.align[index]}` : undefined}>{renderInline(cell, `${key}-h${index}`, evidenceIds, bindings)}</th>
                 ))}
               </tr>
             </thead>
@@ -133,7 +146,7 @@ export function renderBlock(block, key = 'b', evidenceIds = null) {
               {block.rows.map((row, rowIndex) => (
                 <tr key={rowIndex}>
                   {row.map((cell, index) => (
-                    <td key={index} className={block.align[index] ? `is-${block.align[index]}` : undefined}>{renderInline(cell, `${key}-${rowIndex}-${index}`, evidenceIds)}</td>
+                    <td key={index} className={block.align[index] ? `is-${block.align[index]}` : undefined}>{renderInline(cell, `${key}-${rowIndex}-${index}`, evidenceIds, bindings)}</td>
                   ))}
                 </tr>
               ))}
@@ -152,25 +165,39 @@ export function renderBlock(block, key = 'b', evidenceIds = null) {
  * blokları sabit kalır.
  */
 const MarkdownBlock = memo(
-  function MarkdownBlock({ block, blockKey, evidenceIds }) {
-    return renderBlock(block, blockKey, evidenceIds);
+  function MarkdownBlock({ block, blockKey, evidenceIds, bindings = null, start = 0 }) {
+    // Her çizim kendi sayacıyla başlar: blok yeniden çizilse de sıra kaymaz.
+    return renderBlock(block, blockKey, evidenceIds, bindings ? { ...bindings, counter: { next: start } } : null);
   },
   (previous, next) => previous.blockKey === next.blockKey
     && previous.block.source === next.block.source
     && previous.rotaData === next.rotaData
     && previous.evidenceIds === next.evidenceIds
+    && previous.bindings === next.bindings
+    && previous.start === next.start
 );
 
-export function AssistantMarkdown({ text, evidence = null, rotaData = false }) {
+/**
+ * `cards`: yalnızca bu oturumda yeni üretilmiş kanıta dayalı yanıtın geçici kanıt kartları (`{ value, receivedAt }`).
+ * Kart yoksa çizim yolu eskisiyle aynıdır.
+ */
+export function AssistantMarkdown({ text, evidence = null, rotaData = false, cards = null }) {
   const parse = useMemo(() => createAssistantMarkdownParser({ rotaData }), [rotaData]);
   const blocks = useMemo(() => parse(text), [parse, text]);
   const evidenceIds = useMemo(
     () => new Set((Array.isArray(evidence) ? evidence : []).map((item) => item?.id).filter(Boolean)),
     [evidence]
   );
+  const bindings = useMemo(() => (rotaData && cards?.value ? {
+    anchors: new Map(cards.value.anchors.map((anchor) => [anchor.strong, anchor])),
+    cards: new Map(cards.value.cards.map((card) => [card.id, card])),
+    receivedAt: cards.receivedAt
+  } : null), [cards, rotaData]);
+  const starts = useMemo(() => (bindings ? blockStrongStarts(blocks) : null), [bindings, blocks]);
   return (
     <div className="assistant-md">
-      {blocks.map((block, index) => <MarkdownBlock key={index} blockKey={`b${index}`} block={block} evidenceIds={evidenceIds} rotaData={rotaData} />)}
+      {blocks.map((block, index) => <MarkdownBlock key={index} blockKey={`b${index}`} block={block} evidenceIds={evidenceIds} rotaData={rotaData}
+        bindings={bindings} start={starts ? starts[index] : 0} />)}
     </div>
   );
 }

@@ -14,7 +14,8 @@
  * kota, beklenmeyen model, düşünme, bütçe aşımı ya da önbelleğin yeniden kullanılmaması komut hatasıdır; değerlendirici
  * bunu altyapı hatası sayar ve koşuyu durdurur.
  *
- * Ortam: PLANNER_CLAUDE_MODEL (varsayılan claude-haiku-4-5-20251001), PLANNER_CLAUDE_EFFORT (low),
+ * Ortam: PLANNER_CLAUDE_MODEL (varsayılan claude-haiku-4-5-20251001), PLANNER_CLAUDE_EFFORT (low), PLANNER_CLAUDE_THINKING=allow (yalnızca
+ * düşünmesi kapatılamayan model için açık izin; düşünme yine kayda geçer),
  * PLANNER_CLAUDE_LOG (çağrı başına içeriksiz ölçüm satırı; bütçe ve önbellek kapısının durumu), PLANNER_CLAUDE_MAX_CALLS, PLANNER_CLAUDE_MAX_UNCACHED
  * (önbellekten okunmayan girdi belirteçlerinin toplam üst sınırı), PLANNER_CLAUDE_NAMED_TOOL=auto (adlı araç seçimini standart araç
  * profilinin üretim sözleşmesiyle, sıradan MCP aracı olarak sunar), PLANNER_CLAUDE_REQUIRE_CACHE=1 (aynı önekle ikinci
@@ -729,10 +730,18 @@ function reportFailure(log, error, extra = {}) {
   process.stdout.write(`${JSON.stringify({ text: '', toolCalls: [], error })}\n`);
 }
 
+/**
+ * Düşünmesi kapatılamayan model (uyarlamalı düşünme) yalnızca açık seçimle kabul edilir: `PLANNER_CLAUDE_THINKING=allow`.
+ * Varsayılan değişmez (düşünme hatadır); kabul edilen düşünme her satırda `thinking: 'on'` ve belirteç sayısıyla kayda geçer.
+ */
+function thinkingAccepted() {
+  return process.env.PLANNER_CLAUDE_THINKING === 'allow';
+}
+
 /** Model yanıtının kabul önkoşulu (yinelenen ilk yanıt dâhil): yalnızca beklenen model, düşünme kapalı. */
 export function responseProblem(row, model) {
   if (!row.models?.length || row.models.some((item) => item !== model)) return 'PLANNER_MODEL_MISMATCH';
-  if (row.thinking !== 'off') return 'PLANNER_THINKING_ON';
+  if (row.thinking !== 'off' && !thinkingAccepted()) return 'PLANNER_THINKING_ON';
   return null;
 }
 
@@ -883,7 +892,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheState.error) return fail(cacheState.error, row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
-    if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);
+    if (row.thinking !== 'off' && !thinkingAccepted()) return fail('PLANNER_THINKING_ON', row);
     appendLedger(log, row);
     // Zorunlu turda öteki araçların çağrısı yalnızca yeniden denemesiz devirde (üretimin `auto` seçimi) iletilir.
     const structured = !result.is_error && result.structured_output && typeof result.structured_output === 'object' && !Array.isArray(result.structured_output);

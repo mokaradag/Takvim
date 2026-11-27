@@ -735,10 +735,20 @@ export function useReveal() {
 // HoverListCard imlece bağlı olmayan etkileşimli karttır;
 // Tooltip öğesinden farklı olarak imleci izlemez ve işaretçi olaylarını alır,
 // böylece içindeki uzun liste kaydırılabilir.
+//
+// İsteğe bağlı seçenekler (varsayılanları mevcut davranışı değiştirmez):
+// - `renderItem(öğe, sıra, kapat)`: üçüncü bağımsız değişken kartı kapatır (ör. göreve tıklanınca).
+// - `cardClass`, `cardLabel`: kartın ek sınıfı ve erişilebilir adı (ad verilirse kart `dialog` rolü alır).
+// - `triggerLabel`: tetikleyicinin erişilebilir adı.
+// - `manageFocus`: klavyeyle sabitlenen kartta odak ilk düğmeye taşınır; kart kapanınca tetikleyiciye döner,
+//   odak kartın dışına çıkınca kart kapanır.
+// - `closeOnScroll`: kart dışındaki bir kaydırma kartı kapatır (kaydırılan metinden kopmuş kart kalmaz).
+// - `hideListHead`: liste başlığı satırı çizilmez.
 export function HoverListCard({
   children, title, icon, accent, summary, items = [], renderItem,
   listLabel = 'Görevler', listHint, onViewAll, emptyText = 'Kayıt yok.',
-  wrapperStyle, wrapperClass = 'hovercard-trigger'
+  wrapperStyle, wrapperClass = 'hovercard-trigger',
+  cardClass = '', cardLabel, triggerLabel, manageFocus = false, closeOnScroll = false, hideListHead = false
 }) {
   const [show, setShow] = useSx(false);
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
@@ -772,6 +782,9 @@ export function HoverListCard({
   // KAPANMAZ. Dokunmatik ve klavye kullanıcısının listedeki görev düğmelerine
   // ulaşabilmesinin tek yolu budur.
   const [pinned, setPinned] = useSx(false);
+  // Odak yönetimi (yalnızca `manageFocus`): klavyeyle açılışta odak karta taşınır; geri dönüşte yeniden açılmaz.
+  const focusIntoCard = useRx(false);
+  const suppressFocusOpen = useRx(false);
 
   // Açılmayı bekleyen kart da Esc ile iptal edilir; kapalı kart Esc'i tüketmez.
   const openPending = useRx(false);
@@ -787,12 +800,17 @@ export function HoverListCard({
     openPending.current = false;
     setShow(true);
   };
-  const closeNow = () => {
+  const closeNow = ({ restoreFocus = true } = {}) => {
     clearTimeout(openT.current);
     clearTimeout(closeT.current);
     openPending.current = false;
+    const inside = manageFocus && cardRef.current?.contains(document.activeElement);
     setPinned(false);
     setShow(false);
+    if (inside && restoreFocus) {
+      suppressFocusOpen.current = true;
+      wrapRef.current?.focus();
+    }
   };
   const scheduleClose = () => {
     clearTimeout(openT.current);
@@ -809,13 +827,33 @@ export function HoverListCard({
   useEx(() => { if (show) place(); }, [show]);
   useEx(() => () => { clearTimeout(openT.current); clearTimeout(closeT.current); }, []);
 
+  useEx(() => {
+    if (!manageFocus || !show || !pos.ready || !focusIntoCard.current) return;
+    focusIntoCard.current = false;
+    cardRef.current?.querySelector('button, a[href], [tabindex="0"]')?.focus();
+    // Odakla zaten açık kart Enter ile sabitlendiğinde de (yalnızca `pinned` değişir) odak karta taşınır.
+  }, [manageFocus, show, pos.ready, pinned]);
+
+  // Kart dışındaki kaydırma kartı kapatır (yalnızca `closeOnScroll`).
+  useEx(() => {
+    if (!closeOnScroll || !show) return undefined;
+    const onScroll = (event) => {
+      if (cardRef.current && event.target instanceof Node && cardRef.current.contains(event.target)) return;
+      closeNow({ restoreFocus: false });
+    };
+    window.addEventListener('scroll', onScroll, true);
+    return () => window.removeEventListener('scroll', onScroll, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeOnScroll, show]);
+
   // Sabitlenmiş kart dışarı tıklamayla ve Esc ile kapanır.
   useEx(() => {
     if (!pinned) return undefined;
     const depth = modalTrapDepth();
     const onPointerDown = (event) => {
       if (wrapRef.current?.contains(event.target) || cardRef.current?.contains(event.target)) return;
-      closeNow();
+      // Dış tıklama odağı tıklanan öğeye bırakır; odak yalnızca Esc ile tetikleyiciye döner.
+      closeNow({ restoreFocus: false });
     };
     const onKey = (event) => { if (event.key === 'Escape' && !event.defaultPrevented && modalTrapDepth() <= depth) { event.preventDefault(); closeNow(); } };
     document.addEventListener('mousedown', onPointerDown);
@@ -830,7 +868,8 @@ export function HoverListCard({
   const card = show && ReactDOM.createPortal(
     <div
       ref={cardRef}
-      className="rich-tip interactive"
+      className={`rich-tip interactive${cardClass ? ` ${cardClass}` : ''}`}
+      {...(cardLabel ? { role: 'dialog', 'aria-label': cardLabel } : {})}
       style={{
         position: 'fixed', left: pos.x, top: pos.y,
         visibility: pos.ready ? 'visible' : 'hidden',
@@ -839,6 +878,10 @@ export function HoverListCard({
       onMouseEnter={() => clearTimeout(closeT.current)}
       onMouseLeave={scheduleClose}
       onFocus={() => clearTimeout(closeT.current)}
+      onBlur={manageFocus ? (event) => {
+        const next = event.relatedTarget;
+        if (next && !cardRef.current?.contains(next) && !wrapRef.current?.contains(next)) closeNow({ restoreFocus: false });
+      } : undefined}
     >
       {(title || icon) && (
         <div className="rich-tip-head">
@@ -848,15 +891,17 @@ export function HoverListCard({
       )}
       <div className="rich-tip-body">
         {summary}
-        <div className="rt-list-head">
-          <span>{listLabel} · {items.length}</span>
-          {listHint && <span className="rt-list-hint">{listHint}</span>}
-        </div>
+        {!hideListHead && (
+          <div className="rt-list-head">
+            <span>{listLabel} · {items.length}</span>
+            {listHint && <span className="rt-list-hint">{listHint}</span>}
+          </div>
+        )}
         {onViewAll && <button type="button" className="btn ghost sm hover-list-detail" onClick={() => { closeNow(); onViewAll(wrapRef); }}>Tüm görevleri gör <Icons.ChevronRight size={12} /></button>}
         <div className="rt-list">
           {items.length === 0
             ? <div className="rt-list-empty">{emptyText}</div>
-            : items.map((it, i) => renderItem(it, i))}
+            : items.map((it, i) => renderItem(it, i, closeNow))}
         </div>
       </div>
     </div>,
@@ -875,15 +920,25 @@ export function HoverListCard({
         role="button"
         tabIndex={0}
         aria-expanded={show}
+        {...(triggerLabel ? { 'aria-label': triggerLabel } : {})}
+        {...(cardLabel ? { 'aria-haspopup': 'dialog' } : {})}
         style={{ display: 'block', ...wrapperStyle }}
         onMouseEnter={open}
         onMouseLeave={scheduleClose}
-        onFocus={openNow}
-        onBlur={scheduleClose}
+        onFocus={() => {
+          if (suppressFocusOpen.current) { suppressFocusOpen.current = false; return; }
+          openNow();
+        }}
+        onBlur={(event) => {
+          // Odak karta geçiyorsa (odak yönetimi) kart açık kalır.
+          if (manageFocus && event.relatedTarget && cardRef.current?.contains(event.relatedTarget)) return;
+          scheduleClose();
+        }}
         onClick={toggle}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
+            if (manageFocus && !pinned) focusIntoCard.current = true;
             toggle();
           } else if (event.key === 'Escape' && (show || openPending.current)) {
             event.preventDefault();
