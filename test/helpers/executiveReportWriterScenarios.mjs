@@ -135,7 +135,10 @@ export function scenarioSeed(spec) {
   const preparedTasks = (spec.gorevler || []).map((t) => {
     taskNo += 1;
     const id = `71000000-0000-4000-8000-${hex(taskNo)}`;
-    if (t.k) keyToId.set(t.k, id);
+    if (t.k) {
+      if (keyToId.has(t.k)) throw new Error(`${spec.id}: yinelenen görev anahtarı (${t.k})`);
+      keyToId.set(t.k, id);
+    }
     return { t, id };
   });
   for (const { t, id } of preparedTasks) {
@@ -762,7 +765,7 @@ export const WRITER_SCENARIOS = Object.freeze([
 export const REPRESENTATIVE_MANDATORY_KEYS = Object.freeze({
   R1: { Z1: [['montaj'], ['5 kasım']], Z2: [['test cihaz'], ['saha test']] },
   R2: { Z1: [['18'], ['ufuk'], ['pusula']], Z2: [['harici onay', 'entegrasyon plan'], ['4 kasım', 'hedef tarih']] },
-  R3: { Z1: [['18']], Z2: [['52'], ['14'], ['7 geciken', '7 gecikmiş', 'geciken 7', 'gecikmiş 7', '7 görev gecik', '7 iş gecik', 'geciken görev sayısı 7']] },
+  R3: { Z1: [['18']], Z2: [['52'], ['14'], ['7 geciken', '7 gecikmiş', 'geciken 7', 'gecikmiş 7', '7 görev gecik', '7 iş gecik', 'geciken görev sayısı 7', "7'si gecik", '7 si gecik']] },
   R4: { Z1: [['12 kasım'], ['ertelen']] },
   R5: { Z1: [['doğrulama rapor'], ['kayıtlı değil', 'kayıtlı olmadığ', 'tarihi yok', 'tarihi bulunmu', 'bilinmiyor', 'tarihsiz', 'kaydedilmemiş']] },
   R6: { Z1: [['sürüm paket'], ['devam', 'sürüyor', 'açık']], Z2: [['test cihaz'], ['5 kasım', 'hedef tarih']] },

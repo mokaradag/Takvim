@@ -444,10 +444,10 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   };
   // Kronolojik öncelik yalnızca karşılaştırılan TÜM kayıtlarda geçerli zaman bulunup
   // en az iki farklı zaman noktası VE tekil bir en güncel kayıt olduğunda verilir;
-  // tarihsiz kayıt varsa ya da en son zamanı paylaşan iki kayıt varsa tek kayıt esas alınamaz.
+  // tarihsiz kayıt, seyrek dizi boşluğu ya da en son zamanı paylaşan iki kayıt varsa tek kayıt esas alınamaz.
   const hasUniqueLatestTime = (rawList) => {
     if (!Array.isArray(rawList) || rawList.length < 2) return false;
-    const parsed = rawList.map(parseConflictTime);
+    const parsed = Array.from(rawList, (entry) => parseConflictTime(entry));
     if (parsed.some((entry) => entry === null)) return false;
     const kind = parsed[0].kind;
     if (parsed.some((entry) => entry.kind !== kind)) return false;
@@ -470,7 +470,9 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     // Farklı görevlere ait iki güncel notun yazım zamanı farkı (`notlar_arasi_celiski`) durum değişimi kanıtı değildir.
     if (conflict.tur === 'notlar_arasi_celiski') return false;
     if (Array.isArray(conflict.kronoloji) && hasUniqueLatestTime(conflict.kronoloji)) return true;
-    const writeTimes = conflict.kanitlar
+    // Yinelenen kanıt kimlikleri tekilleştirilir; aynı kaydın tekrar geçmesi en güncel zamanı sahte eşitliğe düşürmez.
+    const uniqueIds = [...new Set(conflict.kanitlar)];
+    const writeTimes = uniqueIds
       .map((id) => itemById.get(id))
       .map((item) => (isPlainObject(item) ? (item.kayit_zamani ?? null) : null));
     return hasUniqueLatestTime(writeTimes);
@@ -526,8 +528,10 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   const priorityNotes = notesFor(groups.oncelikli, noteTask, groups.not);
   const openDepEvidence = groups.acikBagimli;
   const noteOrDepRiskEvidence = [...priorityNotes, ...openDepEvidence];
-  const overdueMeasure = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'geciken');
-  const overdueUnknown = Boolean(overdueMeasure && (overdueMeasure.deger === null || overdueMeasure.tamlik === 'partial'));
+  const overdueMeasures = pkg.kanitlar.filter((item) => isPlainObject(item) && typeof item.id === 'string' && item.tur === 'olcu' && item.olcu === 'geciken');
+  const unknownOverdueMeasures = overdueMeasures.filter((item) => item.deger === null || item.tamlik === 'partial');
+  const overdueUnknown = unknownOverdueMeasures.length > 0;
+  const unknownOverdueIds = unknownOverdueMeasures.map((item) => item.id);
   const scopeRestricted = tamlik.kapsam_gorunurlugu === 'partial' || tamlik.paket_kesildi === true || tamlik.kesit_tutarli === false;
   const focus = pkg.istek.odak ?? 'dengeli';
   // Kanonik stil kuralı: maddi risk, gecikme, engelli iş ya da çelişki varsa Riskler bölümü açık olsa da Yönetici Değerlendirmesi'nde anılır.
@@ -547,7 +551,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     if (openDepEvidence.length > 0) {
       parts.push('Açık bağımlılıkları kesinleşmiş engel değil bağımlılık gözlemi olarak ayrı ve ölçülü biçimde değerlendir.');
     }
-    const refs = [...new Set([...noteOrDepRiskEvidence, ...(overdueUnknown ? [overdueMeasure.id] : [])])].slice(0, 12);
+    const refs = [...new Set([...noteOrDepRiskEvidence, ...unknownOverdueIds])].slice(0, 12);
     out.push({
       kimlik: 'dengeli_sunum', bolum: 'yonetici_degerlendirmesi', kanitlar: refs,
       yonerge: parts.join(' ')
@@ -555,7 +559,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   } else if (focus === 'riskler' && !riskSectionPlanned) {
     if (overdueUnknown) {
       out.push({
-        kimlik: 'risk_odagi_gecikme_bilinmiyor', bolum: 'yonetici_degerlendirmesi', kanitlar: [overdueMeasure.id],
+        kimlik: 'risk_odagi_gecikme_bilinmiyor', bolum: 'yonetici_degerlendirmesi', kanitlar: unknownOverdueIds,
         yonerge: 'Rapor risk odağıyla istendi ancak geciken iş sayısı kanıtta bilinmiyor ya da kısmi durumda. Gecikme olmadığını varsayma; gecikme ölçüsünün belirlenemediğini açıkça belirt.'
       });
     } else {
@@ -571,17 +575,33 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
       });
     }
   }
-  const completed = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'tamamlanan' && isReportPeriodItem(item, reportPeriod));
-  const activity = pkg.kanitlar.find((item) => isPlainObject(item) && item.tur === 'olcu' && item.olcu === 'hareket' && isReportPeriodItem(item, reportPeriod));
-  const completedExplicitZero = Boolean(completed && completed.deger === 0 && completed.tamlik !== 'partial');
-  const completionCompatibleWithZero = completed ? completedExplicitZero : true;
-  if (activity && activity.deger === 0 && activity.kayit_kapsami !== 'partial' && activity.tamlik !== 'partial'
+  const completedMeasures = pkg.kanitlar.filter((item) => isPlainObject(item) && typeof item.id === 'string' && item.tur === 'olcu' && item.olcu === 'tamamlanan' && isReportPeriodItem(item, reportPeriod));
+  const activityMeasures = pkg.kanitlar.filter((item) => isPlainObject(item) && typeof item.id === 'string' && item.tur === 'olcu' && item.olcu === 'hareket' && isReportPeriodItem(item, reportPeriod));
+  const hasPositiveReportPeriodSummary = pkg.kanitlar.some((item) => (
+    isPlainObject(item)
+    && item.tur === 'hareket'
+    && isReportPeriodItem(item, reportPeriod)
+    && isPlainObject(item.donem_ozeti)
+    && (
+      (Number.isFinite(item.donem_ozeti.toplam_hareket) && item.donem_ozeti.toplam_hareket > 0)
+      || (Number.isFinite(item.donem_ozeti.tamamlanan_gorev) && item.donem_ozeti.tamamlanan_gorev > 0)
+      || (Number.isFinite(item.donem_ozeti.olusturulan_gorev) && item.donem_ozeti.olusturulan_gorev > 0)
+    )
+  ));
+  const completedExplicitZero = completedMeasures.length > 0
+    && completedMeasures.every((item) => item.deger === 0 && item.tamlik !== 'partial');
+  const completionCompatibleWithZero = completedMeasures.length === 0 || completedExplicitZero;
+  const activityExplicitZero = activityMeasures.length > 0
+    && activityMeasures.every((item) => item.deger === 0 && item.kayit_kapsami !== 'partial' && item.tamlik !== 'partial');
+  if (activityExplicitZero
+    && !hasPositiveReportPeriodSummary
     && tamlik.hareket !== 'partial' && tamlik.kapsam_gorunurlugu !== 'partial'
     && tamlik.paket_kesildi !== true && tamlik.kesit_tutarli !== false
     && groups.tamamlanan.length === 0
     && completionCompatibleWithZero) {
     out.push({
-      kimlik: 'degisiklik_yok', bolum: 'yonetici_degerlendirmesi', kanitlar: [activity.id, ...(completed ? [completed.id] : [])],
+      kimlik: 'degisiklik_yok', bolum: 'yonetici_degerlendirmesi',
+      kanitlar: [...activityMeasures.map((item) => item.id), ...completedMeasures.map((item) => item.id)],
       yonerge: completedExplicitZero
         ? 'Dönemde kayda geçen değişiklik ve tamamlanan görev yok. Bunu dürüst ve kısa biçimde söyle; dolgu metni, uydurma etkinlik ya da varsayılan ilerleme yazma.'
         : 'Dönemde hareket kaydına geçen bir değişiklik bulunmuyor. Bunu dürüst ve kısa biçimde söyle; dolgu metni, uydurma etkinlik ya da varsayılan ilerleme yazma.'
@@ -613,8 +633,14 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
   if (!hasAnyEvidenceId) {
     throw new ReportPlanError('EVIDENCE_EMPTY');
   }
-  if (!Array.isArray(kapaliBolumler) || kapaliBolumler.some((id) => !OPTIONAL_WRITER_SECTIONS.includes(id))) {
+  if (!Array.isArray(kapaliBolumler)) {
     throw new ReportPlanError('SECTION_OPTION_INVALID');
+  }
+  // Seyrek dizilerdeki boş yuvalar `.some()` tarafından atlanmamalıdır; her dizin açıkça doğrulanır.
+  for (let i = 0; i < kapaliBolumler.length; i += 1) {
+    if (!Object.hasOwn(kapaliBolumler, i) || !OPTIONAL_WRITER_SECTIONS.includes(kapaliBolumler[i])) {
+      throw new ReportPlanError('SECTION_OPTION_INVALID');
+    }
   }
   const pkg = evidencePackage;
   const detail = REPORT_DETAIL_LEVELS.includes(pkg.istek.ayrinti) ? pkg.istek.ayrinti : 'standart';
@@ -622,26 +648,32 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
   const reportPeriod = own(pkg.istek, 'donem');
   const classified = classifyEvidence(pkg);
   const { groups, noteTask, itemTypeById } = classified;
-  const order = pkg.kanitlar.map((item) => item.id);
+  const order = pkg.kanitlar
+    .filter((item) => isPlainObject(item) && typeof item.id === 'string')
+    .map((item) => item.id);
   const derivedAll = derivedIds(pkg);
   const conflictIds = (pkg.celiskiler || []).flatMap((conflict) => (Array.isArray(conflict?.kanitlar) ? conflict.kanitlar : []));
   const refOrder = [...order, ...derivedAll];
 
   const highlightsPrimary = [...groups.tamamlanan, ...notesFor(groups.tamamlanan, noteTask, groups.not), ...groups.hareketli,
     ...notesFor(groups.hareketli, noteTask, groups.not), ...groups.belge, ...derivedIds(pkg, ['kilometre_tasi_ozeti', 'karsilastirma'])];
-  // Görev satırları bütçe nedeniyle düştüyse rapor dönemindeki pozitif tamamlama ölçüsü veya görev oluşturma özeti yedek odak kanıtı olur.
+  // Görev satırları bütçe nedeniyle düştüyse rapor dönemindeki pozitif tamamlama ölçüsü, görev oluşturma özeti
+  // veya yetkili görev notları yedek odak kanıtı olur (yalnızca not içeren paketlerde sahte "gelişme yok" yönergesi verilmez).
   const highlightsFallback = highlightsPrimary.length > 0
     ? []
-    : pkg.kanitlar.filter((item) => {
-      if (!isPlainObject(item) || typeof item.id !== 'string' || !isReportPeriodItem(item, reportPeriod)) return false;
-      if (item.tur === 'olcu' && item.olcu === 'tamamlanan' && Number.isFinite(item.deger) && item.deger > 0) return true;
-      if (item.tur === 'hareket' && isPlainObject(item.donem_ozeti)) {
-        const completedCount = item.donem_ozeti.tamamlanan_gorev;
-        const createdCount = item.donem_ozeti.olusturulan_gorev;
-        return (Number.isFinite(completedCount) && completedCount > 0) || (Number.isFinite(createdCount) && createdCount > 0);
-      }
-      return false;
-    }).map((item) => item.id);
+    : [
+      ...pkg.kanitlar.filter((item) => {
+        if (!isPlainObject(item) || typeof item.id !== 'string' || !isReportPeriodItem(item, reportPeriod)) return false;
+        if (item.tur === 'olcu' && item.olcu === 'tamamlanan' && Number.isFinite(item.deger) && item.deger > 0) return true;
+        if (item.tur === 'hareket' && isPlainObject(item.donem_ozeti)) {
+          const completedCount = item.donem_ozeti.tamamlanan_gorev;
+          const createdCount = item.donem_ozeti.olusturulan_gorev;
+          return (Number.isFinite(completedCount) && completedCount > 0) || (Number.isFinite(createdCount) && createdCount > 0);
+        }
+        return false;
+      }).map((item) => item.id),
+      ...groups.not
+    ];
 
   const allocation = {
     yonetici_degerlendirmesi: [...groups.olcu, ...derivedAll, ...groups.tamamlanan, ...groups.geciken, ...groups.engelli, ...groups.oncelikli, ...conflictIds],

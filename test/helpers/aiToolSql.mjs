@@ -1120,9 +1120,20 @@ function reportDependencies(db, params) {
   const scope = scopeOf(db, params);
   const limit = Number(params.maxRows || 1001);
   const taskFilter = new Set(String(params.taskIds || '').split(',').map(upper).filter(isGuid));
-  const rows = (db.taskDependencies || [])
+  const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
+  const isPostCutoffDep = (dep) => {
+    if (cutOffMs == null) return false;
+    const createdMs = dep.CreatedAt != null ? new Date(dep.CreatedAt).getTime() : NaN;
+    const updatedMs = dep.UpdatedAt != null ? new Date(dep.UpdatedAt).getTime() : NaN;
+    return (Number.isFinite(createdMs) && createdMs > cutOffMs)
+      || (Number.isFinite(updatedMs) && updatedMs > cutOffMs);
+  };
+  const scopedDeps = (db.taskDependencies || [])
     .filter((dep) => scope.projects.get(upper(dep.ProjectId))?.AccessLevel === 'FULL')
-    .filter((dep) => taskFilter.size === 0 || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)))
+    .filter((dep) => taskFilter.size === 0 || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)));
+  const hasPostCutoffChange = scopedDeps.some(isPostCutoffDep);
+  const rows = scopedDeps
+    .filter((dep) => !isPostCutoffDep(dep))
     .sort((a, b) => (
       sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId))
       || sqlGuidSortKey(a.TaskId).localeCompare(sqlGuidSortKey(b.TaskId))
@@ -1136,9 +1147,11 @@ function reportDependencies(db, params) {
       DependencyType: dep.DependencyType,
       LagDays: dep.LagDays,
       LagValue: dep.LagValue,
-      LagUnit: dep.LagUnit
+      LagUnit: dep.LagUnit,
+      CreatedAt: dep.CreatedAt ?? null,
+      UpdatedAt: dep.UpdatedAt ?? null
     }));
-  return [rows];
+  return [rows, [{ HasPostCutoffChange: hasPostCutoffChange ? 1 : 0 }]];
 }
 
 function reportActivitySummary(db, params) {

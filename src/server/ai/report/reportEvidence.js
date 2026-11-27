@@ -1179,11 +1179,10 @@ export async function buildExecutiveReportEvidence({
       || periodActivityAgg.hasPostCutoffDeletion
       || compActivityAgg?.hasPostCutoffDeletion
     );
-    const snapshotConsistent = postCutoffModifiedCount === 0 && !hasPostCutoffScopeLoss;
     const rosterTruncated = taskFactsResult.roster?.truncated === true;
     const factsComplete = !taskFactsResult.truncated && !rosterTruncated;
 
-    // 6. Bağımlılıkları YALNIZCA FULL erişimli projeler için tek toplu sorguda oku (READ ve PARTIAL projelerde asla okunmaz).
+    // 6. Bağımlılıkları YALNIZCA FULL erişimli projeler için veri kesitiyle tek toplu sorguda oku (READ ve PARTIAL projelerde asla okunmaz).
     const dependencyMap = new Map();
     const fullProjectIds = [...projects.values()]
       .filter((project) => project.accessLevel === 'FULL')
@@ -1191,6 +1190,7 @@ export async function buildExecutiveReportEvidence({
     const fullProjectIdSet = new Set(fullProjectIds);
     let dependencyTruncated = false;
     let droppedDependencyEdges = 0;
+    let hasPostCutoffDependencyChange = false;
     if (fullProjectIds.length > 0) {
       effectiveSignal.throwIfAborted();
       // Kişi/ekip/örgüt kapsamlarında bağımlılık sorgusu satır sınırından ÖNCE görünür görevlere daraltılır.
@@ -1200,10 +1200,18 @@ export async function buildExecutiveReportEvidence({
       const depResult = await turn.sql(effectiveSignal, (executor) => readReportDependencies(executor, scope, {
         projectIds: fullProjectIds,
         taskIds: scopedDependencyTaskIds,
+        cutOffUtc: cutOffDate,
         maxRows: REPORT_DEPENDENCIES_MAX_ROWS
       }));
       dependencyTruncated = Boolean(depResult.truncated);
+      hasPostCutoffDependencyChange = Boolean(depResult.hasPostCutoffChange);
       for (const row of depResult.dependencies || []) {
+        const createdMs = row.CreatedAt ? Date.parse(row.CreatedAt) : NaN;
+        const updatedMs = row.UpdatedAt ? Date.parse(row.UpdatedAt) : NaN;
+        if ((Number.isFinite(createdMs) && createdMs > cutOffMs) || (Number.isFinite(updatedMs) && updatedMs > cutOffMs)) {
+          hasPostCutoffDependencyChange = true;
+          continue;
+        }
         const taskId = canonicalActualId(row.TaskId);
         const predId = canonicalActualId(row.PredecessorTaskId);
         if (!taskId || !predId || !taskById.has(taskId) || !taskById.has(predId)) {
@@ -1216,9 +1224,14 @@ export async function buildExecutiveReportEvidence({
         dependencyMap.get(predId).ardil.push(taskId);
       }
     }
+    const snapshotConsistent = postCutoffModifiedCount === 0 && !hasPostCutoffScopeLoss && !hasPostCutoffDependencyChange;
+    // Kesit sonrası görev güncellemesi veya bağımlılık değişikliği varsa silinmiş/değişmiş bağlantılar tarihsel olarak
+    // kanıtlanamayacağından bağımlılık kapsamı eksiksiz (`complete`) bildirilmez.
     const dependencyCoverage = (
       dependencyTruncated
       || droppedDependencyEdges > 0
+      || hasPostCutoffDependencyChange
+      || postCutoffModifiedCount > 0
       || Boolean(taskFactsResult.truncated)
       || rosterTruncated
       || hasPostCutoffScopeLoss
@@ -1566,17 +1579,21 @@ export async function buildExecutiveReportEvidence({
       const deps = dependencyMap.get(task.id);
       const currentProjectLabel = projectLabelOf(task.projectId);
       const completedProjectId = task._completedInPeriod ? auditCompletedProjectByTaskId.get(task.id) : null;
-      const completedProjectLabel = completedProjectId && completedProjectId !== task.projectId
-        ? projectLabelOf(completedProjectId)
-        : null;
+      const shouldEmitCompletedProject = Boolean(
+        completedProjectId && (completedProjectId !== task.projectId || task._postCutoffModified)
+      );
+      const completedProjectLabel = shouldEmitCompletedProject ? projectLabelOf(completedProjectId) : null;
       const taskItemObj = {
         _taskId: task.id,
         tur: 'gorev',
         kaynak: 'rota_task_search',
         gorev: task.id,
         proje: currentProjectLabel,
-        // Görev dönemde başka bir projede tamamlanıp kesitten önce taşındıysa tamamlanma projesi ayrıca belirtilir.
-        ...(completedProjectLabel && completedProjectLabel !== currentProjectLabel ? { tamamlandigi_proje: completedProjectLabel } : {}),
+        // Görev dönemde başka bir projede tamamlanıp taşındıysa veya kesit sonrası değiştiği için canlı proje
+        // etiketi yazar izdüşümünde çıkarılacaksa denetim destekli yetkili tamamlanma projesi korunur.
+        ...(completedProjectLabel && (task._postCutoffModified || completedProjectLabel !== currentProjectLabel)
+          ? { tamamlandigi_proje: completedProjectLabel }
+          : {}),
         ...(project?.name ? { proje_adi: project.name } : {}),
         baslik: dataText(task.title, 160),
         durum: STATUS_TO_CANONICAL[task.status] || 'baslamadi',

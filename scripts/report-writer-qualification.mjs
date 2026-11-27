@@ -225,7 +225,7 @@ export function resolveOnPremConfig(options = {}, env = process.env) {
 }
 
 /** Vekil köprüsüne bir yazar isteği gönderir; kabuk kullanılmaz, UTF-8 parçaları tamponlanarak çözülür. */
-function callSurrogate(request, ledger) {
+export function callSurrogate(request, ledger, { adapterPath = ADAPTER } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (payload) => {
@@ -233,7 +233,7 @@ function callSurrogate(request, ledger) {
       settled = true;
       resolve(payload);
     };
-    const child = spawn(process.execPath, [ADAPTER], {
+    const child = spawn(process.execPath, [adapterPath], {
       cwd: ROOT,
       env: {
         ...process.env,
@@ -247,19 +247,21 @@ function callSurrogate(request, ledger) {
       stdio: ['pipe', 'pipe', 'pipe']
     });
     const stdoutChunks = [];
+    let stdinError = null;
     child.stdout.on('data', (chunk) => { stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); });
     child.stderr.on('data', () => {});
     child.on('error', (error) => {
       finish({ code: null, parsed: null, spawnError: error?.code || 'KOPRU_BASLATMA_HATASI' });
     });
+    // Alt süreç girdiyi okumadan erken çıkarsa (ör. ortam doğrulama hatası) EPIPE yapılandırılmış stdout hatasını ezmemelidir.
     child.stdin.on('error', (error) => {
-      finish({ code: null, parsed: null, spawnError: error?.code || 'KOPRU_GIRDI_HATASI' });
+      if (!stdinError) stdinError = error?.code || 'KOPRU_GIRDI_HATASI';
     });
     child.on('close', (code) => {
       const out = Buffer.concat(stdoutChunks).toString('utf8');
       let parsed = null;
       try { parsed = JSON.parse(out.trim().split('\n').pop()); } catch { /* köprü çıktısı yok */ }
-      finish({ code, parsed, spawnError: null });
+      finish({ code, parsed, spawnError: parsed?.error ? null : stdinError });
     });
     child.stdin.end(JSON.stringify({ messages: request.messages, tools: [], toolChoice: 'none', maxOutputTokens: request.maxOutputTokens }));
   });
@@ -449,11 +451,10 @@ async function commandRun(options) {
   let profileMaxOutputTokens = null;
   let modelContextTokens = null;
   let requestTimeoutMs = null;
-  const thinkingMode = options['dusunme-kipi'] ?? null;
-  const quantization = options.nicemleme ?? null;
-  const deploymentEnv = typeof options['dagitim-ortami'] === 'string' && options['dagitim-ortami'].trim()
-    ? options['dagitim-ortami'].trim()
-    : null;
+  const trimOption = (raw) => (typeof raw === 'string' && raw.trim() ? raw.trim() : null);
+  const thinkingMode = trimOption(options['dusunme-kipi']);
+  const quantization = trimOption(options.nicemleme);
+  const deploymentEnv = trimOption(options['dagitim-ortami']);
   if (transport === 'kurum-ici') {
     model = options.model;
     if (!model) throw new Error('--model gerekli (kurum içi katalog kimliği).');
@@ -473,14 +474,33 @@ async function commandRun(options) {
   // Göreli --defter yolu üst ve alt süreçlerde aynı konuma işaret etmesi için tek kez mutlak yola çözülür.
   const ledgerBase = path.resolve(options.defter || path.join(tmpdir(), `rapor-yazari-defter-${runId}`));
   const ledgerFor = (worker) => `${ledgerBase}-${worker}.jsonl`;
-  // İşçi defterleri ile koşu çıktı dosyasının aynı dosyaya düşmesi önlenir.
+  const implicitBenchmarkInputs = [
+    path.join(ROOT, bench.WRITER_PACKAGES_PATH),
+    path.join(ROOT, bench.BENCHMARK_FIXTURE_PATH),
+    path.join(ROOT, bench.REPORT_STYLE_PATH)
+  ];
+  for (const inputPath of implicitBenchmarkInputs) {
+    if (sameFile(inputPath, out)) {
+      throw new Error(`Çıktı dosyası kıyas girdi dosyalarından biriyle aynı olamaz: ${out}`);
+    }
+  }
+  // İşçi defterleri ile koşu çıktı dosyasının ya da kıyas girdilerinin aynı dosyaya düşmesi önlenir.
   for (let worker = 0; worker < concurrency; worker += 1) {
-    if (sameFile(out, ledgerFor(worker))) {
+    const workerLedger = ledgerFor(worker);
+    if (sameFile(out, workerLedger)) {
       throw new Error(`Çıktı dosyası işçi defteriyle aynı olamaz: ${out}`);
+    }
+    for (const inputPath of implicitBenchmarkInputs) {
+      if (sameFile(inputPath, workerLedger)) {
+        throw new Error(`İşçi defteri kıyas girdi dosyalarından biriyle aynı olamaz: ${workerLedger}`);
+      }
     }
   }
   // Her koşu ayrı bir dosya açar: eski aday kaydının üzerine ekleme ve karışık koşu üretimi engellenir.
   mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+  if (transport === 'vekil') {
+    mkdirSync(path.dirname(ledgerBase), { recursive: true });
+  }
   let fd;
   try {
     fd = openSync(out, 'wx', 0o600);
@@ -548,6 +568,7 @@ export function selectHomogeneousRun(records, { runId = null } = {}) {
     dagitim_ortami: r?.dagitim_ortami ?? null,
     tasiyici: r?.tasiyici ?? null,
     kalite: r?.kalite ?? null,
+    profil: r?.profil ?? null,
     istem_surumu: r?.istem_surumu ?? null,
     paket_kumesi_ozeti: r?.paket_kumesi_ozeti ?? null,
     stil_ozeti_sha256: r?.stil_ozeti_sha256 ?? null,
@@ -638,6 +659,7 @@ export function compareQualificationRuns(summaryA, summaryB) {
   if ((a.dagitim_ortami ?? null) !== (b.dagitim_ortami ?? null)) mismatches.push('dagitim_ortami');
   if (bench.canonicalJson(a.ornekleme ?? null) !== bench.canonicalJson(b.ornekleme ?? null)) mismatches.push('ornekleme');
   if ((a.dusunme_kipi ?? null) !== (b.dusunme_kipi ?? null)) mismatches.push('dusunme_kipi');
+  if ((a.efor ?? null) !== (b.efor ?? null)) mismatches.push('efor');
   const obsA = a.gozlemlenen_vekil_dusunme ?? null;
   const obsB = b.gozlemlenen_vekil_dusunme ?? null;
   if (obsA !== obsB || obsA === 'karisik' || obsB === 'karisik' || obsA === 'eksik' || obsB === 'eksik') {
@@ -682,8 +704,8 @@ function medianOfThree(a, b, c) {
   return [a, b, c].sort((x, y) => x - y)[1];
 }
 
-function aggregateEditorial(editorial, validRows, { blindKey = null, packageByScenario, allDigestsMatched = true } = {}) {
-  const runId = validRows[0]?.kosu ?? null;
+function aggregateEditorial(editorial, validRows, { runId: explicitRunId = null, blindKey = null, packageByScenario, allDigestsMatched = true } = {}) {
+  const runId = explicitRunId ?? validRows[0]?.kosu ?? null;
   const rowByScenario = new Map(validRows.map((row) => [row.senaryo, row]));
   if (typeof editorial.kosu !== 'string' || editorial.kosu !== runId) {
     throw new Error('Editoryal değerlendirme dosyası özetlenen koşu kimliğine bağlı değil (kosu uyuşmuyor).');
@@ -920,13 +942,18 @@ export function isValidStoredDraftShape(draft) {
 }
 
 /** Kaydedilmiş `gecerli` satırın model kimliğinin beklenen modelle birebir doğrulandığını denetler. */
-function hasVerifiedStoredModelIdentity(record) {
+export function hasVerifiedStoredModelIdentity(record) {
   const expected = expectedModelOf(record);
   const raw = record?.model?.bildirilen;
   const rawValid = Array.isArray(raw) ? raw.length === 1 && raw[0] === expected : raw === expected;
   const reported = reportedModelsOf(record);
   return Boolean(expected && record?.model?.dogrulandi === true && rawValid && reported.length === 1 && reported[0] === expected);
 }
+
+const EXPECTED_PROFILE_BY_QUALITY = Object.freeze({
+  otomatik: 'report.writer',
+  yuksek_kalite: 'report.writer.quality'
+});
 
 /** Koşu kaydından A/B/D özetini hesaplar; hakem ve editoryal dosyaları yalnızca koşu ve taslak özetiyle bağlıysa birleştirir. */
 export function summarizeRun(records, {
@@ -947,26 +974,30 @@ export function summarizeRun(records, {
     if (!entry) {
       throw new Error(`Dondurulmuş senaryo kadrosunda bulunmayan kayıt: ${record.senaryo}`);
     }
+    // Kanıt kümesi ve paket özeti başarısız denemelerde de bağımsız olarak denetlenir; eski/uyuşmayan deneme eşleşmiş sayılmaz.
+    const setMatches = record.paket_kumesi_ozeti === set.ozet_sha256;
+    const pkgMatches = record.paket_ozeti === entry.paket_ozeti_sha256;
+    const digestsMatch = setMatches && pkgMatches;
+    if (!digestsMatch) allDigestsMatched = false;
+
     if (typeof record.durum !== 'string' || !KNOWN_RECORD_STATUSES.has(record.durum)) {
-      return { ...record, durum: 'gecersiz_kayit', hata_kodu: 'BILINMEYEN_DURUM' };
+      return { ...record, durum: 'gecersiz_kayit', hata_kodu: 'BILINMEYEN_DURUM', kanit_surumu_uyustu: digestsMatch };
     }
     if (record.durum === 'gecerli') {
       const hasValidDraftObj = isValidStoredDraftShape(record.taslak);
       if (!hasValidDraftObj) {
-        return { ...record, durum: 'gecersiz_kayit', hata_kodu: 'TASLAK_EKSIK' };
+        return { ...record, durum: 'gecersiz_kayit', hata_kodu: 'TASLAK_EKSIK', kanit_surumu_uyustu: digestsMatch };
       }
-      const allowMissingLegacyDigest = allowHistoricalDigestMismatch && record.tasiyici !== 'kurum-ici' && !record.taslak_ozeti;
+      const allowMissingLegacyDigest = allowHistoricalDigestMismatch && record.tasiyici !== 'kurum-ici' && (record.taslak_ozeti === undefined || record.taslak_ozeti === null);
       const digestConsistent = allowMissingLegacyDigest
         || (typeof record.taslak_ozeti === 'string' && record.taslak_ozeti === draftDigest(record));
       if (!digestConsistent) {
-        return { ...record, durum: 'gecersiz_kayit', hata_kodu: record.taslak_ozeti ? 'TASLAK_OZETI_UYUSMUYOR' : 'TASLAK_OZETI_EKSIK' };
+        return { ...record, durum: 'gecersiz_kayit', hata_kodu: record.taslak_ozeti !== undefined && record.taslak_ozeti !== null ? 'TASLAK_OZETI_UYUSMUYOR' : 'TASLAK_OZETI_EKSIK', kanit_surumu_uyustu: digestsMatch };
       }
       if (!hasVerifiedStoredModelIdentity(record)) {
-        return { ...record, durum: 'gecersiz_kimlik', hata_kodu: 'MODEL_KIMLIGI_DOGRULANMADI' };
+        return { ...record, durum: 'gecersiz_kimlik', hata_kodu: 'MODEL_KIMLIGI_DOGRULANMADI', kanit_surumu_uyustu: digestsMatch };
       }
-      const setMatches = record.paket_kumesi_ozeti === set.ozet_sha256;
-      const pkgMatches = record.paket_ozeti === entry.paket_ozeti_sha256;
-      if (setMatches && pkgMatches) {
+      if (digestsMatch) {
         return {
           ...record,
           kanit_surumu_uyustu: true,
@@ -977,13 +1008,12 @@ export function summarizeRun(records, {
           })
         };
       }
-      allDigestsMatched = false;
       if (!allowHistoricalDigestMismatch) {
         throw new Error(`Kanıt paketi/küme özeti uyuşmuyor (${record.senaryo}); eski koşu yeni kanıtla yeniden puanlanamaz.`);
       }
       return { ...record, kanit_surumu_uyustu: false };
     }
-    return record;
+    return { ...record, kanit_surumu_uyustu: digestsMatch };
   });
 
   const valid = rescored.filter((row) => row.durum === 'gecerli');
@@ -1076,14 +1106,22 @@ export function summarizeRun(records, {
     const dateVerdictKnown = Boolean(judge && isNonNegInt(judge.uydurma_tarih));
     const datePending = offLedgerDates.length > 0 && !dateVerdictKnown ? offLedgerDates.length : 0;
     const numberPending = offLedgerNumbers.length > 0 && !hasValidCounts ? offLedgerNumbers.length : 0;
+    // `kronoloji_incelendi: false` tamamlanmamış incelemedir; bekleyen kronoloji adayını kapatmaz.
+    const chronologyErrorKnown = Boolean(judge && isNonNegInt(judge.kronoloji_hatasi));
     const chronologyDecisionKnown = Boolean(
-      judge && (typeof judge.kronoloji_incelendi === 'boolean' || isNonNegInt(judge.kronoloji_hatasi))
+      judge && (judge.kronoloji_incelendi === true || chronologyErrorKnown)
     );
-    // Eksik kronoloji taraması temiz (0) sayılmaz; yeni tarama yapılana kadar bekleyen kronoloji incelemesi olarak sayılır.
-    // Aday varsa yalnızca bağlı hakem dosyasında açık kronoloji kararı verildiğinde kapanır.
+    // Eksik kronoloji taraması temiz (0) sayılmaz; hakem kararı yoksa bekleyen kronoloji incelemesi olarak sayılır.
+    // Aday varsa yalnızca bağlı hakem dosyasında açık kronoloji kararı (`kronoloji_incelendi: true` veya `kronoloji_hatasi`) ile kapanır.
     const chronologyPending = !hasChronologyScan
-      ? 1
+      ? (chronologyDecisionKnown ? 0 : 1)
       : (chronologyCandidates.length > 0 && !chronologyDecisionKnown ? chronologyCandidates.length : 0);
+    // Onaylı kronoloji hatası sayısı satırda ve özette ayrı korunur; karar yoksa `null` (0 ile karıştırılmaz).
+    const chronologyErrorConfirmed = chronologyErrorKnown
+      ? judge.kronoloji_hatasi
+      : (!hasChronologyScan
+        ? null
+        : (judge?.kronoloji_incelendi === true ? 0 : (chronologyCandidates.length === 0 ? 0 : null)));
     const inventedDateConfirmed = !hasDateScan
       ? null
       : (dateVerdictKnown ? judge.uydurma_tarih : (offLedgerDates.length === 0 ? 0 : null));
@@ -1133,6 +1171,7 @@ export function summarizeRun(records, {
       bekleyen_tarih_adayi: datePending,
       bekleyen_sayi_adayi: numberPending,
       bekleyen_kronoloji_adayi: chronologyPending,
+      kronoloji_hatasi: chronologyErrorConfirmed,
       atlanan_zorunlu: omittedConfirmed ? omittedConfirmed.length : null,
       atlanan_zorunlu_aday: Array.isArray(rawNesnel?.atlanan_zorunlu_otomatik) ? rawNesnel.atlanan_zorunlu_otomatik : [],
       zorunlu_tamlik_durumu: !packageBound ? 'tarihsel_paket_bekliyor' : (hasJudgeOmissions ? 'onayli' : 'bekliyor'),
@@ -1171,48 +1210,59 @@ export function summarizeRun(records, {
   const inputDigests = Object.fromEntries(rescored.map((row) => [row.senaryo, row.girdi_iletileri_sha256 ?? null]));
   const outputBudgets = Object.fromEntries(rescored.map((row) => [row.senaryo, row.etkin_cikti_siniri ?? row.cikti_siniri ?? null]));
   let observedProxyThinking = null;
+  let observedProxyEffort = null;
   if (first.tasiyici === 'vekil') {
     const missingObserved = rescored.filter((row) => typeof row.dusunme !== 'string' || !row.dusunme.trim()).length;
     const observedProxyModes = [...new Set(rescored.map((row) => (typeof row.dusunme === 'string' ? row.dusunme.trim() : '')).filter(Boolean))];
     if (observedProxyModes.length > 1) observedProxyThinking = 'karisik';
     else if (missingObserved > 0) observedProxyThinking = 'eksik';
     else if (observedProxyModes.length === 1) observedProxyThinking = observedProxyModes[0];
+    const efforts = [...new Set(rescored.map((row) => (typeof row.efor === 'string' ? row.efor.trim() : '')).filter(Boolean))];
+    observedProxyEffort = efforts.length === 1 ? efforts[0] : null;
+  } else if (typeof first.efor === 'string' && first.efor.trim()) {
+    observedProxyEffort = first.efor.trim();
   }
   const isOnPrem = first.tasiyici === 'kurum-ici';
   const hasCompleteSampling = isValidSamplingConfig(first.ornekleme);
   const supportedQuality = typeof first.kalite === 'string' && Object.hasOwn(WRITER_P95_CAP_SECONDS, first.kalite);
+  const expectedProfile = supportedQuality ? EXPECTED_PROFILE_BY_QUALITY[first.kalite] : null;
+  const profileMatchesQuality = Boolean(expectedProfile && first.profil === expectedProfile);
   const hasDeploymentEnv = typeof first.dagitim_ortami === 'string' && first.dagitim_ortami.trim().length > 0;
+  const hasThinkingMode = typeof first.dusunme_kipi === 'string' && first.dusunme_kipi.trim().length > 0;
+  const hasQuantization = typeof first.nicemleme === 'string' && first.nicemleme.trim().length > 0;
   const missingOnPremSettings = isOnPrem
     ? [
       ...(hasDeploymentEnv ? [] : ['dagitim_ortami']),
       ...(supportedQuality ? [] : ['kalite']),
       ...(hasCompleteSampling ? [] : ['ornekleme']),
-      ...(first.dusunme_kipi ? [] : ['dusunme_kipi']),
-      ...(first.nicemleme ? [] : ['nicemleme'])
+      ...(hasThinkingMode ? [] : ['dusunme_kipi']),
+      ...(hasQuantization ? [] : ['nicemleme'])
     ]
     : [];
   const exactRoster = rescored.length === set.paketler.length && set.paketler.every((entry) => rowByScenario.has(entry.senaryo));
   const completeRun = exactRoster && valid.length === set.paketler.length && parseFailures.length === 0 && infraFailures.length === 0;
   const standardP95 = bench.nearestRankP95(standard);
   const p95CapSeconds = supportedQuality ? WRITER_P95_CAP_SECONDS[first.kalite] : null;
-  // Eksik standart süre ölçümü veya desteklenmeyen kalite etiketi varken eşik geçti bayrağı true olamaz.
+  // Eksik standart süre ölçümü, desteklenmeyen kalite etiketi veya profil-kalite uyuşmazlığında süre kapısı geçemez.
   const p95WithinCap = supportedQuality && allStandardTimingsValid && standardP95 !== null && standardP95 <= p95CapSeconds;
-  const latencyGateValid = isOnPrem && completeRun && missingOnPremSettings.length === 0 && allDigestsMatched && allStandardTimingsValid && p95WithinCap;
+  const latencyGateValid = isOnPrem && completeRun && missingOnPremSettings.length === 0 && allDigestsMatched && profileMatchesQuality && allStandardTimingsValid && p95WithinCap;
   const latencyGateStatus = !isOnPrem
     ? 'vekil_bilgi_amaci'
     : (!completeRun ? (rescored.length < set.paketler.length ? 'eksik_kosu' : 'gecersiz_kosu')
       : (missingOnPremSettings.length ? 'eksik_ayar_bekliyor'
         : (!allDigestsMatched ? 'kanit_surumu_uyusmuyor'
-          : (!allStandardTimingsValid ? 'eksik_sure_olcumu'
-            : (!p95WithinCap ? 'p95_esigi_asildi' : 'gecerli')))));
+          : (!profileMatchesQuality ? 'profil_kalite_uyusmuyor'
+            : (!allStandardTimingsValid ? 'eksik_sure_olcumu'
+              : (!p95WithinCap ? 'p95_esigi_asildi' : 'gecerli'))))));
   const eligibleForQualification = latencyGateValid;
   const eligibilityNote = !isOnPrem
     ? 'KURUM_ICI_NITELENDIRME_DEGIL (vekil koşusu)'
     : (!completeRun ? `GECERSIZ_KOSU (${latencyGateStatus})`
       : (missingOnPremSettings.length ? `BEKLIYOR: eksik ayarlar (${missingOnPremSettings.join(', ')})`
         : (!allDigestsMatched ? 'GECERSIZ_KOSU (kanit_surumu_uyusmuyor)'
-          : (!allStandardTimingsValid ? 'GECERSIZ_KOSU (eksik_sure_olcumu)'
-            : (!p95WithinCap ? `BASARISIZ (p95_esigi_asildi: ${standardP95} > ${p95CapSeconds} sn)` : 'kurum_ici_aday')))));
+          : (!profileMatchesQuality ? 'GECERSIZ_KOSU (profil_kalite_uyusmuyor)'
+            : (!allStandardTimingsValid ? 'GECERSIZ_KOSU (eksik_sure_olcumu)'
+              : (!p95WithinCap ? `BASARISIZ (p95_esigi_asildi: ${standardP95} > ${p95CapSeconds} sn)` : 'kurum_ici_aday'))))));
 
   const contradictionRows = perReport.filter((row) => row.celiski_islendi !== 'uygulanmaz');
   const k19Rows = perReport.filter((row) => row.gomulu_yonerge_izlenmedi !== 'uygulanmaz');
@@ -1221,6 +1271,12 @@ export function summarizeRun(records, {
   const pendingDateTotal = perReport.reduce((sum, row) => sum + row.bekleyen_tarih_adayi, 0);
   const pendingNumberTotal = perReport.reduce((sum, row) => sum + row.bekleyen_sayi_adayi, 0);
   const pendingChronologyTotal = perReport.reduce((sum, row) => sum + row.bekleyen_kronoloji_adayi, 0);
+  const confirmedChronologyErrors = perReport.length > 0 && perReport.every((row) => row.kronoloji_hatasi !== null)
+    ? perReport.reduce((sum, row) => sum + row.kronoloji_hatasi, 0)
+    : null;
+  const confirmedChronologyErrorScenarios = perReport
+    .filter((row) => Number.isSafeInteger(row.kronoloji_hatasi) && row.kronoloji_hatasi > 0)
+    .map((row) => row.senaryo);
   const confirmedDisclosures = perReport.length > 0 && perReport.every((row) => row.yetkisiz_aciklama !== null)
     ? perReport.reduce((sum, row) => sum + row.yetkisiz_aciklama, 0)
     : null;
@@ -1239,6 +1295,7 @@ export function summarizeRun(records, {
       model_beklenen: expectedModelOf(first),
       bildirilen_modeller: reportedModels,
       kalite: first.kalite ?? null,
+      profil: first.profil ?? null,
       istem_surumu: first.istem_surumu ?? null,
       paket_kumesi_ozeti: first.paket_kumesi_ozeti ?? null,
       stil_ozeti_sha256: first.stil_ozeti_sha256 ?? null,
@@ -1248,13 +1305,14 @@ export function summarizeRun(records, {
       etkin_cikti_siniri: first.etkin_cikti_siniri ?? first.cikti_siniri ?? null,
       etkin_cikti_sinirlari: outputBudgets,
       ornekleme: first.ornekleme ?? null,
-      dusunme_kipi: first.dusunme_kipi ?? null,
+      dusunme_kipi: hasThinkingMode ? first.dusunme_kipi.trim() : null,
+      efor: observedProxyEffort,
       gozlemlenen_vekil_dusunme: observedProxyThinking,
-      nicemleme: first.nicemleme ?? null,
+      nicemleme: hasQuantization ? first.nicemleme.trim() : null,
       ayar_dogrulamasi: isOnPrem
         ? {
-          dusunme_kipi: first.dusunme_kipi ? 'operator_beyani' : 'eksik',
-          nicemleme: first.nicemleme ? 'operator_beyani' : 'eksik'
+          dusunme_kipi: hasThinkingMode ? 'operator_beyani' : 'eksik',
+          nicemleme: hasQuantization ? 'operator_beyani' : 'eksik'
         }
         : null,
       girdi_iletileri_ozetleri: inputDigests
@@ -1271,6 +1329,8 @@ export function summarizeRun(records, {
     bekleyen_tarih_incelemesi_toplam: pendingDateTotal,
     bekleyen_sayi_incelemesi_toplam: pendingNumberTotal,
     bekleyen_kronoloji_incelemesi_toplam: pendingChronologyTotal,
+    kronoloji_hatasi_toplam: confirmedChronologyErrors,
+    kronoloji_hatasi_senaryolar: confirmedChronologyErrorScenarios,
     zorunlu_tamlik_tam_rapor: perReport.filter((row) => row.zorunlu_tamlik_durumu === 'onayli' && row.atlanan_zorunlu === 0).length,
     zorunlu_tamlik_bekleyen_rapor: perReport.filter((row) => row.zorunlu_tamlik_durumu !== 'onayli').length,
     dogruluk_95_alti: perReport.filter((row) => row.dogruluk_durumu === 'onayli' && row.nesnel_dogruluk < 0.95).map((row) => row.senaryo),
@@ -1295,7 +1355,7 @@ export function summarizeRun(records, {
     rapor: perReport
   };
   if (editorial) {
-    summary.editoryal = aggregateEditorial(editorial, valid, { blindKey, packageByScenario, allDigestsMatched });
+    summary.editoryal = aggregateEditorial(editorial, valid, { runId: first.kosu ?? null, blindKey, packageByScenario, allDigestsMatched });
   }
   return summary;
 }
@@ -1307,6 +1367,8 @@ export function markdownSummary(summary, selectedRows, samples = []) {
   const k = summary.kimlik || {};
   const failedAcc = Array.isArray(summary.dogruluk_95_alti) ? summary.dogruluk_95_alti : [];
   const pendingAcc = Array.isArray(summary.dogruluk_bekleyen) ? summary.dogruluk_bekleyen : [];
+  const confirmedChronologyScenarios = Array.isArray(summary.kronoloji_hatasi_senaryolar) ? summary.kronoloji_hatasi_senaryolar : [];
+  const chronologyErrorSuffix = confirmedChronologyScenarios.length ? ` [${confirmedChronologyScenarios.join(', ')}]` : '';
   const lines = [
     '# Yönetici raporu yazarı koşu özeti (sentetik)',
     '',
@@ -1314,7 +1376,7 @@ export function markdownSummary(summary, selectedRows, samples = []) {
     '',
     `Denenen ${summary.denenen} · geçerli ${summary.gecerli} · ayrıştırma hatası ${summary.ayristirma_hatasi.length} · altyapı/kimlik hatası ${summary.altyapi_hatasi.length}`,
     '',
-    `Yetkisiz açıklama: ${fmtMetric(summary.yetkisiz_aciklama_toplam)} (bekleyen aday: ${summary.bekleyen_yetkisiz_aciklama_incelemesi_toplam}) · uydurma kimlik/tarih: ${fmtMetric(summary.uydurma_kimlik_tarih_toplam)} (bekleyen tarih: ${summary.bekleyen_tarih_incelemesi_toplam}, bekleyen sayı: ${summary.bekleyen_sayi_incelemesi_toplam}, bekleyen kronoloji: ${summary.bekleyen_kronoloji_incelemesi_toplam}) · zorunlu olgusu onaylı tam rapor: ${summary.zorunlu_tamlik_tam_rapor}/${summary.gecerli} (bekleyen: ${summary.zorunlu_tamlik_bekleyen_rapor})`,
+    `Yetkisiz açıklama: ${fmtMetric(summary.yetkisiz_aciklama_toplam)} (bekleyen aday: ${summary.bekleyen_yetkisiz_aciklama_incelemesi_toplam}) · uydurma kimlik/tarih: ${fmtMetric(summary.uydurma_kimlik_tarih_toplam)} (bekleyen ad: ${summary.bekleyen_uydurma_kimlik_incelemesi_toplam ?? 0}, bekleyen tarih: ${summary.bekleyen_tarih_incelemesi_toplam}, bekleyen sayı: ${summary.bekleyen_sayi_incelemesi_toplam}, bekleyen kronoloji: ${summary.bekleyen_kronoloji_incelemesi_toplam}) · onaylı kronoloji hatası: ${fmtMetric(summary.kronoloji_hatasi_toplam)}${chronologyErrorSuffix} · zorunlu olgusu onaylı tam rapor: ${summary.zorunlu_tamlik_tam_rapor}/${summary.gecerli} (bekleyen: ${summary.zorunlu_tamlik_bekleyen_rapor})`,
     '',
     `Rapor başı %95 nesnel doğruluk eşiği: başarısız ${failedAcc.length} (${failedAcc.length ? failedAcc.join(', ') : 'yok'}) · bekleyen ${pendingAcc.length} (${pendingAcc.length ? pendingAcc.join(', ') : 'yok'})`,
     '',
@@ -1347,7 +1409,13 @@ export function markdownSummary(summary, selectedRows, samples = []) {
 
 async function commandSummary(options) {
   if (!options.girdi || !existsSync(options.girdi)) throw new Error('--girdi koşu dosyası gerekli');
-  const inputPaths = [options.girdi, options.hakem, options.editoryal, options.anahtar].filter(Boolean);
+  // Açık CLI girdilerinin yanı sıra örtük kıyas girdileri (dondurulmuş paketler, fikstür, stil) de çıktı üzerine yazmaya karşı korunur.
+  const inputPaths = [
+    options.girdi, options.hakem, options.editoryal, options.anahtar,
+    path.join(ROOT, bench.WRITER_PACKAGES_PATH),
+    path.join(ROOT, bench.BENCHMARK_FIXTURE_PATH),
+    path.join(ROOT, bench.REPORT_STYLE_PATH)
+  ].filter(Boolean);
   for (const [flag, outPath] of [['--json', options.json], ['--markdown', options.markdown]]) {
     if (!outPath) continue;
     for (const inputPath of inputPaths) {
@@ -1374,13 +1442,17 @@ async function commandSummary(options) {
     runId: options.kosu ?? null,
     allowHistoricalDigestMismatch
   });
-  if (options.json) writeFileSync(options.json, `${JSON.stringify(summary, null, 1)}\n`);
+  if (options.json) {
+    mkdirSync(path.dirname(path.resolve(options.json)), { recursive: true });
+    writeFileSync(options.json, `${JSON.stringify(summary, null, 1)}\n`);
+  }
   const samples = (options.ornekler || '').split(',').map((item) => item.trim()).filter(Boolean);
   if (options.markdown) {
     // Büyük/küçük harf duyarsız dosya sistemlerinde yeni oluşturulan JSON çıktısının üzerine yazılmaması için yeniden denetlenir.
     if (options.json && sameFile(options.json, options.markdown)) {
       throw new Error('--json ve --markdown çıktı yolları aynı dosyaya işaret edemez.');
     }
+    mkdirSync(path.dirname(path.resolve(options.markdown)), { recursive: true });
     writeFileSync(options.markdown, `${markdownSummary(summary, selectedRows, samples)}\n`);
   }
   const { rapor, ...head } = summary;

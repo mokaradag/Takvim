@@ -1552,18 +1552,35 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
 
 /**
  * Aşama 4I-A — Seçili FULL erişimli projelerin bağımlılıklarını tek sınırlı sorguda okur.
- * READ ve PARTIAL projeler hiçbir zaman bağımlılık döndürmez; görev kimliği süzgeci verildiyse
- * `TOP (@maxRows)` sınırından ÖNCE uygulanır.
+ * READ ve PARTIAL projeler hiçbir zaman bağımlılık döndürmez; görev kimliği süzgeci ve veri kesiti
+ * (`@cutOffUtc`) `TOP (@maxRows)` sınırından ÖNCE uygulanır. Kesit sonrası eklenen veya güncellenen
+ * bağlantılar dışlanır ve ikinci sonuç kümesinde `HasPostCutoffChange` olarak bildirilir.
  */
 export const AI_TOOL_REPORT_DEPENDENCIES_SQL = `/* rota-ai-tool:report-dependencies */
 ${SCOPE_PROJECTS}
-  SELECT TOP (@maxRows) d.ProjectId, d.TaskId, d.PredecessorTaskId, d.DependencyType, d.LagDays, d.LagValue, d.LagUnit
+  SELECT TOP (@maxRows) d.ProjectId, d.TaskId, d.PredecessorTaskId, d.DependencyType, d.LagDays, d.LagValue, d.LagUnit, d.CreatedAt, d.UpdatedAt
   FROM dbo.MR_TaskDependencies d
   JOIN #AiScopeProjects v ON v.ProjectId = d.ProjectId AND v.AccessLevel = 'FULL'
   WHERE (@AiTaskFilterActive = 0
     OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.TaskId)
     OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.PredecessorTaskId))
+    AND (@cutOffUtc IS NULL OR (
+      (d.CreatedAt IS NULL OR d.CreatedAt <= @cutOffUtc)
+      AND (d.UpdatedAt IS NULL OR d.UpdatedAt <= @cutOffUtc)
+    ))
   ORDER BY d.ProjectId, d.TaskId, d.PredecessorTaskId;
+  SELECT CAST(CASE WHEN @cutOffUtc IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM dbo.MR_TaskDependencies d
+    JOIN #AiScopeProjects v ON v.ProjectId = d.ProjectId AND v.AccessLevel = 'FULL'
+    WHERE (@AiTaskFilterActive = 0
+      OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.TaskId)
+      OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.PredecessorTaskId))
+      AND (
+        (d.CreatedAt IS NOT NULL AND d.CreatedAt > @cutOffUtc)
+        OR (d.UpdatedAt IS NOT NULL AND d.UpdatedAt > @cutOffUtc)
+      )
+  ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffChange;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**

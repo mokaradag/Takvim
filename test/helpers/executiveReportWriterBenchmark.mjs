@@ -40,11 +40,21 @@ export function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
 }
 
-/** Kanonik JSON (anahtarlar sıralı): paket özeti alan sırasından bağımsızdır. */
+/** Kanonik JSON (anahtarlar sıralı): paket özeti alan sırasından bağımsızdır ve JSON.stringify ile gidiş-dönüş tutarlıdır. */
 export function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (Array.isArray(value)) {
+    return `[${Array.from(value, (item) => (
+      item === undefined || typeof item === 'function' || typeof item === 'symbol'
+        ? 'null'
+        : canonicalJson(item)
+    )).join(',')}]`;
+  }
   if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+    const entries = Object.keys(value)
+      .filter((key) => value[key] !== undefined && typeof value[key] !== 'function' && typeof value[key] !== 'symbol')
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
+    return `{${entries.join(',')}}`;
   }
   return JSON.stringify(value);
 }
@@ -200,15 +210,15 @@ export function verifyWriterPackageSet(set, fixture) {
     return Boolean(aliasMatch && projectBaseLabels.has(aliasMatch[1]));
   };
   for (const entry of packages) {
-    if (entry.paket_ozeti_sha256 !== sha256(canonicalJson(entry.paket))) {
-      problems.push(`paket_ozeti_uyusmuyor:${entry.senaryo}`);
+    const contract = validateEvidencePackageContract(entry?.paket);
+    if (!contract.ok) problems.push(`kanit_zarfi_gecersiz:${entry?.senaryo}`);
+    if (entry?.paket !== undefined && typeof entry.paket !== 'function' && typeof entry.paket !== 'symbol') {
+      if (entry.paket_ozeti_sha256 !== sha256(canonicalJson(entry.paket))) {
+        problems.push(`paket_ozeti_uyusmuyor:${entry?.senaryo}`);
+      }
     }
-    const contract = validateEvidencePackageContract(entry.paket);
-    if (!contract.ok) {
-      problems.push(`kanit_zarfi_gecersiz:${entry.senaryo}`);
-    }
-    if (!Array.isArray(entry.zorunlu_olgular)) {
-      problems.push(`zorunlu_olgular_gecersiz:${entry.senaryo}`);
+    if (!Array.isArray(entry?.zorunlu_olgular)) {
+      problems.push(`zorunlu_olgular_gecersiz:${entry?.senaryo}`);
     } else {
       for (const fact of entry.zorunlu_olgular) {
         const validGroups = Boolean(
@@ -221,12 +231,14 @@ export function verifyWriterPackageSet(set, fixture) {
         if (!validGroups) problems.push(`zorunlu_olgu_gecersiz:${entry.senaryo}`);
       }
     }
-    if (!Array.isArray(entry.yetkisiz_varliklar)
+    if (!Array.isArray(entry?.yetkisiz_varliklar)
       || entry.yetkisiz_varliklar.some((name) => typeof name !== 'string' || !name.trim())) {
-      problems.push(`yetkisiz_varliklar_gecersiz:${entry.senaryo}`);
+      problems.push(`yetkisiz_varliklar_gecersiz:${entry?.senaryo}`);
     }
-    for (const name of properNamesIn(entry.paket)) {
-      if (!isRecognizedSyntheticName(name)) problems.push(`sentetik_olmayan_ad:${entry.senaryo}`);
+    if (entry?.paket && typeof entry.paket === 'object') {
+      for (const name of properNamesIn(entry.paket)) {
+        if (!isRecognizedSyntheticName(name)) problems.push(`sentetik_olmayan_ad:${entry.senaryo}`);
+      }
     }
   }
   return [...new Set(problems)];
@@ -243,12 +255,12 @@ export function syntheticRoster(fixture) {
   ]);
 }
 
-const NAME_FIELDS = new Set(['proje', 'proje_adi', 'sorumlu', 'ekip', 'mudurluk', 'birim', 'direktorluk']);
+const NAME_FIELDS = new Set(['proje', 'proje_adi', 'tamamlandigi_proje', 'sorumlu', 'ekip', 'mudurluk', 'birim', 'direktorluk']);
 
-/** Paketin yapılandırılmış ad alanlarındaki özel adlar (metin alanları hariç; onlar kullanıcı verisidir). */
+/** Paketin (ham veya yazar-görünür izdüşümün) yapılandırılmış ad alanlarındaki özel adlar (metin alanları hariç). */
 export function properNamesIn(pkg) {
   const names = new Set();
-  const scopeIds = pkg?.istek?.kapsam?.kimlikler;
+  const scopeIds = pkg?.istek?.kapsam?.kimlikler ?? pkg?.header?.istek?.kapsam?.kimlikler;
   if (Array.isArray(scopeIds)) {
     for (const id of scopeIds) {
       if (typeof id === 'string') names.add(id);
@@ -268,6 +280,7 @@ export function properNamesIn(pkg) {
     }
   };
   visit(pkg?.kanitlar);
+  visit(pkg?.turetilmis);
   return names;
 }
 
@@ -296,21 +309,47 @@ const MONTHS = ['ocak', 'şubat', 'mart', 'nisan', 'mayis', 'haziran', 'temmuz',
 const MONTH_ALT = MONTHS.join('|');
 const BIR_BEFORE_MONTH_PATTERN = new RegExp(`(?<=[\\s(])bir(?=\\s+(?:${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?=[\\s.,;:)']))`, 'gu');
 
-/** Birleşik Türkçe sayı öbeklerini ("yüz yirmi" → 120, "on iki" → 12) tek sayı olarak çözer; tek başına "bir" korunur. */
+/**
+ * Birleşik Türkçe sayı öbeklerini ("yüz yirmi" → 120, "on iki" → 12) tek sayı olarak çözer;
+ * yaklaşık aralıkları ("bir iki", "iki üç", "yirmi otuz") ve geçersiz basamak tekrarlarını reddeder (`null`).
+ */
 function parseTurkishNumberPhrase(tokens) {
+  if (!tokens.length) return null;
+  if (tokens.length === 1 && tokens[0] === 'sifir') return 0;
   let total = 0;
   let current = 0;
+  let usedThousand = false;
+  let hasHundred = false;
+  let hasTen = false;
+  let hasUnit = false;
   for (const token of tokens) {
     if (Object.hasOwn(TURKISH_UNITS, token)) {
-      if (token === 'sifir' && tokens.length > 1) return null;
+      if (token === 'sifir') return null;
+      // Birler basamağı aynı binlik grupta yinelenemez ("bir iki", "iki üç").
+      if (hasUnit) return null;
       current += TURKISH_UNITS[token];
+      hasUnit = true;
     } else if (Object.hasOwn(TURKISH_TENS, token)) {
+      // Onlar basamağı başka bir onlar ya da birler basamağından sonra gelemez ("yirmi otuz", "beş on").
+      if (hasTen || hasUnit) return null;
       current += TURKISH_TENS[token];
+      hasTen = true;
     } else if (token === 'yüz') {
-      current = (current === 0 ? 1 : current) * 100;
+      // Yüzler basamağı aynı grupta yinelenemez ve onlar basamağından sonra gelemez ("on yüz", "yüz iki yüz");
+      // "bir yüz" doğal Türkçe sayı değildir.
+      if (hasHundred || hasTen || (hasUnit && current === 1)) return null;
+      current = (hasUnit ? current : 1) * 100;
+      hasHundred = true;
+      hasUnit = false;
     } else if (token === 'bin') {
+      // Binler basamağı yinelenemez ve "bir bin" standart Türkçe sayı değildir.
+      if (usedThousand || (!hasHundred && !hasTen && hasUnit && current === 1)) return null;
       total += (current === 0 ? 1 : current) * 1000;
       current = 0;
+      usedThousand = true;
+      hasHundred = false;
+      hasTen = false;
+      hasUnit = false;
     } else {
       return null;
     }
@@ -520,15 +559,17 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null, maskHor
   return [...new Set(numbers)];
 }
 
-/** Paketteki bütün geçerli tarih değerleri (kanıt alanları, dönem sınırları, İstanbul gününe çevrilmiş veri anı/termin, notlar). */
+/** Paketteki bütün geçerli tarih değerleri (kanıt alanları, dönem sınırları, İstanbul gününe çevrilmiş tüm zaman damgaları, notlar). */
 export function packageDates(pkg) {
   const days = new Set();
-  const rootSnapshotDay = snapshotBusinessDay(pkg?.veri_ani);
-  const defaultYear = Number(String(rootSnapshotDay ?? pkg?.veri_ani ?? '2026').slice(0, 4)) || 2026;
+  const rootVeriAni = pkg?.veri_ani ?? pkg?.header?.veri_ani;
+  const rootSnapshotDay = snapshotBusinessDay(rootVeriAni);
+  const defaultYear = Number(String(rootSnapshotDay ?? rootVeriAni ?? '2026').slice(0, 4)) || 2026;
   const visit = (value, key = '') => {
     if (typeof value === 'string') {
-      // `veri_ani` ve zaman damgalı `hedef_bitis` alanları yazar bölüm planıyla tutarlı olarak İstanbul takvim gününe çevrilir.
-      if (key === 'veri_ani' || key === 'hedef_bitis') {
+      // Tüm saat dilimli ISO zaman damgaları (`veri_ani`, `hedef_bitis`, `gerceklesen_bitis`, `kayit_zamani`, `kronoloji` vb.)
+      // yazar bölüm planıyla tutarlı biçimde Europe/Istanbul takvim gününe çevrilir; UTC tarih öneki yanlışlıkla eklenmez.
+      if (key !== 'metin') {
         const istanbulDay = snapshotBusinessDay(value);
         if (istanbulDay) {
           days.add(istanbulDay);
@@ -627,31 +668,42 @@ export function mandatoryCoverage(prose, mandatory = [], draft = null, defaultYe
   });
 }
 
-function matchesUnauthorizedEntity(normText, rawName) {
-  const needle = normalizeProse(rawName).trim();
+function matchesUnauthorizedEntity(rawProse, normText, rawName) {
+  const trimmed = String(rawName ?? '').trim();
+  const needle = normalizeProse(trimmed).trim();
   if (!needle) return false;
   // Proje kodu gibi tireli belirteçlerde tire de belirteç parçasıdır (`PRJ-ATLAS-2`, `PRJ-ATLAS` sayılmaz).
   if (/^[a-z0-9]+-[a-z0-9-]+$/iu.test(needle)) {
     return new RegExp(`(?<![\\p{L}\\p{N}-])${escapeRegex(needle)}(?![\\p{L}\\p{N}-])`, 'u').test(normText);
   }
-  // Çok sözcüklü görev/varlık adlarında Türkçe çekim ekleri ("Doruk erişim katmanının") de yakalanır.
-  if (needle.includes(' ')) {
+  // Çok sözcüklü görev/varlık adlarında veya alt çizgili kapalı belirteçlerde Türkçe çekim ekleri de yakalanır.
+  if (needle.includes(' ') || trimmed.includes('_')) {
     return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(needle)}(?:'?[\\p{L}]{1,8})?(?![\\p{L}\\p{N}])`, 'u').test(normText);
   }
-  // Tek sözcüklü adlarda kesme işaretli çekimler ("Atlas'ın", "Doruk'un") da yakalanır.
-  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(needle)}(?:'[\\p{L}]{1,8})?(?![\\p{L}\\p{N}])`, 'u').test(normText);
+  // Tek sözcüklü özel adlarda ("Doruk", "Denge" vb.) özgün metinde büyük harfle/tamamı büyük harfle anılma
+  // veya açık proje/ekip/birim bağlamı aranır; "doruk noktasında" gibi sıradan Türkçe sözcükler yanlış eşleşmez.
+  if (matchesInventedRosterEntity(rawProse, normText, trimmed)) return true;
+  return new RegExp(
+    `(?<![\\p{L}\\p{N}])${escapeRegex(needle)}(?:'[\\p{L}]{1,8})?\\s+(?:proje[\\p{L}]*|ekib[\\p{L}]*|ekip[\\p{L}]*|birim[\\p{L}]*|müdürlü[\\p{L}]*|kapsam[\\p{L}]*)(?![\\p{L}\\p{N}])`,
+    'u'
+  ).test(normText);
 }
 
 /**
  * Uydurma kimlik aday taraması: tek sözcüklü özel adlar (ör. "Denge" proje adı) küçük harfli sıradan
- * Türkçe sözcüklerle ("bu denge") yanlış eşleşmemesi için özgün metinde büyük harfle başlama veya
+ * Türkçe sözcüklerle ("bu denge", "dengelendi") yanlış eşleşmemesi için özgün metinde büyük harfle başlama veya
  * kesme işaretli özel ad çekimi (`Denge'de`) gerektirir; kodlar ve çok sözcüklü adlar harf duyarsız kalır.
  */
 function matchesInventedRosterEntity(rawProse, normText, rawName) {
   const trimmed = String(rawName ?? '').trim();
   if (!trimmed) return false;
   if (trimmed.includes(' ') || /^[a-z0-9]+-[a-z0-9-]+$/iu.test(trimmed)) {
-    return matchesUnauthorizedEntity(normText, trimmed);
+    const needle = normalizeProse(trimmed).trim();
+    if (!needle) return false;
+    if (/^[a-z0-9]+-[a-z0-9-]+$/iu.test(needle)) {
+      return new RegExp(`(?<![\\p{L}\\p{N}-])${escapeRegex(needle)}(?![\\p{L}\\p{N}-])`, 'u').test(normText);
+    }
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(needle)}(?:'?[\\p{L}]{1,8})?(?![\\p{L}\\p{N}])`, 'u').test(normText);
   }
   const normalizedProse = String(rawProse).normalize('NFC').replace(/[’']/gu, "'");
   const normalizedName = trimmed.normalize('NFC');
@@ -713,25 +765,29 @@ const EMBEDDED_INSTRUCTION_MARKERS = Object.freeze([
 export function assessDraftObjectively({ draft, pkg, fixture, mandatory = [], unauthorized = [], projected = null }) {
   const prose = draftProse(draft);
   const norm = normalizeProse(prose);
+  // Tarih, sayı ve varlık defterlerinin tamamı modele gerçekten iletilen yazar-görünür izdüşümden türetilir;
+  // kesit sonrası gizlenen görev alanları ve sunucu sınırları beyaz listeye alınmaz.
+  const writerVisible = projected ?? projectEvidencePackageForWriter(pkg);
   const roster = syntheticRoster(fixture);
-  const inPackage = new Set([...properNamesIn(pkg)]);
-  const packageText = normalizeProse(JSON.stringify(pkg.kanitlar));
+  const inPackage = new Set([...properNamesIn(writerVisible)]);
+  const rawPackageText = JSON.stringify([writerVisible.kanitlar, writerVisible.turetilmis]);
+  const normPackageText = normalizeProse(rawPackageText);
   const closed = new Set([...Object.keys(fixture.sentetik_kadro.kapali_varliklar), ...Object.values(fixture.sentetik_kadro.kapali_varliklar), ...unauthorized]);
-  const disclosures = [...closed].filter((name) => matchesUnauthorizedEntity(norm, name));
+  const disclosures = [...closed].filter((name) => matchesUnauthorizedEntity(prose, norm, name));
+  // Kadro adı pakette yalnızca alt dize ("dengelendi" içindeki "denge") olarak geçiyorsa varlık izni kazanmaz;
+  // yapılandırılmış ad alanlarında veya yazar-görünür kanıtta gerçek varlık anımı olarak yer almalıdır.
   const invented = [...roster].filter((name) => !closed.has(name) && !inPackage.has(name)
-    && !packageText.includes(normalizeProse(name).trim())
+    && !matchesInventedRosterEntity(rawPackageText, normPackageText, name)
     && matchesInventedRosterEntity(prose, norm, name));
-  const snapshotDay = snapshotBusinessDay(pkg.veri_ani);
-  const year = Number(String(snapshotDay ?? pkg.veri_ani).slice(0, 4));
-  const allowedDates = packageDates(pkg);
+  const snapshotDay = snapshotBusinessDay(writerVisible.header?.veri_ani ?? pkg.veri_ani);
+  const year = Number(String(snapshotDay ?? writerVisible.header?.veri_ani ?? pkg.veri_ani).slice(0, 4));
+  const allowedDates = packageDates(writerVisible);
   const dateAnalysis = extractDateAnalysis(prose, year, { includeInvalid: true });
   const dates = dateAnalysis.allDays;
   const unknownDates = [
     ...dateAnalysis.validDays.filter((day) => !allowedDates.has(day)),
     ...dateAnalysis.invalidDays
   ];
-  // Sayı defteri yalnızca modele görünür paket izdüşümünden kurulur; sunucu yürütme sınırları (ör. 120000) deftere girmez.
-  const writerVisible = projected ?? projectEvidencePackageForWriter(pkg);
   const allowedNumbers = new Set([...packageNumbers(writerVisible, year)]);
   const allowedYears = new Set([...allowedDates].map((day) => Number(day.slice(0, 4))));
   const numbers = extractTurkishNumbers(prose, year, { allowedYears, maskHorizonSeven: true });

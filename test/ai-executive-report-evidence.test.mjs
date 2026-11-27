@@ -5067,3 +5067,192 @@ test('proje etiket ayrıştırması: kanonik eşdeğer NFC ve NFD proje adları 
   });
 });
 
+test('kesit sonrası tamamlanma projesi: aynı projede sonradan düzenlenen görevde yetkili tamamlandigi_proje korunur, yetkisiz veya kayıtsız proje sızmaz', async () => {
+  const baseSeed = executiveReportBenchmarkSeed();
+  const sameProjectEditedId = '22222222-2222-4222-8222-222222221301';
+  const movedFromUnauthId = '22222222-2222-4222-8222-222222221302';
+  const missingAuditId = '22222222-2222-4222-8222-222222221303';
+  const unauthProjectId = '11111111-1111-4111-8111-111111111399';
+  const postCutoffTs = '2026-11-09T11:30:00.000Z';
+
+  await withReportStack({
+    projects: [
+      ...baseSeed.projects,
+      { ProjectId: unauthProjectId, SourceType: 'MANUAL', ProjectCode: 'PRJ-GIZLI', ProjectName: 'Gizli Proje', LeadSicil: U.DENIZ, IsActive: 1 }
+    ],
+    tasks: [
+      ...baseSeed.tasks,
+      {
+        TaskId: sameProjectEditedId, ProjectId: P.KUZEY, Title: 'Kesit sonrası başlığı güncellenen iş',
+        Status: 'done', Priority: 'high', ActualFinish: '2026-11-05',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: postCutoffTs
+      },
+      {
+        TaskId: movedFromUnauthId, ProjectId: P.KUZEY, Title: 'Yetkisiz projeden taşınan iş',
+        Status: 'done', Priority: 'normal', ActualFinish: '2026-11-06',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: postCutoffTs
+      },
+      {
+        TaskId: missingAuditId, ProjectId: P.KUZEY, Title: 'Denetim kaydı eksik iş',
+        Status: 'done', Priority: 'normal', ActualFinish: '2026-11-06',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: postCutoffTs
+      }
+    ],
+    auditLog: [
+      ...baseSeed.auditLog,
+      {
+        AuditId: 9301, OccurredAt: '2026-11-05T10:00:00.000Z',
+        ActorSicil: U.YONETICI, ActorDisplayName: 'Yönetici', ActionCode: 'UPDATE',
+        EntityType: 'TASK', EntityId: sameProjectEditedId, ProjectId: P.KUZEY,
+        CorrelationId: '65000000-0000-4000-8000-000000009301',
+        BeforeJson: JSON.stringify({ Status: 'in_progress', ProjectId: P.KUZEY }),
+        AfterJson: JSON.stringify({ Status: 'done', ProjectId: P.KUZEY, ActualFinish: '2026-11-05' })
+      },
+      {
+        AuditId: 9302, OccurredAt: postCutoffTs,
+        ActorSicil: U.YONETICI, ActorDisplayName: 'Yönetici', ActionCode: 'UPDATE',
+        EntityType: 'TASK', EntityId: sameProjectEditedId, ProjectId: P.KUZEY,
+        CorrelationId: '65000000-0000-4000-8000-000000009302',
+        BeforeJson: JSON.stringify({ Title: 'Eski başlık', Status: 'done', ProjectId: P.KUZEY }),
+        AfterJson: JSON.stringify({ Title: 'Kesit sonrası başlığı güncellenen iş', Status: 'done', ProjectId: P.KUZEY })
+      },
+      {
+        AuditId: 9303, OccurredAt: '2026-11-06T09:00:00.000Z',
+        ActorSicil: U.DENIZ, ActorDisplayName: 'Deniz Akalın', ActionCode: 'UPDATE',
+        EntityType: 'TASK', EntityId: movedFromUnauthId, ProjectId: unauthProjectId,
+        CorrelationId: '65000000-0000-4000-8000-000000009303',
+        BeforeJson: JSON.stringify({ Status: 'in_progress', ProjectId: unauthProjectId }),
+        AfterJson: JSON.stringify({ Status: 'done', ProjectId: unauthProjectId, ActualFinish: '2026-11-06' })
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    const sameRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === sameProjectEditedId);
+    assert.ok(sameRow, 'aynı projede sonradan düzenlenen görev kanıtta yer almalıdır');
+    assert.equal(sameRow.kesit_sonrasi_degisti, true);
+    assert.equal(sameRow.tamamlandigi_proje, 'PRJ-KUZEY');
+
+    const unauthRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === movedFromUnauthId);
+    assert.ok(unauthRow);
+    assert.equal(unauthRow.tamamlandigi_proje, undefined, 'yetkisiz tarihsel proje asla sızmamalıdır');
+    assert.equal(JSON.stringify(evidencePackage).includes('Gizli Proje'), false);
+    assert.equal(JSON.stringify(evidencePackage).includes('PRJ-GIZLI'), false);
+
+    const missingAuditRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === missingAuditId);
+    assert.ok(missingAuditRow);
+    assert.equal(missingAuditRow.tamamlandigi_proje, undefined, 'denetim kaydı olmadan tarihsel tamamlanma projesi uydurulmamalıdır');
+  });
+});
+
+test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya güncellenen kenarlar dışlanır ve kapsam partial olarak bildirilir', async () => {
+  const baseSeed = executiveReportBenchmarkSeed();
+  const depProjectId = '11111111-1111-4111-8111-111111111401';
+  const taskPreId = '22222222-2222-4222-8222-222222221401';
+  const taskMidId = '22222222-2222-4222-8222-222222221402';
+  const taskPostId = '22222222-2222-4222-8222-222222221403';
+  const unauthProjectId = '11111111-1111-4111-8111-111111111499';
+  const unauthTaskId = '22222222-2222-4222-8222-222222221499';
+  const preCutoffTs = '2026-11-04T08:00:00.000Z';
+  const postCutoffTs = '2026-11-09T11:30:00.000Z';
+
+  const makeTasks = (updatedAt = preCutoffTs) => [
+    ...baseSeed.tasks,
+    {
+      TaskId: taskPreId, ProjectId: depProjectId, Title: 'Öncül görev', Status: 'in_progress', Priority: 'normal',
+      DueDate: '2026-11-10', CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: preCutoffTs
+    },
+    {
+      TaskId: taskMidId, ProjectId: depProjectId, Title: 'Bağımlı görev', Status: 'in_progress', Priority: 'normal',
+      DueDate: '2026-11-12', CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: updatedAt
+    },
+    {
+      TaskId: taskPostId, ProjectId: depProjectId, Title: 'Üçüncü görev', Status: 'in_progress', Priority: 'normal',
+      DueDate: '2026-11-14', CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: preCutoffTs
+    },
+    {
+      TaskId: unauthTaskId, ProjectId: unauthProjectId, Title: 'Gizli görev', Status: 'in_progress', Priority: 'high',
+      DueDate: '2026-11-11', CreatedBySicil: U.DENIZ, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: preCutoffTs
+    }
+  ];
+  const makeProjects = () => [
+    ...baseSeed.projects,
+    { ProjectId: depProjectId, SourceType: 'MANUAL', ProjectCode: 'PRJ-BAG', ProjectName: 'Bağımlılık Test Projesi', LeadSicil: U.YONETICI, IsActive: 1 },
+    { ProjectId: unauthProjectId, SourceType: 'MANUAL', ProjectCode: 'PRJ-GIZLI-BAG', ProjectName: 'Gizli Bağımlılık Projesi', LeadSicil: U.DENIZ, IsActive: 1 }
+  ];
+
+  // 1. Kesit öncesi geçerli kenar dahil edilir ve bağımlılık kapsamı complete kalır.
+  await withReportStack({
+    projects: makeProjects(),
+    tasks: makeTasks(preCutoffTs),
+    taskDependencies: [
+      { ProjectId: depProjectId, TaskId: taskMidId, PredecessorTaskId: taskPreId, DependencyType: 'FS', LagDays: 0, CreatedAt: preCutoffTs, UpdatedAt: preCutoffTs }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik', donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-BAG'] }, notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
+    });
+    const midRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === taskMidId);
+    assert.ok(midRow?.bagimliliklar?.oncul?.includes(taskPreId));
+    assert.equal(evidencePackage.tamlik.bagimliliklar, 'complete');
+    assert.equal(evidencePackage.tamlik.kesit_tutarli, undefined);
+  });
+
+  // 2. Kesit sonrası oluşturulan veya güncellenen kenarlar dışlanır ve kapsam partial + kesit_tutarli false olur.
+  await withReportStack({
+    projects: makeProjects(),
+    tasks: makeTasks(preCutoffTs),
+    taskDependencies: [
+      { ProjectId: depProjectId, TaskId: taskMidId, PredecessorTaskId: taskPreId, DependencyType: 'FS', LagDays: 0, CreatedAt: preCutoffTs, UpdatedAt: preCutoffTs },
+      { ProjectId: depProjectId, TaskId: taskPostId, PredecessorTaskId: taskMidId, DependencyType: 'FS', LagDays: 0, CreatedAt: postCutoffTs, UpdatedAt: postCutoffTs },
+      { ProjectId: depProjectId, TaskId: taskPreId, PredecessorTaskId: taskPostId, DependencyType: 'SS', LagDays: 1, CreatedAt: preCutoffTs, UpdatedAt: postCutoffTs }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik', donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-BAG'] }, notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
+    });
+    const postRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === taskPostId);
+    const preRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === taskPreId);
+    assert.equal(postRow?.bagimliliklar, undefined, 'kesit sonrası eklenen kenar kanıta girmemelidir');
+    assert.equal(preRow?.bagimliliklar?.oncul?.includes(taskPostId) ?? false, false, 'kesit sonrası güncellenen kenar kanıta girmemelidir');
+    assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
+    assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
+  });
+
+  // 3. Kesit sonrası görev değişikliği (silinen kenar olasılığı) ve yetkisiz uç nokta bağımlılık kapsamını partial yapar.
+  await withReportStack({
+    projects: makeProjects(),
+    tasks: makeTasks(postCutoffTs),
+    taskDependencies: [
+      { ProjectId: depProjectId, TaskId: taskPreId, PredecessorTaskId: unauthTaskId, DependencyType: 'FS', LagDays: 0, CreatedAt: preCutoffTs, UpdatedAt: preCutoffTs }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik', donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-BAG'] }, notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
+    });
+    assert.equal(JSON.stringify(evidencePackage).includes('Gizli görev'), false);
+    assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
+  });
+});
+
+

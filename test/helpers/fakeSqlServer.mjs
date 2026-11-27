@@ -230,7 +230,10 @@ export function createFakeDatabase(seed = {}) {
       DependencyType: entry.DependencyType || 'FS',
       LagDays: entry.LagDays ?? 0,
       LagValue: entry.LagValue ?? null,
-      LagUnit: entry.LagUnit ?? null
+      LagUnit: entry.LagUnit ?? null,
+      // Kayıt anları yalnızca tohumda verildiyse taşınır (kesit sonrası bağımlılık sınamaları için).
+      ...(entry.CreatedAt != null ? { CreatedAt: entry.CreatedAt } : {}),
+      ...(entry.UpdatedAt != null ? { UpdatedAt: entry.UpdatedAt } : {})
     })),
     baselines: seed.baselines || [],
     taskBaselineSnapshots: seed.taskBaselineSnapshots || [],

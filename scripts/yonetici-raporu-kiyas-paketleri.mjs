@@ -37,13 +37,17 @@ if (args.includes('--denetle')) {
 }
 // Mevcut dondurulmuş fikstürü kesmeden önce aynı dizinde geçici dosyaya yazıp atomik olarak değiştir.
 const tmpPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+let createdTmp = false;
 try {
   writeFileSync(tmpPath, text, { encoding: 'utf8', flag: 'wx' });
+  createdTmp = true;
   renameSync(tmpPath, target);
 } catch (error) {
-  try {
-    rmSync(tmpPath, { force: true });
-  } catch { /* geçici dosya zaten oluşmamış olabilir */ }
+  if (createdTmp) {
+    try {
+      rmSync(tmpPath, { force: true });
+    } catch { /* geçici dosya temizlenemedi */ }
+  }
   throw error;
 }
 process.stdout.write(`${set.paketler.length} paket yazıldı (özet ${set.ozet_sha256.slice(0, 16)}).\n`);

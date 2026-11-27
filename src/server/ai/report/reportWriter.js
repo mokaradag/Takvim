@@ -167,13 +167,18 @@ export function assessReportWriterModelIdentity({ model = null, configuredModel 
  */
 const KNOWN_ABNORMAL_FINISH_REASONS = new Set(['content_filter', 'tool_calls', 'function_call']);
 
-export function finalizeReportWriterResponse({ text, finishReason = null, plan, evidencePackage }) {
+/** Kesilme veya olağandışı bitiş nedenlerini yazar sözleşmesi hatalarına çevirir. */
+function throwIfAbnormalFinishReason(finishReason) {
   const normalizedFinish = normalizeFinishReason(finishReason);
   if (normalizedFinish === 'length') throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
   if (normalizedFinish && !NORMAL_FINISH_REASONS.has(normalizedFinish)) {
     const safeReason = KNOWN_ABNORMAL_FINISH_REASONS.has(normalizedFinish) ? normalizedFinish : 'other';
     throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_INCOMPLETE_FINISH', { finishReason: safeReason });
   }
+}
+
+export function finalizeReportWriterResponse({ text, finishReason = null, plan, evidencePackage }) {
+  throwIfAbnormalFinishReason(finishReason);
   try {
     return parseReportDraft(text, { plan, evidencePackage });
   } catch (error) {
@@ -200,7 +205,7 @@ export function finalizeReportWriterResponse({ text, finishReason = null, plan, 
  * @param {string} [input.quality] - `otomatik` ya da `yuksek_kalite`.
  * @param {string[]} [input.kapaliBolumler] - Kullanıcının kapattığı isteğe bağlı bölümler.
  * @param {AbortSignal|null} [input.signal] - İstemci iptali.
- * @param {number} [input.revalidationTimeoutMs] - Üretim sonrası son yetki doğrulaması için üst süre sınırı (ms).
+ * @param {number} [input.revalidationTimeoutMs] - Gönderim öncesi ve üretim sonrası yetki doğrulaması için üst süre sınırı (ms).
  * @returns {Promise<{ draft: object, plan: object, meta: object }>} Doğrulanmış taslak ve içeriksiz üstveri.
  */
 export async function writeExecutiveReportDraft({
@@ -217,6 +222,11 @@ export async function writeExecutiveReportDraft({
   cancelled(signal);
   if (typeof gateway?.completeChat !== 'function') throw writerFailure(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, 'REPORT_WRITER_GATEWAY_MISSING');
   if (typeof revalidate !== 'function') throw writerFailure(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, 'REPORT_WRITER_REVALIDATION_MISSING');
+  // Gönderim öncesi ve üretim sonrası yetki doğrulamalarının her ikisi de aynı bağımsız üst süre sınırıyla çalışır.
+  const boundedRevalidationTimeoutMs = typeof revalidationTimeoutMs === 'number'
+    && Number.isFinite(revalidationTimeoutMs) && revalidationTimeoutMs > 0
+    ? revalidationTimeoutMs
+    : REPORT_WRITER_REVALIDATION_TIMEOUT_MS;
   // İstem ve taslak doğrulaması aynı kanıt anlık görüntüsüne bağlanır; çağrı sırasında dış nesne değişse bile tutarlılık bozulmaz.
   let evidenceSnapshot;
   try {
@@ -237,24 +247,19 @@ export async function writeExecutiveReportDraft({
       requireText: true,
       // İletiler sunucunun ürettiği sabit istektir: sağlayıcının 4xx yanıtı kullanıcı değil yapılandırma hatasıdır.
       callerInput: false,
-      // Kuyruk beklemesi sırasında yetki ya da rıza kaldırıldıysa kanıt sağlayıcıya hiç gönderilmez.
-      beforeDispatch: (dispatchSignal) => assertStillAuthorized(revalidate, dispatchSignal ?? signal)
+      // Kuyruk beklemesi sırasında yetki ya da rıza kaldırıldıysa kanıt sağlayıcıya hiç gönderilmez; asılı doğrulama yuvayı tutamaz.
+      beforeDispatch: (dispatchSignal) => assertStillAuthorized(revalidate, dispatchSignal ?? signal, boundedRevalidationTimeoutMs)
     });
   } catch (error) {
     if (error instanceof AiError
       && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID
-      && error.details?.reason === 'EMPTY_COMPLETION'
-      && normalizeFinishReason(error.details?.finishReason) === 'length') {
-      throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
+      && error.details?.reason === 'EMPTY_COMPLETION') {
+      throwIfAbnormalFinishReason(error.details?.finishReason);
     }
     throw error;
   }
   cancelled(signal);
   // Uzun süren yazım sırasında yetki ya da rıza değişmiş olabilir: geçersiz zaman aşımı girdisinde dahi varsayılan üst sınır korunur.
-  const boundedRevalidationTimeoutMs = typeof revalidationTimeoutMs === 'number'
-    && Number.isFinite(revalidationTimeoutMs) && revalidationTimeoutMs > 0
-    ? revalidationTimeoutMs
-    : REPORT_WRITER_REVALIDATION_TIMEOUT_MS;
   await assertStillAuthorized(revalidate, signal, boundedRevalidationTimeoutMs);
   const identity = assessReportWriterModelIdentity(result);
   const draft = finalizeReportWriterResponse({ text: result.text, finishReason: result.finishReason, plan: request.plan, evidencePackage: evidenceSnapshot });

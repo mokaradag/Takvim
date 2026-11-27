@@ -11,14 +11,16 @@
  * Yeni taslak üretmek için önce koşu yapılır (ör. `node scripts/report-writer-qualification.mjs kosu --tasiyici vekil
  * --senaryolar S12 --cikti kosu.jsonl`).
  */
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
 
 registerServerOnlyShim();
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { renderReportDraftText } = await import('../src/domain/ai/report/reportDraft.js');
-const { loadBenchmarkFixture } = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
-const { draftDigest, isValidStoredDraftShape, literalFence, selectHomogeneousRun } = await import('./report-writer-qualification.mjs');
+const { BENCHMARK_FIXTURE_PATH, REPORT_STYLE_PATH, WRITER_PACKAGES_PATH, loadBenchmarkFixture } = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
+const { draftDigest, hasVerifiedStoredModelIdentity, isValidStoredDraftShape, literalFence, selectHomogeneousRun } = await import('./report-writer-qualification.mjs');
 
 function canonicalPath(filePath) {
   const resolved = path.resolve(filePath);
@@ -62,8 +64,14 @@ if (!options.girdi) {
   process.stderr.write('--girdi gerekli.\n');
   process.exit(2);
 }
-if (options.cikti && sameFile(options.girdi, options.cikti)) {
-  process.stderr.write('Çıktı yolu girdi koşu dosyasının kendisi olamaz.\n');
+const protectedInputs = [
+  options.girdi,
+  path.join(ROOT, BENCHMARK_FIXTURE_PATH),
+  path.join(ROOT, WRITER_PACKAGES_PATH),
+  path.join(ROOT, REPORT_STYLE_PATH)
+];
+if (options.cikti && protectedInputs.some((inputPath) => sameFile(inputPath, options.cikti))) {
+  process.stderr.write('Çıktı yolu girdi koşu veya kıyas dosyalarından birinin kendisi olamaz.\n');
   process.exit(2);
 }
 
@@ -119,17 +127,24 @@ for (const id of wanted) {
   const durationLabel = typeof record.sure_ms === 'number' && Number.isFinite(record.sure_ms)
     ? `${Math.round(record.sure_ms / 1000)} sn`
     : 'ölçülmedi';
+  const modelVerified = record.durum === 'gecerli' ? hasVerifiedStoredModelIdentity(record) : true;
+  const effectiveStatus = record.durum === 'gecerli' && !modelVerified ? 'gecersiz_kimlik' : record.durum;
   out.push(`## ${id} — ${scenario.durum}`, '');
   out.push(`- Sınanan: ${scenario.sinanan}`);
   out.push(`- İstek: ${scenario.donem} · ${scenario.kapsam} · ayrıntı ${scenario.ayrinti} · odak ${scenario.odak} · notlar ${scenario.notlar} · karşılaştırma ${scenario.karsilastirma}`);
-  out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${record.durum} · süre ${durationLabel}${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
+  out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${effectiveStatus} · süre ${durationLabel}${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
   // Model düzyazısı HTML yorumu ya da Markdown sözdizimiyle gizlenmemesi için düz metin çitinde birebir sunulur;
-  // kayıtlı taslak özeti uyuşmayan satırlar değiştirilmiş taslak olarak bildirilir, diğer geçerli satırlar etkilenmez.
+  // model kimliği doğrulanmamış, taslak özeti bozuk ya da uyuşmayan satırlar reddedilir, diğer geçerli satırlar etkilenmez.
   if (record.durum === 'gecerli') {
+    const hasOwnDigest = record.taslak_ozeti !== undefined && record.taslak_ozeti !== null;
     if (!isValidStoredDraftShape(record.taslak)) {
       out.push('_Kayıtlı taslak yapısı bozuk; önizleme oluşturulamadı._', '');
-    } else if (typeof record.taslak_ozeti === 'string' && record.taslak_ozeti.length > 0) {
-      if (record.taslak_ozeti !== draftDigest(record)) {
+    } else if (!modelVerified) {
+      out.push('_Kayıtlı model kimliği beklenen modelle doğrulanmadı; doğrulanmamış taslak önizlemede gösterilmedi._', '');
+    } else if (hasOwnDigest) {
+      if (typeof record.taslak_ozeti !== 'string' || !record.taslak_ozeti.trim()) {
+        out.push('_Kayıtlı taslak özeti geçersiz biçimde; bozuk kayıt önizlemede gösterilmedi._', '');
+      } else if (record.taslak_ozeti !== draftDigest(record)) {
         out.push('_Kayıtlı taslak özeti uyuşmuyor; değiştirilmiş taslak önizlemede gösterilmedi._', '');
       } else {
         out.push(literalFence(renderReportDraftText(record.taslak)), '');
@@ -142,5 +157,9 @@ for (const id of wanted) {
   }
 }
 const text = `${out.join('\n')}\n`;
-if (options.cikti) writeFileSync(options.cikti, text, 'utf8');
-else process.stdout.write(text);
+if (options.cikti) {
+  mkdirSync(path.dirname(path.resolve(options.cikti)), { recursive: true });
+  writeFileSync(options.cikti, text, 'utf8');
+} else {
+  process.stdout.write(text);
+}

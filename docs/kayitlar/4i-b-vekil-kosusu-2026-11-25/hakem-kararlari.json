@@ -349,8 +349,8 @@
   "yanlis": 0,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
-  "celiski_islendi": true,
-  "not": "Yüklenen tablonun yalnızca kısmen okunabildiği ve sonraki satırların çıkarılamadığı açıkça belirtilmiş.",
+  "celiski_islendi": null,
+  "not": "Yüklenen tablonun yalnızca kısmen okunabildiği ve sonraki satırların çıkarılamadığı açıkça belirtilmiş; pakette kaynaklar arası çelişki bulunmadığından celiski_islendi null bırakıldı.",
   "taslak_ozeti": "b41bfd98ddcd6ef130892c27d443e3944c30db7a2fe63c6bbdc748a173b0e09f"
  },
  "S42": {

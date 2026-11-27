@@ -14954,7 +14954,9 @@
        "gecikmiş 7",
        "7 görev gecik",
        "7 iş gecik",
-       "geciken görev sayısı 7"
+       "geciken görev sayısı 7",
+       "7'si gecik",
+       "7 si gecik"
       ]
      ]
     }
@@ -16607,5 +16609,5 @@
    "paket_ozeti_sha256": "375c58baaa09ce012735ad396821985204e29464847d2526f520b054c9a1bbe5"
   }
  ],
- "ozet_sha256": "9955c8553b707fdd2c734f88afb7154d7bb1eb6e2f10ccd920d23efb18cbf2ff"
+ "ozet_sha256": "8818f000d7775d73ef3906c834e364e91109d5bfe6b61ea0e4afe72b49e68a68"
 }
