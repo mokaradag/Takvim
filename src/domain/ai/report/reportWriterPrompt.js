@@ -1,6 +1,6 @@
 import { isIsoDay } from '../isoDay.js';
 import { REPORT_EVIDENCE_SCHEMA } from './reportRequest.js';
-import { isKnownOpenTaskStatus, parseStrictEvidenceDay, REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan.js';
+import { distinctConflictEvidence, isKnownOpenTaskStatus, parseStrictEvidenceDay, REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan.js';
 
 /**
  * Bilgin Aşama 4I-B — modelden bağımsız yönetici raporu yazar istemi (saf).
@@ -9,8 +9,8 @@ import { isKnownOpenTaskStatus, parseStrictEvidenceDay, REPORT_WRITING_CONTRACT,
  *   1. Sistem yönergesi — kurumsal yazım standardı, kanıt otoritesi, iddia sınıfları ve çıktı sözleşmesi.
  *      Yalnızca stil belgesinden ve sabit kurallardan kurulur; rapora göre değişmez (önbelleğe alınabilir önek).
  *   2. Bölüm planı iletisi — sunucunun belirlenimci kararları (bölümler, bütçeler, zorunlu açıklamalar).
- *   3. Kanıt iletileri — güvenilmez veri. Her ileti en çok 32 KiB (UTF-8 bayt) ve bir kanıt hiçbir zaman iki
- *      iletiye bölünmez; ileti sırası ve toplamı her iletide yazılıdır.
+ *   3. Kanıt iletileri — güvenilmez veri. Her ileti en çok 32 KiB (UTF-8 bayt). Yalnızca tek iletiye sığmayan
+ *      belge metni bölünür; ileti sırası ve toplamı her iletide yazılıdır.
  *
  * Bu modülde hiçbir model adı geçmez; aynı istem bütün nitelendirme adaylarına aynen verilir. Güvenlik
  * yalnızca isteme bırakılmaz: çıktı `reportDraft.js` ile yapısal ve göndergesel olarak doğrulanır.
@@ -151,7 +151,7 @@ export function buildReportWriterSystemPrompt(style) {
       'Not, kaydı yazan kişinin bildirimidir; bağımsız olarak doğrulanmış olgu değildir. Kaynağı bir kez doğal biçimde anarsın ("ekip notuna göre"); her cümlede "doğrulanmamış" demezsin. Ek niteleme yalnızca not bir neden, plan, tahmin, kesin olmayan tarih ya da görev kaydıyla çelişen bir durum bildirdiğinde gerekir.',
       `Belirsizlik dili: ${s.belirsizlikDili}`,
       `${s.notKurallari.tarihAyrimi} "Haftaya", "dün", "yarın" gibi göreli ifadeleri notun kayıt zamanına (kayit_zamani) göre yorumlarsın; kayıt zamanı bilinmeyen notu tarihlendirmezsin ve göreli ifadeyi kesin bir güne çevirmezsin.`,
-      '"tarihsel" ya da "tarihsel_onceki" sürüm notlar geçmiş kayıttır; güncel durum gibi sunulmaz. Aynı görevin sürümleri zaman sırasıyla okunur, en güncel kayıt esas alınır ve değişiklik açıkça söylenir.',
+      '"tarihsel" ya da "tarihsel_onceki" sürüm notlar geçmiş kayıttır; güncel durum gibi sunulmaz. Aynı görevin sürümleri ancak kayıt zamanları kesin ve tek bir en güncel kayıt varsa zaman sırasıyla yorumlanır. Zaman belirsizse veya son zamanı birden çok kayıt paylaşıyorsa tek kayıt esas alınmaz.',
       'Kısaltılmış, parçalı ya da noktalaması bozuk notu aynen aktarmaz, anlamını koruyarak profesyonel Türkçeye çevirirsin. Bilmediğin kısaltmaya açılım uydurmaz, teknik terimi korursun; çeviri sırasında olgu eklemezsin.',
       'Aynı gelişmeyi anlatan birden çok notu tek gelişme olarak birleştirirsin; olayı birden çok kez sayarak önemini şişirmezsin.',
       'Çelişen kanıtları gizlemezsin: kayıt zamanı belirliyse zaman sırasını verir ve değişikliği söylersin; kesin zaman sırası yoksa sıra uydurmadan karşıt bildirimleri eşit mesafeyle aktarır, hangisinin doğru olduğuna kanıt ötesinde karar vermezsin.'
@@ -221,7 +221,7 @@ const DAY_MS = 86400000;
 /** Kesit sonrası değişmiş görevlerde anlık durum/termin/bitiş/kilometre taşı, gecikme ve canlı proje iddiasına yol açabilecek alanlar. */
 const POST_CUTOFF_OMITTED_TASK_KEYS = new Set([
   'durum', 'hedef_bitis', 'oncelik', 'gerceklesen_bitis', 'kilometre_tasi',
-  'proje', 'proje_kodu', 'proje_adi', 'geciken_gun'
+  'baslik', 'proje', 'proje_kodu', 'proje_adi', 'geciken_gun'
 ]);
 
 /** İki geçerli ISO gün arasındaki takvim günü farkı (sunucu aritmetiği). */
@@ -246,7 +246,7 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
       || key === 'proje_kimligi'
       || key === 'gorev_kaniti'
     ) continue;
-    // Kesit sonrası değişen görevlerin güncel durum/termin/öncelik/bitiş/kilometre taşı, gecikme ve canlı proje alanları
+    // Kesit sonrası değişen görevlerin güncel başlık/durum/termin/öncelik/bitiş/kilometre taşı, gecikme ve canlı proje alanları
     // kesit anı iddiasına dönüşmemesi için çıkarılır (denetim destekli `tamamlandigi_proje` korunur).
     if (postCutoffTask && POST_CUTOFF_OMITTED_TASK_KEYS.has(key)) continue;
     if (key === 'gorev') {
@@ -280,8 +280,13 @@ function projectConflict(conflict, refs, omittedRefs) {
   for (const [key, value] of Object.entries(conflict)) {
     if (key === 'gorev_kaniti') continue;
     if (key === 'gorev') out.gorev_kaniti = projectTaskRef(value, refs, omittedRefs);
-    else if (key === 'kanitlar' && Array.isArray(value)) out.kanitlar = [...new Set(value)];
     else out[key] = value;
+  }
+  if (Array.isArray(out.kanitlar)) {
+    const evidence = distinctConflictEvidence(out.kanitlar, out.kronoloji);
+    out.kanitlar = evidence.references;
+    if (evidence.chronology) out.kronoloji = evidence.chronology;
+    else delete out.kronoloji;
   }
   return out;
 }
@@ -397,12 +402,24 @@ export function buildReportWriterPlanMessage(plan, evidencePackage, evidenceMess
     })),
     kapali_bolumler: plan.kapali_bolumler
   };
-  return [
+  const preamble = [
     'BÖLÜM PLANI (sunucu kararı; değiştirilemez)',
     'Aşağıdaki planda yer alan bölümleri, verilen sırayla ve kimlikle yaz. "odak_kanitlar" bölümün öncelikli kanıtlarıdır; uygun düştüğünde paketteki başka kanıtlara da dayanabilirsin. "zorunlu_aciklamalar" o bölümde mutlaka doğal dille karşılanmalıdır. Kapatılan bölümler yazılmaz ama içerdikleri zorunlu açıklamalar zorunlu bölümlere taşınmıştır.',
-    `Kanıtlar bu iletiyi izleyen ${evidenceMessageCount} kanıt iletisindedir.`,
-    JSON.stringify(body)
+    `Kanıtlar bu iletiyi izleyen ${evidenceMessageCount} kanıt iletisindedir.`
   ].join('\n');
+  const serialize = () => `${preamble}\n${JSON.stringify(body)}`;
+  const full = serialize();
+  if (byteLength(full) <= REPORT_WRITER_MAX_MESSAGE_BYTES) return full;
+  // Geniş çelişkilerin bütün göndergeleri kanıt iletilerinde durur; plan açıklama yönergelerini korur.
+  for (const section of body.bolumler) {
+    for (const entry of section.zorunlu_aciklamalar) {
+      if (entry.kimlik.startsWith('celiski_') && entry.kanitlar.length > 2) {
+        entry.kanitlar = entry.kanitlar.slice(0, 2);
+        entry.yonerge += ' Tam kayıt ve göndergeler kanıt iletilerindedir.';
+      }
+    }
+  }
+  return serialize();
 }
 
 const EVIDENCE_PREAMBLE = (index, total) => [
@@ -425,9 +442,11 @@ function jsonCodePointUtf8Bytes(ch) {
 }
 
 /**
- * Kanıt paketini 32 KiB (UTF-8 bayt) sınırlı iletilere böler. Kayıt bütünlüğü korunur: hiçbir çelişki,
- * türetim ya da kanıt bölünmez; ilk ileti istek/tamlık başlığını taşır, çelişkiler, türetimler ve
- * kanıtlar kayıt sınırlarından aynı ileti bütçesine yerleştirilir.
+ * Kanıt paketini 32 KiB (UTF-8 bayt) sınırlı iletilere böler. İlk ileti istek ve tamlık başlığını taşır.
+ * Çelişkiler, türetimler ve kanıtlar kayıt sınırlarından yerleştirilir. Tek iletiye sığmayan belge metni
+ * aynı kanıt kimliğiyle bölünür. Metni, aynı kimliğin `metin_parcasi` alanına göre birden başlayarak birleştir;
+ * `metin_toplam_parca` beklenen parça sayısıdır. Geniş kapsamlı bir ölçünün `kapsam_grubu` alanı,
+ * `kapsam_parcalari` dizisindeki aynı grubun `parca` sırasındaki kapsam listelerine başvurur.
  *
  * @param {object} evidencePackage - Doğrulanmış kanıt paketi.
  * @param {{ maxBytes?: number }} [options] - Yalnızca sınama için daha dar sınır.

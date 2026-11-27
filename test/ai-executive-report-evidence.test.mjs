@@ -5210,48 +5210,55 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya günce
     assert.equal(evidencePackage.tamlik.kesit_tutarli, undefined);
   });
 
-  // 2. Kesit sonrası oluşturulan veya güncellenen kenarlar dışlanır ve kapsam partial + kesit_tutarli false olur.
-  await withReportStack({
-    projects: makeProjects(),
-    tasks: makeTasks(preCutoffTs),
-    taskDependencies: [
-      { ProjectId: depProjectId, TaskId: taskMidId, PredecessorTaskId: taskPreId, DependencyType: 'FS', LagDays: 0, CreatedAt: preCutoffTs, UpdatedAt: preCutoffTs },
-      { ProjectId: depProjectId, TaskId: taskPostId, PredecessorTaskId: taskMidId, DependencyType: 'FS', LagDays: 0, CreatedAt: postCutoffTs, UpdatedAt: postCutoffTs },
-      { ProjectId: depProjectId, TaskId: taskPreId, PredecessorTaskId: taskPostId, DependencyType: 'SS', LagDays: 1, CreatedAt: preCutoffTs, UpdatedAt: postCutoffTs }
-    ]
+  const testRequest = {
+    rapor_turu: 'haftalik', donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+    kapsam: { tur: 'proje', kimlikler: ['PRJ-BAG'] }, notlar: 'haric'
+  };
+  const readDependencies = async (tasks, taskDependencies, verify) => withReportStack({
+    projects: makeProjects(), tasks, taskDependencies
   }, U.YONETICI, async () => {
     const { evidencePackage } = await buildExecutiveReportEvidence({
-      request: {
-        rapor_turu: 'haftalik', donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
-        kapsam: { tur: 'proje', kimlikler: ['PRJ-BAG'] }, notlar: 'haric'
-      },
-      now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
+      request: testRequest, now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
     });
-    const postRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === taskPostId);
-    const preRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === taskPreId);
-    assert.equal(postRow?.bagimliliklar, undefined, 'kesit sonrası eklenen kenar kanıta girmemelidir');
-    assert.equal(preRow?.bagimliliklar?.oncul?.includes(taskPostId) ?? false, false, 'kesit sonrası güncellenen kenar kanıta girmemelidir');
-    assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
-    assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
+    verify(evidencePackage);
   });
-
-  // 3. Kesit sonrası görev değişikliği (silinen kenar olasılığı) ve yetkisiz uç nokta bağımlılık kapsamını partial yapar.
-  await withReportStack({
-    projects: makeProjects(),
-    tasks: makeTasks(postCutoffTs),
-    taskDependencies: [
-      { ProjectId: depProjectId, TaskId: taskPreId, PredecessorTaskId: unauthTaskId, DependencyType: 'FS', LagDays: 0, CreatedAt: preCutoffTs, UpdatedAt: preCutoffTs }
-    ]
-  }, U.YONETICI, async () => {
-    const { evidencePackage } = await buildExecutiveReportEvidence({
-      request: {
-        rapor_turu: 'haftalik', donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
-        kapsam: { tur: 'proje', kimlikler: ['PRJ-BAG'] }, notlar: 'haric'
-      },
-      now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
+  const createEdge = (TaskId, PredecessorTaskId, CreatedAt, UpdatedAt) => ({
+    ProjectId: depProjectId, TaskId, PredecessorTaskId, DependencyType: 'FS', LagDays: 0, CreatedAt, UpdatedAt
+  });
+  const originalEdge = createEdge(taskMidId, taskPreId, preCutoffTs, preCutoffTs);
+  // Oluşturma ve güncelleme zamanlarının her biri, tek başına kenarı dışlamalı ve kapsamı kısmileştirmelidir.
+  for (const lateEdge of [
+    createEdge(taskPostId, taskMidId, postCutoffTs, null),
+    createEdge(taskPreId, taskPostId, preCutoffTs, postCutoffTs)
+  ]) {
+    await readDependencies(makeTasks(preCutoffTs), [originalEdge, lateEdge], (evidencePackage) => {
+      const taskRows = new Map(evidencePackage.kanitlar.filter((item) => item.tur === 'gorev').map((item) => [item.gorev, item]));
+      assert.ok(taskRows.has(taskPostId) && taskRows.has(taskPreId) && taskRows.has(taskMidId), 'Üç görev de kanıtta bulunmalıdır.');
+      assert.ok(taskRows.get(taskMidId).bagimliliklar?.oncul?.includes(taskPreId), 'Kesit öncesi kenar korunmalıdır.');
+      assert.ok(!taskRows.get(lateEdge.TaskId).bagimliliklar?.oncul?.includes(lateEdge.PredecessorTaskId));
+      assert.ok(!taskRows.get(lateEdge.PredecessorTaskId).bagimliliklar?.ardil?.includes(lateEdge.TaskId));
+      assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
+      assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
     });
+  }
+
+  // Yetkisiz bir uç, kesit sonrası görev değişikliği olmadan da bağımlılık kapsamını kısmileştirir.
+  await readDependencies(makeTasks(preCutoffTs), [
+    createEdge(taskPreId, unauthTaskId, preCutoffTs, preCutoffTs)
+  ], (evidencePackage) => {
+    const allowedTask = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === taskPreId);
+    assert.ok(allowedTask, 'Yetkili bağımlılık ucu kanıtta bulunmalıdır.');
+    assert.ok(!allowedTask.bagimliliklar?.oncul?.includes(unauthTaskId));
+    assert.equal(JSON.stringify(evidencePackage).includes(unauthTaskId), false);
     assert.equal(JSON.stringify(evidencePackage).includes('Gizli görev'), false);
     assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
+    assert.equal(evidencePackage.tamlik.kesit_tutarli, undefined);
+  });
+
+  // Görevin kendisi kesitten sonra değiştiğinde silinmiş bir kenarın yokluğu da kesinleştirilemez.
+  await readDependencies(makeTasks(postCutoffTs), [], (evidencePackage) => {
+    assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
+    assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
   });
 });
 

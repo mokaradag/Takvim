@@ -517,8 +517,9 @@ dondurulmuş sentetik kanıt paketi kümesi ve nitelendirme/vekil/önizleme ara�
 - **Vekil canlı koşu — son yapılandırma (2026-11-25, `yazar-istemi-4`, düşük eforlu küçük vekil model, yalıtılmış CLI
   köprüsü, 48 senaryo, eşzamanlılık 4):** geçerli taslak **48/48** (sözleşme dışı yanıt 0, altyapı hatası 0); yetkisiz
   açıklama **0**; uydurma kimlik/tarih **0** (tek aday, "denge" sözcüğü, hakemce yanlış pozitif); zorunlu olgu tamlığı
-  **48/48** raporda %100 (2'si hakem kararıyla); değer düzeyinde defter dışı yanlış değer 0 (cümle düzeyinde insan
-  doğrulaması bekliyor); çelişki senaryolarının 3/4'ü (S25 kronoloji tersinmesi nedeniyle başarısız, bkz. `hakem-kararlari.json`)
+  **48/48** raporda %100 (2'si hakem kararıyla); değer düzeyinde defter dışı yanlış değer 0. S03'te Denge’nin iki
+  güncellemesi Meltem’e atfedilmiştir (arşiv hakem doğruluğu 15/16, %93,75). Cümle düzeyinde insan doğrulaması bekliyor.
+  Çelişki senaryolarının 3/4'ü (S25 kronoloji tersinmesi nedeniyle başarısız, bkz. `hakem-kararlari.json`)
   ve iki gömülü yönerge senaryosu doğru işlendi; model gün aritmetiği 0;
   standart ayrıntıda yazar süresi p95 **116 sn** (vekil; kurum içi başarımı öngörmez); ortalama 534 sözcük.
   Kayıt: `docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/` (ham yanıtlar, hakem kararları, yapılandırma özetleri).

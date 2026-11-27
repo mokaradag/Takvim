@@ -36,6 +36,8 @@ node scripts/report-writer-qualification.mjs ozet --girdi docs/kayitlar/4i-b-vek
 
 ## Sonuç (vekil, sentetik)
 
+S03 hakem kararı tarihsel kanıt sürümü üzerinden düzeltildi. Dönemdeki iki belge güncellemesi Denge’ye, tek tamamlanan görev Meltem’e aittir. Yanlış proje atfı eklendiğinde S03’ün kayıtlı doğruluk oranı 15/15’ten 15/16’ya (%93,75) düştü. Ham taslak özeti aynı kaldı. Güncel kanıt kümesiyle özet üretildiğinde tarihsel paket uyuşmazlığı nedeniyle S03’ün doğruluk durumu bekliyor olarak raporlanır.
+
 Sayısal sonuçlar ve yorumu yol haritasının "Oturum devri — 2026-11-25" girdisindedir. Kapı durumu: A ve B kapıları bu
 koşuyla **kapatılmaz** (vekil model; insan puanı ve kurum içi doğrulama yok); D yazar süresi yalnızca vekil için
 bilgidir. Formal 4I-B nitelendirmesi ve kabulü **bekliyor**.

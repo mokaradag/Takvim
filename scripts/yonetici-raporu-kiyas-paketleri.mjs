@@ -8,7 +8,7 @@
  *   node scripts/yonetici-raporu-kiyas-paketleri.mjs            # dosyayı yeniden üretir
  *   node scripts/yonetici-raporu-kiyas-paketleri.mjs --denetle  # dosya üretimle aynı değilse çıkış kodu 1
  */
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,8 +39,13 @@ if (args.includes('--denetle')) {
 const tmpPath = `${target}.${process.pid}.${Date.now()}.tmp`;
 let createdTmp = false;
 try {
-  writeFileSync(tmpPath, text, { encoding: 'utf8', flag: 'wx' });
+  const fd = openSync(tmpPath, 'wx');
   createdTmp = true;
+  try {
+    writeFileSync(fd, text, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmpPath, target);
 } catch (error) {
   if (createdTmp) {

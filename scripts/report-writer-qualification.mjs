@@ -32,7 +32,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -161,10 +161,18 @@ function parseOptionalPositiveInt(value, flagName) {
   return parsed;
 }
 
+function validRequestTimeout(value) {
+  return Number.isSafeInteger(value) && value >= AI_REQUEST_TIMEOUT_BOUNDS.min && value <= AI_REQUEST_TIMEOUT_BOUNDS.max;
+}
+
+function validRunConcurrency(value) {
+  return Number.isSafeInteger(value) && value >= 1 && value <= 4;
+}
+
 function parseOnPremRequestTimeout(value) {
   if (value === undefined) return AI_REQUEST_TIMEOUT_BOUNDS.fallback;
   const parsed = parseOptionalPositiveInt(value, '--istek-suresi-ms');
-  if (parsed < AI_REQUEST_TIMEOUT_BOUNDS.min || parsed > AI_REQUEST_TIMEOUT_BOUNDS.max) {
+  if (!validRequestTimeout(parsed)) {
     throw new Error(`--istek-suresi-ms ${AI_REQUEST_TIMEOUT_BOUNDS.min} ile ${AI_REQUEST_TIMEOUT_BOUNDS.max} arasında olmalıdır.`);
   }
   return parsed;
@@ -233,17 +241,22 @@ export function callSurrogate(request, ledger, { adapterPath = ADAPTER } = {}) {
       settled = true;
       resolve(payload);
     };
+    const env = {
+      ...process.env,
+      PLANNER_CLAUDE_MODEL: VEKIL_MODEL,
+      PLANNER_CLAUDE_EFFORT: VEKIL_EFFORT,
+      PLANNER_CLAUDE_LOG: ledger,
+      PLANNER_CLAUDE_OUTPUT_CAP: '64000',
+      PLANNER_CLAUDE_ALLOW_THINKING: '1',
+      PLANNER_MODEL_TIMEOUT_MS: String(SURROGATE_TIMEOUT_MS)
+    };
+    // Planlayıcı değerlendirmesinin bütçesi, önbellek koşulu ve koşu etiketi bu koşuya ait değildir.
+    for (const key of ['PLANNER_CLAUDE_MAX_CALLS', 'PLANNER_CLAUDE_MAX_UNCACHED', 'PLANNER_CLAUDE_REQUIRE_CACHE', 'PLANNER_CLAUDE_RUN_ID']) {
+      delete env[key];
+    }
     const child = spawn(process.execPath, [adapterPath], {
       cwd: ROOT,
-      env: {
-        ...process.env,
-        PLANNER_CLAUDE_MODEL: VEKIL_MODEL,
-        PLANNER_CLAUDE_EFFORT: VEKIL_EFFORT,
-        PLANNER_CLAUDE_LOG: ledger,
-        PLANNER_CLAUDE_OUTPUT_CAP: '64000',
-        PLANNER_CLAUDE_ALLOW_THINKING: '1',
-        PLANNER_MODEL_TIMEOUT_MS: String(SURROGATE_TIMEOUT_MS)
-      },
+      env,
       stdio: ['pipe', 'pipe', 'pipe']
     });
     const stdoutChunks = [];
@@ -309,7 +322,7 @@ async function runScenario(entry, context) {
     paket_kumesi_ozeti: context.setHash, stil_ozeti_sha256: styleHash,
     tasiyici: transport, kalite: quality, ayrinti: entry.paket.istek.ayrinti ?? 'standart',
     eszamanlilik: concurrency,
-    ...(transport === 'kurum-ici' ? { istek_suresi_ms: requestTimeoutMs } : {})
+    istek_suresi_ms: transport === 'kurum-ici' ? requestTimeoutMs : SURROGATE_TIMEOUT_MS
   };
   const request = writer.prepareReportWriterRequest({ evidencePackage: entry.paket, style, quality });
   const effectiveOutputTokens = transport === 'kurum-ici'
@@ -435,6 +448,10 @@ export function appendJsonlRecordAtomic(filePath, record, { appendImpl = appendF
 async function commandRun(options) {
   const transport = options.tasiyici;
   if (!['vekil', 'kurum-ici'].includes(transport)) throw new Error('--tasiyici vekil | kurum-ici');
+  const onPremOnly = ['model', 'anahtar-ortami', 'profil-cikti-siniri', 'baglam-siniri', 'sicaklik', 'top-p',
+    'dusunme-kipi', 'nicemleme', 'istek-suresi-ms', 'dagitim-ortami'];
+  const incompatibleOption = transport === 'vekil' && onPremOnly.find((key) => Object.hasOwn(options, key));
+  if (incompatibleOption) throw new Error(`--${incompatibleOption} yalnızca kurum içi koşuda kullanılabilir.`);
   const quality = options.kalite || 'otomatik';
   // Geçersiz kalite seçeneği çıktı dosyası açılmadan önce reddedilir.
   if (!['otomatik', 'yuksek_kalite'].includes(quality)) throw new Error('--kalite otomatik | yuksek_kalite olmalıdır.');
@@ -467,7 +484,7 @@ async function commandRun(options) {
     if (!catalogue.includes(model)) throw new Error('Model kurum içi katalogda doğrulanamadı: koşu başlamaz (BEKLIYOR).');
   }
   const parsedConcurrency = parseOptionalPositiveInt(options.eszamanlilik, '--eszamanlilik') ?? 1;
-  if (parsedConcurrency > 4) throw new Error('--eszamanlilik 1 ile 4 arasında tam sayı olmalıdır.');
+  if (!validRunConcurrency(parsedConcurrency)) throw new Error('--eszamanlilik 1 ile 4 arasında tam sayı olmalıdır.');
   const concurrency = parsedConcurrency;
   const runId = randomUUID();
   const runStartedAtUtc = new Date().toISOString();
@@ -501,15 +518,12 @@ async function commandRun(options) {
   if (transport === 'vekil') {
     mkdirSync(path.dirname(ledgerBase), { recursive: true });
   }
-  let fd;
-  try {
-    fd = openSync(out, 'wx', 0o600);
-  } catch (error) {
-    if (error?.code === 'EEXIST') throw new Error(`Çıktı dosyası zaten var (karışık koşu önlemi): ${out}`);
-    throw error;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+  const runFiles = [[out, '']];
+  if (transport === 'vekil') {
+    for (let worker = 0; worker < concurrency; worker += 1) runFiles.push([ledgerFor(worker), '']);
   }
+  // Dosya sisteminin kendi ad ve kimlik kuralları geçerlidir; iki koşu aynı defteri açamaz.
+  writeNewQualificationFiles(runFiles);
   const context = {
     transport, style, styleHash, fixture, runId, runStartedAtUtc, deploymentEnv,
     ledgerFor, onPrem, model, quality, setHash: set.ozet_sha256,
@@ -655,7 +669,8 @@ export function compareQualificationRuns(summaryA, summaryB) {
   if (a.paket_kumesi_ozeti !== b.paket_kumesi_ozeti) mismatches.push('paket_kumesi_ozeti');
   if (a.stil_ozeti_sha256 !== b.stil_ozeti_sha256) mismatches.push('stil_ozeti_sha256');
   if (a.istem_surumu !== b.istem_surumu) mismatches.push('istem_surumu');
-  if (a.eszamanlilik !== b.eszamanlilik) mismatches.push('eszamanlilik');
+  if (!validRunConcurrency(a.eszamanlilik) || a.eszamanlilik !== b.eszamanlilik) mismatches.push('eszamanlilik');
+  if ((a.tasiyici ?? null) !== (b.tasiyici ?? null)) mismatches.push('tasiyici');
   if ((a.dagitim_ortami ?? null) !== (b.dagitim_ortami ?? null)) mismatches.push('dagitim_ortami');
   if (bench.canonicalJson(a.ornekleme ?? null) !== bench.canonicalJson(b.ornekleme ?? null)) mismatches.push('ornekleme');
   if ((a.dusunme_kipi ?? null) !== (b.dusunme_kipi ?? null)) mismatches.push('dusunme_kipi');
@@ -666,7 +681,7 @@ export function compareQualificationRuns(summaryA, summaryB) {
     mismatches.push('gozlemlenen_vekil_dusunme');
   }
   if ((a.nicemleme ?? null) !== (b.nicemleme ?? null)) mismatches.push('nicemleme');
-  if ((a.istek_suresi_ms ?? null) !== (b.istek_suresi_ms ?? null)) mismatches.push('istek_suresi_ms');
+  if (!validRequestTimeout(a.istek_suresi_ms) || a.istek_suresi_ms !== b.istek_suresi_ms) mismatches.push('istek_suresi_ms');
   if (!inputMessageDigestsMatch(a.girdi_iletileri_ozetleri, b.girdi_iletileri_ozetleri)) {
     mismatches.push('girdi_iletileri_sha256');
   }
@@ -1236,7 +1251,9 @@ export function summarizeRun(records, {
       ...(supportedQuality ? [] : ['kalite']),
       ...(hasCompleteSampling ? [] : ['ornekleme']),
       ...(hasThinkingMode ? [] : ['dusunme_kipi']),
-      ...(hasQuantization ? [] : ['nicemleme'])
+      ...(hasQuantization ? [] : ['nicemleme']),
+      ...(validRunConcurrency(first.eszamanlilik) ? [] : ['eszamanlilik']),
+      ...(validRequestTimeout(first.istek_suresi_ms) ? [] : ['istek_suresi_ms'])
     ]
     : [];
   const exactRoster = rescored.length === set.paketler.length && set.paketler.every((entry) => rowByScenario.has(entry.senaryo));
@@ -1469,6 +1486,17 @@ export function literalFence(text) {
   return `${fence}text\n${text}\n${fence}`;
 }
 
+// Model adları tire, boşluk ve sürüm noktaları değişse de karşılaştırılır. Tarihli katalog takma adının kökü de denetlenir.
+function mentionsGeneratingModel(record) {
+  const compact = (text) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const prose = compact(bench.draftProse(record.taslak));
+  const identities = [expectedModelOf(record), ...reportedModelsOf(record)].filter((id) => typeof id === 'string');
+  return identities.some((id) => [id, id.replace(/[-_.](?:\d{8}|bf16|fp8|fp16|int4|int8)$/iu, '')].some((alias) => {
+    const name = compact(alias);
+    return name.length >= 5 && prose.includes(name);
+  }));
+}
+
 /**
  * Kör insan puanlama paketini (Markdown, CSV ve koordinatör anahtarı) bellekte kurar:
  *   - tek homojen koşuyu ve güncel dondurulmuş kanıt özetleriyle birebir eşleşmeyi zorunlu kılar;
@@ -1501,6 +1529,9 @@ export function buildBlindScoringPacket(records, {
     }
     if (!hasVerifiedStoredModelIdentity(record)) {
       throw new Error(`Model kimliği doğrulanmamış (${record.senaryo}); kör puanlama paketi kurulamaz.`);
+    }
+    if (mentionsGeneratingModel(record)) {
+      throw new Error(`Taslak metni model kimliğini içeriyor (${record.senaryo}); kör puanlama paketi kurulamaz.`);
     }
     const allowMissingLegacyDigest = allowHistoricalDigestMismatch && record.tasiyici !== 'kurum-ici' && !record.taslak_ozeti;
     if (!allowMissingLegacyDigest && (typeof record.taslak_ozeti !== 'string' || record.taslak_ozeti !== draftDigest(record))) {
@@ -1619,6 +1650,36 @@ export function isPathInside(candidate, parentDir) {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
+/** Bir gruptaki yeni dosyaları açar; herhangi bir yazma hatasında yalnızca bu grubun dosyalarını geri alır. */
+export function writeNewQualificationFiles(files, write = writeFileSync) {
+  const created = [];
+  try {
+    for (const [file, text] of files) {
+      let fd;
+      try {
+        fd = openSync(file, 'wx', 0o600);
+        created.push({ file, identity: fstatSync(fd, { bigint: true }) });
+        if (text) write(fd, text, 'utf8');
+      } catch (error) {
+        if (error?.code === 'EEXIST' && fd === undefined) {
+          throw new Error(`Hedef dosya zaten var (karışık koşu önlemi): ${file}`, { cause: error });
+        }
+        throw error;
+      } finally {
+        if (fd !== undefined) closeSync(fd);
+      }
+    }
+  } catch (error) {
+    for (const { file, identity } of created.reverse()) {
+      try {
+        const current = lstatSync(file, { bigint: true });
+        if (current.dev === identity.dev && current.ino === identity.ino) rmSync(file);
+      } catch { /* Temizlik hatası asıl yazma hatasını gölgelememelidir. */ }
+    }
+    throw error;
+  }
+}
+
 /** Kör puanlama paketi: çıktılar ayrıcalıklı (wx) yazılır; koordinatör anahtarı puanlayıcı dizini dışında zorunludur; hata durumunda kısmi çıktı geri alınır. */
 async function commandHumanPackage(options) {
   if (!options.girdi || !options.dizin || !options.anahtar) {
@@ -1643,25 +1704,20 @@ async function commandHumanPackage(options) {
     if (sameFile(options.girdi, target)) throw new Error(`Çıktı yolu girdi koşu dosyasının kendisi olamaz: ${target}`);
     if (existsSync(target)) throw new Error(`Hedef dosya zaten var (karışık paket önlemi): ${target}`);
   }
-  const createdFiles = [];
-  try {
-    writeFileSync(keyPath, `${JSON.stringify(packet.key, null, 1)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-    createdFiles.push(keyPath);
-    writeFileSync(mdPath, packet.markdown, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-    createdFiles.push(mdPath);
-    writeFileSync(csvPath, packet.csv, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-    createdFiles.push(csvPath);
-  } catch (error) {
-    for (const file of createdFiles) {
-      try { rmSync(file, { force: true }); } catch { /* geri alma en iyi çaba */ }
-    }
-    throw error;
-  }
+  writeNewQualificationFiles([
+    [keyPath, `${JSON.stringify(packet.key, null, 1)}\n`],
+    [mdPath, packet.markdown],
+    [csvPath, packet.csv]
+  ]);
   process.stdout.write(`${packet.count} taslak kör pakete yazıldı (paket ${packet.packetId}).\n`);
 }
 
-const direct = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (direct) {
+function isDirectInvocation() {
+  try { return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+
+if (isDirectInvocation()) {
   try {
     const { command, options } = parseQualificationArgs(process.argv.slice(2));
     if (command === 'kosu') await commandRun(options);

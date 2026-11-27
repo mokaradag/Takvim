@@ -40,34 +40,35 @@ test('üretim komutu ve belgeler MERGEN Rota için 8008 portunu kullanır', () =
   assert.match(readme, /npm run start -- -H 0\.0\.0\.0 -p 8008/);
 });
 
+function hasForeignDeploymentPort(source) {
+  return /-p\s*8009\b/u.test(source)
+    || /"(?:port|PORT)"\s*:\s*(?:"8009"|8009)(?=\s|[,}\]]|$)/u.test(source)
+    || /\bPORT\s*=\s*["']?8009["']?(?!\d)/u.test(source)
+    || /https?:\/\/[^\s"'`]+:8009\b/iu.test(source);
+}
+
+test('arşiv ölçümlerindeki 8009 sayısını dağıtım portu ayarından ayırır', () => {
+  assert.equal(hasForeignDeploymentPort('Toplam 8009 kayıt incelendi.'), false);
+  assert.equal(hasForeignDeploymentPort('{"output_tokens":8009}'), false);
+  for (const source of ['{"env":{"PORT":"8009"}}', '{"port":8009}', 'PORT=8009', 'next start -p 8009', 'https://örnek:8009/']) {
+    assert.equal(hasForeignDeploymentPort(source), true, source);
+  }
+});
+
 test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
   for (const relativePath of DOC_AND_CONFIG_FILES) {
     const source = read(relativePath);
-    const isMeasurementData = relativePath.startsWith('docs/kayitlar/') && /\.(sha256|json|jsonl|csv)$/i.test(relativePath);
-    const isSha256Manifest = relativePath.startsWith('docs/kayitlar/') && relativePath.endsWith('.sha256');
-    // Ölçüm kayıtları ve özet dosyaları da dağıtım komutu, URL veya PORT ayarıyla 8009 taşıyamaz.
-    if (isMeasurementData) {
-      assert.doesNotMatch(source, /-p\s*8009\b/, relativePath);
-      assert.doesNotMatch(source, /"port"\s*:\s*"?8009"?/, relativePath);
-      assert.doesNotMatch(source, /\bPORT\s*=\s*["']?8009["']?(?!\d)/, relativePath);
-      assert.doesNotMatch(source, /https?:\/\/[^\s"'`]+:8009\b/i, relativePath);
-      continue;
-    }
-    const scannable = isSha256Manifest ? source.replace(/[0-9a-f]{64}/gi, ' ') : source;
-    // Paragraf düzeyinde bakılır: cümle satır sonuna sarabilir.
-    for (const paragraph of scannable.split(/\n\s*\n/)) {
+    assert.equal(hasForeignDeploymentPort(source), false, relativePath);
+    // Arşivlerde sayı sayım verisi olabilir; komut, URL ve yapılandırma kuralları her belgede geçerlidir.
+    if (relativePath.startsWith('docs/kayitlar/')) continue;
+    for (const paragraph of source.split(/\n\s*\n/u)) {
       if (!paragraph.includes('8009')) continue;
-      // 8009 yalnızca "MERGEN Bilge'ye aittir" bağlamında anılabilir.
       assert.match(
         paragraph,
         /Bilge/i,
         `${relativePath}: 8009 yalnızca MERGEN Bilge bağlamında anılabilir → ${paragraph.trim().slice(0, 120)}`
       );
     }
-    assert.doesNotMatch(source, /-p\s*8009\b/, relativePath);
-    assert.doesNotMatch(source, /"port"\s*:\s*"?8009"?/, relativePath);
-    assert.doesNotMatch(source, /\bPORT\s*=\s*["']?8009["']?(?!\d)/, relativePath);
-    assert.doesNotMatch(source, /https?:\/\/[^\s"'`]+:8009\b/i, relativePath);
   }
 });
 
@@ -169,6 +170,41 @@ test('istemci paketine sunucu tarafı kimlik yapılandırması sızmaz', () => {
   }
 });
 
+const ARCHIVED_DIGEST_KEYS = new Set([
+  'paket_ozeti', 'paket_kumesi_ozeti', 'taslak_ozeti', 'stil_ozeti_sha256', 'girdi_iletileri_sha256'
+]);
+const ARCHIVE_JSON_TOKENS = /"taslak_ozetleri"\s*:\s*\{\s*(?:"(?:S\d{2}|K-[0-9a-f]{6})"\s*:\s*"[0-9a-f]{64}"\s*(?:,\s*|(?=\})))*\}|"(?:[^"\\]|\\.)*"(?:\s*:\s*"[0-9a-f]{64}")?/gisu;
+
+function archiveTextForEmployeeIdScan(source, relative) {
+  if (!relative.startsWith('docs/kayitlar/')) return source;
+  if (relative.endsWith('.sha256')) return source.replace(/^[0-9a-f]{64}(?=[ \t]+\S)/gimu, ' ');
+  if (relative.endsWith('.md')) return source.replace(/^(#{1,6}\s+[^\n]*?)\bK-[0-9A-F]{6}\b/gmu, '$1K-KOD');
+  if (relative.endsWith('.csv')) return source.replace(/^K-[0-9A-F]{6}(?=,)/gmu, 'K-KOD');
+  if (!/\.jsonl?$/u.test(relative)) return source;
+
+  // Ham JSON dizgelerini bütün olarak geçeriz; metin içindeki alıntılar ve yinelenen alanlar taranmaya devam eder.
+  const masked = source.replace(ARCHIVE_JSON_TOKENS, (token) => {
+    if (/^"taslak_ozetleri"\s*:\s*\{/u.test(token)) return token.replace(/"[0-9a-f]{64}"/giu, '""');
+    const field = /^"([a-z_]+)"(\s*:\s*)"[0-9a-f]{64}"$/iu.exec(token);
+    return field && ARCHIVED_DIGEST_KEYS.has(field[1]) ? `"${field[1]}"${field[2]}""` : token;
+  });
+  return relative.endsWith('.json') ? masked.replace(/"K-[0-9A-F]{6}"/gu, '"K-KOD"') : masked;
+}
+
+test('arşivde sicil taraması yalnızca bilinen özetleri ve sağlama sütununu atlar', () => {
+  const digest = '12345' + 'a'.repeat(59);
+  const archivePath = 'docs/kayitlar/ornek.jsonl';
+  const value = JSON.stringify({ paket_ozeti: digest, metin: digest, taslak_ozeti: digest });
+  const scanned = JSON.parse(archiveTextForEmployeeIdScan(value, archivePath));
+  assert.deepEqual(scanned, { paket_ozeti: '', metin: digest, taslak_ozeti: '' });
+  const list = JSON.stringify({ taslak_ozetleri: { S01: digest }, not: `"paket_ozeti": "${digest}"` });
+  assert.equal(JSON.parse(archiveTextForEmployeeIdScan(list, 'docs/kayitlar/ornek.json')).not.includes(digest), true);
+  assert.equal(JSON.parse(archiveTextForEmployeeIdScan(list, 'docs/kayitlar/ornek.json')).taslak_ozetleri.S01, '');
+  const duplicate = '{"metin":"' + digest + '","metin":"anonim"}';
+  assert.ok(archiveTextForEmployeeIdScan(duplicate, archivePath).includes(digest));
+  assert.equal(archiveTextForEmployeeIdScan(`${digest}  belge-${digest}.md`, 'docs/kayitlar/ornek.sha256').includes(digest), true);
+});
+
 test('depoda gerçek sicil, gerçek jeton veya gerçek kurumsal adres bulunmaz', () => {
   const scanned = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'test')), ...walk(path.join(ROOT, 'database'))]
     .filter((file) => /\.(js|jsx|mjs|sql)$/.test(file));
@@ -180,22 +216,7 @@ test('depoda gerçek sicil, gerçek jeton veya gerçek kurumsal adres bulunmaz',
     if (!statSync(file).isFile()) continue;
     const source = readFileSync(file, 'utf8');
     const relative = path.relative(ROOT, file).split(path.sep).join('/');
-    // Yalnızca docs/kayitlar/ altındaki kayıt ve özet dosyalarındaki 64 haneli onaltılık SHA-256 özetleri ile
-    // kör puanlama başlık/çizelge alanlarındaki üretilen K-XXXXXX kodları gerçek sicil sayılmaz;
-    // belgenin geri kalanındaki olası gerçek siciller taranmaya devam eder.
-    let scannable = source;
-    if (relative.startsWith('docs/kayitlar/')) {
-      if (/\.(sha256|json|jsonl)$/i.test(relative)) {
-        scannable = scannable.replace(/[0-9a-f]{64}/gi, ' ');
-      }
-      if (/\.md$/i.test(relative)) {
-        scannable = scannable.replace(/^(#{1,6}\s+[^\n]*?)\bK-[0-9A-F]{6}\b/gmu, '$1K-KOD');
-      } else if (/\.csv$/i.test(relative)) {
-        scannable = scannable.replace(/^K-[0-9A-F]{6}(?=,)/gmu, 'K-KOD');
-      } else if (/\.json$/i.test(relative)) {
-        scannable = scannable.replace(/"K-[0-9A-F]{6}"/gu, '"K-KOD"');
-      }
-    }
+    const scannable = archiveTextForEmployeeIdScan(source, relative);
     // Kaldırılan gerçek sicil değerleri geri gelmemelidir.
     for (const sicil of ['10276', '18068', '23977', '17205']) {
       assert.equal(scannable.includes(sicil), false, `${relative}: gerçek sicil değeri (${sicil}) bulunmamalıdır`);

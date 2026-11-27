@@ -13,11 +13,11 @@
  },
  "S03": {
   "dogru": 15,
-  "yanlis": 0,
+  "yanlis": 1,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null,
+  "not": "Meltem faaliyet paragrafı, dönem toplamındaki iki güncellemeyi Meltem’e bağlıyor. Güncellenen iki belge görevi Denge’ye, tek tamamlanan görev Meltem’e ait. Doğru sayısal değerler korundu; yanlış proje atfı ayrı bir olgusal iddia olarak sayıldı.",
   "taslak_ozeti": "6a4c968aae13e29dbe2df56abcfd9709ea1a39191a5640c4861932e107b73b03"
  },
  "S01": {

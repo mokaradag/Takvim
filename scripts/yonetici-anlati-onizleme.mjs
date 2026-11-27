@@ -124,36 +124,40 @@ for (const id of wanted) {
     continue;
   }
   const model = Array.isArray(record.model?.bildirilen) ? record.model.bildirilen.join(', ') : record.model?.bildirilen ?? '-';
-  const durationLabel = typeof record.sure_ms === 'number' && Number.isFinite(record.sure_ms)
+  const durationLabel = Number.isFinite(record.sure_ms) && record.sure_ms >= 0
     ? `${Math.round(record.sure_ms / 1000)} sn`
     : 'ölçülmedi';
-  const modelVerified = record.durum === 'gecerli' ? hasVerifiedStoredModelIdentity(record) : true;
-  const effectiveStatus = record.durum === 'gecerli' && !modelVerified ? 'gecersiz_kimlik' : record.durum;
+  let status = record.durum;
+  let message = null;
+  if (status === 'gecerli') {
+    const digest = record.taslak_ozeti;
+    if (!hasVerifiedStoredModelIdentity(record)) {
+      status = 'gecersiz_kimlik';
+      message = 'Kayıtlı model kimliği beklenen modelle doğrulanmadı; doğrulanmamış taslak önizlemede gösterilmedi.';
+    } else if (!isValidStoredDraftShape(record.taslak)) {
+      status = 'gecersiz_kayit';
+      message = 'Kayıtlı taslak yapısı bozuk; önizleme oluşturulamadı.';
+    } else if (digest == null) {
+      status = 'dogrulanmamis_tarihsel';
+      message = 'Uyarı: kayıtlı taslak özeti yok (doğrulanmamış tarihsel taslak).';
+    } else if (typeof digest !== 'string' || !digest.trim()) {
+      status = 'gecersiz_kayit';
+      message = 'Kayıtlı taslak özeti geçersiz biçimde; bozuk kayıt önizlemede gösterilmedi.';
+    } else if (digest !== draftDigest(record)) {
+      status = 'gecersiz_kayit';
+      message = 'Kayıtlı taslak özeti uyuşmuyor; değiştirilmiş taslak önizlemede gösterilmedi.';
+    }
+  } else {
+    message = `Taslak üretilemedi: ${record.hata_kodu || status}.`;
+  }
   out.push(`## ${id} — ${scenario.durum}`, '');
   out.push(`- Sınanan: ${scenario.sinanan}`);
   out.push(`- İstek: ${scenario.donem} · ${scenario.kapsam} · ayrıntı ${scenario.ayrinti} · odak ${scenario.odak} · notlar ${scenario.notlar} · karşılaştırma ${scenario.karsilastirma}`);
-  out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${effectiveStatus} · süre ${durationLabel}${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
-  // Model düzyazısı HTML yorumu ya da Markdown sözdizimiyle gizlenmemesi için düz metin çitinde birebir sunulur;
-  // model kimliği doğrulanmamış, taslak özeti bozuk ya da uyuşmayan satırlar reddedilir, diğer geçerli satırlar etkilenmez.
-  if (record.durum === 'gecerli') {
-    const hasOwnDigest = record.taslak_ozeti !== undefined && record.taslak_ozeti !== null;
-    if (!isValidStoredDraftShape(record.taslak)) {
-      out.push('_Kayıtlı taslak yapısı bozuk; önizleme oluşturulamadı._', '');
-    } else if (!modelVerified) {
-      out.push('_Kayıtlı model kimliği beklenen modelle doğrulanmadı; doğrulanmamış taslak önizlemede gösterilmedi._', '');
-    } else if (hasOwnDigest) {
-      if (typeof record.taslak_ozeti !== 'string' || !record.taslak_ozeti.trim()) {
-        out.push('_Kayıtlı taslak özeti geçersiz biçimde; bozuk kayıt önizlemede gösterilmedi._', '');
-      } else if (record.taslak_ozeti !== draftDigest(record)) {
-        out.push('_Kayıtlı taslak özeti uyuşmuyor; değiştirilmiş taslak önizlemede gösterilmedi._', '');
-      } else {
-        out.push(literalFence(renderReportDraftText(record.taslak)), '');
-      }
-    } else {
-      out.push('_Uyarı: kayıtlı taslak özeti yok (doğrulanmamış tarihsel taslak)._', '', literalFence(renderReportDraftText(record.taslak)), '');
-    }
-  } else {
-    out.push(`_Taslak üretilemedi: ${record.hata_kodu || record.durum}._`, '');
+  out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${status} · süre ${durationLabel}${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
+  if (message) out.push(`_${message}_`, '');
+  // Düzyazı, Markdown ya da HTML sözdizimiyle gizlenmemesi için düz metin çitinde sunulur.
+  if (status === 'gecerli' || status === 'dogrulanmamis_tarihsel') {
+    out.push(literalFence(renderReportDraftText(record.taslak)), '');
   }
 }
 const text = `${out.join('\n')}\n`;

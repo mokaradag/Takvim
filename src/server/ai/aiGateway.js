@@ -388,6 +388,8 @@ export function createAiGateway({
   }) {
     for (let attempt = 1; ; attempt += 1) {
       if (beforeDispatch) await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
+      const expired = deadline.failure();
+      if (expired) throw expired;
       if (context) context.attempts = attempt;
       const startedAt = now();
       try {
@@ -470,7 +472,7 @@ export function createAiGateway({
               model: route.model,
               messages: safeMessages,
               maxOutputTokens: outputLimit,
-              ...(sampling ? { sampling } : {}),
+              ...(sampling != null ? { sampling } : {}),
               signal: attemptSignal
             });
           } catch (error) {

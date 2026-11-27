@@ -360,6 +360,19 @@ function derivedIds(pkg, types = null) {
   return (pkg.turetilmis || []).filter((item) => isPlainObject(item) && (!types || types.includes(item.tur))).map((item) => item.id);
 }
 
+/** İlk görülen kanıt sırasını korur; bir kanıta çelişen zamanlar atanmışsa kronoloji kurulamaz. */
+export function distinctConflictEvidence(references, chronology) {
+  const positions = new Map();
+  references.forEach((id, index) => { if (!positions.has(id)) positions.set(id, index); });
+  const aligned = Array.isArray(chronology) && chronology.length === references.length
+    && Array.from(references).every((id, index) => Object.hasOwn(chronology, index)
+      && chronology[index] === chronology[positions.get(id)]);
+  return {
+    references: [...positions.keys()],
+    chronology: aligned ? [...positions.values()].map((index) => chronology[index]) : null
+  };
+}
+
 /**
  * Kaldırılamaz bütünlük açıklamaları: her biri ZORUNLU bir bölüme bağlanır, böylece isteğe bağlı
  * bir bölümün kapatılması tamlık, çelişki ya da kısmi görünürlük bilgisini bastıramaz.
@@ -399,7 +412,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   if (tamlik.bagimliliklar === 'partial') {
     out.push({
       kimlik: 'kismi_bagimlilik_kapsami', bolum: 'faaliyetler', kanitlar: [],
-      yonerge: 'Bağımlılık kaydı erişim düzeyi nedeniyle kısmidir: pakette bağımlılık bağlantısı görünmemesi bağımlılık olmadığı anlamına gelmez. Bu sınırı kısaca belirt; görünmeyen bağımlılıklar hakkında tahmin yürütme.'
+      yonerge: 'Bağımlılık kaydının kapsamı kısmidir: pakette bağımlılık bağlantısı görünmemesi bağımlılık olmadığı anlamına gelmez. Bu sınırı kısaca belirt; görünmeyen bağımlılıklar hakkında tahmin yürütme.'
     });
   }
   const clippedNotes = pkg.kanitlar.filter((item) => isPlainObject(item) && item.tur === 'not' && item.kirpildi === true).map((item) => item.id);
@@ -469,10 +482,9 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   const hasOrderableConflictTime = (conflict) => {
     // Farklı görevlere ait iki güncel notun yazım zamanı farkı (`notlar_arasi_celiski`) durum değişimi kanıtı değildir.
     if (conflict.tur === 'notlar_arasi_celiski') return false;
-    if (Array.isArray(conflict.kronoloji) && hasUniqueLatestTime(conflict.kronoloji)) return true;
-    // Yinelenen kanıt kimlikleri tekilleştirilir; aynı kaydın tekrar geçmesi en güncel zamanı sahte eşitliğe düşürmez.
-    const uniqueIds = [...new Set(conflict.kanitlar)];
-    const writeTimes = uniqueIds
+    const evidence = distinctConflictEvidence(conflict.kanitlar, conflict.kronoloji);
+    if (Array.isArray(conflict.kronoloji)) return hasUniqueLatestTime(evidence.chronology);
+    const writeTimes = evidence.references
       .map((id) => itemById.get(id))
       .map((item) => (isPlainObject(item) ? (item.kayit_zamani ?? null) : null));
     return hasUniqueLatestTime(writeTimes);
@@ -595,9 +607,9 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     && activityMeasures.every((item) => item.deger === 0 && item.kayit_kapsami !== 'partial' && item.tamlik !== 'partial');
   if (activityExplicitZero
     && !hasPositiveReportPeriodSummary
-    && tamlik.hareket !== 'partial' && tamlik.kapsam_gorunurlugu !== 'partial'
+    && !partialActivity && tamlik.kapsam_gorunurlugu !== 'partial'
     && tamlik.paket_kesildi !== true && tamlik.kesit_tutarli !== false
-    && groups.tamamlanan.length === 0
+    && groups.tamamlanan.length === 0 && groups.hareketli.length === 0
     && completionCompatibleWithZero) {
     out.push({
       kimlik: 'degisiklik_yok', bolum: 'yonetici_degerlendirmesi',
@@ -657,9 +669,8 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
 
   const highlightsPrimary = [...groups.tamamlanan, ...notesFor(groups.tamamlanan, noteTask, groups.not), ...groups.hareketli,
     ...notesFor(groups.hareketli, noteTask, groups.not), ...groups.belge, ...derivedIds(pkg, ['kilometre_tasi_ozeti', 'karsilastirma'])];
-  // Görev satırları bütçe nedeniyle düştüyse rapor dönemindeki pozitif tamamlama ölçüsü, görev oluşturma özeti
-  // veya yetkili görev notları yedek odak kanıtı olur (yalnızca not içeren paketlerde sahte "gelişme yok" yönergesi verilmez).
-  const highlightsFallback = highlightsPrimary.length > 0
+  // Belge ya da karşılaştırma olsa da görev satırları yokken dönem toplamları öne çıkan gelişmelere girer.
+  const highlightsAggregates = groups.tamamlanan.length > 0
     ? []
     : [
       ...pkg.kanitlar.filter((item) => {
@@ -671,13 +682,13 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
           return (Number.isFinite(completedCount) && completedCount > 0) || (Number.isFinite(createdCount) && createdCount > 0);
         }
         return false;
-      }).map((item) => item.id),
-      ...groups.not
+      }).map((item) => item.id)
     ];
+  const highlights = [...highlightsAggregates, ...highlightsPrimary];
 
   const allocation = {
     yonetici_degerlendirmesi: [...groups.olcu, ...derivedAll, ...groups.tamamlanan, ...groups.geciken, ...groups.engelli, ...groups.oncelikli, ...conflictIds],
-    one_cikan_gelismeler: highlightsPrimary.length > 0 ? highlightsPrimary : highlightsFallback,
+    one_cikan_gelismeler: highlights.length > 0 ? highlights : groups.not,
     faaliyetler: [...groups.olcu, ...groups.hareket, ...groups.gorev, ...groups.not, ...groups.belge],
     // Açık engelli/kritik/yüksek öncelikli işlerin notları, açık bağımlılıklar ve pozitif gecikme ölçüsü/payı risk bölümünü besler;
     // veri kalitesi/tamlık uyarıları kendi zorunlu bölümlerinde bildirildiğinden isteğe bağlı Riskler bölümünü tek başına açmaz.

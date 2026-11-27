@@ -189,7 +189,7 @@ export function verifyWriterPackageSet(set, fixture) {
   const fixtureIds = (fixture?.senaryolar || []).map((item) => item?.id);
   const scenarios = new Map((fixture?.senaryolar || []).map((item) => [item.id, item]));
   const packages = Array.isArray(set?.paketler) ? set.paketler : [];
-  const ids = packages.map((item) => item.senaryo);
+  const ids = packages.map((item) => item?.senaryo);
   const fixtureMatchesRoster = fixtureIds.length === FIXED_SCENARIO_IDS.length
     && new Set(fixtureIds).size === FIXED_SCENARIO_IDS.length
     && fixtureIds.every((id) => FIXED_SCENARIO_SET.has(id));
@@ -209,7 +209,11 @@ export function verifyWriterPackageSet(set, fixture) {
     const aliasMatch = /^(.+) #[1-9]\d*$/u.exec(name);
     return Boolean(aliasMatch && projectBaseLabels.has(aliasMatch[1]));
   };
-  for (const entry of packages) {
+  for (const [index, entry] of packages.entries()) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      problems.push(`paket_satiri_gecersiz:${index}`);
+      continue;
+    }
     const contract = validateEvidencePackageContract(entry?.paket);
     if (!contract.ok) problems.push(`kanit_zarfi_gecersiz:${entry?.senaryo}`);
     if (entry?.paket !== undefined && typeof entry.paket !== 'function' && typeof entry.paket !== 'symbol') {
@@ -458,14 +462,14 @@ function extractDateAnalysis(text, defaultYear, { includeInvalid = true } = {}) 
     addDate(Number(m[4]), Number(m[3]), Number(m[1]), m.index);
   });
   // 3. Ay adlı gün aralığı ("2–8 Kasım 2026")
-  consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})\\s+(${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?:\\s+(\\d{4})(?!\\d))?`, 'gu'), (m) => {
+  consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
     const year = m[4] ? Number(m[4]) : defaultYear;
     const month = MONTHS.indexOf(m[3]) + 1;
     addDate(year, month, Number(m[1]), m.index);
     addDate(year, month, Number(m[2]), m.index + m[1].length + 1);
   });
   // 4. Ortak aylı eşgüdümlü gün listesi ("26 ve 27 Kasım 2026", "10, 12 ve 14 Kasım")
-  consume(new RegExp(`(?<!\\d)(\\d{1,2}(?:\\s*,\\s*\\d{1,2})*\\s+ve\\s+\\d{1,2})\\s+(${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?:\\s+(\\d{4})(?!\\d))?`, 'gu'), (m) => {
+  consume(new RegExp(`(?<!\\d)(\\d{1,2}(?:\\s*,\\s*\\d{1,2})*\\s+ve\\s+\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
     const year = m[3] ? Number(m[3]) : defaultYear;
     const month = MONTHS.indexOf(m[2]) + 1;
     for (const dayMatch of m[1].matchAll(/\d{1,2}/gu)) {
@@ -473,7 +477,7 @@ function extractDateAnalysis(text, defaultYear, { includeInvalid = true } = {}) 
     }
   });
   // 5. Tekil ay adlı tarih ("5 Kasım 2026"; öndeki `(?<!\d)` yıl sonunun gün sanılmasını önler: "2026 Kasım")
-  consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s+(${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?:\\s+(\\d{4})(?!\\d))?`, 'gu'), (m) => {
+  consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
     const year = m[3] ? Number(m[3]) : defaultYear;
     addDate(year, MONTHS.indexOf(m[2]) + 1, Number(m[1]), m.index);
   });
@@ -632,17 +636,17 @@ function sectionProse(draft, sectionId) {
  */
 export function mandatoryCoverage(prose, mandatory = [], draft = null, defaultYear = 2026) {
   const fullText = String(prose);
-  const fullNorm = normalizeProse(fullText);
-  const fullDates = new Set(extractDateAnalysis(fullText, defaultYear, { includeInvalid: false }).validDays);
+  const analyze = (text) => ({
+    norm: normalizeProse(text),
+    dates: new Set(extractDates(text, defaultYear, { includeInvalid: false })),
+    numbers: new Set(extractTurkishNumbers(text, defaultYear))
+  });
+  const full = analyze(fullText);
   const sectionCache = new Map();
   const getTarget = (sectionId) => {
-    if (!sectionId || !draft) return { norm: fullNorm, dates: fullDates };
+    if (!sectionId || !draft) return full;
     if (!sectionCache.has(sectionId)) {
-      const text = sectionProse(draft, sectionId);
-      sectionCache.set(sectionId, {
-        norm: normalizeProse(text),
-        dates: new Set(extractDateAnalysis(text, defaultYear, { includeInvalid: false }).validDays)
-      });
+      sectionCache.set(sectionId, analyze(sectionProse(draft, sectionId)));
     }
     return sectionCache.get(sectionId);
   };
@@ -656,7 +660,14 @@ export function mandatoryCoverage(prose, mandatory = [], draft = null, defaultYe
         return altAnalysis.validDays.every((day) => target.dates.has(day));
       }
       const needle = normalizeProse(alt).trim();
-      return needle.length > 0 && target.norm.includes(needle);
+      if (/^[-−]?\d+(?:[.,]\d+)*$/u.test(needle)) return target.numbers.has(parseTurkishNumber(needle));
+      if (!/\d/u.test(needle)) return needle.length > 0 && target.norm.includes(needle);
+      // Sayı içeren söz öbekleri de uzun bir sayının içinden başlayıp bitemez.
+      const bounded = needle.split(/([-−]?\d+(?:[.,]\d+)*)/u).map((part, index) => {
+        const escaped = escapeRegex(part);
+        return index % 2 === 0 ? escaped : `(?<![\\d−-])(?<!\\d[.,])${escaped}(?!\\d|[.,]\\d)`;
+      }).join('');
+      return new RegExp(bounded, 'u').test(target.norm);
     }));
     return {
       id: fact.id,

@@ -99,7 +99,10 @@ export function createAiDeadline({ timeoutMs, parentSignal = null, now = Date.no
   return {
     signal: controller.signal,
     /** Süre dolduysa ya da iptal edildiyse sınıflandırılmış hata; aksi hâlde `null`. */
-    failure: () => failure,
+    failure() {
+      if (!failure && now() - startedAt >= budgetMs) abort(AI_ERROR_CODES.AI_TIMEOUT);
+      return failure;
+    },
     remainingMs: () => Math.max(0, budgetMs - (now() - startedAt)),
     dispose() {
       clearTimeout(timer);

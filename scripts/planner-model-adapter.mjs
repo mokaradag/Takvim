@@ -743,6 +743,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
   const fail = (error, extra) => reportFailure(log, error, extra);
   const [system, ...rest] = payload.messages;
   if (system?.role !== 'system') return fail('PLANNER_SYSTEM_MISSING');
+  if (payload.tools != null && !Array.isArray(payload.tools)) return fail('PLANNER_TOOL_CATALOG_INVALID');
   const all = payload.toolChoice === 'none' ? [] : (payload.tools ?? []);
   // Zorunlu adlı araç (üretimde OpenAI uyumlu adlı işlev seçimi) CLI'nin yapılandırılmış çıktısıyla verilir: yanıt o aracın şemasıdır.
   // PLANNER_CLAUDE_NAMED_TOOL=auto: standart araç profilinin (`chat.tools`) üretim sözleşmesi. Sağlayıcı bu profilde adlı seçimi `auto`
@@ -755,11 +756,11 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
   // düşünme belirteçleri kayda yazılır. Varsayılan planlayıcı kuralı (düşünme kapalı ve denetimli) değişmez. Araçlı turlarda kullanılamaz.
   const allowThinking = process.env.PLANNER_CLAUDE_ALLOW_THINKING === '1';
   // Araçsız isteklerde `toolChoice` veya `tools` atlanmış olabilir; yalnızca etkin araç varsa ya da `none` dışı araç seçimi istendiyse reddedilir.
-  const hasEffectiveTools = Array.isArray(all) && all.length > 0;
+  const hasEffectiveTools = all.length > 0;
   if (allowThinking && (hasEffectiveTools || (payload.toolChoice != null && payload.toolChoice !== 'none'))) {
     return fail('PLANNER_THINKING_REQUIRES_NO_TOOLS');
   }
-  const forced = !namedAuto && payload.toolChoice?.name && Array.isArray(all) ? all.find((tool) => tool.name === payload.toolChoice.name) || null : null;
+  const forced = !namedAuto && payload.toolChoice?.name ? all.find((tool) => tool.name === payload.toolChoice.name) || null : null;
   // Zorunlu araç turunda yalnızca zorunlu şema (PLANNER_CLAUDE_FORCED_RETRY yeniden denemesi): üretimin adlı araç seçimi
   // modelin başka araç çağırmasını kısıtlı çözümle engeller; CLI bunu yapamaz, bu yüzden yeniden deneme ayrıca sayılır.
   const tools = hideTools ? [] : forced ? all.filter((tool) => tool !== forced) : all;
