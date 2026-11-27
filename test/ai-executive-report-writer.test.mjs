@@ -518,10 +518,13 @@ test('mimari: yazar modülleri model adı, ortam değişkeni, SQL, araç ya da y
     'src/domain/ai/report/reportDraft.js',
     'src/server/ai/report/reportWriter.js'
   ]);
-  const writerImportRe = /(?:^|\n)\s*import\b[\s\S]*?\bfrom\s*['"][^'"]*report(?:Writer|Draft|SectionPlan|WriterPrompt)(?:\.[jt]s)?['"]|\bimport\s*\(\s*['"][^'"]*report(?:Writer|Draft|SectionPlan|WriterPrompt)(?:\.[jt]s)?['"]\s*\)/u;
-  // Pozitif ve negatif kontrol: sıradan tanımlayıcı geçer, gerçek yazar içe aktarımı yakalanır.
+  const writerImportRe = /(?:^|\n)\s*(?:import|export)\b[^;'"]*\bfrom\s*['"][^'"]*report(?:Writer|Draft|SectionPlan|WriterPrompt)(?:\.[jt]s)?['"]|(?:^|\n)\s*import\s*['"][^'"]*report(?:Writer|Draft|SectionPlan|WriterPrompt)(?:\.[jt]s)?['"]|\bimport\s*\(\s*['"][^'"]*report(?:Writer|Draft|SectionPlan|WriterPrompt)(?:\.[jt]s)?['"]\s*\)/u;
+  // Pozitif ve negatif kontroller: sıradan metin ve önceki import sonrası dize geçer; gerçek import/re-export yakalanır.
   assert.equal(writerImportRe.test('const label = "reportWriter";\nexport const x = 1;\n'), false);
+  assert.equal(writerImportRe.test("import fs from 'node:fs';\nconst note = \"from '../reportWriter.js'\";\n"), false);
   assert.equal(writerImportRe.test("import { writeExecutiveReportDraft } from '../reportWriter.js';\n"), true);
+  assert.equal(writerImportRe.test("export { writeExecutiveReportDraft } from '../reportWriter.js';\n"), true);
+  assert.equal(writerImportRe.test("const mod = await import('../reportWriter.js');\n"), true);
   const walk = (dir) => fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
   const importers = walk('src')
     .filter((file) => /\.(m?[jt]s|[jt]sx)$/u.test(file) && !allowedInternalImporters.has(file.split(path.sep).join('/')))
@@ -1059,8 +1062,16 @@ test('kanıt, plan ve istem ek kök neden gerilemeleri: proje kodu çakışması
     const scopeLabelSet = new Set(built.evidencePackage.istek.kapsam.kimlikler);
     const taskProjectLabels = built.evidencePackage.kanitlar.filter((k) => k.tur === 'gorev').map((k) => k.proje);
     assert.ok(taskProjectLabels.length > 0 && taskProjectLabels.every((lbl) => scopeLabelSet.has(lbl)), 'Görev kanıtları da aynı ayrıştırılmış proje etiketlerini taşımalıdır');
-    const breakdownLabels = built.evidencePackage.kanitlar.filter((k) => k.tur === 'olcu' && k.olcu === 'tamamlanan' && k.kapsam?.length === 1).map((k) => k.kapsam[0]);
-    assert.ok(breakdownLabels.every((lbl) => scopeLabelSet.has(lbl)), 'Proje bazlı ölçü kırılımları kapsam etiketleriyle birebir eşleşmelidir');
+    const breakdownRows = built.evidencePackage.kanitlar.filter((k) => k.tur === 'olcu' && k.olcu === 'tamamlanan' && k.kapsam?.length === 1);
+    assert.equal(breakdownRows.length, 2, 'Çakışan kodlu her iki proje için tamamlanan kırılım satırı üretilmelidir');
+    const breakdownLabels = breakdownRows.map((k) => k.kapsam[0]);
+    assert.deepEqual([...new Set(breakdownLabels)].sort(), [...scopeLabelSet].sort(), 'Proje bazlı ölçü kırılımları kapsam etiketleriyle birebir eşleşmelidir');
+    const totalCompletedMeasure = built.evidencePackage.kanitlar.find((k) => k.tur === 'olcu' && k.olcu === 'tamamlanan' && k.kapsam?.length === 2);
+    assert.equal(
+      breakdownRows.reduce((sum, row) => sum + row.deger, 0),
+      totalCompletedMeasure?.deger,
+      'Proje kırılımlarının tamamlanan toplamı genel tamamlanan ölçüsüyle örtüşmelidir'
+    );
     const serialized = JSON.stringify(built.evidencePackage);
     assert.equal(serialized.includes(kuzey.ProjectId), false, 'Ham proje UUID pakete sızmamalıdır');
     assert.equal(serialized.includes(pusula.ProjectId), false, 'Çakışan ikinci projenin ham UUID pakete sızmamalıdır');
@@ -1104,10 +1115,18 @@ test('kanıt, plan ve istem ek kök neden gerilemeleri: proje kodu çakışması
   hugeStyle.anlati.bolum_plani.sozcuk_butcesi.standart = [200, 999999];
   assert.throws(() => plan.buildReportSectionPlan(pkgOf('S01'), hugeStyle), (error) => error?.code === 'STYLE_INVALID');
 
+  // Geçersiz takvim tarihi (`2026-02-31`) ve kuyruk çöpü (`2026-11-08garbage`) tanınan açık görevde (`devam_ediyor`) gecikme üretmez;
+  // aynı görev geçerli geçmiş tarih (`2026-11-01`) aldığında Riskler bölümünü açar (pozitif kontrol).
   const badDayPkg = pkgOf('S28');
-  badDayPkg.kanitlar.push({ id: 'E98', tur: 'gorev', baslik: 'Geçersiz takvim tarihli iş', durum: 'in-progress', baslangic: '2026-01-01', hedef_bitis: '2026-02-31' });
+  badDayPkg.kanitlar.push({ id: 'E98', tur: 'gorev', baslik: 'Geçersiz takvim tarihli iş', durum: 'devam_ediyor', baslangic: '2026-01-01', hedef_bitis: '2026-02-31' });
   const badDayPlan = plan.buildReportSectionPlan(badDayPkg, style);
   assert.equal(badDayPlan.bolumler.some((b) => b.kimlik === 'riskler'), false, 'Geçersiz takvim tarihi gecikmiş sayılmamalıdır');
+  const garbageDayPkg = pkgOf('S28');
+  garbageDayPkg.kanitlar.push({ id: 'E98', tur: 'gorev', baslik: 'Bozuk kuyruklu tarihli iş', durum: 'devam_ediyor', baslangic: '2026-01-01', hedef_bitis: '2026-11-08garbage' });
+  assert.equal(plan.buildReportSectionPlan(garbageDayPkg, style).bolumler.some((b) => b.kimlik === 'riskler'), false, 'Kuyruk çöpü taşıyan tarih gecikmiş sayılmamalıdır');
+  const validPastDayPkg = pkgOf('S28');
+  validPastDayPkg.kanitlar.push({ id: 'E98', tur: 'gorev', baslik: 'Geçerli geçmiş tarihli iş', durum: 'devam_ediyor', baslangic: '2026-01-01', hedef_bitis: '2026-11-01' });
+  assert.equal(plan.buildReportSectionPlan(validPastDayPkg, style).bolumler.some((b) => b.kimlik === 'riskler'), true, 'Aynı açık görev geçerli geçmiş tarihle Riskler bölümünü açmalıdır');
 
   const badPrioPkg = pkgOf('S28');
   // `toString` ve `valueOf` null olan nesne korumasız dizge dönüşümünde TypeError fırlatır; planlayıcı güvenle yoksaymalıdır.
@@ -1583,15 +1602,31 @@ test('nitelendirme ve önizleme betikleri gerileme: CLI doğrulama, homojen koş
       taslak: draftModule.parseReportDraft(validDraftText(pl, { ref: firstRef }), { plan: pl, evidencePackage: it.paket })
     });
   });
+  const all48Packet = qual.buildBlindScoringPacket(all48Rows);
+  const all48BlindKey = all48Packet.key;
+  const codeByScenario = new Map(Object.entries(all48BlindKey.eslesme).map(([code, meta]) => [meta.senaryo, code]));
   const all48Digests = Object.fromEntries(all48Rows.map((r) => [r.senaryo, qual.draftDigest(r)]));
-  const makeAll48Scores = (score, mekanik) => Object.fromEntries(packageSet.paketler.map((it) => {
+  const makeAll48Scores = (score, mekanik, { useBlindCodes = true } = {}) => Object.fromEntries(packageSet.paketler.map((it) => {
     const hasNotes = it.paket.kanitlar.some((k) => k.tur === 'not');
-    return [it.senaryo, { E1: score, E2: score, E3: score, E4: score, E5: score, E6: score, E7: score, E8: hasNotes ? score : null, E9: score, mekanik }];
+    const key = useBlindCodes ? codeByScenario.get(it.senaryo) : it.senaryo;
+    return [key, { E1: score, E2: score, E3: score, E4: score, E5: score, E6: score, E7: score, E8: hasNotes ? score : null, E9: score, mekanik }];
   }));
 
-  const lowScoreOnly = qual.summarizeRun(all48Rows, {
+  // Kör paket anahtarı olmadan ham senaryo anahtarlarıyla B kapısı geçirilemez.
+  const unboundGateB = qual.summarizeRun(all48Rows, {
     editorial: {
       kosu: 'kosu-1', taslak_ozetleri: all48Digests,
+      puanlayicilar: [{ kimlik: 'P1', tur: 'insan', puanlar: makeAll48Scores(5, false, { useBlindCodes: false }) }, { kimlik: 'P2', tur: 'insan', puanlar: makeAll48Scores(5, false, { useBlindCodes: false }) }]
+    }
+  });
+  assert.equal(unboundGateB.editoryal.kapi_b_gecti, null);
+  assert.equal(unboundGateB.editoryal.kor_paket_baglandi, false);
+  assert.equal(unboundGateB.editoryal.kapi_b_durumu, 'kor_paket_baglami_eksik_bekliyor');
+
+  const lowScoreOnly = qual.summarizeRun(all48Rows, {
+    blindKey: all48BlindKey,
+    editorial: {
+      kosu: 'kosu-1', paket_kimligi: all48BlindKey.paket_kimligi,
       puanlayicilar: [{ kimlik: 'P1', tur: 'insan', puanlar: makeAll48Scores(1, false) }, { kimlik: 'P2', tur: 'insan', puanlar: makeAll48Scores(1, false) }]
     }
   });
@@ -1600,8 +1635,9 @@ test('nitelendirme ve önizleme betikleri gerileme: CLI doğrulama, homojen koş
   assert.equal(lowScoreOnly.editoryal.esik_ihlalleri.includes('mekanik_orani_5_ustu'), false);
 
   const highMechOnly = qual.summarizeRun(all48Rows, {
+    blindKey: all48BlindKey,
     editorial: {
-      kosu: 'kosu-1', taslak_ozetleri: all48Digests,
+      kosu: 'kosu-1', paket_kimligi: all48BlindKey.paket_kimligi,
       puanlayicilar: [{ kimlik: 'P1', tur: 'insan', puanlar: makeAll48Scores(5, true) }, { kimlik: 'P2', tur: 'insan', puanlar: makeAll48Scores(5, true) }]
     }
   });
@@ -1610,12 +1646,14 @@ test('nitelendirme ve önizleme betikleri gerileme: CLI doğrulama, homojen koş
   assert.equal(highMechOnly.editoryal.esik_ihlalleri.includes('genel_ortalama_4_alti'), false);
 
   const passingGateB = qual.summarizeRun(all48Rows, {
+    blindKey: all48BlindKey,
     editorial: {
-      kosu: 'kosu-1', taslak_ozetleri: all48Digests,
+      kosu: 'kosu-1', paket_kimligi: all48BlindKey.paket_kimligi,
       puanlayicilar: [{ kimlik: 'P1', tur: 'insan', puanlar: makeAll48Scores(4, false) }, { kimlik: 'P2', tur: 'insan', puanlar: makeAll48Scores(5, false) }]
     }
   });
   assert.equal(passingGateB.editoryal.kapi_b_gecti, true);
+  assert.equal(passingGateB.editoryal.kor_paket_baglandi, true);
   assert.equal(passingGateB.editoryal.kapi_b_durumu, 'gecti');
   assert.deepEqual(passingGateB.editoryal.esik_ihlalleri, []);
 
@@ -1930,14 +1968,21 @@ test('yakınsama kök neden gerilemeleri: proje etiket birliği, sözleşme sın
   assert.equal(usedInjectedFetch, true);
   assert.deepEqual(models, ['Qwen3.8-Flash-Next-FP8']);
 
+  // İstenen düşünme kipi karışıklığı kapalı reddedilir; vekilde gözlemlenen yanıt başına `dusunme` farkı koşuyu engellemez,
+  // özet kimliğinde `gozlemlenen_vekil_dusunme: 'karisik'` olarak raporlanır ve koşu karşılaştırmasında uyuşmazlık sayılır.
   assert.throws(() => qual.selectHomogeneousRun([
-    { kosu: 'k1', senaryo: 'S01', tasiyici: 'vekil', dusunme: 'on', model: { beklenen: 'm' } },
-    { kosu: 'k1', senaryo: 'S02', tasiyici: 'vekil', dusunme: 'off', model: { beklenen: 'm' } }
+    { kosu: 'k1', senaryo: 'S01', tasiyici: 'kurum-ici', dusunme_kipi: 'kapali', model: { beklenen: 'm' } },
+    { kosu: 'k1', senaryo: 'S02', tasiyici: 'kurum-ici', dusunme_kipi: 'acik', model: { beklenen: 'm' } }
   ]), /Karışık koşu/iu);
+  const mixedObservedProxy = qual.selectHomogeneousRun([
+    { kosu: 'k1', senaryo: 'S01', tasiyici: 'vekil', durum: 'gecerli', dusunme: 'on', model: { beklenen: 'm' } },
+    { kosu: 'k1', senaryo: 'S02', tasiyici: 'vekil', durum: 'gecerli', dusunme: 'off', model: { beklenen: 'm' } }
+  ]);
+  assert.equal(mixedObservedProxy.length, 2);
 
   const cmpEnv = qual.compareQualificationRuns(
-    { kimlik: { dagitim_ortami: 'sunucu-a' } },
-    { kimlik: { dagitim_ortami: 'sunucu-b' } }
+    { kimlik: { dagitim_ortami: 'sunucu-a', girdi_iletileri_ozetleri: { S01: 'h1' } } },
+    { kimlik: { dagitim_ortami: 'sunucu-b', girdi_iletileri_ozetleri: { S01: 'h1' } } }
   );
   assert.equal(cmpEnv.karsilastirilabilir, false);
   assert.ok(cmpEnv.uyusmazliklar.includes('dagitim_ortami'));
@@ -1948,9 +1993,14 @@ test('yakınsama kök neden gerilemeleri: proje etiket birliği, sözleşme sın
   assert.ok(bench.normalizeProse('Gecikme payı yüzde bir ve değişim yüzde eksi yüz.').includes('yüzde -100'));
   assert.ok(bench.normalizeProse('Bir görev tamamlandı.').includes('bir görev'));
 
-  const s28UtcDates = bench.packageDates({ ...pkgOf('S28'), veri_ani: '2026-11-08T21:00:00Z' });
-  assert.equal(s28UtcDates.has('2026-11-09'), true);
-  assert.equal(s28UtcDates.has('2026-11-08'), true); // dönem bitişi 2026-11-08
+  // Kök UTC zaman damgası yalıtılmış olarak sınanır (başka bir kanıt satırı 9 Kasım veya 8 Kasım tarihini maskelemez).
+  const isolatedUtcDates = bench.packageDates({
+    veri_ani: '2026-11-08T21:00:00Z',
+    istek: { donem: { baslangic: '2026-11-01', bitis: '2026-11-07' } },
+    kanitlar: []
+  });
+  assert.equal(isolatedUtcDates.has('2026-11-09'), true, 'UTC 21:00 İstanbul takviminde 9 Kasım olarak çözülmelidir');
+  assert.equal(isolatedUtcDates.has('2026-11-08'), false, 'Kök UTC tarihi ham önekten 8 Kasım üretmemelidir');
 
   const dateCov = bench.mandatoryCoverage('Mekanik montaj 15 Kasım tarihinde tamamlandı.', [{ id: 'Z1', anahtarlar: [['5 kasım']] }], null, 2026);
   assert.equal(dateCov[0].aday_eslesti, false, '15 Kasım metni 5 Kasım tarih seçeneğiyle alt dize olarak eşleşmemelidir');
@@ -1969,31 +2019,306 @@ test('yakınsama kök neden gerilemeleri: proje etiket birliği, sözleşme sın
   ]);
   assert.equal(proxyWithInfra.length, 2);
 
-  // Tarihsel paket uyuşmazlığı izniyle yeniden taranmayan satırlar sıfır ihlal değil taranmadı (null) sayılmalıdır.
+  // Tarihsel paket uyuşmazlığı izninde: (1) taramasız satır null/taranmadi, (2) eksik alanlı `nesnel: {}` satır taranmadi/null ve kronoloji bekleyen,
+  // (3) tüm 5 dizisi boş kaydedilmiş temiz tarama tarandi/0, (4) özet eşleşen pozitif kontrol yeniden taranır.
   const histEntry = packageSet.paketler.find((entry) => entry.senaryo === 'S01');
+  const histEntry2 = packageSet.paketler.find((entry) => entry.senaryo === 'S02');
   const histDraft = {
     bolumler: [{ kimlik: 'yonetici_degerlendirmesi', baslik: 'Yönetici Değerlendirmesi', paragraflar: [{ metin: 'Özet metin.', kanitlar: ['E1'] }] }],
     iddialar: []
   };
   const histSummary = qual.summarizeRun([
     {
-      kosu: 'k-hist',
-      senaryo: 'S01',
-      tasiyici: 'vekil',
-      durum: 'gecerli',
-      ayrinti: 'standart',
-      sure_ms: 1000,
-      paket_kumesi_ozeti: 'eski-kume',
-      paket_ozeti: 'eski-paket',
-      model: { beklenen: 'm', bildirilen: ['m'], dogrulandi: true },
-      taslak: histDraft
+      kosu: 'k-hist', senaryo: 'S01', tasiyici: 'vekil', durum: 'gecerli', ayrinti: 'standart', sure_ms: 1000,
+      paket_kumesi_ozeti: 'eski-kume', paket_ozeti: 'eski-paket', dusunme: 'on',
+      model: { beklenen: 'm', bildirilen: ['m'], dogrulandi: true }, taslak: histDraft
+    },
+    {
+      kosu: 'k-hist', senaryo: 'S02', tasiyici: 'vekil', durum: 'gecerli', ayrinti: 'standart', sure_ms: 1100,
+      paket_kumesi_ozeti: 'eski-kume', paket_ozeti: 'eski-paket-2', dusunme: 'off',
+      model: { beklenen: 'm', bildirilen: ['m'], dogrulandi: true }, taslak: histDraft,
+      nesnel: {
+        yetkisiz_aciklama: [], uydurma_kimlik: [], defterde_olmayan_tarihler: [],
+        defterde_olmayan_sayilar: [], kronoloji_celiskisi_adaylari: []
+      }
+    },
+    {
+      kosu: 'k-hist', senaryo: 'S03', tasiyici: 'vekil', durum: 'gecerli', ayrinti: 'standart', sure_ms: 1200,
+      paket_kumesi_ozeti: 'eski-kume', paket_ozeti: 'eski-paket-3', dusunme: 'on',
+      model: { beklenen: 'm', bildirilen: ['m'], dogrulandi: true }, taslak: histDraft,
+      nesnel: {}
     }
-  ], { set: packageSet, fixture, allowHistoricalDigestMismatch: true });
-  assert.equal(histSummary.rapor[0].nesnel_tarama_durumu, 'taranmadi');
-  assert.equal(histSummary.rapor[0].yetkisiz_aciklama, null);
-  assert.equal(histSummary.rapor[0].uydurma_kimlik, null);
-  assert.equal(histSummary.rapor[0].uydurma_tarih, null);
+  ], { allowHistoricalDigestMismatch: true });
+  const rS01 = histSummary.rapor.find((r) => r.senaryo === 'S01');
+  const rS02 = histSummary.rapor.find((r) => r.senaryo === 'S02');
+  const rS03 = histSummary.rapor.find((r) => r.senaryo === 'S03');
+  assert.equal(histSummary.kimlik.gozlemlenen_vekil_dusunme, 'karisik');
+  assert.equal(rS01.nesnel_tarama_durumu, 'taranmadi');
+  assert.equal(rS01.yetkisiz_aciklama, null);
+  assert.equal(rS01.uydurma_kimlik, null);
+  assert.equal(rS01.uydurma_tarih, null);
+  assert.equal(rS01.bekleyen_kronoloji_adayi, 1);
+  assert.equal(rS01.zorunlu_tamlik_durumu, 'tarihsel_paket_bekliyor');
+  assert.equal(rS02.nesnel_tarama_durumu, 'tarandi');
+  assert.equal(rS02.yetkisiz_aciklama, 0);
+  assert.equal(rS02.uydurma_kimlik, 0);
+  assert.equal(rS02.uydurma_tarih, 0);
+  assert.equal(rS02.bekleyen_kronoloji_adayi, 0);
+  assert.equal(rS03.nesnel_tarama_durumu, 'taranmadi');
+  assert.equal(rS03.yetkisiz_aciklama, null);
+  assert.equal(rS03.uydurma_kimlik, null);
+  assert.equal(rS03.bekleyen_kronoloji_adayi, 1);
   assert.equal(histSummary.yetkisiz_aciklama_toplam, null);
   assert.equal(histSummary.uydurma_kimlik_tarih_toplam, null);
-  assert.ok(histEntry);
+  assert.equal(histSummary.bekleyen_kronoloji_incelemesi_toplam, 2);
+
+  // Pozitif kontrol: özet eşleşen güncel satır yeniden taranır.
+  const matchedDraftDigest = qual.draftDigest({ taslak: histDraft });
+  const matchedSummary = qual.summarizeRun([{
+    kosu: 'k-match', senaryo: 'S01', tasiyici: 'vekil', durum: 'gecerli', ayrinti: 'standart', sure_ms: 900,
+    paket_kumesi_ozeti: packageSet.ozet_sha256, paket_ozeti: histEntry.paket_ozeti_sha256,
+    taslak_ozeti: matchedDraftDigest, dusunme: 'on',
+    model: { beklenen: 'm', bildirilen: ['m'], dogrulandi: true }, taslak: histDraft
+  }]);
+  assert.equal(matchedSummary.rapor[0].nesnel_tarama_durumu, 'tarandi');
+  assert.equal(matchedSummary.kimlik.gozlemlenen_vekil_dusunme, 'on');
+  assert.ok(histEntry && histEntry2);
+});
+
+test('son yakınsama kök neden gerilemeleri: plan, istem, taslak, yazar, kanıt, kıyas, nitelendirme ve önizleme', async () => {
+  const os = await import('node:os');
+  const { execFileSync } = await import('node:child_process');
+  const qual = await import('../scripts/report-writer-qualification.mjs');
+  // 1. Taslak: yatay sekme (U+0009) reddedilir.
+  const s28Pkg = pkgOf('S28');
+  const s28Plan = plan.buildReportSectionPlan(s28Pkg, style);
+  const tabbedDraft = JSON.parse(validDraftText(s28Plan, { ref: 'E1' }));
+  tabbedDraft.bolumler[0].paragraflar[0].metin = 'Birinci\tparça.';
+  assert.throws(
+    () => draftModule.parseReportDraft(JSON.stringify(tabbedDraft), { plan: s28Plan, evidencePackage: s28Pkg }),
+    (err) => err?.code === draftModule.REPORT_DRAFT_ERROR_CODES.TEXT
+  );
+
+  // 2. Planlayıcı: engelli görev risk kanıtı olur ama geciken sayılmaz; karşılıksız öncül bağımlılık açar.
+  const blockedPkg = pkgOf('S28');
+  blockedPkg.istek.odak = 'riskler';
+  blockedPkg.kanitlar.push({ id: 'E80', tur: 'gorev', gorev: 'T-ENG', baslik: 'Engelli görev', durum: 'engelli', oncelik: 'low', hedef_bitis: null });
+  const blockedPlan = plan.buildReportSectionPlan(blockedPkg, style);
+  assert.equal(blockedPlan.bolumler.some((b) => b.kimlik === 'riskler'), true, 'Engelli görev Riskler bölümünü açmalıdır');
+  assert.equal(blockedPlan.bolumler.flatMap((b) => b.zorunlu_aciklamalar).some((d) => d.kimlik === 'risk_odagi_risk_yok'), false);
+  const projectedBlocked = prompt.projectEvidencePackageForWriter(blockedPkg).kanitlar.find((k) => k.id === 'E80');
+  assert.equal(projectedBlocked.veri_anina_gore_gecikme_takvim_gunu, undefined, 'Termini olmayan engelli görev gecikmiş sayılmamalıdır');
+
+  const predDepPkg = pkgOf('S28');
+  predDepPkg.kanitlar.push(
+    { id: 'E81', tur: 'gorev', gorev: 'T-OPEN-PRED', baslik: 'Açık öncül', durum: 'devam_ediyor', oncelik: 'low', hedef_bitis: '2026-12-20' },
+    { id: 'E82', tur: 'gorev', gorev: 'T-DONE-SUCC', baslik: 'Tamamlanan ardıl', durum: 'tamamlandi', oncelik: 'low', bagimliliklar: { oncul: ['T-OPEN-PRED'], ardil: [] } }
+  );
+  assert.equal(plan.buildReportSectionPlan(predDepPkg, style).bolumler.some((b) => b.kimlik === 'riskler'), true, 'Açık öncül bağımlılığı Riskler bölümünü açmalıdır');
+
+  // 3. Planlayıcı: karşılaştırma dönemi kısmi hareket kaydı rapor dönemi bildirimine karışmaz.
+  const compPartialPkg = pkgOf('S28');
+  compPartialPkg.kanitlar.push({
+    id: 'E83', tur: 'olcu', olcu: 'hareket', deger: 2, tamlik: 'partial',
+    donem: { baslangic: '2026-10-26', bitis: '2026-11-01' }
+  });
+  const compPartialDisclosures = plan.buildReportSectionPlan(compPartialPkg, style).bolumler.flatMap((b) => b.zorunlu_aciklamalar);
+  assert.equal(compPartialDisclosures.some((d) => d.kimlik === 'kismi_hareket_kaydi'), false, 'Karşılaştırma dönemi kısmi hareketi rapor dönemini kirletmemelidir');
+  assert.equal(compPartialDisclosures.some((d) => d.kimlik === 'kismi_karsilastirma_hareket_kaydi'), true);
+
+  // 4. Planlayıcı: eşit en son zamanlı çelişki ve `notlar_arasi_celiski` kronolojik öncelik yönergesi almaz.
+  const tiedConflictPkg = pkgOf('S28');
+  tiedConflictPkg.celiskiler = [{
+    tur: 'not_surum_celiskisi',
+    kanitlar: ['E1', 'E2', 'E3'],
+    kronoloji: ['2026-11-05T10:00:00Z', '2026-11-05T11:00:00Z', '2026-11-05T11:00:00Z']
+  }];
+  const tiedGuidance = plan.buildReportSectionPlan(tiedConflictPkg, style).bolumler.flatMap((b) => b.zorunlu_aciklamalar).find((d) => d.kimlik === 'celiski_1')?.yonerge || '';
+  assert.ok(tiedGuidance.includes('kesin bir zaman sırası bulunmuyor'), 'En son zaman eşitken tekil son kayıt yönergesi verilmemelidir');
+
+  const crossNotePkg = pkgOf('S28');
+  crossNotePkg.kanitlar.push(
+    { id: 'E84', tur: 'not', gorev: 'T1', kayit_zamani: '2026-11-05T09:00:00Z', metin: 'Ortam hazır.' },
+    { id: 'E85', tur: 'not', gorev: 'T2', kayit_zamani: '2026-11-05T14:00:00Z', metin: 'Ortam hazır değil.' }
+  );
+  crossNotePkg.celiskiler = [{ tur: 'notlar_arasi_celiski', kanitlar: ['E84', 'E85'] }];
+  const crossGuidance = plan.buildReportSectionPlan(crossNotePkg, style).bolumler.flatMap((b) => b.zorunlu_aciklamalar).find((d) => d.kimlik === 'celiski_1')?.yonerge || '';
+  assert.ok(crossGuidance.includes('kesin bir zaman sırası bulunmuyor'), 'notlar_arasi_celiski farklı yazım saatleriyle durum değişimi sayılmamalıdır');
+
+  // 5. Planlayıcı: öncelikli görev notu Riskler açıkken de Yönetici Değerlendirmesi'ne koşullu taşınır.
+  const prioNotePkg = pkgOf('S28');
+  prioNotePkg.kanitlar.push(
+    { id: 'E86', tur: 'gorev', gorev: 'T-PRIO', baslik: 'Kritik iş', durum: 'devam_ediyor', oncelik: 'high', hedef_bitis: null },
+    { id: 'E87', tur: 'not', gorev: 'T-PRIO', metin: 'Dış onay bekleniyor.' }
+  );
+  const prioNotePlan = plan.buildReportSectionPlan(prioNotePkg, style);
+  assert.equal(prioNotePlan.bolumler.some((b) => b.kimlik === 'riskler'), true);
+  assert.equal(prioNotePlan.bolumler.find((b) => b.kimlik === 'yonetici_degerlendirmesi').zorunlu_aciklamalar.some((d) => d.kimlik === 'dengeli_sunum'), true);
+
+  // 6. Planlayıcı: görev satırsız pakette pozitif tamamlama ölçüsü veya görev oluşturma özeti Öne Çıkan Gelişmeler'i besler; dar [10,10] bütçesi tavanı aşmaz.
+  const measureOnlyPkg = pkgOf('S28');
+  measureOnlyPkg.kanitlar = [
+    { id: 'E1', tur: 'olcu', olcu: 'tamamlanan', deger: 2, donem: structuredClone(measureOnlyPkg.istek.donem) }
+  ];
+  const measureOnlyPlan = plan.buildReportSectionPlan(measureOnlyPkg, style);
+  assert.deepEqual(measureOnlyPlan.bolumler.find((b) => b.kimlik === 'one_cikan_gelismeler').odak_kanitlar, ['E1']);
+
+  const createdOnlyPkg = pkgOf('S28');
+  createdOnlyPkg.kanitlar = [
+    { id: 'E1', tur: 'hareket', donem: structuredClone(createdOnlyPkg.istek.donem), donem_ozeti: { toplam_hareket: 1, olusturulan_gorev: 1, tamamlanan_gorev: 0 } }
+  ];
+  assert.deepEqual(plan.buildReportSectionPlan(createdOnlyPkg, style).bolumler.find((b) => b.kimlik === 'one_cikan_gelismeler').odak_kanitlar, ['E1']);
+
+  const tinyStyle = structuredClone(style);
+  tinyStyle.anlati.bolum_plani.sozcuk_butcesi[s28Pkg.istek.ayrinti] = [10, 10];
+  const tinyPlan = plan.buildReportSectionPlan(pkgOf('S28'), tinyStyle);
+  assert.ok(tinyPlan.sozcuk_araligi[1] <= 10, 'Toplam üst bütçe stil tavanını (10) aşmamalıdır');
+  assert.ok(tinyPlan.bolumler.reduce((s, b) => s + b.sozcuk_araligi[0], 0) <= 10);
+
+  // 7. İstem projeksiyonu: kesit sonrası `kilometre_tasi` düşer, ham `gorev_kaniti` hesaplananı ezmez, büyük kapsam listesi 32 KiB altında parçalanır.
+  const projPkg = pkgOf('S28');
+  projPkg.kanitlar.push(
+    { id: 'E90', tur: 'gorev', gorev: 'T-CUT', baslik: 'Kesit sonrası iş', durum: 'devam_ediyor', kilometre_tasi: true, kesit_sonrasi_degisti: true },
+    { id: 'E91', tur: 'gorev', gorev: 'T-REAL', baslik: 'Gerçek görev', durum: 'devam_ediyor' },
+    { id: 'E92', tur: 'not', gorev: 'T-REAL', gorev_kaniti: 'E90', metin: 'Not metni.' }
+  );
+  projPkg.celiskiler = [{ tur: 'not_surum_celiskisi', gorev: 'T-REAL', gorev_kaniti: 'E90', kanitlar: ['E92'] }];
+  const projected = prompt.projectEvidencePackageForWriter(projPkg);
+  assert.equal('kilometre_tasi' in projected.kanitlar.find((k) => k.id === 'E90'), false);
+  assert.equal(projected.kanitlar.find((k) => k.id === 'E92').gorev_kaniti, 'E91');
+  assert.equal(projected.celiskiler[0].gorev_kaniti, 'E91');
+  assert.ok(prompt.buildReportWriterSystemPrompt(style).includes('tekil "proje" etiketini'));
+
+  const wideScopePkg = pkgOf('S28');
+  const wideLabels = Array.from({ length: 300 }, (_, i) => `ÇĞIÖŞÜ_UZUN_PROJE_ETİKETİ_${String(i + 1).padStart(3, '0')}_${'Ö'.repeat(40)}`);
+  wideScopePkg.kanitlar = [{ id: 'E1', tur: 'olcu', olcu: 'tamamlanan', deger: 5, kapsam: wideLabels }];
+  const wideMessages = prompt.buildReportEvidenceMessages(wideScopePkg);
+  assert.ok(wideMessages.length >= 2);
+  assert.ok(wideMessages.every((m) => Buffer.byteLength(m, 'utf8') <= prompt.REPORT_WRITER_MAX_MESSAGE_BYTES));
+  assert.ok(wideMessages.some((m) => m.includes('"kapsam_grubu":"K1"')));
+
+  // 8. Yazar & ağ geçidi: bitiş nedeni normalleştirme (`max_tokens`, `stop_sequence`) ve geçersiz `revalidationTimeoutMs` sınırlandırması.
+  const validText = validDraftText(s28Plan, { ref: 'E1' });
+  assert.throws(
+    () => writer.finalizeReportWriterResponse({ text: validText, finishReason: 'MAX_TOKENS', plan: s28Plan, evidencePackage: s28Pkg }),
+    (err) => err?.details?.reason === 'REPORT_DRAFT_TRUNCATED'
+  );
+  assert.doesNotThrow(
+    () => writer.finalizeReportWriterResponse({ text: validText, finishReason: 'stop_sequence', plan: s28Plan, evidencePackage: s28Pkg })
+  );
+
+  // 9. Kanıt: UTF-16 vekil çiftini bölmeden kırpma (`dataText`).
+  const { dataText } = await import('../src/server/ai/tools/toolResultText.js');
+  const emojiName = `${'a'.repeat(158)}😀x`;
+  const clippedEmoji = dataText(emojiName, 160);
+  assert.equal(clippedEmoji.isWellFormed(), true, 'Vekil çifti bölünerek eşleşmemiş yüksek vekil bırakılmamalıdır');
+
+  // 10. Kıyas tarayıcısı: sabit 48 senaryo kadrosu, bozuk kapsam zarfı, ondalık baştaki sıfır, `yüz yüze`, büyük harfli proje ve kronoloji bağlacı.
+  const set47 = structuredClone(packageSet);
+  set47.paketler.pop();
+  set47.ozet_sha256 = bench.sha256(bench.canonicalJson(set47.paketler));
+  const fix47 = structuredClone(fixture);
+  fix47.senaryolar.pop();
+  assert.ok(bench.verifyWriterPackageSet(set47, fix47).includes('senaryo_kumesi_eksik'), '47 senaryo hem fikstürde hem pakette aynı olsa da reddedilmelidir');
+
+  const badScopeSet = structuredClone(packageSet);
+  badScopeSet.paketler[0].paket.istek.kapsam.kimlikler = 42;
+  badScopeSet.paketler[0].paket_ozeti_sha256 = bench.sha256(bench.canonicalJson(badScopeSet.paketler[0].paket));
+  badScopeSet.ozet_sha256 = bench.sha256(bench.canonicalJson(badScopeSet.paketler));
+  assert.ok(bench.verifyWriterPackageSet(badScopeSet, fixture).includes('kanit_zarfi_gecersiz:S01'));
+
+  assert.ok(bench.normalizeProse('Oran sıfır virgül sıfır beş oldu.').includes('0,05'));
+  assert.equal(bench.normalizeProse('Gecikme yüz yüze görüşmede ele alındı.').includes('100'), false);
+  const upperProjDraft = { bolumler: [{ kimlik: 'yonetici_degerlendirmesi', paragraflar: [{ metin: 'MELTEM projesi kapsam dışındadır.' }] }] };
+  assert.equal(bench.assessDraftObjectively({ draft: upperProjDraft, pkg: pkgOf('S21'), fixture }).uydurma_kimlik.includes('Meltem'), true);
+  const upperChron = bench.detectChronologyInversions("8 Kasım'da inceleme yapıldı, PEŞİNDEN 6 Kasım'da onay verildi.", 2026);
+  assert.equal(upperChron.length, 1);
+
+  // S11 iki not gelişmesini ayrı ayrı ister; S35 birim-proje eşlemesini kanıtta ve Z2'de taşır.
+  const s11Entry = packageSet.paketler.find((p) => p.senaryo === 'S11');
+  assert.equal(bench.mandatoryCoverage('Ay içinde tamamlanan görev yok; protokol katmanı ve düzenek tamamlandı.', s11Entry.zorunlu_olgular, null, 2026)[0].aday_eslesti, false);
+  assert.equal(bench.mandatoryCoverage('Ay içinde tamamlanan görev yok; protokol katmanı, hata yönetimi ve düzenek tamamlandı.', s11Entry.zorunlu_olgular, null, 2026)[0].aday_eslesti, true);
+  const s35Entry = packageSet.paketler.find((p) => p.senaryo === 'S35');
+  assert.ok(s35Entry.paket.kanitlar.some((k) => k.birim === 'Veri ve Entegrasyon Birimi' && k.proje === 'PRJ-DENGE'));
+  assert.ok(s35Entry.zorunlu_olgular.some((z) => z.id === 'Z2'));
+
+  // 11. Nitelendirme: boş `--sicaklik`, eksik girdi özeti karşılaştırması, eksik örnekleme/süre D kapısı, atomik JSONL geri alma,
+  // düz metin çitli özet, doğrulanmamış modelin kör paketten reddi ve başlıksız S17 notlarına ortak etiket.
+  assert.throws(() => qual.parseSamplingOptions({ sicaklik: '' }), /boş olamaz/u);
+  assert.equal(qual.parseSamplingOptions({ sicaklik: '0' }).temperature, 0);
+
+  const nullDigestCmp = qual.compareQualificationRuns(
+    { kimlik: { girdi_iletileri_ozetleri: { S01: null } } },
+    { kimlik: { girdi_iletileri_ozetleri: { S01: null } } }
+  );
+  assert.equal(nullDigestCmp.karsilastirilabilir, false);
+  assert.ok(nullDigestCmp.uyusmazliklar.includes('girdi_iletileri_sha256'));
+
+  const obsThinkingCmp = qual.compareQualificationRuns(
+    { kimlik: { gozlemlenen_vekil_dusunme: 'on', girdi_iletileri_ozetleri: { S01: 'h1' } } },
+    { kimlik: { gozlemlenen_vekil_dusunme: 'off', girdi_iletileri_ozetleri: { S01: 'h1' } } }
+  );
+  assert.equal(obsThinkingCmp.karsilastirilabilir, false);
+  assert.ok(obsThinkingCmp.uyusmazliklar.includes('gozlemlenen_vekil_dusunme'));
+
+  const tmpAtomic = path.join(os.tmpdir(), `atomic-jsonl-${Date.now()}.jsonl`);
+  fs.writeFileSync(tmpAtomic, '{"ok":1}\n', 'utf8');
+  assert.throws(() => qual.appendJsonlRecordAtomic(tmpAtomic, { ok: 2 }, {
+    appendImpl: (file) => {
+      fs.appendFileSync(file, '{"yarim":', 'utf8');
+      throw new Error('ENOSPC');
+    }
+  }), /ENOSPC/);
+  assert.equal(fs.readFileSync(tmpAtomic, 'utf8'), '{"ok":1}\n');
+  fs.rmSync(tmpAtomic, { force: true });
+
+  const s17Item = packageSet.paketler.find((p) => p.senaryo === 'S17');
+  const s17Plan = plan.buildReportSectionPlan(s17Item.paket, style);
+  const s17Draft = draftModule.parseReportDraft(validDraftText(s17Plan, { ref: s17Item.paket.kanitlar[0].id }), { plan: s17Plan, evidencePackage: s17Item.paket });
+  const s17Row = {
+    kosu: 'k-s17', senaryo: 'S17', tasiyici: 'vekil', durum: 'gecerli', ayrinti: s17Item.paket.istek.ayrinti, sure_ms: 1000,
+    paket_kumesi_ozeti: packageSet.ozet_sha256, paket_ozeti: s17Item.paket_ozeti_sha256,
+    model: { beklenen: 'm', bildirilen: ['m'], dogrulandi: true }, taslak: s17Draft,
+    taslak_ozeti: qual.draftDigest({ taslak: s17Draft })
+  };
+  const s17Packet = qual.buildBlindScoringPacket([s17Row]);
+  const untitledMatches = s17Packet.markdown.match(/görev: paketteki başlıksız görev #1/gu) || [];
+  assert.ok(untitledMatches.length >= 2, 'Başlıksız aynı göreve ait ardışık notlar ortak paket-yerel etiket almalıdır');
+
+  assert.throws(
+    () => qual.buildBlindScoringPacket([{ ...s17Row, model: { beklenen: 'm', bildirilen: ['baska'], dogrulandi: false } }]),
+    /Model kimliği doğrulanmamış/u
+  );
+
+  const mdWithHtml = qual.markdownSummary(
+    { kimlik: { kosu: 'k-md' }, denenen: 1, gecerli: 1, ayristirma_hatasi: [], altyapi_hatasi: [], celiski_isleme: { uygulanan: 0, islenen: 0, basarisiz: [], bekleyen: [] }, k19_gomulu_yonerge: { uygulanan: 0, gecen: 0, basarisiz: [], bekleyen: [] }, rapor: [{ senaryo: 'S17' }] },
+    [s17Row],
+    ['S17']
+  );
+  assert.ok(mdWithHtml.includes('~~~text\n'), 'Markdown özetindeki model taslağı düz metin çitiyle sarılmalıdır');
+
+  // 12. Önizleme: tarihsel karışık düşünmeli arşiv önizlenebilir ve bozuk taslak satırı diğer geçerli taslakları düşürmez.
+  const bundledPreview = execFileSync(process.execPath, [
+    path.join(ROOT, 'scripts/yonetici-anlati-onizleme.mjs'),
+    '--girdi', path.join(ROOT, 'docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/kosu-kaydi.jsonl'),
+    '--senaryolar', 'S01,S25'
+  ], { encoding: 'utf8' });
+  assert.ok(bundledPreview.includes('## S01') && bundledPreview.includes('## S25'));
+
+  const mixedBadFile = path.join(os.tmpdir(), `onizleme-bozuk-${Date.now()}.jsonl`);
+  fs.writeFileSync(mixedBadFile, [
+    JSON.stringify({ ...s17Row, senaryo: 'S17' }),
+    JSON.stringify({ ...s17Row, senaryo: 'S01', taslak: { bolumler: [{ kimlik: 'yonetici_degerlendirmesi' }] } })
+  ].join('\n') + '\n', 'utf8');
+  try {
+    const partialPreview = execFileSync(process.execPath, [
+      path.join(ROOT, 'scripts/yonetici-anlati-onizleme.mjs'),
+      '--girdi', mixedBadFile,
+      '--senaryolar', 'S01,S17'
+    ], { encoding: 'utf8' });
+    assert.ok(partialPreview.includes('Kayıtlı taslak yapısı bozuk'));
+    assert.ok(partialPreview.includes('## S17') && partialPreview.includes('~~~text'));
+  } finally {
+    fs.rmSync(mixedBadFile, { force: true });
+  }
 });

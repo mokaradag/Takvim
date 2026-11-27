@@ -43,7 +43,7 @@ test('üretim komutu ve belgeler MERGEN Rota için 8008 portunu kullanır', () =
 test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
   for (const relativePath of DOC_AND_CONFIG_FILES) {
     const source = read(relativePath);
-    const isMeasurementData = relativePath.startsWith('docs/') && /\.(sha256|json|jsonl|csv)$/i.test(relativePath);
+    const isMeasurementData = relativePath.startsWith('docs/kayitlar/') && /\.(sha256|json|jsonl|csv)$/i.test(relativePath);
     const isSha256Manifest = relativePath.startsWith('docs/kayitlar/') && relativePath.endsWith('.sha256');
     // Ölçüm kayıtları ve özet dosyaları da dağıtım komutu, URL veya PORT ayarıyla 8009 taşıyamaz.
     if (isMeasurementData) {
@@ -180,8 +180,9 @@ test('depoda gerçek sicil, gerçek jeton veya gerçek kurumsal adres bulunmaz',
     if (!statSync(file).isFile()) continue;
     const source = readFileSync(file, 'utf8');
     const relative = path.relative(ROOT, file).split(path.sep).join('/');
-    // Yalnızca kayıt SHA-256 özet dosyalarındaki 64 haneli onaltılık özetler gerçek sicil sayılmaz; boşlukla değiştirilerek komşu karakter birleşimi önlenir.
-    const scannable = relative.startsWith('docs/kayitlar/') && relative.endsWith('.sha256')
+    // Yalnızca docs/kayitlar/ altındaki kayıt ve özet dosyalarındaki 64 haneli onaltılık SHA-256 özetleri gerçek sicil sayılmaz;
+    // boşlukla değiştirilerek komşu karakter birleşimi önlenir.
+    const scannable = relative.startsWith('docs/kayitlar/') && /\.(sha256|json|jsonl)$/i.test(relative)
       ? source.replace(/[0-9a-f]{64}/gi, ' ')
       : source;
     // Kaldırılan gerçek sicil değerleri geri gelmemelidir.

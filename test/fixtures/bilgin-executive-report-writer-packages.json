@@ -6022,7 +6022,9 @@
        "kapanan görev"
       ],
       [
-       "protokol katmanı",
+       "protokol katmanı"
+      ],
+      [
        "hata yönetimi"
       ],
       [
@@ -13067,6 +13069,54 @@
       "hedef_bitis": "2026-11-18",
       "gerceklesen_bitis": null,
       "mudurluk": "Sistem Geliştirme Müdürlüğü"
+     },
+     {
+      "id": "E14",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "birim": "Veri ve Entegrasyon Birimi",
+      "proje": "PRJ-DENGE",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E15",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 2,
+      "birim": "Yazılım Mimarisi Birimi",
+      "proje": "PRJ-DENGE",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
+     },
+     {
+      "id": "E16",
+      "tur": "olcu",
+      "kaynak": "rota_task_analytics",
+      "olcu": "tamamlanan",
+      "deger": 1,
+      "birim": "Sistem Tasarım Birimi",
+      "proje": "PRJ-KUZEY",
+      "ust_duzey_toplamina_dahil": true,
+      "donem": {
+       "baslangic": "2026-10-01",
+       "bitis": "2026-10-31",
+       "ad": "geçen ay"
+      },
+      "tamlik": "complete"
      }
     ],
     "turetilmis": [],
@@ -13097,7 +13147,7 @@
      "tarihsiz_tamamlanan": 0,
      "paket_kesildi": false,
      "disarida_kalan_kanit": 0,
-     "karakter_sayisi": 4664
+     "karakter_sayisi": 5463
     },
     "celiskiler": [],
     "sinirlar": {
@@ -13121,10 +13171,25 @@
        "üç tamamlan"
       ]
      ]
+    },
+    {
+     "id": "Z2",
+     "olgu": "Denge projesinin tamamlanan işleri Veri ve Entegrasyon Birimi ile Yazılım Mimarisi Birimi altında yer alır; birim alt kırılımları ortak görev nedeniyle müdürlük toplamına yeniden eklenmez.",
+     "anahtarlar": [
+      [
+       "denge"
+      ],
+      [
+       "veri ve entegrasyon"
+      ],
+      [
+       "yazılım mimarisi"
+      ]
+     ]
     }
    ],
    "yetkisiz_varliklar": [],
-   "paket_ozeti_sha256": "410d0e1e12ad7379db998d61373b17f719ab5e2e5d9a1efd85044b7ae253280f"
+   "paket_ozeti_sha256": "fdb405e3429523f0dd250327340d3d17a4e662286ae63853423d13e3b3aa9d2b"
   },
   {
    "senaryo": "S36",
@@ -16534,5 +16599,5 @@
    "paket_ozeti_sha256": "375c58baaa09ce012735ad396821985204e29464847d2526f520b054c9a1bbe5"
   }
  ],
- "ozet_sha256": "76d9528776e35369d72fd6948864bef5c831779a53bbd7f638233d85714912ff"
+ "ozet_sha256": "7b5ddb0bf9e436d156e7736750643ebedc3983a0219dc52cbe0bfe5c1890d1dd"
 }

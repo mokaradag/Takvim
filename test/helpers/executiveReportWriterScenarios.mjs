@@ -216,7 +216,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { k: 'd', p: 'Yıldız', t: 'Sistem entegrasyon planı', s: 'in-progress', tf: '2026-11-28', as: ['Deniz Akalın'] }
     ],
     zorunlu: [
-      { id: 'Z1', olgu: 'Ay içinde tamamlanan görev yok; ilerleme ara kilometre taşlarıyla (protokol katmanı, hata yönetimi modülü, düzeneğin kurulması) notlarda görülüyor.', anahtarlar: [['tamamlanan görev bulunmu', 'tamamlanan görev yok', 'hiçbir görev tamamlan', 'görev tamamlanmadı', 'tamamlanmış görev bulunmu', 'tamamlanma kaydı', 'resmî tamamlanma', 'resmi tamamlanma', 'kapanan görev'], ['protokol katmanı', 'hata yönetimi'], ['düzenek']] },
+      { id: 'Z1', olgu: 'Ay içinde tamamlanan görev yok; ilerleme ara kilometre taşlarıyla (protokol katmanı, hata yönetimi modülü, düzeneğin kurulması) notlarda görülüyor.', anahtarlar: [['tamamlanan görev bulunmu', 'tamamlanan görev yok', 'hiçbir görev tamamlan', 'görev tamamlanmadı', 'tamamlanmış görev bulunmu', 'tamamlanma kaydı', 'resmî tamamlanma', 'resmi tamamlanma', 'kapanan görev'], ['protokol katmanı'], ['hata yönetimi'], ['düzenek']] },
       { id: 'Z2', olgu: 'Görüntü işleme kartı sürücüsünde DMA aktarımında ara sıra veri kaybı bildirildi.', anahtarlar: [['veri kaybı'], ['sürücü']] }
     ]
   },
@@ -627,7 +627,16 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Denge', t: 'Denge ortak entegrasyon görevi', s: 'in-progress', pr: 'high', tf: '2026-11-18', as: ['Can Ertem', 'Mert Yalçıner'] },
       { p: 'Kuzey', t: 'Kuzey kart üretim dosyaları', s: 'done', tf: '2026-10-15', af: '2026-10-14', as: ['Ece Tunalı'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Müdürlük genelinde 3 görev tamamlandı (Denge projesinde 2, Kuzey projesinde 1); iki sorumlulu görev üretici tarafında tekilleştirilerek çift sayılmaz.', anahtarlar: [['denge'], ['3 görev', 'üç görev', '3 tamamlan', 'üç tamamlan']] }]
+    // Proje-birim eşlemesi için yetkili birim kırılımı eklenir; birim sayıları ortak görev nedeniyle örtüşür ve müdürlük toplamını 3 üstüne şişirmez.
+    orgOlculeri: [
+      { birim: 'Veri ve Entegrasyon Birimi', proje: 'PRJ-DENGE', olcu: 'tamamlanan', deger: 1, ust_duzey_toplamina_dahil: true },
+      { birim: 'Yazılım Mimarisi Birimi', proje: 'PRJ-DENGE', olcu: 'tamamlanan', deger: 2, ust_duzey_toplamina_dahil: true },
+      { birim: 'Sistem Tasarım Birimi', proje: 'PRJ-KUZEY', olcu: 'tamamlanan', deger: 1, ust_duzey_toplamina_dahil: true }
+    ],
+    zorunlu: [
+      { id: 'Z1', olgu: 'Müdürlük genelinde 3 görev tamamlandı (Denge projesinde 2, Kuzey projesinde 1); iki sorumlulu görev üretici tarafında tekilleştirilerek çift sayılmaz.', anahtarlar: [['denge'], ['3 görev', 'üç görev', '3 tamamlan', 'üç tamamlan']] },
+      { id: 'Z2', olgu: 'Denge projesinin tamamlanan işleri Veri ve Entegrasyon Birimi ile Yazılım Mimarisi Birimi altında yer alır; birim alt kırılımları ortak görev nedeniyle müdürlük toplamına yeniden eklenmez.', anahtarlar: [['denge'], ['veri ve entegrasyon'], ['yazılım mimarisi']] }
+    ]
   },
   {
     id: 'S36', aktor: 'yonetici', istek: req('haftalik', WEEK, proje('Pusula')),
@@ -795,6 +804,7 @@ function attachSupplementary(pkg, spec) {
       tur: 'olcu', kaynak: 'rota_task_analytics', olcu: metric.olcu, deger: metric.deger,
       ...(metric.mudurluk ? { mudurluk: metric.mudurluk } : {}),
       ...(metric.birim ? { birim: metric.birim } : {}),
+      ...(metric.proje ? { proje: metric.proje } : {}),
       ...(metric.ust_duzey_toplamina_dahil ? { ust_duzey_toplamina_dahil: true } : {}),
       donem: structuredClone(pkg.istek.donem), tamlik: 'complete'
     })),

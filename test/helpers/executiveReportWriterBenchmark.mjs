@@ -165,16 +165,28 @@ export function loadWriterPackageSet() {
   return set;
 }
 
-/** Paket kümesindeki sürümü, küme ve tekil paket özetlerini ve sentetik kadro bütünlüğünü doğrular. */
+const FIXED_SCENARIO_IDS = Object.freeze(
+  Array.from({ length: 48 }, (_, index) => `S${String(index + 1).padStart(2, '0')}`)
+);
+const FIXED_SCENARIO_SET = new Set(FIXED_SCENARIO_IDS);
+
+/** Paket kümesindeki sürümü, sabit 48 senaryo kadrosunu, özetleri ve sentetik kadro bütünlüğünü doğrular. */
 export function verifyWriterPackageSet(set, fixture) {
   const problems = [];
   if (set?.sema !== 'bilgin-yonetici-raporu-yazar-paketleri' || set?.veri_niteligi !== 'sentetik') problems.push('sema_ya_da_veri_niteligi');
   if (set?.surum !== 1) problems.push('surum_desteklenmiyor');
   if (fixture?.veri_niteligi !== 'sentetik') problems.push('fikstur_sentetik_degil');
+  const fixtureIds = (fixture?.senaryolar || []).map((item) => item?.id);
   const scenarios = new Map((fixture?.senaryolar || []).map((item) => [item.id, item]));
   const packages = Array.isArray(set?.paketler) ? set.paketler : [];
   const ids = packages.map((item) => item.senaryo);
-  if (ids.length !== scenarios.size || new Set(ids).size !== ids.length || ids.some((id) => !scenarios.has(id))) problems.push('senaryo_kumesi_eksik');
+  const fixtureMatchesRoster = fixtureIds.length === FIXED_SCENARIO_IDS.length
+    && new Set(fixtureIds).size === FIXED_SCENARIO_IDS.length
+    && fixtureIds.every((id) => FIXED_SCENARIO_SET.has(id));
+  const packagesMatchRoster = ids.length === FIXED_SCENARIO_IDS.length
+    && new Set(ids).size === FIXED_SCENARIO_IDS.length
+    && ids.every((id) => FIXED_SCENARIO_SET.has(id) && scenarios.has(id));
+  if (!fixtureMatchesRoster || !packagesMatchRoster) problems.push('senaryo_kumesi_eksik');
   const expectedHash = sha256(canonicalJson(packages));
   if (set?.ozet_sha256 !== expectedHash) problems.push('ozet_uyusmuyor');
   const roster = syntheticRoster(fixture);
@@ -218,8 +230,11 @@ const NAME_FIELDS = new Set(['proje', 'proje_adi', 'sorumlu', 'ekip', 'mudurluk'
 /** Paketin yapılandırılmış ad alanlarındaki özel adlar (metin alanları hariç; onlar kullanıcı verisidir). */
 export function properNamesIn(pkg) {
   const names = new Set();
-  for (const id of pkg?.istek?.kapsam?.kimlikler || []) {
-    if (typeof id === 'string') names.add(id);
+  const scopeIds = pkg?.istek?.kapsam?.kimlikler;
+  if (Array.isArray(scopeIds)) {
+    for (const id of scopeIds) {
+      if (typeof id === 'string') names.add(id);
+    }
   }
   const visit = (value) => {
     if (Array.isArray(value)) value.forEach(visit);
@@ -285,22 +300,38 @@ function parseTurkishNumberPhrase(tokens) {
   return total + current;
 }
 
+/** Ondalık kesir kısmında baştaki "sıfır" sözcüklerini korur ("sıfır beş" → "05"). */
+function parseTurkishDecimalFraction(tokens) {
+  let leadingZeros = 0;
+  while (leadingZeros < tokens.length && tokens[leadingZeros] === 'sifir') {
+    leadingZeros += 1;
+  }
+  if (leadingZeros === tokens.length) return '0'.repeat(leadingZeros);
+  const rest = parseTurkishNumberPhrase(tokens.slice(leadingZeros));
+  if (rest === null) return null;
+  return `${'0'.repeat(leadingZeros)}${rest}`;
+}
+
 /** Değerlendirme kopyası: Türkçe küçük harf, boşluk sadeleştirme, birleşik ve ondalıklı sayı sözcükleri tek rakama. */
 export function normalizeProse(text) {
   // Türkçe küçük harfe çevirme kısaltmalardaki I'yı ı yapar ("SPI" → "spı"); eşleştirmede ı ve i katlanır.
   let out = ` ${String(text).normalize('NFC').toLocaleLowerCase('tr-TR').replace(/ı/gu, 'i').replace(/[’']/gu, "'").replace(/\s+/gu, ' ')} `;
-  // 1. Önce tam yazılı ondalıklar ("altmış altı virgül yedi" → "66,7") tek nicelik olarak çevrilir.
+  // 1. Önce tam yazılı ondalıklar ("altmış altı virgül yedi" → "66,7", "sıfır virgül sıfır beş" → "0,05") tek nicelik olarak çevrilir.
   out = out.replace(DECIMAL_PHRASE_PATTERN, (match, intPart, fracPart) => {
     const intVal = parseTurkishNumberPhrase(intPart.split(/\s+/u));
-    const fracVal = parseTurkishNumberPhrase(fracPart.split(/\s+/u));
-    if (intVal === null || fracVal === null) return match;
-    return `${intVal},${fracVal}`;
+    const fracStr = parseTurkishDecimalFraction(fracPart.split(/\s+/u));
+    if (intVal === null || fracStr === null) return match;
+    return `${intVal},${fracStr}`;
   });
   // 2. Bileşik sayı öbekleri ("yirmi bir", "on bir", "yüz yirmi") tek başına "bir" kuralından ÖNCE çevrilir.
-  out = out.replace(NUMBER_PHRASE_PATTERN, (match) => {
+  out = out.replace(NUMBER_PHRASE_PATTERN, (match, _group, offset, fullStr) => {
     const tokens = match.split(/\s+/u);
     // Tek başına "bir" belirsiz tanımlıktır ("bir görev"); yalnızca bileşik sayı içinde ("on bir", "yüz bir") çevrilir.
     if (tokens.length === 1 && tokens[0] === 'bir') return match;
+    // "yüz yüze" deyimindeki "yüz" sayısal 100 niceliğine dönüştürülmez.
+    if (tokens.length === 1 && tokens[0] === 'yüz' && /^\s+yüze(?=[\s.,;:)'])/u.test(fullStr.slice(offset + match.length))) {
+      return match;
+    }
     const value = parseTurkishNumberPhrase(tokens);
     return value === null ? match : String(value);
   });
@@ -602,7 +633,12 @@ function matchesInventedRosterEntity(rawProse, normText, rawName) {
   }
   const normalizedProse = String(rawProse).normalize('NFC').replace(/[’']/gu, "'");
   const normalizedName = trimmed.normalize('NFC');
-  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(normalizedName)}(?:'[\\p{L}]{1,8})?(?![\\p{L}\\p{N}])`, 'u').test(normalizedProse);
+  const upperName = normalizedName.toLocaleUpperCase('tr-TR');
+  // Baş harfi büyük veya tamamı büyük yazılan özel adlar yakalanır; küçük harfli genel sözcükler ("denge") dışarıda kalır.
+  const variants = upperName !== normalizedName
+    ? `(?:${escapeRegex(normalizedName)}|${escapeRegex(upperName)})`
+    : escapeRegex(normalizedName);
+  return new RegExp(`(?<![\\p{L}\\p{N}])${variants}(?:'[\\p{L}]{1,8})?(?![\\p{L}\\p{N}])`, 'u').test(normalizedProse);
 }
 
 /**
@@ -613,17 +649,19 @@ function matchesInventedRosterEntity(rawProse, normText, rawName) {
 export function detectChronologyInversions(prose, defaultYear) {
   const inversions = [];
   const sentences = String(prose).split(/(?<=[.!?])\s+|\n+/u).filter((s) => s.trim());
-  const connectorRegex = /\b(?:bunun\s+ardından|ardından|sonrasında|peşinden)\b/giu;
+  const connectorRegex = /\b(?:bunun\s+ardından|ardından|sonrasında|peşinden)\b/gu;
   for (const sentence of sentences) {
-    const connectors = [...sentence.matchAll(connectorRegex)];
+    // Türkçe büyük harfler ("PEŞİNDEN", "ARDINDAN") standart `/i` ile katlanmadığından önce tr-TR küçük harfe çevrilir.
+    const lowerSentence = sentence.toLocaleLowerCase('tr-TR');
+    const connectors = [...lowerSentence.matchAll(connectorRegex)];
     if (!connectors.length) continue;
     const spans = [];
     let cursor = 0;
     for (const m of connectors) {
-      spans.push(sentence.slice(cursor, m.index));
+      spans.push(lowerSentence.slice(cursor, m.index));
       cursor = m.index + m[0].length;
     }
-    spans.push(sentence.slice(cursor));
+    spans.push(lowerSentence.slice(cursor));
     const spanDates = spans.map((span) => extractDateAnalysis(span, defaultYear, { includeInvalid: false }).occurrences);
     for (let i = 0; i < connectors.length; i += 1) {
       const before = spanDates[i];
@@ -632,7 +670,7 @@ export function detectChronologyInversions(prose, defaultYear) {
       const first = before[before.length - 1].day;
       const second = after[0].day;
       if (first > second) {
-        inversions.push({ onceki_tarih: first, sonraki_tarih: second, baglac: connectors[i][0].toLocaleLowerCase('tr-TR') });
+        inversions.push({ onceki_tarih: first, sonraki_tarih: second, baglac: connectors[i][0] });
       }
     }
   }
