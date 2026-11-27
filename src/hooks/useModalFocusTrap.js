@@ -162,15 +162,17 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
     const openedFrom = focusDocument.activeElement;
     const owner = containerRef.current;
     const restoreFocus = restoreFocusRef?.current;
-    const shouldRestoreFocus = () => restoreFocusEnabledRef?.current !== false;
     // Üstünde boyanan açık bir pencere varken etkinleşen alt yüzey odağı ondan
     // çalmaz; odak, üstteki pencere kapanınca aşağıdaki geri verme adımıyla gelir.
     const self = { priority, containerRef };
     if (!activeTraps.some((token) => paintsAbove(token, self) === true)) initialFocusRef.current?.focus();
     const restore = () => {
-      if (!shouldRestoreFocus() || focusEpochRef.current !== epoch) return;
+      if (focusEpochRef.current !== epoch) return;
       const focused = focusDocument.activeElement;
       const remaining = keyboardOwner();
+      // Başlatıcıya dönüş kapalı olsa da açık kalan pencere klavye odağını alabilmeli.
+      const restoreToOpener = restoreFocusEnabledRef?.current !== false;
+      if (!restoreToOpener && !remaining) return;
       // Odak bilerek başka bir ögeye taşındıysa (ör. "Görevi aç" ile açılan
       // çekmece) geri çekilmez; ancak arkada açık bir tuzak varken onun DIŞINDA
       // kalan odak kabul edilmez ve aşağıdaki adaylarla tuzağa geri alınır.
@@ -180,7 +182,7 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       // birlikte kapanır; odak o anda gövdeye düşer) ya da odak alamaz hâle
       // gelmiş olabilir. Adaylar sırayla denenir; odak gerçekten geçene dek
       // sıradaki yedeğe geçilir.
-      const candidates = [openedFrom, restoreFocus, restoreFocusRef?.current];
+      const candidates = restoreToOpener ? [openedFrom, restoreFocus, restoreFocusRef?.current] : [];
       // Arkada hâlâ açık bir tuzak varsa odak onun DIŞINDA bırakılmaz (ör. zil
       // düğmesi açık Bilgin sayfasının ya da "Görevi aç" ile açılan görev
       // çekmecesinin arkasında kalırdı); yalnızca o yüzeye ait adaylar, ardından

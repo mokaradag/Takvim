@@ -62,6 +62,33 @@ test('kart klavyeyle açılır, odak karta taşınır, Esc kartı kapatıp odağ
   view.unmount();
 });
 
+test('yeniden açılan kart yeni konumu ölçülene kadar gizli kalır ve odak ölçümden sonra taşınır', (t) => {
+  const view = mountDom(Harness, { receivedAt: Date.now(), openTask: () => {} });
+  try {
+    const trigger = view.host.querySelector('.ice-ref');
+    const beforePlacement = [];
+    let left = 40;
+    t.mock.method(trigger, 'getBoundingClientRect', () => {
+      beforePlacement.push({ visibility: cardNode().style.visibility, triggerFocused: document.activeElement === trigger });
+      return { left, top: 60, width: 20, height: 16 };
+    });
+    key('Enter', trigger);
+    assert.equal(cardNode().style.left, '40px');
+    key('Escape');
+    assert.equal(cardNode(), null);
+
+    left = 120;
+    beforePlacement.length = 0;
+    key('Enter', trigger);
+    assert.deepEqual(beforePlacement, [{ visibility: 'hidden', triggerFocused: true }]);
+    assert.equal(cardNode().style.left, '120px');
+    assert.equal(cardNode().style.visibility, 'visible');
+    assert.equal(document.activeElement, cardNode().querySelector('.ice-row'));
+  } finally {
+    view.unmount();
+  }
+});
+
 test('görev satırı mevcut görev açma sözleşmesini görev kimliğiyle çağırır ve kartı kapatır', () => {
   const opened = [];
   const view = mountDom(Harness, { receivedAt: Date.now(), openTask: (id) => opened.push(id) });
@@ -356,6 +383,64 @@ test('görev seçimi başarılıysa yalnız kipli Bilgin paneli çekmeceye alan 
     } finally {
       view.unmount();
     }
+  }
+});
+
+test('Bilgin görev çekmecesinin odağını bağlanma sırasından bağımsız korur ve olağan kapanışta başlatıcıya döner', async (t) => {
+  const controller = await taskPanelController();
+  t.after(() => controller.dispose());
+  const frames = [];
+  t.mock.method(globalThis, 'requestAnimationFrame', (callback) => frames.push(callback));
+  const flushFrames = () => act(() => { for (const frame of frames.splice(0)) frame(); });
+
+  function GecikenCekmece() {
+    const drawerRef = React.useRef(null);
+    useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, priority: 310 });
+    return React.createElement('div', { ref: drawerRef, role: 'dialog', tabIndex: -1, 'aria-label': 'Görev ayrıntısı' });
+  }
+
+  function BilginVeCekmece({ drawer }) {
+    const [open, setOpen] = React.useState(false);
+    const launcherRef = React.useRef(null);
+    return React.createElement(React.Fragment, null,
+      React.createElement('button', { ref: launcherRef, onClick: () => setOpen(true) }, 'Bilgin'),
+      drawer && React.createElement(GecikenCekmece),
+      React.createElement(RotaAssistantPanel, {
+        assistant: { controller, open, actual: true, focused: true, launcherRef, close: () => setOpen(false) },
+        openEvidenceTask: async () => ({ ok: true })
+      }));
+  }
+
+  const view = mountDom(BilginVeCekmece);
+  try {
+    const launcher = view.host.querySelector('button');
+    const drawer = () => view.host.querySelector('[aria-label="Görev ayrıntısı"]');
+    for (const drawerFirst of [false, true]) {
+      click(launcher);
+      if (drawerFirst) {
+        view.render({ drawer: true });
+        assert.equal(view.host.querySelector('#rota-assistant-panel').contains(document.activeElement), true);
+      }
+      click(view.host.querySelector('.ice-ref'));
+      await act(async () => click(cardNode().querySelector('.ice-row')));
+      assert.equal(view.host.querySelector('#rota-assistant-panel'), null);
+      flushFrames();
+      if (!drawerFirst) {
+        assert.equal(document.activeElement === document.body, true, 'çekmece henüz kurulmadan odak başlatıcıya dönmemeli');
+        view.render({ drawer: true });
+      }
+      assert.equal(document.activeElement === drawer(), true, 'odak görev çekmecesine geçmeli');
+      view.render({ drawer: false });
+      flushFrames();
+    }
+
+    click(launcher);
+    click(view.host.querySelector('[aria-label="Bilgin’i kapat"]'));
+    flushFrames();
+    assert.equal(document.activeElement, launcher);
+  } finally {
+    view.unmount();
+    flushFrames();
   }
 });
 

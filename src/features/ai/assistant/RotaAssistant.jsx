@@ -305,6 +305,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings, openEvidenceTask
     if (!result?.ok) setTaskOpenFailed(true);
     else if (panel.getAttribute('aria-modal') === 'true') {
       // Görev seçildiyse kipli panel çekmeceye yer açar; taslak ve konuşma bellekte kalır.
+      restoreFocusEnabledRef.current = false;
       close({ restoreFocus: false });
     }
   } : null }), [controller, draftKey, openEvidenceTask, close]);

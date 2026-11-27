@@ -832,7 +832,10 @@ export function HoverListCard({
   };
 
   useEx(() => {
-    if (!show) return undefined;
+    if (!show) {
+      setPos((previous) => previous.ready ? { ...previous, ready: false } : previous);
+      return undefined;
+    }
     place();
     if (!manageFocus) return undefined;
     window.addEventListener('resize', place);
