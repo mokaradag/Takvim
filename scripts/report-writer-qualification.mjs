@@ -48,17 +48,17 @@ const VEKIL_MODEL = 'claude-haiku-5-5';
 const VEKIL_EFFORT = 'low';
 const SURROGATE_TIMEOUT_MS = 600000;
 const EDITORIAL_CRITERIA = Object.freeze(['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7', 'E8', 'E9']);
-/** Kıyas çerçevesi §4 editoryal ölçüt tanımları (kör puanlama paketine doğrudan eklenir). */
+/** Kıyas çerçevesi §4 editoryal ölçüt tanımları (`docs/BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md` §4 ile birebir uyumlu). */
 const EDITORIAL_CRITERIA_GUIDE = Object.freeze([
-  'E1 — Yönetici sesi ve doğrudanlık: Kurumsal, ölçülü, gereksiz dolgusuz, doğrudan konuya giren yönetici dili (1–5).',
-  'E2 — Sentez ve bağlantılılık: Kayıt dökümü yerine olayları, sayıları ve sonuçları anlamlı bir bütün olarak ilişkilendirme (1–5).',
-  'E3 — Yapısal akış ve tekrar kontrolü: Bölümler arası rol ayrımına uyma, aynı olguyu gereksiz yinelememe (1–5).',
-  'E4 — Somutluk ve eyleme dönüklük: Somut iş/proje adları, tarihler ve yönetimin izleyebileceği net öncelikler (1–5).',
-  'E5 — Belirsizlik ve sınır dili: Kısmi kapsam, eksik veri veya kesinleşmemiş planları abartmadan doğal dille belirtme (1–5).',
-  'E6 — Denge ve tarafsızlık: Başarı ile risk/gecikmeleri dengeli verme; kişiye suç atfetmeme, taraf seçmeme (1–5).',
-  'E7 — Türkçe dil kalitesi ve okunabilirlik: Doğal, akıcı, dilbilgisi ve terim bütünlüğü yüksek kurumsal Türkçe (1–5).',
-  'E8 — Görev notu dönüşümü (yalnızca not içeren taslaklarda): Kısaltmalı/parçalı notları olgu eklemeden, çelişki ve sürüm değişimini koruyarak profesyonel Türkçeye çevirme (1–5; notsuz taslaklarda U/D).',
-  'E9 — Kapanış ve karar değeri: Genel Sonuç bölümünde yeni olgu eklemeden ve tekrara düşmeden net yönetim değerlendirmesi (1–5).'
+  'E1 — Doğallık ve akıcılık: Türkçesi doğal, cümleler çeşitli ve akıcı (1–5).',
+  'E2 — Bağlantılı paragraflar: Paragraflar bir düşünceyi geliştirir, geçişler doğal (1–5).',
+  'E3 — Sentez ve yorum: Gelişmeleri ilişkilendirir, anlamını kanıt ölçüsünde açıklar (1–5).',
+  'E4 — Yönetici tonu: Ölçülü, yetkin, karar destekleyici (1–5).',
+  'E5 — Özgüllük: Somut iş, proje ve gelişme adlandırılır (1–5).',
+  'E6 — Kalıptan kaçınma: Her bölüm kendi içeriğiyle açılır, tekrar eden kalıplardan kaçınılır (1–5).',
+  'E7 — Yönetim değeri: Dikkat gerektiren konular ve öncelikler net biçimde sunulur (1–5).',
+  'E8 — Not dönüşümü (yalnızca not içeren taslaklarda): Kısaltılmış notlar kanıtı aşmadan profesyonel dile çevrilir (1–5; notsuz taslaklarda U/D).',
+  'E9 — Belirsizliğin anlatımı: Kesin olmayan bilgi doğal ve ölçülü nitelenir (1–5).'
 ]);
 const CONTRADICTION_SCENARIOS = new Set(['S09', 'S17', 'S24', 'S37', 'S38']);
 const KNOWN_RECORD_STATUSES = new Set(['gecerli', 'ayristirma_hatasi', 'altyapi_hatasi', 'gecersiz_kimlik', 'gecersiz_kayit']);

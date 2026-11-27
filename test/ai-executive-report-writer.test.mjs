@@ -2282,6 +2282,9 @@ test('son yakınsama kök neden gerilemeleri: plan, istem, taslak, yazar, kanıt
     taslak_ozeti: qual.draftDigest({ taslak: s17Draft })
   };
   const s17Packet = qual.buildBlindScoringPacket([s17Row]);
+  assert.ok(s17Packet.markdown.includes('E1 — Doğallık ve akıcılık'), 'Kör paket E1 tanımı §4 ile uyumlu olmalıdır');
+  assert.ok(s17Packet.markdown.includes('E6 — Kalıptan kaçınma'), 'Kör paket E6 tanımı §4 ile uyumlu olmalıdır');
+  assert.ok(s17Packet.markdown.includes('E9 — Belirsizliğin anlatımı'), 'Kör paket E9 tanımı §4 ile uyumlu olmalıdır');
   const untitledMatches = s17Packet.markdown.match(/görev: paketteki başlıksız görev #1/gu) || [];
   assert.ok(untitledMatches.length >= 2, 'Başlıksız aynı göreve ait ardışık notlar ortak paket-yerel etiket almalıdır');
 
