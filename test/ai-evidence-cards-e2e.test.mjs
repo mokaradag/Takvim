@@ -151,3 +151,32 @@ test('kayıtlı konuşma yeniden açıldığında yanıtlar kart taşımaz; gün
     assert.equal(titles.some((id) => line.includes(id)), false, 'günlük kart satırı taşımamalı');
   }
 });
+
+test('görev ve sorumlu okumaları arasında atama değişirse yanıt tamamlanır ama çelişkili kart üretilmez', async (t) => {
+  const { ZEYNEP } = await import('./helpers/aiToolFixtures.mjs');
+  const seed = rotaToolSeed();
+  // Tam erişimli projedeki gecikmiş görev ilk okumada sorumlusuzdur; ikinci okumada görünür bir sorumlu atanır.
+  seed.taskAssignees = seed.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+  const stack = stackFor(t, { seed });
+  let mutated = false;
+  stack.db.queryBarrier = {
+    entered: 0,
+    released: Promise.resolve(),
+    match(sql) {
+      if (!mutated && /JOIN\s+dbo\.MR_TaskAssignees\s+ta\s+ON\s+ta\.TaskId\s*=\s*visible\.TaskId/i.test(sql)) {
+        mutated = true;
+        stack.db.taskAssignees.push({ TaskId: TASKS.OVERDUE, Sicil: ZEYNEP });
+      }
+      return false;
+    }
+  };
+  const ALL_OVERDUE = { operation: 'list', metrics: ['tasks.total', 'task.targetFinish', 'task.overdueDays'],
+    population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' }, layout: 'auto',
+    filters: { deadline: 'overdue' } };
+  stack.provider.enqueue(plan(ALL_OVERDUE), composer());
+  const done = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Geciken görevleri göster.' }));
+  assert.equal(mutated, true, 'ikinci sorumlu okuması simüle edilmeli');
+  assert.equal(done.assistantMessage.finishReason, 'unavailable', 'çelişkili okuma yetki sınırında kapalı reddedilmeli');
+  assert.equal(hasBindingMarks(done.assistantMessage.content), false);
+  assert.equal(done.evidenceCards, undefined, 'çelişkili sorumluluk bilgisi karta taşınmamalı');
+});

@@ -17,6 +17,7 @@ const cardsDomain = await import('../src/domain/ai/evidenceCards.js');
 const { EVIDENCE_CARD_LIMITS, bindingMark, hasBindingMarks, normalizeEvidenceCards, resolveBindingAnchors, stripBindingMarks, evidenceCardsExpired } = cardsDomain;
 const { countProposition, fluentParagraph, tablePropositions, taskCountLead } = await import('../src/domain/ai/groundedPropositions.js');
 const { renderComposition } = await import('../src/domain/ai/groundedComposition.js');
+const { renderGroupDetails } = await import('../src/domain/ai/evidenceNarrative.js');
 const { escapedFactText } = await import('../src/domain/ai/evidenceFacts.js');
 const { strongTexts, blockStrongStarts } = await import('../src/features/ai/assistant/evidenceCardAnchors.js');
 const { parseAssistantMarkdown } = await import('../src/features/ai/assistant/assistantMarkdown.js');
@@ -429,4 +430,200 @@ test('çizim bağlı kalın düğümü tetikleyiciye sarar; metni uyuşmayan ba�
   assert.equal(findElement(mismatched, (node) => node.type === EvidenceReference), null);
   // Kart yoksa çizim eskisiyle aynıdır.
   assert.equal(findElement(renderBlock(block, 'b0', new Set()), (node) => node.type === EvidenceReference), null);
+});
+
+/* ── Kök neden regresyon testleri (R1–R5) ──────────────────── */
+
+test('bütçe kırpmasıyla düşen kartın kanıt kimliği bağımlılıklardan çıkarılır, kalan kartlarınki korunur', () => {
+  const longTitle = 'Ü'.repeat(150);
+  const bindings = [
+    { type: 'tasks', evidenceId: 'R1', count: 30, title: 'Birinci kart', tone: 'overdue' },
+    { type: 'task', evidenceId: 'R1', taskId: taskId(1) },
+    { type: 'tasks', evidenceId: 'R2', count: 30, title: 'İkinci kart', tone: 'neutral' },
+    { type: 'tasks', evidenceId: 'R3', count: 30, title: 'Üçüncü kart', tone: 'neutral' },
+    { type: 'tasks', evidenceId: 'R4', count: 30, title: 'Dördüncü kart', tone: 'neutral' },
+    { type: 'tasks', evidenceId: 'R5', count: 30, title: 'Beşinci kart', tone: 'neutral' }
+  ];
+  const text = bindings.map((_, index) => `**${bindingMark(index + 1)}30**`).join(' ');
+  const rowsFor = (offset) => Array.from({ length: 30 }, (_, row) => taskRow(offset + row + 1, { title: longTitle }));
+  const entries = ['R1', 'R2', 'R3', 'R4', 'R5'].map((id, index) => entry(id, rowsFor(index * 100)));
+  const summaries = entries.map((item) => summary(item.id));
+  const { text: clean, evidenceBindings } = bound(text, bindings);
+  const built = buildEvidenceCards({ evidenceBindings, finalText: clean, entries, summaries, citedIds: entries.map((item) => item.id) });
+  assert.ok(built, 'bütçeye sığan kartlar kalmalı');
+  assert.ok(built.descriptor.cards.length < 5, 'sondaki kartlar bütçe nedeniyle düşmeli');
+  assert.equal(built.evidenceIds.includes('R1'), true, 'kalan kartların ortak kanıtı korunmalı');
+  assert.equal(built.evidenceIds.includes('R5'), false, 'düşen kartın kanıtı bağımlılıkta kalmamalı');
+  assert.equal(new Set(built.evidenceIds).size, built.evidenceIds.length, 'ortak kanıt kimliği tekilleştirilmeli');
+  // Düşen kartın kanıtı (R5) teslimde yoksa bile kalan kartlar yetki denetiminden geçer; kalan kartın kanıtı (R1) kalkarsa reddedilir.
+  const deliveredWithoutDropped = new Set(built.evidenceIds);
+  assert.equal(built.evidenceIds.every((id) => deliveredWithoutDropped.has(id)), true);
+  deliveredWithoutDropped.delete('R1');
+  assert.equal(built.evidenceIds.every((id) => deliveredWithoutDropped.has(id)), false);
+});
+
+test('markedDetail uyuşmazlığında hayalet bağ ayrılmaz ve sonraki geçerli bağlar doğru anahtar alır', () => {
+  const mkGroup = (evidenceId, count) => ({
+    tool: 'rota_task_search',
+    evidenceId,
+    envelope: [{ field: 'totalCount', value: count, semantic: { complete: true, filters: { assignee: 'me', deadline: 'overdue' } } }],
+    main: { entries: [] },
+    collections: new Map()
+  });
+  const badGroup = mkGroup('R1', 3);
+  const goodGroup = mkGroup('R2', 5);
+  const badLead = taskCountLead(badGroup, 'tr');
+  const goodLead = taskCountLead(goodGroup, 'tr');
+  // İlk ayrıntının önceden çizilmiş metni `detailText(detail, lead)` çıktısından bilerek farklı tutulur (uyuşmazlık simülasyonu).
+  const goodText = renderGroupDetails(goodGroup, { locale: 'tr', empty: [], layout: 'list', lead: goodLead, criteriaStated: false });
+  const details = new Map([
+    ['D1', { id: 'D1', evidenceId: 'R1', part: 0, text: 'Farklı ayrıntı metni.', source: { group: badGroup, lead: badLead, empty: [], layout: 'list', criteriaStated: false } }],
+    ['D2', { id: 'D2', evidenceId: 'R2', part: 0, text: goodText, source: { group: goodGroup, lead: goodLead, empty: [], layout: 'list', criteriaStated: false } }]
+  ]);
+  const composition = { render: { locale: 'tr', propositions: new Map(), details, tables: new Map(), charts: new Map(), titles: new Map() } };
+  const validated = { blocks: [{ type: 'details', source: 'D1' }, { type: 'details', source: 'D2' }] };
+  const plain = renderComposition(composition, validated);
+  const marked = renderComposition(composition, validated, { bind: true });
+  assert.equal(stripBindingMarks(marked.text), plain.text, 'işaretsiz metin bayt bayt aynı kalmalı');
+  assert.equal(marked.bindings.length, 1, 'reddedilen ayrıntı bağ ayırmamalı');
+  assert.equal(marked.bindings[0].evidenceId, 'R2');
+  const resolved = resolveBindingAnchors(marked.text, strongTexts);
+  assert.equal(resolved.rejected, null);
+  assert.deepEqual(resolved.anchors.map((anchor) => [anchor.key, anchor.text]), [[1, '5']]);
+});
+
+test('fluentParagraph uyuşmaz önermede bağ ayırmaz ve 16 bağ sınırında geçerli bağları korur', () => {
+  const mkProp = (evidenceId, count) => {
+    const group = { tool: 'rota_task_search', evidenceId, envelope: [] };
+    const fact = { field: 'totalCount', value: count, semantic: { complete: true, filters: { deadline: 'overdue', assignee: 'me' } } };
+    return countProposition(group, fact, 'tr', null);
+  };
+  const valid = mkProp('R2', 4);
+  const mismatched = { ...mkProp('R1', 9), markdown: 'Uyuşmayan sabit önerme metni.' };
+  // 16 geçerli önermeden önce 3 uyuşmaz önerme: hiçbiri bağ bütçesi tüketmemeli.
+  const entries = [
+    { proposition: mismatched },
+    { proposition: mismatched },
+    { proposition: mismatched },
+    ...Array.from({ length: EVIDENCE_CARD_LIMITS.maxAnchors }, (_, index) => ({ proposition: mkProp(`R${index + 10}`, 4) }))
+  ];
+  const bindings = [];
+  const mark = (spec) => {
+    const value = bindingMark(bindings.length + 1);
+    if (value) bindings.push(spec);
+    return value;
+  };
+  const plain = fluentParagraph(entries, 'tr');
+  const marked = fluentParagraph(entries, 'tr', null, null, mark);
+  assert.equal(stripBindingMarks(marked), plain, 'varsayılan çizim değişmemeli');
+  assert.equal(bindings.length, EVIDENCE_CARD_LIMITS.maxAnchors, 'reddedilen önermeler bağ bütçesini tüketmemeli');
+  assert.equal(bindings[0].evidenceId, 'R10');
+  assert.equal(bindings.at(-1).evidenceId, `R${EVIDENCE_CARD_LIMITS.maxAnchors + 9}`);
+  const resolved = resolveBindingAnchors(marked, strongTexts);
+  assert.equal(resolved.rejected, null);
+  assert.equal(resolved.anchors.length, EVIDENCE_CARD_LIMITS.maxAnchors);
+  assert.equal(resolved.anchors[0].key, 1);
+  assert.equal(resolved.anchors.at(-1).key, EVIDENCE_CARD_LIMITS.maxAnchors);
+  // Tekil geçerli önerme de korunur.
+  const singleBindings = [];
+  const singleText = fluentParagraph([{ proposition: mismatched }, { proposition: valid }], 'tr', null, null, (spec) => bindingMark(singleBindings.push(spec)));
+  assert.equal(singleBindings.length, 1);
+  assert.equal(singleBindings[0].evidenceId, 'R2');
+  assert.equal(stripBindingMarks(singleText), fluentParagraph([{ proposition: mismatched }, { proposition: valid }], 'tr'));
+});
+
+test('farklı okumalardan gelen çelişkili sorumluluk durumu kart izdüşümünü kapalı reddeder', () => {
+  // İlk okuma sorumlusuz, ikinci okuma görünür sorumlu: çelişkili kart reddedilir.
+  assert.equal(single(1, [taskRow(1, { assignment: 'unassigned', assignees: [{ name: 'Ayşe Demir', sicil: 10 }] })]), null);
+  // İlk okuma sorumlusuz, ikinci okuma gizli sorumlu: çelişkili kart reddedilir.
+  assert.equal(single(1, [taskRow(1, { assignment: 'unassigned', assignees: [{ name: 'Gizli', identityHidden: true }] })]), null);
+  // İlk okuma görünür atanmış, ikinci okuma boş sorumlu listesi: çelişkili kart reddedilir.
+  assert.equal(single(1, [taskRow(1, { assignment: 'visible', assignees: [] })]), null);
+  // İlk okuma çözülemeyen atama, ikinci okuma dizinde çözülen görünür sorumlu: çelişkili kart reddedilir.
+  const unresolvedRow = taskRow(1, { assignment: 'unresolved', assignees: [{ name: 'Ayşe Demir', sicil: 10 }] });
+  assert.equal(single(1, [unresolvedRow], {
+    entries: [{ ...entry('R1', [unresolvedRow]), cardAssignments: new Map([[unresolvedRow.taskId, { unresolved: [], visibleCount: 1 }]]) }]
+  }), null);
+  // İlk okuma gizli atama, ikinci okuma görünür sorumlu: çelişkili kart reddedilir.
+  assert.equal(single(1, [taskRow(1, { assignment: 'undisclosed', assignees: [{ name: 'Ayşe Demir', sicil: 10 }] })]), null);
+  // Alan doğrulaması da sorumlusuz satırda sorumlu adını reddeder.
+  const badDescriptor = structuredClone(validDescriptor());
+  badDescriptor.cards[0].items[0].assignment = 'unassigned';
+  badDescriptor.cards[0].items[0].assignees = ['Ayşe Demir'];
+  assert.equal(normalizeEvidenceCards(badDescriptor), null);
+  // Tutarlı sorumlusuz, görünür ve gizli atamalar korunur.
+  assert.ok(single(1, [taskRow(1, { assignment: 'unassigned', assignees: [] })]));
+  assert.ok(single(1, [taskRow(1, { assignment: 'visible', assignees: [{ name: 'Ayşe Demir', sicil: 10 }] })]));
+  assert.ok(single(1, [taskRow(1, { assignment: 'undisclosed', assignees: [{ name: 'Gizli', identityHidden: true }] })]));
+});
+
+test('denetleyici süresi dolan kanıt yükünü yeni tur olmadan bellekten siler ve zamanlayıcıları temizler', async (t) => {
+  const start = Date.parse(GENERATED_AT);
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
+  const { api, turns } = fakeRuns();
+  let counter = 0;
+  let scheduledCount = 0;
+  let cancelledCount = 0;
+  const controller = createAssistantController({
+    api,
+    createId: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`,
+    reconciliationDelaysMs: [],
+    schedule: (callback, delayMs) => {
+      scheduledCount += 1;
+      const timer = setTimeout(callback, delayMs);
+      return () => {
+        cancelledCount += 1;
+        clearTimeout(timer);
+      };
+    }
+  });
+  t.after(() => controller.dispose());
+  await controller.activate();
+  const conversation = { id: '6f1c2d3e-4a5b-4c6d-8e7f-001122334455', title: 'Süre', messageCount: 2 };
+
+  const completeTurn = async (index, content) => {
+    controller.send(`Soru ${index}`);
+    const run = turns.at(-1);
+    run.onEvent({ type: 'accepted', data: { conversation: { ...conversation, messageCount: index * 2 }, userMessage: { id: `u${index}`, content: `Soru ${index}`, turnId: run.input.turnId }, context: {}, rotaData: true } });
+    run.resolve({ ok: true, done: { conversation: { ...conversation, messageCount: index * 2 }, evidenceCards: validDescriptor(), assistantMessage: { id: `a${index}`, content, rotaData: true, evidence: [] } } });
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  // Tur 1 (T=0) ve Tur 2 (T=+5 dk): iki farklı süre sonu.
+  await completeTurn(1, 'İlk yanıt **2** görev.');
+  t.mock.timers.tick(5 * 60 * 1000);
+  await completeTurn(2, 'İkinci yanıt **2** görev.');
+  assert.ok(controller.getState().active.turns[0].answer.evidenceCards);
+  assert.ok(controller.getState().active.turns[1].answer.evidenceCards);
+
+  // Panel yeniden açılması (activate) süreyi uzatmaz.
+  await controller.activate();
+  t.mock.timers.tick(10 * 60 * 1000);
+  assert.equal(controller.getState().active.turns[0].answer.evidenceCards, undefined, 'ilk turun kartı 15. dakikada bellekten silinmeli');
+  assert.equal(controller.getState().active.turns[0].answer.content, 'İlk yanıt **2** görev.', 'yanıt metni korunmalı');
+  assert.ok(controller.getState().active.turns[1].answer.evidenceCards, 'ikinci turun kartı henüz süresi dolmadığı için kalmalı');
+
+  // 5 dakika daha geçince ikinci turun kartı da bellekten silinir.
+  t.mock.timers.tick(5 * 60 * 1000);
+  assert.equal(controller.getState().active.turns[1].answer.evidenceCards, undefined, 'ikinci turun kartı 20. dakikada bellekten silinmeli');
+  assert.equal(controller.getState().active.turns[1].answer.content, 'İkinci yanıt **2** görev.');
+
+  // Konuşma değişimi ve dispose bekleyen zamanlayıcıyı iptal eder.
+  await completeTurn(3, 'Üçüncü yanıt **2** görev.');
+  const beforeSwitch = cancelledCount;
+  controller.newConversation();
+  assert.ok(cancelledCount > beforeSwitch, 'konuşma değişiminde süre sonu zamanlayıcısı iptal edilmeli');
+
+  // Uyuyan sekme simülasyonu: zamanlayıcı ateşlemeden duvar saati ileri giderse activate() süresi dolanı temizler.
+  await completeTurn(4, 'Dördüncü yanıt **2** görev.');
+  t.mock.timers.setTime(Date.now() + EVIDENCE_CARD_LIMITS.ttlMs + 1000);
+  await controller.activate();
+  assert.equal(controller.getState().active.turns[0].answer.evidenceCards, undefined, 'uykudan dönüşte activate() süresi dolan kartı temizlemeli');
+  assert.ok(scheduledCount >= 3);
+
+  const beforeDispose = cancelledCount;
+  await completeTurn(5, 'Beşinci yanıt **2** görev.');
+  controller.dispose();
+  assert.ok(cancelledCount > beforeDispose, 'dispose() bekleyen zamanlayıcıyı iptal etmeli');
 });

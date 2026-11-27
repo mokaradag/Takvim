@@ -159,6 +159,9 @@ function normalizeItem(item) {
   if (assignees.some((name) => !name.ok)) return null;
   // Gecikme günü yalnızca gecikmiş açık görevde, tamamlanma günü yalnızca tamamlanmış görevde anlamlıdır.
   if ((overdueDays.value != null && !item.overdue) || (item.overdue && item.status === 'done') || (finished.value != null && item.status !== 'done')) return null;
+  // Sorumlusuz satırda sorumlu kaydı, gizli ya da çözülemeyen durumda görünür ad taşınmaz.
+  if (item.assignment === 'unassigned' && (assignees.length > 0 || hidden.value > 0 || unresolved.value > 0 || clipped)) return null;
+  if ((item.assignment === 'undisclosed' || item.assignment === 'unresolved') && (assignees.length > 0 || clipped)) return null;
   return Object.freeze({ id, title: title.value, project: project.value, status: item.status, overdue: item.overdue, overdueDays: overdueDays.value,
     due: due.value, finished: finished.value, progress: progress.value, assignees: Object.freeze(assignees.map((name) => name.value)),
     hiddenAssignees: hidden.value, ...(unresolved.value ? { unresolvedAssignees: unresolved.value } : {}),

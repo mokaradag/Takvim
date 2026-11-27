@@ -153,23 +153,30 @@ test('kipli kart Tab sırasını sahiplenir ve ilk Esc yalnız kartı kapatır',
       React.createElement(Harness, { receivedAt: Date.now(), openTask: () => {} }));
   }
   const view = mountDom(Panel);
-  const trigger = view.host.querySelector('.ice-ref');
-  act(() => trigger.focus());
-  key('Enter', trigger);
-  const rows = [...cardNode().querySelectorAll('button')];
-  assert.equal(document.activeElement, rows[0]);
-  assert.equal(key('Tab', rows[0]).defaultPrevented, false);
-  key('Tab', rows[0], { shiftKey: true });
-  assert.equal(document.activeElement, rows.at(-1));
-  key('Tab', rows.at(-1));
-  assert.equal(document.activeElement, rows[0]);
-  key('Escape');
-  assert.equal(cardNode(), null);
-  assert.equal(document.activeElement, trigger);
-  assert.equal(closed, 0);
-  key('Escape');
-  assert.equal(closed, 1);
-  view.unmount();
+  try {
+    const trigger = view.host.querySelector('.ice-ref');
+    act(() => trigger.focus());
+    key('Enter', trigger);
+    const chips = cardNode().querySelector('ul.ice-chips');
+    const rows = [...cardNode().querySelectorAll('button')];
+    assert.ok(chips, 'sorumlu listesi odaklanabilir olmalı');
+    assert.equal(document.activeElement, rows[0]);
+    assert.equal(key('Tab', rows[0]).defaultPrevented, false);
+    assert.equal(key('Tab', rows[0], { shiftKey: true }).defaultPrevented, false);
+    act(() => chips.focus());
+    key('Tab', chips, { shiftKey: true });
+    assert.equal(document.activeElement, rows.at(-1));
+    key('Tab', rows.at(-1));
+    assert.equal(document.activeElement, chips);
+    key('Escape');
+    assert.equal(cardNode(), null);
+    assert.equal(document.activeElement, trigger);
+    assert.equal(closed, 0);
+    key('Escape');
+    assert.equal(closed, 1);
+  } finally {
+    view.unmount();
+  }
 });
 
 test('fareye açık sabitlenmemiş kart Esc ile kapanır, dışarıdaki odak yerinde kalır', (t) => {
@@ -232,6 +239,94 @@ test('görünüm alanı kanıt kartının tamamını sınırlar ve kart gövdesi
   const css = readFileSync(new URL('../src/app/styles/assistant.css', import.meta.url), 'utf8');
   assert.match(css, /\.rich-tip\.ice-card\s*\{[^}]*max-height:\s*min\([^;]*--app-viewport-h/);
   assert.match(css, /\.ice-card \.rich-tip-body\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(css, /\.ice-chips:focus-visible\s*\{[^}]*outline:/);
+});
+
+test('fareyle sabitlenen kart tetikleyiciden başka öğeye odak gidince kapanır, kendi kartına geçince açık kalır', () => {
+  const secondCard = { ...card, id: 'c2', title: 'İkinci kanıt', total: 4 };
+  function TwoRefs() {
+    return React.createElement(EvidenceCardActionsContext.Provider, { value: { openTask: () => {} } },
+      React.createElement('p', null,
+        React.createElement(EvidenceReference, { card, receivedAt: Date.now(), text: '12' }, React.createElement('strong', null, '12')),
+        ' ve ',
+        React.createElement(EvidenceReference, { card: secondCard, receivedAt: Date.now(), text: '4' }, React.createElement('strong', null, '4'))));
+  }
+  const view = mountDom(TwoRefs);
+  try {
+    const [first, second] = [...view.host.querySelectorAll('.ice-ref')];
+    click(first);
+    assert.equal(document.querySelectorAll('.ice-card').length, 1);
+    // Odak kendi kartının içine geçerse kart açık kalır.
+    const ownRow = cardNode().querySelector('button.ice-row');
+    act(() => ownRow.focus());
+    assert.equal(document.querySelectorAll('.ice-card').length, 1);
+    // Tekrar ilk tetikleyiciye dönüp ikinci tetikleyiciye Tab ile geçilince yalnızca ikinci kart açık kalır.
+    act(() => first.focus());
+    act(() => second.focus());
+    const openCards = [...document.querySelectorAll('.ice-card')];
+    assert.equal(openCards.length, 1, 'iki kart aynı anda açık kalmamalı');
+    assert.match(openCards[0].getAttribute('aria-label'), /^İkinci kanıt:/);
+    assert.equal(document.activeElement, second, 'odak ikinci tetikleyicide kalmalı');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('odaklanabilir alt öğesi olmayan salt okunur kanıt kartı diyalog köküne odaklanır ve modal tuzağında kalır', () => {
+  const singleCard = normalizeEvidenceCards({
+    v: 1,
+    cards: [{ id: 'c1', kind: 'task', title: 'Tekil görev', tone: 'neutral', generatedAt: '2026-11-27T08:00:00.000Z',
+      total: 1, scopePartial: false, items: [item(1)], people: [{ name: 'Ayşe Demir', tasks: 1 }], unassigned: 0, undisclosed: 0 }],
+    anchors: [{ strong: 0, text: 'Tekil görev', card: 'c1' }]
+  }).cards[0];
+  function ModalReadOnly() {
+    const containerRef = React.useRef(null);
+    const initialFocusRef = React.useRef(null);
+    useModalFocusTrap({ containerRef, initialFocusRef, onClose: () => {} });
+    return React.createElement('div', { ref: containerRef },
+      React.createElement('input', { ref: initialFocusRef }),
+      React.createElement(EvidenceCardActionsContext.Provider, { value: { openTask: null } },
+        React.createElement(EvidenceReference, { card: singleCard, receivedAt: Date.now(), text: 'Tekil görev' },
+          React.createElement('strong', null, 'Tekil görev'))));
+  }
+  const view = mountDom(ModalReadOnly);
+  try {
+    const trigger = view.host.querySelector('.ice-ref');
+    act(() => trigger.focus());
+    key('Enter', trigger);
+    const dialog = cardNode();
+    assert.ok(dialog);
+    assert.equal(dialog.getAttribute('tabindex'), '-1');
+    assert.equal(document.activeElement, dialog, 'alt öğe yoksa odak diyalog köküne yerleşmeli');
+    key('Tab', dialog);
+    assert.equal(document.activeElement, dialog, 'Tab odağı belgenin dışına kaçırmamalı');
+    key('Tab', dialog, { shiftKey: true });
+    assert.equal(document.activeElement, dialog, 'Shift+Tab odağı diyalog kökünde tutmalı');
+    key('Escape', dialog);
+    assert.equal(cardNode(), null);
+    assert.equal(document.activeElement, trigger);
+  } finally {
+    view.unmount();
+  }
+});
+
+test('taşan sorumlu listesi klavyeyle odaklanabilir ve uygun Türkçe erişilebilir ada sahiptir', () => {
+  const manyPeople = Array.from({ length: 24 }, (_, index) => ({ name: `Sorumlu ${index + 1}`, tasks: 1 }));
+  const crowdedCard = { ...card, people: manyPeople };
+  const view = mountDom(Harness, { shownCard: crowdedCard, receivedAt: Date.now(), openTask: () => {} });
+  try {
+    click(view.host.querySelector('.ice-ref'));
+    const list = cardNode().querySelector('ul.ice-chips');
+    assert.ok(list);
+    assert.equal(list.getAttribute('tabindex'), '0');
+    assert.equal(list.getAttribute('aria-label'), 'Sorumlular');
+    assert.equal(list.querySelectorAll('li.ice-chip').length, 25);
+    assert.equal(list.querySelectorAll('button, [tabindex]').length, 0, 'statik kişi yongaları gereksiz etkileşim taşımamalı');
+    act(() => list.focus());
+    assert.equal(document.activeElement, list);
+  } finally {
+    view.unmount();
+  }
 });
 
 test('görev seçimi başarılıysa yalnız kipli Bilgin paneli çekmeceye alan açar', async (t) => {

@@ -1188,8 +1188,9 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
   // `mark` (yalnızca yanıt düzeni): bağlı kalın değerlere konum işareti; işaretsiz biçim önerme metniyle birebir aynıdır.
   const marked = (proposition) => {
     if (!mark || !proposition.parts?.some((part) => part?.bind)) return proposition.markdown;
-    const text = sentence(proposition.parts, mark).markdown;
-    return stripBindingMarks(text) === proposition.markdown ? text : proposition.markdown;
+    // İşaretleyici çağrılmadan önce işaretsiz parçaların önerme metniyle eşleştiği doğrulanır; hayalet bağ ayrılmaz.
+    if (sentence(proposition.parts).markdown !== proposition.markdown) return proposition.markdown;
+    return sentence(proposition.parts, mark).markdown;
   };
   return units.map((unit) => {
     if (unit.text != null) return unit.text;

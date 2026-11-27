@@ -843,7 +843,10 @@ export function HoverListCard({
   useEx(() => {
     if (!manageFocus || !show || !pos.ready || !focusIntoCard.current) return;
     focusIntoCard.current = false;
-    cardRef.current?.querySelector('button, a[href], [tabindex="0"]')?.focus();
+    // Önce etkileşimli satır/bağlantı, yoksa odaklanabilir liste, o da yoksa diyalog kökü odaklanır.
+    (cardRef.current?.querySelector('button:not([disabled]), a[href]')
+      || cardRef.current?.querySelector('[tabindex="0"]')
+      || cardRef.current)?.focus();
     // Odakla zaten açık kart Enter ile sabitlendiğinde de (yalnızca `pinned` değişir) odak karta taşınır.
   }, [manageFocus, show, pos.ready, pinned]);
 
@@ -891,6 +894,7 @@ export function HoverListCard({
       ref={cardRef}
       className={`rich-tip interactive${cardClass ? ` ${cardClass}` : ''}`}
       {...(cardLabel ? { role: 'dialog', 'aria-label': cardLabel } : {})}
+      tabIndex={manageFocus || cardLabel ? -1 : undefined}
       data-hover-list-focus={manageFocus ? '' : undefined}
       data-modal-owner={manageFocus ? wrapRef.current?.closest('[data-focus-scope]')?.getAttribute('data-focus-scope') : undefined}
       style={{
@@ -953,8 +957,15 @@ export function HoverListCard({
           openNow();
         }}
         onBlur={(event) => {
-          // Odak karta geçiyorsa (odak yönetimi) kart açık kalır.
-          if (manageFocus && event.relatedTarget && cardRef.current?.contains(event.relatedTarget)) return;
+          const next = event.relatedTarget;
+          // Odak karta geçiyorsa (odak yönetimi) kart açık kalır; kart ve tetikleyici dışına geçince sabitlenmiş kart da kapanır.
+          if (manageFocus) {
+            if (next && (cardRef.current?.contains(next) || wrapRef.current?.contains(next))) return;
+            if (next) {
+              closeNow({ restoreFocus: false });
+              return;
+            }
+          }
           scheduleClose();
         }}
         onClick={toggle}

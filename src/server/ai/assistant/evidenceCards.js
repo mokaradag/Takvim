@@ -81,6 +81,12 @@ function projectTask(row, directory) {
   const maxNames = EVIDENCE_CARD_LIMITS.maxAssigneesPerItem;
   const availableNames = Math.min(maxNames, visible.length);
   const assignment = ASSIGNMENTS.has(row.assignment) ? row.assignment : visible.length ? 'visible' : 'undisclosed';
+  const totalVisible = Math.max(visible.length, directory?.visibleCount ?? 0);
+  // Görev olgusu ile sorumlu okuması arasında atama durumu değiştiyse çelişkili satır kapalı reddedilir.
+  if (assignment === 'unassigned' && (people.length > 0 || totalVisible > 0 || unresolvedCount > 0 || hidden > 0)) return null;
+  if (assignment === 'visible' && totalVisible === 0) return null;
+  if (assignment === 'unresolved' && (totalVisible > 0 || unresolvedCount === 0)) return null;
+  if (assignment === 'undisclosed' && (totalVisible > 0 || unresolvedCount > 0)) return null;
   const progress = Number.isSafeInteger(row.progressPercent) && row.progressPercent >= 0 && row.progressPercent <= 100 ? row.progressPercent : null;
   return {
     item: {
@@ -94,7 +100,7 @@ function projectTask(row, directory) {
       finished: row.status === 'done' && validDay(row.actualFinish) ? row.actualFinish : null,
       progress,
       assignees: visible.slice(0, availableNames).map((person) => person.name),
-      ...(Math.max(visible.length, directory?.visibleCount ?? 0) > availableNames ? { assigneesClipped: true } : {}),
+      ...(totalVisible > availableNames ? { assigneesClipped: true } : {}),
       ...(unresolvedCount ? { unresolvedAssignees: unresolvedCount } : {}),
       hiddenAssignees: hidden,
       assignment
@@ -174,8 +180,8 @@ export function buildEvidenceCards({ evidenceBindings, finalText, entries = [], 
   const summaryById = new Map(summaries.filter((summary) => cited.has(summary?.id)).map((summary) => [summary.id, summary]));
   const cards = [];
   const cardIds = new Map();
+  const cardEvidence = new Map();
   const anchors = [];
-  const usedEvidence = new Set();
   let totalItems = 0;
   for (const anchor of evidenceBindings.anchors) {
     if (anchors.length >= EVIDENCE_CARD_LIMITS.maxAnchors) break;
@@ -190,8 +196,8 @@ export function buildEvidenceCards({ evidenceBindings, finalText, entries = [], 
       id = `c${cards.length + 1}`;
       cards.push({ id, ...card });
       cardIds.set(key, id);
+      cardEvidence.set(id, bind.evidenceId);
       totalItems += card.items.length;
-      usedEvidence.add(bind.evidenceId);
     }
     anchors.push({ strong: anchor.strong, text: anchor.text, card: id });
   }
@@ -205,5 +211,7 @@ export function buildEvidenceCards({ evidenceBindings, finalText, entries = [], 
   // Sunucu da tarayıcının katı doğrulamasından geçmeyen tanımlayıcıyı göndermez.
   const normalized = descriptor.cards.length ? normalizeEvidenceCards(descriptor) : null;
   if (!normalized) return null;
-  return { descriptor: normalized, evidenceIds: [...usedEvidence] };
+  // Kanıt bağımlılıkları yalnızca bütçe kırpmasından sonra kalan kartlardan türetilir.
+  const evidenceIds = [...new Set(normalized.cards.map((card) => cardEvidence.get(card.id)).filter(Boolean))];
+  return { descriptor: normalized, evidenceIds };
 }

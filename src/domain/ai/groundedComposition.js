@@ -1553,10 +1553,18 @@ export function renderComposition(composition, validated, { bind = false } = {})
     if (!mark || !text || !source?.lead || source.group?.tool !== 'rota_task_search') return text;
     const empty = (source.empty || []).includes(detail.evidenceId);
     if (taskCountLead(source.group, locale, { empty }) !== source.lead) return text;
-    const lead = taskCountLead(source.group, locale, { empty, mark });
+    // Aday metin doğrulanmadan ortak bağ dizisi değiştirilmez; reddedilen deneme bağ bütçesi tüketmez.
+    const staged = [];
+    const lead = taskCountLead(source.group, locale, { empty, mark: (spec) => {
+      const value = bindingMark(bindings.length + staged.length + 1);
+      if (value) staged.push(spec);
+      return value;
+    } });
     if (!lead || lead === source.lead) return text;
     const candidate = detailText(detail, lead);
-    return stripBindingMarks(candidate) === text ? candidate : text;
+    if (stripBindingMarks(candidate) !== text) return text;
+    bindings.push(...staged);
+    return candidate;
   };
   const pending = [];
   const showDetail = (id, place = true) => {

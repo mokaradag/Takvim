@@ -112,7 +112,7 @@ function PeopleSection({ card }) {
         {card.items.length < card.total && <span className="ice-section-hint">gösterilen görevlerde</span>}
       </div>
       {card.peopleClipped && <p className="ice-section-hint">Kişi listesi kısmi önizlemedir.</p>}
-      <ul className="ice-chips">
+      <ul className="ice-chips" tabIndex={0} aria-label="Sorumlular">
         {card.people.map((person, index) => (
           <li key={`${person.name}-${index}`} className="ice-chip" title={`${person.name} · ${person.tasks} görev`}>
             <Avatar name={person.name} size="sm" />

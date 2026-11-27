@@ -150,6 +150,16 @@ function withoutEvidenceCards(active) {
   return { ...active, turns: pruneEvidenceCards(active.turns, Number.POSITIVE_INFINITY) };
 }
 
+/** Etkin konuşmadaki canlı kanıt kartlarının en erken süre sonu (ms) ya da `null`. */
+function earliestEvidenceDeadline(turns = []) {
+  let earliest = Infinity;
+  for (const turn of turns) {
+    const receivedAt = turn.answer?.evidenceCards?.receivedAt;
+    if (Number.isFinite(receivedAt)) earliest = Math.min(earliest, receivedAt + EVIDENCE_CARD_LIMITS.ttlMs);
+  }
+  return Number.isFinite(earliest) ? earliest : null;
+}
+
 /** Kayıtlı iletileri turlara çevirir; yanıtı olmayan kullanıcı iletisi yanıtsız turdur. */
 export function turnsFromMessages(messages = []) {
   const turns = [];
@@ -217,6 +227,9 @@ export function createAssistantController({
   const viewKeys = new Map();
   const listMutations = new Map();
   let mutationVersion = 0;
+  let cancelEvidenceExpiry = null;
+  let evidenceExpiryDeadline = null;
+  let evidenceExpiryView = null;
   // Ayarlar'daki yanıt ayrıntısı (kabuk bildirir); yalnızca sunum tercihidir, çizim durumunu değiştirmez.
   let answerDetail = DEFAULT_ANSWER_DETAIL;
 
@@ -226,6 +239,47 @@ export function createAssistantController({
   };
   state.active = draft();
 
+  function clearEvidenceExpiry() {
+    cancelEvidenceExpiry?.();
+    cancelEvidenceExpiry = null;
+    evidenceExpiryDeadline = null;
+    evidenceExpiryView = null;
+  }
+
+  function pruneActiveEvidenceCards(now = Date.now()) {
+    const turns = state.active?.turns;
+    if (!turns?.length) return;
+    const pruned = pruneEvidenceCards(turns, now);
+    if (pruned === turns) {
+      syncEvidenceExpiry();
+      return;
+    }
+    update((current) => (current.active?.turns === turns ? { ...current, active: { ...current.active, turns: pruned } } : current));
+  }
+
+  /** En erken kanıt kartı süre sonuna tek zamanlayıcı kurar; kart yoksa veya konuşma değiştiyse iptal eder. */
+  function syncEvidenceExpiry() {
+    const deadline = earliestEvidenceDeadline(state.active?.turns);
+    const view = state.active?.viewKey ?? null;
+    if (deadline == null) {
+      clearEvidenceExpiry();
+      return;
+    }
+    if (cancelEvidenceExpiry && evidenceExpiryDeadline === deadline && evidenceExpiryView === view) return;
+    clearEvidenceExpiry();
+    const ownSession = session;
+    const ownView = view;
+    evidenceExpiryDeadline = deadline;
+    evidenceExpiryView = ownView;
+    cancelEvidenceExpiry = schedule(() => {
+      cancelEvidenceExpiry = null;
+      evidenceExpiryDeadline = null;
+      evidenceExpiryView = null;
+      if (ownSession !== session || state.active?.viewKey !== ownView) return;
+      pruneActiveEvidenceCards();
+    }, Math.max(0, deadline - Date.now()));
+  }
+
   function emit() {
     for (const listener of [...listeners]) listener();
   }
@@ -234,6 +288,7 @@ export function createAssistantController({
     const next = recipe(state);
     // Panel düzeyindeki hata yalnızca oturum hatasıdır: gözlenen oturum/yetki geçersizliği geçici kartları hemen siler.
     state = next.status === 'error' && next.active ? { ...next, active: withoutEvidenceCards(next.active) } : next;
+    syncEvidenceExpiry();
     emit();
   }
 
@@ -955,6 +1010,8 @@ export function createAssistantController({
    * okunur (ör. kullanıcı Ayarlar'dan anahtar ekledi).
    */
   async function activate({ refresh = false } = {}) {
+    // Panel yeniden açıldığında veya sekme uykudan döndüğünde süresi dolmuş kanıt kartları hemen temizlenir.
+    pruneActiveEvidenceCards();
     if (!refresh && state.status === 'loading') return;
     if (!refresh && state.status === 'ready' && state.readiness?.available) return;
     const ownSession = session;
@@ -1045,6 +1102,7 @@ export function createAssistantController({
   /** Bütün istekleri keser ve sonraki geç sonuçları geçersiz kılar. */
   function dispose() {
     session += 1;
+    clearEvidenceExpiry();
     readinessToken += 1;
     readinessLoad = null;
     viewToken += 1;
