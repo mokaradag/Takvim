@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { captureConsole, createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
-import { AYSE, NOW, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { AYSE, NOW, TASKS, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { composer, coveringBlocks, isCompositionCall } from './helpers/compositionScenario.mjs';
 import { declared } from './helpers/evidenceScenario.mjs';
 
@@ -22,9 +22,9 @@ const OVERDUE_LIST = { operation: 'list', metrics: ['tasks.total', 'task.targetF
   population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' }, layout: 'auto', filters: { deadline: 'overdue', assignee: 'me' } };
 const plan = (request = OVERDUE_LIST) => ({ type: 'tool-calls', preface: [declared(request, { language: 'tr' })], calls: [] });
 
-function stackFor(t, { composition = true } = {}) {
+function stackFor(t, { composition = true, seed = rotaToolSeed() } = {}) {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
-  return createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: composition ? 'true' : 'false' } });
+  return createAiStack(t, { sicil: AYSE, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: composition ? 'true' : 'false' } });
 }
 
 const doneOf = (response) => {
@@ -70,6 +70,45 @@ test('model düzeni kapalıyken (belirlenimci anlatım) kart üretilmez ve yanı
   const done = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION }));
   assert.equal(done.evidenceCards, undefined);
   assert.equal(hasBindingMarks(done.assistantMessage.content), false);
+});
+
+for (const composition of [false, true]) {
+  test(`açık tablo isteği sunulurken kart ayarı korunur (${composition ? 'açık' : 'kapalı'})`, async (t) => {
+    const stack = stackFor(t, { composition });
+    stack.provider.enqueue(plan({ ...OVERDUE_LIST, metrics: [...OVERDUE_LIST.metrics, 'task.title'], layout: 'table' }), ...(composition ? [composer()] : []));
+    const done = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Geciken görevlerimi tabloyla göster.' }));
+    assert.match(done.assistantMessage.content, /\|.*Görev|Görev.*\|/);
+    assert.equal(Boolean(done.evidenceCards), composition);
+    assert.equal(hasBindingMarks(done.assistantMessage.content), false);
+  });
+}
+
+test('grafik isteği model düzeni kapalıyken doğrulanmış yanıtı kartsız taşır', async (t) => {
+  const stack = stackFor(t, { composition: false });
+  const declaration = JSON.parse(declared(OVERDUE_LIST, { language: 'tr' }));
+  declaration.arguments.visual = true;
+  stack.provider.enqueue({ type: 'tool-calls', preface: [JSON.stringify(declaration)], calls: [] });
+  const done = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Geciken görevlerimi grafikle göster.' }));
+  assert.match(done.assistantMessage.content, /gecik/i);
+  assert.match(done.assistantMessage.content, /grafik|rota-chart/i);
+  assert.equal(done.evidenceCards, undefined);
+  assert.equal(hasBindingMarks(done.assistantMessage.content), false);
+});
+
+test('dizin çözüm durumu kartı düzeltir, model ve kalıcı kanıt görünümü korunur', async (t) => {
+  const seed = rotaToolSeed();
+  const taskId = TASKS.OVERDUE;
+  seed.taskAssignees.push({ TaskId: taskId, Sicil: 919999 });
+  const stack = stackFor(t, { seed });
+  stack.provider.enqueue(plan(), composer());
+  const done = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION }));
+  const card = done.evidenceCards.cards.find((item) => item.kind === 'tasks');
+  const row = card.items.find((item) => item.id === taskId);
+  assert.ok(row?.assignees.length);
+  assert.equal(row.unresolvedAssignees, 1);
+  assert.doesNotMatch(JSON.stringify(card), /Seçilen kişi|919999/);
+  const persisted = JSON.stringify(stack.db.aiMessageEvidence);
+  assert.doesNotMatch(persisted, /cardAssignments|unresolvedAssignees/);
 });
 
 test('aynı turun yeniden denenmesi kayıtlı yanıtı oynatır ve kart taşımaz', async (t) => {

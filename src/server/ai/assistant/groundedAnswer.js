@@ -1941,11 +1941,11 @@ export async function presentVerdict(turn, verdict, compose) {
     if (!validated) {
       turn.trace.presentation = { ...(turn.trace.presentation || {}), mode: 'narrative', reason };
       // ICE: belirlenimci anlatımın görev sayımı cümlesi de (yalnızca kanıt grubunun kendi tam cümlesiyse) karta bağlanır.
-      const narrative = verdict.kind === 'grounded' ? bindNarrativeLeads(composition, verdict.normalized) : null;
+      const narrative = turn.composeAnswers && verdict.kind === 'grounded' ? bindNarrativeLeads(composition, verdict.normalized) : null;
       const bound = narrative ? settleEvidenceBindings({ ...verdict, normalized: narrative.text }, narrative.bindings) : verdict;
       return visual ? withChartNote(turn, bound) : bound;
     }
-    const rendered = renderComposition(composition, validated, { bind: true });
+    const rendered = renderComposition(composition, validated, { bind: turn.composeAnswers });
     if (!rendered.citedIds.every((id) => verdict.citedIds.includes(id))) {
       turn.trace.presentation = { mode: 'narrative', reason: 'CITATION_SCOPE' };
       return visual ? withChartNote(turn, verdict) : verdict;
@@ -2126,7 +2126,7 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   let evidenceCards = null;
   if (verdict.kind === 'grounded' && verdict.evidenceBindings && !bounded.overflow && !bounded.exhausted && !ledger.revoked()) {
     try {
-      evidenceCards = buildEvidenceCards({ evidenceBindings: verdict.evidenceBindings, finalText, entries: ledger.requestEntries(), summaries: cited, citedIds: verdict.citedIds });
+      evidenceCards = buildEvidenceCards({ evidenceBindings: verdict.evidenceBindings, finalText, entries: ledger.requestEntries({ forCards: true }), summaries: cited, citedIds: verdict.citedIds });
     } catch {
       evidenceCards = null;
     }

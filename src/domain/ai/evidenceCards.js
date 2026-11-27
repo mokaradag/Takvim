@@ -141,17 +141,19 @@ function day(value) {
 }
 
 function normalizeItem(item) {
-  if (!isPlain(item)) return null;
+  if (!isPlain(item) || typeof item.id !== 'string') return null;
   const id = canonicalActualId(item.id);
   const title = text(item.title);
   const project = text(item.project, { optional: true });
   const overdueDays = count(item.overdueDays, { optional: true });
   const progress = count(item.progress, { optional: true });
   const hidden = count(item.hiddenAssignees);
+  const unresolved = count(item.unresolvedAssignees === undefined ? 0 : item.unresolvedAssignees);
+  const clipped = item.assigneesClipped === undefined ? false : item.assigneesClipped;
   const due = day(item.due);
   const finished = day(item.finished);
   if (!id || id !== item.id || !title.ok || !project.ok || !overdueDays.ok || !progress.ok || (progress.value != null && progress.value > 100) || !hidden.ok
-    || !due.ok || !finished.ok || !STATUSES.has(item.status) || typeof item.overdue !== 'boolean' || !ASSIGNMENTS.has(item.assignment)
+    || !unresolved.ok || typeof clipped !== 'boolean' || !due.ok || !finished.ok || !STATUSES.has(item.status) || typeof item.overdue !== 'boolean' || !ASSIGNMENTS.has(item.assignment)
     || !Array.isArray(item.assignees) || item.assignees.length > EVIDENCE_CARD_LIMITS.maxAssigneesPerItem) return null;
   const assignees = item.assignees.map((name) => text(name));
   if (assignees.some((name) => !name.ok)) return null;
@@ -159,7 +161,8 @@ function normalizeItem(item) {
   if ((overdueDays.value != null && !item.overdue) || (item.overdue && item.status === 'done') || (finished.value != null && item.status !== 'done')) return null;
   return Object.freeze({ id, title: title.value, project: project.value, status: item.status, overdue: item.overdue, overdueDays: overdueDays.value,
     due: due.value, finished: finished.value, progress: progress.value, assignees: Object.freeze(assignees.map((name) => name.value)),
-    hiddenAssignees: hidden.value, assignment: item.assignment });
+    hiddenAssignees: hidden.value, ...(unresolved.value ? { unresolvedAssignees: unresolved.value } : {}),
+    ...(clipped ? { assigneesClipped: true } : {}), assignment: item.assignment });
 }
 
 function normalizePerson(person) {
@@ -170,15 +173,17 @@ function normalizePerson(person) {
 }
 
 function normalizeCard(card) {
-  if (!isPlain(card) || !CARD_ID.test(String(card.id)) || !EVIDENCE_CARD_KINDS.includes(card.kind) || !EVIDENCE_CARD_TONES.includes(card.tone)) return null;
+  if (!isPlain(card) || typeof card.id !== 'string' || !CARD_ID.test(card.id) || !EVIDENCE_CARD_KINDS.includes(card.kind) || !EVIDENCE_CARD_TONES.includes(card.tone)) return null;
   const title = text(card.title);
   const total = count(card.total);
   const unassigned = count(card.unassigned);
   const undisclosed = count(card.undisclosed);
+  const clipped = card.peopleClipped === undefined ? false : card.peopleClipped;
   if (!title.ok || !total.ok || !unassigned.ok || !undisclosed.ok || typeof card.generatedAt !== 'string' || !INSTANT.test(card.generatedAt)
     || Number.isNaN(Date.parse(card.generatedAt)) || typeof card.scopePartial !== 'boolean'
     || !Array.isArray(card.items) || !card.items.length || card.items.length > EVIDENCE_CARD_LIMITS.maxItemsPerCard
-    || !Array.isArray(card.people) || card.people.length > EVIDENCE_CARD_LIMITS.maxPeoplePerCard) return null;
+    || typeof clipped !== 'boolean' || !Array.isArray(card.people) || card.people.length > EVIDENCE_CARD_LIMITS.maxPeoplePerCard
+    || (clipped && card.people.length !== EVIDENCE_CARD_LIMITS.maxPeoplePerCard)) return null;
   const items = card.items.map(normalizeItem);
   const people = card.people.map(normalizePerson);
   if (items.some((item) => !item) || people.some((person) => !person)) return null;
@@ -187,7 +192,7 @@ function normalizeCard(card) {
     || (card.kind === 'task' && (items.length !== 1 || total.value !== 1))
     || unassigned.value + undisclosed.value > items.length) return null;
   return Object.freeze({ id: card.id, kind: card.kind, title: title.value, tone: card.tone, generatedAt: card.generatedAt, total: total.value,
-    scopePartial: card.scopePartial, items: Object.freeze(items), people: Object.freeze(people), unassigned: unassigned.value, undisclosed: undisclosed.value });
+    scopePartial: card.scopePartial, items: Object.freeze(items), people: Object.freeze(people), ...(clipped ? { peopleClipped: true } : {}), unassigned: unassigned.value, undisclosed: undisclosed.value });
 }
 
 /**

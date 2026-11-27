@@ -969,7 +969,15 @@ body.high-contrast .assistant-md a { text-decoration-thickness: 2px; }
 .ice-ref:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 body.high-contrast .ice-ref { text-decoration-thickness: 2px; text-decoration-color: var(--ice-tone); }
 
-.rich-tip.ice-card { width: min(372px, calc(var(--app-viewport-w, 100vw) - 24px)); max-width: none; }
+.rich-tip.ice-card {
+  display: flex;
+  flex-direction: column;
+  width: min(372px, calc(var(--app-viewport-w, 100vw) - 24px));
+  max-width: none;
+  max-height: min(440px, calc(var(--app-viewport-h, 100vh) - 16px));
+}
+.ice-card .rich-tip-head { flex-shrink: 0; }
+.ice-card .rich-tip-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .rich-tip.ice-card.is-single { width: min(330px, calc(var(--app-viewport-w, 100vw) - 24px)); }
 .rich-tip.ice-card .rich-tip-title {
   min-width: 0;
@@ -979,8 +987,9 @@ body.high-contrast .ice-ref { text-decoration-thickness: 2px; text-decoration-co
   -webkit-box-orient: vertical;
   line-height: 1.35;
 }
-.ice-card .rt-list { max-height: 264px; scrollbar-gutter: stable; }
+.ice-card .rt-list { max-height: none; overflow: visible; }
 .ice-card .rt-list-head { margin-top: 10px; }
+.ice-card .ice-status-pill { font-size: 10px; }
 
 .ice-metric { display: flex; align-items: baseline; gap: 7px; margin: 0 0 8px; }
 .ice-metric-value {

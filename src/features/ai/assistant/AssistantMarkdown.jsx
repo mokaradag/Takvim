@@ -1,6 +1,7 @@
 'use client';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Icons } from '../../../components/icons';
+import { EVIDENCE_CARD_LIMITS, evidenceCardsExpired } from '../../../domain/ai/evidenceCards.js';
 import { ANSWER_CHART_FENCE, parseAnswerChart } from '../../../domain/ai/answerChart.js';
 import { AnswerChart } from './AnswerChart.jsx';
 import { copyTextToClipboard } from './assistantInteraction.js';
@@ -188,11 +189,30 @@ export function AssistantMarkdown({ text, evidence = null, rotaData = false, car
     () => new Set((Array.isArray(evidence) ? evidence : []).map((item) => item?.id).filter(Boolean)),
     [evidence]
   );
-  const bindings = useMemo(() => (rotaData && cards?.value ? {
+  const [expiredAt, setExpiredAt] = useState(null);
+  const receivedAt = rotaData ? cards?.receivedAt : undefined;
+  const expired = expiredAt === receivedAt || evidenceCardsExpired(receivedAt);
+  useEffect(() => {
+    if (expired) return undefined;
+    // Her yanıt için tek zamanlayıcı; askıdan dönüşte de duvar saati denetlenir.
+    let timer;
+    const check = () => {
+      clearTimeout(timer);
+      if (evidenceCardsExpired(receivedAt)) setExpiredAt(receivedAt);
+      else timer = setTimeout(check, receivedAt + EVIDENCE_CARD_LIMITS.ttlMs - Date.now());
+    };
+    check();
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [expired, receivedAt]);
+  const bindings = useMemo(() => (!expired && cards?.value ? {
     anchors: new Map(cards.value.anchors.map((anchor) => [anchor.strong, anchor])),
     cards: new Map(cards.value.cards.map((card) => [card.id, card])),
-    receivedAt: cards.receivedAt
-  } : null), [cards, rotaData]);
+    receivedAt
+  } : null), [cards, expired, receivedAt]);
   const starts = useMemo(() => (bindings ? blockStrongStarts(blocks) : null), [bindings, blocks]);
   return (
     <div className="assistant-md">

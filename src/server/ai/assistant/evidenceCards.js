@@ -40,7 +40,7 @@ function cleanText(value, max = EVIDENCE_CARD_LIMITS.maxTextChars) {
   return `${cut.trimEnd()}…`;
 }
 
-const validDay = (value) => typeof value === 'string' && DAY.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+const validDay = (value) => typeof value === 'string' && DAY.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 
 /**
  * Düzen metnindeki işaretleri söker; bağlar `evidenceBindings` alanında taşınır. İşaret yoksa değer olduğu gibi döner.
@@ -57,16 +57,29 @@ export function settleEvidenceBindings(value, bindings) {
 }
 
 /** Görev satırının kart izdüşümü; biçimi beklenmeyen satır `null` (kart düşer). */
-function projectTask(row) {
-  if (!row || typeof row !== 'object') return null;
+function projectTask(row, directory) {
+  if (!row || typeof row !== 'object' || typeof row.taskId !== 'string') return null;
   const id = canonicalActualId(row.taskId);
   const title = cleanText(row.title);
   if (!id || !title || !STATUSES.has(row.status)) return null;
   const overdue = row.overdue === true && row.status !== 'done';
-  const people = Array.isArray(row.assignees) ? row.assignees.filter((person) => person && typeof person === 'object') : [];
-  // Kimliği açık sorumlular adıyla; kimliği gizli eş sorumlular yalnızca sayı olarak (ad ve Sicil taşınmaz).
-  const visible = people.filter((person) => person.identityHidden !== true && cleanText(person.name));
-  const hidden = people.filter((person) => person.identityHidden === true).length;
+  const people = Array.isArray(row.assignees) ? row.assignees : [];
+  // Sonuç boyutu nedeniyle kısaltılan sorumlu dizisi aynı sıradaki önektir.
+  const unresolved = new Set(directory?.unresolved);
+  const visible = [];
+  let hidden = 0;
+  let unresolvedCount = directory?.unresolved.length ?? 0;
+  people.forEach((person, index) => {
+    if (!person || typeof person !== 'object') return;
+    if (person.identityHidden === true) hidden += 1;
+    else if (!directory && row.assignment === 'unresolved') unresolvedCount += 1;
+    else if (!unresolved.has(index)) {
+      const name = cleanText(person.name);
+      if (name) visible.push({ name, key: Number.isSafeInteger(person.sicil) ? `s:${person.sicil}` : `n:${name}` });
+    }
+  });
+  const maxNames = EVIDENCE_CARD_LIMITS.maxAssigneesPerItem;
+  const availableNames = Math.min(maxNames, visible.length);
   const assignment = ASSIGNMENTS.has(row.assignment) ? row.assignment : visible.length ? 'visible' : 'undisclosed';
   const progress = Number.isSafeInteger(row.progressPercent) && row.progressPercent >= 0 && row.progressPercent <= 100 ? row.progressPercent : null;
   return {
@@ -80,12 +93,14 @@ function projectTask(row) {
       due: validDay(row.targetFinish) ? row.targetFinish : null,
       finished: row.status === 'done' && validDay(row.actualFinish) ? row.actualFinish : null,
       progress,
-      assignees: visible.slice(0, EVIDENCE_CARD_LIMITS.maxAssigneesPerItem).map((person) => cleanText(person.name)),
+      assignees: visible.slice(0, availableNames).map((person) => person.name),
+      ...(Math.max(visible.length, directory?.visibleCount ?? 0) > availableNames ? { assigneesClipped: true } : {}),
+      ...(unresolvedCount ? { unresolvedAssignees: unresolvedCount } : {}),
       hiddenAssignees: hidden,
       assignment
     },
     // Farklı sorumluların ayrılması yalnızca sunucuda (Sicil ile); tarayıcıya yalnızca ad ve görev sayısı gider.
-    people: visible.map((person) => ({ key: Number.isSafeInteger(person.sicil) ? `s:${person.sicil}` : `n:${cleanText(person.name)}`, name: cleanText(person.name) }))
+    people: visible
   };
 }
 
@@ -99,8 +114,9 @@ function distinctPeople(projected) {
       else byKey.set(person.key, { name: person.name, tasks: 1 });
     }
   }
-  return [...byKey.values()].sort((left, right) => right.tasks - left.tasks || collator.compare(left.name, right.name))
-    .slice(0, EVIDENCE_CARD_LIMITS.maxPeoplePerCard);
+  const limit = EVIDENCE_CARD_LIMITS.maxPeoplePerCard;
+  const people = [...byKey.values()].sort((left, right) => right.tasks - left.tasks || collator.compare(left.name, right.name)).slice(0, limit);
+  return { people, ...(byKey.size > limit ? { peopleClipped: true } : {}) };
 }
 
 function taskTone(item) {
@@ -123,21 +139,21 @@ function cardFor(bind, entry, summary) {
     if (!Number.isSafeInteger(count) || count < 1 || rows.length > count) return null;
     const exact = Number.isSafeInteger(payload.totalCount) && payload.totalCount === count;
     if (!exact && !(payload.complete === true && payload.truncated !== true && rows.length === count)) return null;
-    const projected = rows.slice(0, EVIDENCE_CARD_LIMITS.maxItemsPerCard).map(projectTask);
+    const projected = rows.slice(0, EVIDENCE_CARD_LIMITS.maxItemsPerCard).map((row) => projectTask(row, entry.cardAssignments?.get(row?.taskId)));
     if (projected.some((row) => !row)) return null;
     const items = projected.map((row) => row.item);
     if (new Set(items.map((item) => item.id)).size !== items.length) return null;
     const title = cleanText(bind.title) || 'Görevler';
-    return { ...base, kind: 'tasks', title, tone: bind.tone || 'neutral', total: count, items, people: distinctPeople(projected),
+    return { ...base, kind: 'tasks', title, tone: bind.tone || 'neutral', total: count, items, ...distinctPeople(projected),
       unassigned: items.filter((item) => item.assignment === 'unassigned').length, undisclosed: items.filter((item) => item.assignment === 'undisclosed').length };
   }
   if (bind.type === 'task') {
     const taskId = canonicalActualId(bind.taskId);
     const matches = taskId ? rows.filter((row) => canonicalActualId(row?.taskId) === taskId) : [];
     if (matches.length !== 1) return null;
-    const projected = projectTask(matches[0]);
+    const projected = projectTask(matches[0], entry.cardAssignments?.get(taskId));
     if (!projected) return null;
-    return { ...base, kind: 'task', title: projected.item.title, tone: taskTone(projected.item), total: 1, items: [projected.item], people: distinctPeople([projected]),
+    return { ...base, kind: 'task', title: projected.item.title, tone: taskTone(projected.item), total: 1, items: [projected.item], ...distinctPeople([projected]),
       unassigned: projected.item.assignment === 'unassigned' ? 1 : 0, undisclosed: projected.item.assignment === 'undisclosed' ? 1 : 0 };
   }
   return null;

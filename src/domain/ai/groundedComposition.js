@@ -1416,13 +1416,6 @@ function supports(render, id, proposition) {
 const citation = (ids) => [...new Set(ids)].map((id) => `【${id}】`).join('');
 
 /**
- * Doğrulanmış düzeni Markdown yanıta çevirir. Önerme cümleleri, değerler, tablolar, ayrıntılar, grafik,
- * yönlendirmeler ve kaynak işaretleri sunucunundur; model metni çizime alınmaz. Söylenen sayım önermesi
- * ayrıntısının yerine geçer (zorunlu zarf notları önermeyle birlikte yazılır); söylenmeyen her ayrıntı
- * sunucu tarafından eklenir.
- * @returns {{ text: string, citedIds: string[], chart: string|null, charts: number, blocks: number, said: number, suppressed?: number, tables: number, notes: number, titled: boolean }}
- */
-/**
  * ICE: model düzeni kurulmadığında gösterilen doğrulanmış belirlenimci anlatımda görev sayımı bağı. Yalnızca düzen sayfasının
  * ayrıntılarındaki görev araması gruplarının KENDİ sayım giriş cümlesi (`taskCountLead`) aranır: cümle anlatımda tam bir kez
  * geçmeli ve başka hiçbir grubun cümlesiyle aynı olmamalıdır. Bulunan cümle, aynı parçalardan işaretli biçimiyle değiştirilir;
@@ -1458,6 +1451,13 @@ export function bindNarrativeLeads(composition, text) {
   return bindings.length ? { text: out, bindings } : null;
 }
 
+/**
+ * Doğrulanmış düzeni Markdown yanıta çevirir. Önerme cümleleri, değerler, tablolar, ayrıntılar, grafik,
+ * yönlendirmeler ve kaynak işaretleri sunucunundur; model metni çizime alınmaz. Söylenen sayım önermesi
+ * ayrıntısının yerine geçer (zorunlu zarf notları önermeyle birlikte yazılır); söylenmeyen her ayrıntı
+ * sunucu tarafından eklenir.
+ * @returns {{ text: string, citedIds: string[], chart: string|null, charts: number, blocks: number, said: number, suppressed?: number, tables: number, notes: number, titled: boolean }}
+ */
 export function renderComposition(composition, validated, { bind = false } = {}) {
   const { render } = composition;
   const locale = render.locale;

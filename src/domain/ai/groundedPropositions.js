@@ -413,8 +413,8 @@ function soleTaskBind(group, described, facts, target, collection) {
 function extremeSentence({ kind, metric, type, label, value, owner, locale, semantic, ownerBind = null }) {
   const en = locale === 'en';
   // Adı söylenen satır bir görevse (ICE) adı tekil görev kartına bağlanır; değer ve cümle değişmez.
-  const v = (text) => (owner != null && text === owner ? bound(strongPart(text), ownerBind) : strongPart(text));
-  const named = owner ? [' (', v(owner), ')'] : [];
+  const ownerPart = owner ? bound(strongPart(owner), ownerBind) : null;
+  const named = owner ? [' (', ownerPart, ')'] : [];
   const pair = (tail, extra = {}) => ({ pair: { role: kind, tail }, ...extra });
   const high = kind === 'maximum';
   if (metric === 'task.overdueDays') {
@@ -422,33 +422,33 @@ function extremeSentence({ kind, metric, type, label, value, owner, locale, sema
     // Aşama G: en uzun gecikme, hemen önceki aynı nüfusun sayım cümlesine yan cümle olarak bağlanabilir ("Şu anda **3** gecikmiş
     // göreviniz var; en uzun süredir geciken görev **X** (**23 gün**).").
     if (owner) {
-      return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'}-overdue task is `, v(owner), ' (', v(amount), ').']
-        : [`En ${high ? 'uzun' : 'kısa'} süredir geciken görev `, v(owner), ' (', v(amount), ').']),
-      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'}-overdue is `, v(owner), ' (', v(amount), ')'] : [`en ${high ? 'uzun' : 'kısa'} süredir geciken ise `, v(owner), ' (', v(amount), ')'],
-        high ? { names: owner, days: value, afterCount: en ? ['; the longest-overdue task is ', v(owner), ' (', v(amount), ')'] : ['; en uzun süredir geciken görev ', v(owner), ' (', v(amount), ')'] } : {}) };
+      return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'}-overdue task is `, ownerPart, ' (', strongPart(amount), ').']
+        : [`En ${high ? 'uzun' : 'kısa'} süredir geciken görev `, ownerPart, ' (', strongPart(amount), ').']),
+      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'}-overdue is `, ownerPart, ' (', strongPart(amount), ')'] : [`en ${high ? 'uzun' : 'kısa'} süredir geciken ise `, ownerPart, ' (', strongPart(amount), ')'],
+        high ? { names: owner, days: value, afterCount: en ? ['; the longest-overdue task is ', ownerPart, ' (', strongPart(amount), ')'] : ['; en uzun süredir geciken görev ', ownerPart, ' (', strongPart(amount), ')'] } : {}) };
     }
-    return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'} delay is `, v(amount), '.'] : [`En ${high ? 'uzun' : 'kısa'} gecikme `, v(amount), '.']),
-      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'} is `, v(amount)] : [`en ${high ? 'uzun' : 'kısa'} gecikme ise `, v(amount)],
-        high ? { afterCount: en ? ['; the longest delay is ', v(amount)] : ['; en uzun gecikme ', v(amount)] } : {}) };
+    return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'} delay is `, strongPart(amount), '.'] : [`En ${high ? 'uzun' : 'kısa'} gecikme `, strongPart(amount), '.']),
+      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'} is `, strongPart(amount)] : [`en ${high ? 'uzun' : 'kısa'} gecikme ise `, strongPart(amount)],
+        high ? { afterCount: en ? ['; the longest delay is ', strongPart(amount)] : ['; en uzun gecikme ', strongPart(amount)] } : {}) };
   }
   if (metric === 'task.targetFinish') {
-    return { ...sentence(en ? [`The ${high ? 'latest' : 'earliest'} deadline is `, v(day(value, locale)), ...named, '.']
-      : [`En ${high ? 'geç' : 'erken'} termin `, v(day(value, locale)), ...named, '.']),
-    fluent: pair(en ? [`and the ${high ? 'latest' : 'earliest'} is `, v(day(value, locale)), ...named] : [`en ${high ? 'geç' : 'erken'} termin ise `, v(day(value, locale)), ...named]) };
+    return { ...sentence(en ? [`The ${high ? 'latest' : 'earliest'} deadline is `, strongPart(day(value, locale)), ...named, '.']
+      : [`En ${high ? 'geç' : 'erken'} termin `, strongPart(day(value, locale)), ...named, '.']),
+    fluent: pair(en ? [`and the ${high ? 'latest' : 'earliest'} is `, strongPart(day(value, locale)), ...named] : [`en ${high ? 'geç' : 'erken'} termin ise `, strongPart(day(value, locale)), ...named]) };
   }
   const shown = type === 'date' ? day(value, locale) : numericValue(value, semantic, locale);
   const word = type === 'date' ? (high ? ['latest', 'en geç'] : ['earliest', 'en erken']) : (high ? ['highest', 'en yüksek'] : ['lowest', 'en düşük']);
   if (en) {
-    return { ...sentence([`The ${word[0]} “`, t(label), '” value is ', v(shown), ...named, '.']),
-      fluent: pair([`and the ${word[0]} is `, v(shown), ...named]) };
+    return { ...sentence([`The ${word[0]} “`, t(label), '” value is ', strongPart(shown), ...named, '.']),
+      fluent: pair([`and the ${word[0]} is `, strongPart(shown), ...named]) };
   }
   // Satırı adıyla söylenebilen uçta özne satırdır ("“Gecikmiş görev” değeri en yüksek olan **X** (**2**)").
   if (owner) {
-    return { ...sentence(['“', t(label), `” değeri ${word[1]} olan `, v(owner), ' (', v(shown), ').']),
-      fluent: pair([`${word[1]} olan ise `, v(owner), ' (', v(shown), ')']) };
+    return { ...sentence(['“', t(label), `” değeri ${word[1]} olan `, ownerPart, ' (', strongPart(shown), ').']),
+      fluent: pair([`${word[1]} olan ise `, ownerPart, ' (', strongPart(shown), ')']) };
   }
-  return { ...sentence(['“', t(label), `” sütununda ${word[1]} ${type === 'date' ? 'tarih' : 'değer'} `, v(shown), '.']),
-    fluent: pair([`${word[1]} ${type === 'date' ? 'tarih' : 'değer'} ise `, v(shown)]) };
+  return { ...sentence(['“', t(label), `” sütununda ${word[1]} ${type === 'date' ? 'tarih' : 'değer'} `, strongPart(shown), '.']),
+    fluent: pair([`${word[1]} ${type === 'date' ? 'tarih' : 'değer'} ise `, strongPart(shown)]) };
 }
 
 /**

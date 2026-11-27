@@ -9,6 +9,7 @@ import { ASSISTANT_DEFAULT_TITLE } from '../../../domain/ai/assistantContract.js
 import { keyboardOwnedElsewhere, modalTrapDepth, useModalFocusTrap } from '../../../hooks/useModalFocusTrap.js';
 import { useReducedMotion } from '../../../hooks/useReducedMotion.js';
 import { appZoom } from '../../../lib/zoom.js';
+import { EvidenceCardActionsContext } from './EvidenceCard.jsx';
 import { AssistantComposer } from './AssistantComposer.jsx';
 import { AssistantConversationList } from './AssistantConversationList.jsx';
 import { AssistantThread, FAILURE_ACTION_LABELS } from './AssistantThread.jsx';
@@ -241,7 +242,7 @@ function Welcome({ readiness, mode, onSuggest, recent }) {
 }
 
 /** Panel. Kabukta her zaman monte edilir; kapalıyken hiçbir şey çizmez ama durumunu korur. */
-export function RotaAssistantPanel({ assistant, onOpenSettings }) {
+export function RotaAssistantPanel({ assistant, onOpenSettings, openEvidenceTask }) {
   const { controller, open, actual, focusRequest, launcherRef, close } = assistant;
   const state = useAssistantState(controller);
   const sheet = useSheetLayout();
@@ -276,6 +277,14 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const held = heldDrafts[draftKey] || null;
   const restoreFocusEnabledRef = useRef(true);
   useEffect(() => { if (open) restoreFocusEnabledRef.current = modal; }, [open, modal]);
+  const cardActions = useMemo(() => ({ openTask: openEvidenceTask ? async (taskId) => {
+    const panel = panelRef.current;
+    const result = await openEvidenceTask(taskId);
+    // Görev seçildiyse kipli panel çekmeceye yer açar; Bilgin'in taslağı ve konuşması bellekte kalır.
+    if (result?.ok && panel && panelRef.current === panel && panel.getAttribute('aria-modal') === 'true') {
+      close({ restoreFocus: false });
+    }
+  } : null }), [openEvidenceTask, close]);
   const focusTargetRef = useMemo(() => ({
     get current() {
       return inputRef.current && !inputRef.current.disabled ? inputRef.current : headingRef.current;
@@ -575,7 +584,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             <button type="button" className="btn ghost sm" onClick={() => setHeldDraft(null)}>Kapat</button>
           </Notice>
         )}
-        {body}
+        <EvidenceCardActionsContext.Provider value={cardActions}>{body}</EvidenceCardActionsContext.Provider>
       </div>
       {(canCompose || (actual && generating)) && (
         <AssistantComposer

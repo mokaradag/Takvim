@@ -298,7 +298,19 @@ const taskSearch = {
     const next = sorted[page.length];
     const nextValue = next && rankSort ? (rankSort[0] === 'overdueDays'
       ? (isOverdue(next, call.today) ? overdueDays(next, call.today) : null) : next[rankSort[0]] ?? null) : null;
+    // Yalnızca canlı kart için; model zarfına ve kalıcı kanıta eklenmez.
+    const cardAssignments = new Map(pageFacts.map((fact) => {
+      const unresolved = [];
+      let visibleCount = 0;
+      (pageAssignees.get(fact.id) || []).forEach((person, index) => {
+        if (!person.identityVisible) return;
+        if (!person.resolved || !person.name) unresolved.push(index);
+        else visibleCount += 1;
+      });
+      return [fact.id, { unresolved, visibleCount }];
+    }));
     return {
+      cardAssignments,
       ...(rankSort && offset === 0 && next ? { rankingBoundary: {
         collection: 'tasks', metric: `task.${rankSort[0]}`, order: rankSort[1], returnedCount: page.length, nextValue
       } } : {}),

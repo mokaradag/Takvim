@@ -8,10 +8,15 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import React, { act } from 'react';
 import { click, key, mountDom } from './helpers/clientDomHarness.mjs';
 
 const { EvidenceReference, EvidenceCardActionsContext } = await import('../src/features/ai/assistant/EvidenceCard.jsx');
+const { AssistantMarkdown } = await import('../src/features/ai/assistant/AssistantMarkdown.jsx');
+const { RotaAssistantPanel } = await import('../src/features/ai/assistant/RotaAssistant.jsx');
+const { createAssistantController } = await import('../src/features/ai/assistant/assistantController.js');
+const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
 const { HoverListCard } = await import('../src/components/ui-extras.jsx');
 const { EVIDENCE_CARD_LIMITS, normalizeEvidenceCards } = await import('../src/domain/ai/evidenceCards.js');
 
@@ -23,10 +28,10 @@ const descriptor = normalizeEvidenceCards({ v: 1, cards: [{ id: 'c1', kind: 'tas
 anchors: [{ strong: 0, text: '12', card: 'c1' }] });
 const [card] = descriptor.cards;
 
-function Harness({ receivedAt, openTask }) {
+function Harness({ receivedAt, openTask, shownCard = card }) {
   return React.createElement(EvidenceCardActionsContext.Provider, { value: { openTask } },
     React.createElement('p', null, 'Şu anda ',
-      React.createElement(EvidenceReference, { card, receivedAt, text: '12' }, React.createElement('strong', null, '12')),
+      React.createElement(EvidenceReference, { card: shownCard, receivedAt, text: '12' }, React.createElement('strong', null, '12')),
       ' gecikmiş göreviniz var.'),
     React.createElement('button', { type: 'button', id: 'disari' }, 'Dışarı'));
 }
@@ -49,7 +54,7 @@ test('kart klavyeyle açılır, odak karta taşınır, Esc kartı kapatıp odağ
   assert.equal(dialog.getAttribute('role'), 'dialog');
   assert.equal(dialog.getAttribute('aria-label'), 'Gecikmiş görevleriniz: 12 görev');
   assert.ok(dialog.contains(document.activeElement), 'odak kartta olmalı');
-  assert.equal(document.activeElement.getAttribute('aria-label'), 'Görev 1 görevini aç');
+  assert.match(document.activeElement.getAttribute('aria-label'), /^Görev 1 görevini aç · Altyapı/);
   key('Escape', document.activeElement);
   assert.equal(cardNode(), null, 'Esc kartı kapatmalı');
   assert.equal(document.activeElement, trigger, 'odak tetikleyiciye dönmeli');
@@ -135,4 +140,131 @@ test('HoverListCard mevcut kullanımı değişmez: rol, odak taşıma ve iki ba�
   key('Escape', trigger);
   assert.equal(document.querySelector('.rich-tip.interactive'), null);
   view.unmount();
+});
+
+test('kipli kart Tab sırasını sahiplenir ve ilk Esc yalnız kartı kapatır', () => {
+  let closed = 0;
+  function Panel() {
+    const containerRef = React.useRef(null);
+    const initialFocusRef = React.useRef(null);
+    useModalFocusTrap({ containerRef, initialFocusRef, onClose: () => { closed += 1; } });
+    return React.createElement('div', { ref: containerRef },
+      React.createElement('input', { ref: initialFocusRef }),
+      React.createElement(Harness, { receivedAt: Date.now(), openTask: () => {} }));
+  }
+  const view = mountDom(Panel);
+  const trigger = view.host.querySelector('.ice-ref');
+  act(() => trigger.focus());
+  key('Enter', trigger);
+  const rows = [...cardNode().querySelectorAll('button')];
+  assert.equal(document.activeElement, rows[0]);
+  assert.equal(key('Tab', rows[0]).defaultPrevented, false);
+  key('Tab', rows[0], { shiftKey: true });
+  assert.equal(document.activeElement, rows.at(-1));
+  key('Tab', rows.at(-1));
+  assert.equal(document.activeElement, rows[0]);
+  key('Escape');
+  assert.equal(cardNode(), null);
+  assert.equal(document.activeElement, trigger);
+  assert.equal(closed, 0);
+  key('Escape');
+  assert.equal(closed, 1);
+  view.unmount();
+});
+
+test('fareye açık sabitlenmemiş kart Esc ile kapanır, dışarıdaki odak yerinde kalır', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const view = mountDom(Harness, { receivedAt: Date.now(), openTask: () => {} });
+  const outside = view.host.querySelector('#disari');
+  act(() => outside.focus());
+  act(() => view.host.querySelector('.ice-ref').dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+  act(() => t.mock.timers.tick(90));
+  assert.ok(cardNode());
+  assert.equal(key('Escape', outside).defaultPrevented, true);
+  assert.equal(cardNode(), null);
+  assert.equal(document.activeElement, outside);
+  assert.equal(key('Escape', outside).defaultPrevented, false);
+  view.unmount();
+});
+
+test('sabitlenmiş kart yanıt süresi dolunca veya sekme geri gelince kaybolur', (t) => {
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now });
+  for (const resume of [false, true]) {
+    const view = mountDom(AssistantMarkdown, { text: 'Toplam **12** görev.', rotaData: true, cards: { value: descriptor, receivedAt: Date.now() } });
+    const trigger = view.host.querySelector('.ice-ref');
+    click(trigger);
+    assert.ok(cardNode());
+    act(() => {
+      if (resume) {
+        t.mock.timers.setTime(Date.now() + EVIDENCE_CARD_LIMITS.ttlMs);
+        document.dispatchEvent(new Event('visibilitychange'));
+      } else t.mock.timers.tick(EVIDENCE_CARD_LIMITS.ttlMs);
+    });
+    assert.equal(cardNode(), null);
+    assert.equal(view.host.querySelector('.ice-ref'), null);
+    assert.equal(view.host.querySelector('strong').textContent, '12');
+    view.unmount();
+  }
+});
+
+test('aynı adlı görevler görünür bağlamla ayırt edilir ve doğru görev açılır', () => {
+  const shownCard = { ...card, items: [
+    item(1, { title: 'Yük testi', project: 'Birinci proje', hiddenAssignees: 1, unresolvedAssignees: 1 }),
+    item(2, { title: 'Yük testi', project: 'İkinci proje', due: '2026-11-15', assigneesClipped: true })
+  ], peopleClipped: true };
+  const opened = [];
+  const view = mountDom(Harness, { shownCard, receivedAt: Date.now(), openTask: (id) => opened.push(id) });
+  const trigger = view.host.querySelector('.ice-ref');
+  click(trigger);
+  const rows = [...cardNode().querySelectorAll('button')];
+  assert.match(cardNode().textContent, /Kişi listesi kısmi önizlemedir/);
+  assert.match(rows[0].getAttribute('aria-label'), /Birinci proje.*1 sorumlu gösterilemiyor.*1 sorumlunun dizin kaydı çözülemedi/);
+  assert.match(rows[1].getAttribute('aria-label'), /İkinci proje.*Diğer görünür adlar listelenmiyor.*Termin/);
+  click(rows[0]);
+  click(trigger);
+  click(cardNode().querySelectorAll('button')[1]);
+  assert.deepEqual(opened, [taskId(1), taskId(2)]);
+  view.unmount();
+});
+
+test('görünüm alanı kanıt kartının tamamını sınırlar ve kart gövdesi kaydırılabilir', () => {
+  const css = readFileSync(new URL('../src/app/styles/assistant.css', import.meta.url), 'utf8');
+  assert.match(css, /\.rich-tip\.ice-card\s*\{[^}]*max-height:\s*min\([^;]*--app-viewport-h/);
+  assert.match(css, /\.ice-card \.rich-tip-body\s*\{[^}]*overflow-y:\s*auto/);
+});
+
+test('görev seçimi başarılıysa yalnız kipli Bilgin paneli çekmeceye alan açar', async (t) => {
+  const conversation = { id: '6f1c2d3e-4a5b-4c6d-8e7f-001122334455', title: 'Kanıt', messageCount: 2 };
+  const controller = createAssistantController({ api: {
+    loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { available: true, modes: [{ id: 'standard', label: 'Standart', available: true }] } }),
+    listAssistantConversationsRequest: async () => ({ ok: true, conversations: [], nextCursor: null }),
+    async streamAssistantTurnRequest({ turnId, onEvent }) {
+      onEvent({ type: 'accepted', data: { conversation, userMessage: { id: 'u1', turnId, content: 'Soru' }, context: {}, rotaData: true } });
+      return { ok: true, done: { conversation, evidenceCards: descriptor, assistantMessage: { id: 'a1', content: 'Toplam **12** görev.', rotaData: true, evidence: [] } } };
+    }
+  } });
+  t.after(() => controller.dispose());
+  await controller.activate();
+  controller.send('Soru');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  for (const [focused, ok, shouldClose] of [[true, false, false], [false, true, false], [true, true, true]]) {
+    const closed = [];
+    const opened = [];
+    const view = mountDom(RotaAssistantPanel, {
+      assistant: { controller, open: true, actual: true, focused, launcherRef: { current: null }, close: (options) => closed.push(options) },
+      openEvidenceTask: async (id) => { opened.push(id); return { ok }; }
+    });
+    try {
+      click(view.host.querySelector('.ice-ref'));
+      const row = cardNode()?.querySelector('button.ice-row');
+      assert.ok(row);
+      await act(async () => click(row));
+      assert.deepEqual(opened, [taskId(1)]);
+      assert.deepEqual(closed, shouldClose ? [{ restoreFocus: false }] : []);
+    } finally {
+      view.unmount();
+    }
+  }
 });
