@@ -10,6 +10,7 @@ import {
 import * as assistantApi from './assistantClient.js';
 import { assistantFailureView, effectiveAssistantSource, isSessionFailure } from './assistantPresentation.js';
 import { DEFAULT_ANSWER_DETAIL, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
+import { EVIDENCE_CARD_LIMITS, evidenceCardsExpired, normalizeEvidenceCards } from '../../../domain/ai/evidenceCards.js';
 
 /**
  * Rota AI'nin durum makinesi — React'ten bağımsız, saf JavaScript.
@@ -121,6 +122,34 @@ function initialState() {
   };
 }
 
+/**
+ * Geçici kanıt kartlarının (ICE) sınırlı yaşam döngüsü: yalnızca en yeni `maxLiveAnswers` yanıt ve süresi dolmamış kartlar
+ * tutulur. Kartlar yalnızca bellekteki tur nesnesindedir; kayıtlı iletiden kurulan turlar (konuşma açma, uzlaştırma)
+ * hiçbir zaman kart taşımaz.
+ */
+export function pruneEvidenceCards(turns = [], now = Date.now(), elapsed = globalThis.performance.now()) {
+  let completed = 0;
+  let next = turns;
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (turn.answer?.status === 'complete') completed += 1;
+    const cards = turn.answer?.evidenceCards;
+    if (!cards || (completed <= EVIDENCE_CARD_LIMITS.maxLiveAnswers
+      && !evidenceCardsExpired(cards.receivedAt, now, cards.expiresAt, elapsed))) continue;
+    if (next === turns) next = [...turns];
+    const { evidenceCards: _dropped, ...answer } = turn.answer;
+    next[index] = { ...turn, answer };
+  }
+  return next;
+}
+
+/** Etkin konuşmadaki canlı kanıt kartlarının en erken süre sonu (ms) ya da `null`. */
+function earliestEvidenceDeadline(turns = []) {
+  let earliest = Infinity;
+  for (const turn of turns) earliest = Math.min(earliest, turn.answer?.evidenceCards?.expiresAt ?? Infinity);
+  return Number.isFinite(earliest) ? earliest : null;
+}
+
 /** Kayıtlı iletileri turlara çevirir; yanıtı olmayan kullanıcı iletisi yanıtsız turdur. */
 export function turnsFromMessages(messages = []) {
   const turns = [];
@@ -167,6 +196,7 @@ export function createAssistantController({
   api = assistantApi,
   createId = createUuidV4,
   schedule = defaultSchedule,
+  monotonicNow = () => globalThis.performance.now(),
   flushIntervalMs = ASSISTANT_FLUSH_INTERVAL_MS,
   reconciliationDelaysMs = [250, 500, 1000, 2000, 4000, 8000, 10000]
 } = {}) {
@@ -188,6 +218,9 @@ export function createAssistantController({
   const viewKeys = new Map();
   const listMutations = new Map();
   let mutationVersion = 0;
+  let cancelEvidenceExpiry = null;
+  let evidenceExpiryDeadline = null;
+  let evidenceExpiryView = null;
   // Ayarlar'daki yanıt ayrıntısı (kabuk bildirir); yalnızca sunum tercihidir, çizim durumunu değiştirmez.
   let answerDetail = DEFAULT_ANSWER_DETAIL;
 
@@ -197,12 +230,70 @@ export function createAssistantController({
   };
   state.active = draft();
 
+  function clearEvidenceExpiry() {
+    cancelEvidenceExpiry?.();
+    cancelEvidenceExpiry = null;
+    evidenceExpiryDeadline = null;
+    evidenceExpiryView = null;
+  }
+
+  function pruneActiveEvidenceCards(now = Date.now()) {
+    const turns = state.active?.turns;
+    if (!turns?.length) return;
+    const pruned = pruneEvidenceCards(turns, now, monotonicNow());
+    if (pruned === turns) {
+      syncEvidenceExpiry();
+      return;
+    }
+    update((current) => (current.active?.turns === turns ? { ...current, active: { ...current.active, turns: pruned } } : current));
+  }
+
+  /** En erken kanıt kartı süre sonuna tek zamanlayıcı kurar; kart yoksa veya konuşma değiştiyse iptal eder. */
+  function syncEvidenceExpiry() {
+    const deadline = earliestEvidenceDeadline(state.active?.turns);
+    const view = state.active?.viewKey ?? null;
+    if (deadline == null) {
+      clearEvidenceExpiry();
+      return;
+    }
+    if (cancelEvidenceExpiry && evidenceExpiryDeadline === deadline && evidenceExpiryView === view) return;
+    clearEvidenceExpiry();
+    const ownSession = session;
+    const ownView = view;
+    evidenceExpiryDeadline = deadline;
+    evidenceExpiryView = ownView;
+    const hostDocument = globalThis.document;
+    const hostWindow = globalThis.window;
+    const check = () => pruneActiveEvidenceCards();
+    const cancelTimer = schedule(() => {
+      clearEvidenceExpiry();
+      if (ownSession !== session || state.active?.viewKey !== ownView) return;
+      check();
+    }, Math.ceil(Math.max(0, deadline - monotonicNow())));
+    hostDocument?.addEventListener('visibilitychange', check);
+    hostWindow?.addEventListener('pageshow', check);
+    hostWindow?.addEventListener('focus', check);
+    cancelEvidenceExpiry = () => {
+      cancelTimer();
+      hostDocument?.removeEventListener('visibilitychange', check);
+      hostWindow?.removeEventListener('pageshow', check);
+      hostWindow?.removeEventListener('focus', check);
+    };
+  }
+
   function emit() {
     for (const listener of [...listeners]) listener();
   }
 
   function update(recipe) {
-    state = recipe(state);
+    const next = recipe(state);
+    // Panel düzeyindeki hata yalnızca oturum hatasıdır: gözlenen oturum/yetki geçersizliği geçici kartları hemen siler.
+    state = next;
+    if (next.active && (cancelEvidenceExpiry || next.status === 'error')) {
+      const turns = pruneEvidenceCards(next.active.turns, next.status === 'error' ? Infinity : Date.now(), monotonicNow());
+      if (turns !== next.active.turns) state = { ...next, active: { ...next.active, turns } };
+    }
+    syncEvidenceExpiry();
     emit();
   }
 
@@ -353,11 +444,12 @@ export function createAssistantController({
     if (result.ok) {
       const { assistantMessage, conversation } = result.done;
       run.messageCount = conversation.messageCount;
-      update((current) => ({
-        ...current,
-        running: setRunning(current, run.key, null),
-        list: withListConversation(current.list, conversation),
-        active: patchTurn(current, run, (turn) => ({
+      // ICE: yalnızca bu üretimin doğrulanmış Rota yanıtının geçici kartları; kayıtlı iletiye ya da tarayıcı deposuna yazılmaz.
+      const cards = assistantMessage.rotaData === true ? normalizeEvidenceCards(result.done.evidenceCards) : null;
+      const receivedAt = Date.now();
+      const elapsed = monotonicNow();
+      update((current) => {
+        const active = patchTurn(current, run, (turn) => ({
           ...turn,
           user: { ...turn.user, pending: false },
           answer: {
@@ -370,11 +462,18 @@ export function createAssistantController({
             createdAt: assistantMessage.createdAt,
             evidence: Array.isArray(assistantMessage.evidence) ? assistantMessage.evidence : null,
             rotaData: assistantMessage.rotaData === true,
+            ...(cards ? { evidenceCards: { value: cards, receivedAt, expiresAt: elapsed + EVIDENCE_CARD_LIMITS.ttlMs } } : {}),
             error: null
           }
-        })),
-        announcement: current.active?.key === run.key ? announce('Yanıt tamamlandı.') : current.announcement
-      }));
+        }));
+        return {
+          ...current,
+          running: setRunning(current, run.key, null),
+          list: withListConversation(current.list, conversation),
+          active: active === current.active ? active : { ...active, turns: pruneEvidenceCards(active.turns, receivedAt, elapsed) },
+          announcement: current.active?.key === run.key ? announce('Yanıt tamamlandı.') : current.announcement
+        };
+      });
       return;
     }
     const failure = assistantFailureView(result);
@@ -917,6 +1016,8 @@ export function createAssistantController({
    * okunur (ör. kullanıcı Ayarlar'dan anahtar ekledi).
    */
   async function activate({ refresh = false } = {}) {
+    // Panel yeniden açıldığında veya sekme uykudan döndüğünde süresi dolmuş kanıt kartları hemen temizlenir.
+    pruneActiveEvidenceCards();
     if (!refresh && state.status === 'loading') return;
     if (!refresh && state.status === 'ready' && state.readiness?.available) return;
     const ownSession = session;
@@ -1007,6 +1108,7 @@ export function createAssistantController({
   /** Bütün istekleri keser ve sonraki geç sonuçları geçersiz kılar. */
   function dispose() {
     session += 1;
+    clearEvidenceExpiry();
     readinessToken += 1;
     readinessLoad = null;
     viewToken += 1;

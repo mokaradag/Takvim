@@ -11,6 +11,7 @@ import {
 } from '../../../domain/ai/assistantContract.js';
 import { createEventStreamParser } from '../../../domain/ai/eventStreamParser.js';
 import { normalizeEvidenceList } from '../../../domain/ai/evidenceContract.js';
+import { normalizeEvidenceCards } from '../../../domain/ai/evidenceCards.js';
 import { publicRotaPath } from '../../../lib/publicPath.js';
 import { requestJson } from '../../shared/jsonRequest.js';
 
@@ -173,6 +174,12 @@ function interpret({ event, data }) {
       // Kanıt özetleri yalnızca doğrulanmış güvenli künye olarak taşınır.
       if (payload.assistantMessage.evidence != null) {
         payload.assistantMessage.evidence = normalizeEvidenceList(payload.assistantMessage.evidence);
+      }
+      // Geçici kanıt kartları (ICE) isteğe bağlıdır: katı doğrulamadan geçmeyen tanımlayıcı sessizce atılır, yanıt etkilenmez.
+      if (payload.evidenceCards != null) {
+        const cards = normalizeEvidenceCards(payload.evidenceCards);
+        if (cards) payload.evidenceCards = cards;
+        else delete payload.evidenceCards;
       }
       break;
     default:

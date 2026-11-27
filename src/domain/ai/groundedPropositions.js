@@ -1,5 +1,6 @@
 import { canonicalGroupLabel, escapedFactText } from './evidenceFacts.js';
 import { turkishPossessiveSuffix } from './evidenceNarrative.js';
+import { stripBindingMarks } from './evidenceCards.js';
 
 /**
  * Kanıta dayalı yanıtın SUNUCUYA AİT önermeleri (Aşama 4D anlatımı).
@@ -51,17 +52,25 @@ const clipName = (text) => (text.length > MAX_PLAIN_NAME ? `${text.slice(0, MAX_
 
 /** Değer: çizimde vurgulu ve kaçışlı, sayfada düz metin. Sayı ve tarih sunucunun biçimidir. */
 const v = (text) => ({ value: String(text), strong: true });
+const strongPart = v;
 /** Vurgusuz veri metni (ör. grup adı): çizimde yine kaçışlıdır. */
 const t = (text) => ({ value: String(text), strong: false });
+/**
+ * Bağlı değer (ICE): parça, arkasındaki yetkili kayıtları gösteren kanıt kartının bağını (`bind`) taşır. Bağ yalnızca
+ * sunucunun işaretleyicili çiziminde konum işaretine dönüşür; varsayılan çizim ve modelin gördüğü düz metin değişmez.
+ */
+const bound = (part, bind) => (bind ? { ...part, bind: Object.freeze(bind) } : part);
 
 /**
  * Cümle parçaları (sunucu metni ve veri) → `{ markdown, plain }`. Yalnızca sunucunun kendi metniyle
  * başlayan cümlenin ilk harfi büyütülür; veri (kayıt adı) hiçbir zaman değiştirilmez.
  */
-function sentence(parts) {
+function sentence(parts, mark = null) {
   const [head, ...rest] = parts;
   const lead = typeof head === 'string' ? [`${head.charAt(0).toLocaleUpperCase('tr-TR')}${head.slice(1)}`, ...rest] : parts;
-  const markdown = lead.map((part) => (typeof part === 'string' ? part : part.strong ? `**${escapedFactText(part.value)}**` : escapedFactText(part.value))).join('');
+  // İşaretleyici (yalnızca yanıt düzeninde) bağlı kalın değerin başına konum işareti koyar; işaret veriden taklit edilemez.
+  const markdown = lead.map((part) => (typeof part === 'string' ? part
+    : part.strong ? `**${mark && part.bind ? mark(part.bind) : ''}${escapedFactText(part.value)}**` : escapedFactText(part.value))).join('');
   const plain = lead.map((part) => (typeof part === 'string' ? part : clipName(part.value))).join('');
   // Parçalar da saklanır: akıcı paragraf (§ fluentParagraph) yan cümle biçimini metni ayrıştırmadan yeniden kurar.
   return { markdown, plain, parts: Object.freeze([...parts]) };
@@ -164,10 +173,11 @@ function windowParts(population, locale) {
  * Görev sayımının doğal cümlesi: "Şu anda **4** gecikmiş göreviniz var." Yalnızca bütün süzgeçler
  * ifade edilebiliyorsa; aksi hâlde `null`.
  */
-function taskCountSentence(filters, count, locale, { total = false } = {}) {
+function taskCountSentence(filters, count, locale, { total = false, bind = null } = {}) {
   const population = taskPopulation(filters, locale);
   if (!population) return null;
   const { me, team, adjectives, project, relative } = population;
+  const amount = bound(v(number(count, locale)), bind);
   if (locale === 'en') {
     const noun = population.milestone ? (count === 1 ? 'milestone' : 'milestones') : count === 1 ? 'task' : 'tasks';
     const tail = [...(population.after ? [` ${population.after}`] : []), ...(project ? [' in the ', v(project), ' project'] : []), ...windowParts(population, locale),
@@ -175,11 +185,11 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
     const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${noun}`;
     const now = relative ? 'currently ' : '';
     if (population.person) {
-      return sentence([v(population.person), count === 0 ? ` ${now}has no ${described}` : ` ${now}has `, ...(count === 0 ? [] : [v(number(count, locale)), ` ${described}`]), ...tail, '.']);
+      return sentence([v(population.person), count === 0 ? ` ${now}has no ${described}` : ` ${now}has `, ...(count === 0 ? [] : [amount, ` ${described}`]), ...tail, '.']);
     }
     const owner = team ? `${team.en.charAt(0).toUpperCase()}${team.en.slice(1)} ${now}has` : `You ${now}have`;
     if (count === 0) return sentence([me || team ? `${owner} no ${described}` : `There are ${now}no ${described}`, ...tail, '.']);
-    return sentence([me || team ? `${owner} ` : `There ${count === 1 ? 'is' : 'are'} ${now}`, v(number(count, locale)), ` ${described}`, ...tail, '.']);
+    return sentence([me || team ? `${owner} ` : `There ${count === 1 ? 'is' : 'are'} ${now}`, amount, ` ${described}`, ...tail, '.']);
   }
   // Aşama F: termin penceresi ("bugün dahil yedi gün içinde terminli") sayıdan önce gelir; uzun sıfat sayı ile ad arasına
   // girmez ve pencere zaten bugüne göre olduğundan "şu anda" eklenmez ("Bugün dahil yedi gün içinde terminli **17** açık görev var.").
@@ -189,7 +199,7 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
     ...(project ? [v(project), ' projesinde '] : []), ...windowParts(population, locale), ...(windowed ? [`${adjectives[0]} `] : []), ...(total ? ['toplam '] : [])];
   const noun = `${named.length ? `${named.join(', ')} ` : ''}${population.milestone ? (me ? 'kilometre taşınız' : 'kilometre taşı') : me ? 'göreviniz' : 'görev'}`;
   if (count === 0) return sentence([...lead, `${noun} yok.`]);
-  return sentence([...lead, v(number(count, locale)), ` ${noun} var.`]);
+  return sentence([...lead, amount, ` ${noun} var.`]);
 }
 
 /** Dağılımın sahibi (tamlayan): "Görevlerinizin", "**X** projesindeki görevlerin"; ifade edilemiyorsa `null`. */
@@ -270,12 +280,28 @@ export function majorityPercent(value, total, locale) {
  */
 export function countProposition(group, fact, locale, fallback) {
   if (!fact || !Number.isSafeInteger(fact.value) || fact.value < 0) return null;
-  const natural = TASK_TOOLS.has(group.tool) ? taskCountSentence(fact.semantic?.filters, fact.value, locale) : null;
+  const natural = TASK_TOOLS.has(group.tool) ? taskCountSentence(fact.semantic?.filters, fact.value, locale, { bind: taskCollectionBind(group, fact.semantic?.filters, fact.value, locale) }) : null;
   const realized = natural || (fallback ? { markdown: fallback.markdown, plain: fallback.plain } : null);
   return realized ? { kind: 'count', tone: countTone(fact.semantic?.filters, fact.value), evidenceId: group.evidenceId, ...realized, fluent: Object.freeze({ count: fact.value }) } : null;
 }
 
 const countTone = (filters, value) => (filters?.deadline === 'overdue' && value > 0 ? 'warning' : 'info');
+
+/**
+ * Görev sayımının kanıt kartı bağı (ICE): yalnızca satırları kanıtta olan görev aramasında. Sayı, kartın katkıda bulunan
+ * nüfusunun büyüklüğüdür; nüfus aynı kanıtın satırlarıdır (aynı araç çağrısı, aynı süzgeçler). Kartın başlığı ve tonu
+ * süzgeçlerden sunucunun belirlenimci metnidir; olgu taşımaz.
+ */
+function taskCollectionBind(group, filters, count, locale) {
+  if (group?.tool !== 'rota_task_search' || !Number.isSafeInteger(count) || count < 1) return null;
+  const f = filters || {};
+  const statuses = Array.isArray(f.statuses) ? f.statuses : [];
+  const tone = f.deadline === 'overdue' ? 'overdue' : f.assignee === 'unassigned' ? 'unassigned'
+    : TERM_WINDOWS.has(f.deadline) ? 'due' : statuses.length === 1 && statuses[0] === 'done' ? 'done'
+      : statuses.length === 1 && statuses[0] === 'in_progress' ? 'progress' : 'neutral';
+  const title = titleCandidate({ tool: group.tool, filters: f, locale }) || (locale === 'en' ? 'Tasks' : 'Görevler');
+  return { type: 'tasks', evidenceId: group.evidenceId, count, title, tone };
+}
 
 const GROUP_TITLES = Object.freeze({ status: ['durum', 'status'], priority: ['öncelik', 'priority'], project: ['proje', 'project'], deadline: ['termin', 'deadline'],
   target_month: ['termin ayı', 'deadline month'], date_week: ['hafta', 'week'], date_month: ['ay', 'month'], due_horizon: ['teslim ufku', 'delivery horizon'] });
@@ -346,7 +372,7 @@ export function populationProposition({ group, described, size, locale, fallback
   const facts = described.rows.flatMap((row) => row.entries.map(({ fact }) => fact));
   if (!facts.every((fact) => fact.semantic?.complete === true)) return null;
   const scoped = populationScope(described);
-  const realized = taskCountSentence(scoped, size, locale) || fallback?.(scoped) || null;
+  const realized = taskCountSentence(scoped, size, locale, { bind: taskCollectionBind(group, scoped, size, locale) }) || fallback?.(scoped) || null;
   return realized ? { kind: 'count', tone: countTone(scoped, size), evidenceId: group.evidenceId, markdown: realized.markdown, plain: realized.plain,
     ...(realized.parts ? { parts: realized.parts } : {}), fluent: Object.freeze({ count: size }) } : null;
 }
@@ -369,12 +395,26 @@ function soleRow(described, facts, target) {
 }
 
 /**
+ * Uç değerin tekil sahibi görev aramasının görev satırıysa tekil görev kartının bağı (ICE): satırın kanıttaki görev kimliği.
+ * Sahip tekil değilse ya da satır kimliği bilinmiyorsa bağ yoktur (ad düz kalın metin olarak kalır).
+ */
+function soleTaskBind(group, described, facts, target, collection) {
+  if (group?.tool !== 'rota_task_search' || String(collection ?? '').split('.').at(-1) !== 'tasks') return null;
+  const indexes = facts.map((fact, index) => (fact.value === target ? index : -1)).filter((index) => index >= 0);
+  if (indexes.length !== 1) return null;
+  const identity = described.rows[indexes[0]]?.entries?.[0]?.fact?.semantic?.row?.identity;
+  return typeof identity === 'string' && identity ? { type: 'task', evidenceId: group.evidenceId, taskId: identity } : null;
+}
+
+/**
  * Uç değer cümlesi. `fluent.pair.tail`, aynı sütunun karşı ucundan SONRA gelirse kullanılan ikinci yan cümledir
  * ("…, en kısa süredir geciken ise **Y** (**1 gün**)"); `fluent.names`, adı söylenen en uzun gecikmeli görevdir.
  */
-function extremeSentence({ kind, metric, type, label, value, owner, locale, semantic }) {
+function extremeSentence({ kind, metric, type, label, value, owner, locale, semantic, ownerBind = null }) {
   const en = locale === 'en';
-  const named = owner ? [' (', v(owner), ')'] : [];
+  // Adı söylenen satır bir görevse (ICE) adı tekil görev kartına bağlanır; değer ve cümle değişmez.
+  const ownerPart = owner ? bound(strongPart(owner), ownerBind) : null;
+  const named = owner ? [' (', ownerPart, ')'] : [];
   const pair = (tail, extra = {}) => ({ pair: { role: kind, tail }, ...extra });
   const high = kind === 'maximum';
   if (metric === 'task.overdueDays') {
@@ -382,33 +422,33 @@ function extremeSentence({ kind, metric, type, label, value, owner, locale, sema
     // Aşama G: en uzun gecikme, hemen önceki aynı nüfusun sayım cümlesine yan cümle olarak bağlanabilir ("Şu anda **3** gecikmiş
     // göreviniz var; en uzun süredir geciken görev **X** (**23 gün**).").
     if (owner) {
-      return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'}-overdue task is `, v(owner), ' (', v(amount), ').']
-        : [`En ${high ? 'uzun' : 'kısa'} süredir geciken görev `, v(owner), ' (', v(amount), ').']),
-      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'}-overdue is `, v(owner), ' (', v(amount), ')'] : [`en ${high ? 'uzun' : 'kısa'} süredir geciken ise `, v(owner), ' (', v(amount), ')'],
-        high ? { names: owner, days: value, afterCount: en ? ['; the longest-overdue task is ', v(owner), ' (', v(amount), ')'] : ['; en uzun süredir geciken görev ', v(owner), ' (', v(amount), ')'] } : {}) };
+      return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'}-overdue task is `, ownerPart, ' (', strongPart(amount), ').']
+        : [`En ${high ? 'uzun' : 'kısa'} süredir geciken görev `, ownerPart, ' (', strongPart(amount), ').']),
+      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'}-overdue is `, ownerPart, ' (', strongPart(amount), ')'] : [`en ${high ? 'uzun' : 'kısa'} süredir geciken ise `, ownerPart, ' (', strongPart(amount), ')'],
+        high ? { names: owner, days: value, afterCount: en ? ['; the longest-overdue task is ', ownerPart, ' (', strongPart(amount), ')'] : ['; en uzun süredir geciken görev ', ownerPart, ' (', strongPart(amount), ')'] } : {}) };
     }
-    return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'} delay is `, v(amount), '.'] : [`En ${high ? 'uzun' : 'kısa'} gecikme `, v(amount), '.']),
-      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'} is `, v(amount)] : [`en ${high ? 'uzun' : 'kısa'} gecikme ise `, v(amount)],
-        high ? { afterCount: en ? ['; the longest delay is ', v(amount)] : ['; en uzun gecikme ', v(amount)] } : {}) };
+    return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'} delay is `, strongPart(amount), '.'] : [`En ${high ? 'uzun' : 'kısa'} gecikme `, strongPart(amount), '.']),
+      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'} is `, strongPart(amount)] : [`en ${high ? 'uzun' : 'kısa'} gecikme ise `, strongPart(amount)],
+        high ? { afterCount: en ? ['; the longest delay is ', strongPart(amount)] : ['; en uzun gecikme ', strongPart(amount)] } : {}) };
   }
   if (metric === 'task.targetFinish') {
-    return { ...sentence(en ? [`The ${high ? 'latest' : 'earliest'} deadline is `, v(day(value, locale)), ...named, '.']
-      : [`En ${high ? 'geç' : 'erken'} termin `, v(day(value, locale)), ...named, '.']),
-    fluent: pair(en ? [`and the ${high ? 'latest' : 'earliest'} is `, v(day(value, locale)), ...named] : [`en ${high ? 'geç' : 'erken'} termin ise `, v(day(value, locale)), ...named]) };
+    return { ...sentence(en ? [`The ${high ? 'latest' : 'earliest'} deadline is `, strongPart(day(value, locale)), ...named, '.']
+      : [`En ${high ? 'geç' : 'erken'} termin `, strongPart(day(value, locale)), ...named, '.']),
+    fluent: pair(en ? [`and the ${high ? 'latest' : 'earliest'} is `, strongPart(day(value, locale)), ...named] : [`en ${high ? 'geç' : 'erken'} termin ise `, strongPart(day(value, locale)), ...named]) };
   }
   const shown = type === 'date' ? day(value, locale) : numericValue(value, semantic, locale);
   const word = type === 'date' ? (high ? ['latest', 'en geç'] : ['earliest', 'en erken']) : (high ? ['highest', 'en yüksek'] : ['lowest', 'en düşük']);
   if (en) {
-    return { ...sentence([`The ${word[0]} “`, t(label), '” value is ', v(shown), ...named, '.']),
-      fluent: pair([`and the ${word[0]} is `, v(shown), ...named]) };
+    return { ...sentence([`The ${word[0]} “`, t(label), '” value is ', strongPart(shown), ...named, '.']),
+      fluent: pair([`and the ${word[0]} is `, strongPart(shown), ...named]) };
   }
   // Satırı adıyla söylenebilen uçta özne satırdır ("“Gecikmiş görev” değeri en yüksek olan **X** (**2**)").
   if (owner) {
-    return { ...sentence(['“', t(label), `” değeri ${word[1]} olan `, v(owner), ' (', v(shown), ').']),
-      fluent: pair([`${word[1]} olan ise `, v(owner), ' (', v(shown), ')']) };
+    return { ...sentence(['“', t(label), `” değeri ${word[1]} olan `, ownerPart, ' (', strongPart(shown), ').']),
+      fluent: pair([`${word[1]} olan ise `, ownerPart, ' (', strongPart(shown), ')']) };
   }
-  return { ...sentence(['“', t(label), `” sütununda ${word[1]} ${type === 'date' ? 'tarih' : 'değer'} `, v(shown), '.']),
-    fluent: pair([`${word[1]} ${type === 'date' ? 'tarih' : 'değer'} ise `, v(shown)]) };
+  return { ...sentence(['“', t(label), `” sütununda ${word[1]} ${type === 'date' ? 'tarih' : 'değer'} `, strongPart(shown), '.']),
+    fluent: pair([`${word[1]} ${type === 'date' ? 'tarih' : 'değer'} ise `, strongPart(shown)]) };
 }
 
 /**
@@ -527,7 +567,8 @@ export function tablePropositions({ group, described, distribution, locale, popu
     if (type === 'date') {
       if (metric === 'task.targetFinish' && out.some((item) => item.kind === 'maximum'
         && described.rows.every((row) => row.cells[item.column]?.[0]?.semantic?.metric === 'task.overdueDays' && row.cells[item.column][0].value > 0))) continue;
-      add('minimum', extremeSentence({ kind: 'minimum', metric, type, label: header.label, value: sorted[0], owner: soleRow(described, facts, sorted[0]), locale }));
+      add('minimum', extremeSentence({ kind: 'minimum', metric, type, label: header.label, value: sorted[0], owner: soleRow(described, facts, sorted[0]), locale,
+        ownerBind: soleTaskBind(group, described, facts, sorted[0], collection) }));
       const deadline = metric === 'task.targetFinish';
       add('span', deadline
         ? sentence(en ? ['Deadlines range from ', v(day(sorted[0], locale)), ' to ', v(day(sorted.at(-1), locale)), '.'] : ['Terminler ', v(day(sorted[0], locale)), ' ile ', v(day(sorted.at(-1), locale)), ' arasında.'])
@@ -539,7 +580,8 @@ export function tablePropositions({ group, described, distribution, locale, popu
     }
     if (sorted[0] !== sorted.at(-1)) for (const kind of ['maximum', 'minimum']) {
       const value = kind === 'maximum' ? sorted.at(-1) : sorted[0];
-      add(kind, extremeSentence({ kind, metric, type, label: header.label, value, owner: soleRow(described, facts, value), locale, semantic }), overdue && kind === 'maximum' ? 'warning' : 'info');
+      add(kind, extremeSentence({ kind, metric, type, label: header.label, value, owner: soleRow(described, facts, value), locale, semantic,
+        ownerBind: soleTaskBind(group, described, facts, value, collection) }), overdue && kind === 'maximum' ? 'warning' : 'info');
     }
     if (values.length >= 3) {
       const value = Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
@@ -1067,7 +1109,7 @@ const FOLLOW_HOSTS = new Set(['pressure', 'positive', 'concentration']);
  *   önceki paragrafta söylenen olgu sonrakinde yinelenmez. Yalnızca bir yanıt boyunca yaşar.
  * @param {object[] | null} emitted Görünür olguya katkıda bulunan önermeler; birleşenler dahil, bastırılanlar hariç.
  */
-export function fluentParagraph(entries, locale = 'tr', memory = null, emitted = null) {
+export function fluentParagraph(entries, locale = 'tr', memory = null, emitted = null, mark = null) {
   const units = [];
   // Adı ve gün sayısı söylenen en uzun gecikmeli görev (uç cümlesi) ve tam öneri cümlesi: anahtar kanıt + görev adıdır.
   const named = memory?.named ?? new Map();
@@ -1143,10 +1185,17 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
     emitted?.push(proposition);
     if (fluent.pair && fluent.names) named.set(taskKey(subject, fluent.names), fluent.days);
   }
+  // `mark` (yalnızca yanıt düzeni): bağlı kalın değerlere konum işareti; işaretsiz biçim önerme metniyle birebir aynıdır.
+  const marked = (proposition) => {
+    if (!mark || !proposition.parts?.some((part) => part?.bind)) return proposition.markdown;
+    // İşaretleyici çağrılmadan önce işaretsiz parçaların önerme metniyle eşleştiği doğrulanır; hayalet bağ ayrılmaz.
+    if (sentence(proposition.parts).markdown !== proposition.markdown) return proposition.markdown;
+    return sentence(proposition.parts, mark).markdown;
+  };
   return units.map((unit) => {
     if (unit.text != null) return unit.text;
-    if (unit.shares) return sentence([...series(unit.shares.clauses, locale), '.']).markdown;
-    return unit.merged && unit.parts ? sentence([...unit.parts, '.']).markdown : unit.proposition.markdown;
+    if (unit.shares) return sentence([...series(unit.shares.clauses, locale), '.'], mark).markdown;
+    return unit.merged && unit.parts ? sentence([...unit.parts, '.'], mark).markdown : marked(unit.proposition);
   }).join(' ');
 }
 
@@ -1157,9 +1206,13 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
 export { sentence as factSentence, v as strongFact, t as plainFact, number as formatCount, day as formatFactDay, percent as formatPercent, ofCount as possessiveCount, locativeOf as locativeCountSuffix };
 
 /** Görev listesinin kesin sayım cümlesi; doğrulanmış anlatım ve düzen aynı nüfusu adlandırır. */
-export function taskCountLead(group, locale = 'tr', { empty = false } = {}) {
+export function taskCountLead(group, locale = 'tr', { empty = false, mark = null } = {}) {
   const total = group.tool === 'rota_task_search' ? group.envelope.find((fact) => fact.field === 'totalCount') : null;
-  if (total) return countProposition(group, total, locale, null)?.markdown ?? null;
+  if (total) {
+    const proposition = countProposition(group, total, locale, null);
+    // `mark` (yalnızca yanıt düzeni, ICE): sayının konum işaretli biçimi; işaretsiz biçim önerme metniyle aynıdır.
+    return proposition ? (mark && proposition.parts ? sentence(proposition.parts, mark).markdown : proposition.markdown) : null;
+  }
   // Aşama G: boş ve TAM görev listesi sıfır sayımın kanıtıdır; "Gösterilecek görev yok (ölçüt: …)" yerine nüfusu söyleyen doğal
   // cümle ("Bugün terminli açık göreviniz yok."). Süzgeçler doğal söylenemiyorsa ölçütlü cümle kalır.
   const complete = empty && group.tool === 'rota_task_search' ? group.envelope.find((fact) => fact.field === 'complete' && fact.value === true) : null;

@@ -5261,5 +5261,3 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya günce
     assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
   });
 });
-
-

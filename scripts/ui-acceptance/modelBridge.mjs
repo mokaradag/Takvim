@@ -1,7 +1,7 @@
 /**
  * UI kabulü için OpenAI uyumlu yerel uç (yalnızca 127.0.0.1). Uygulamanın üretim sağlayıcı bağdaştırıcısının gönderdiği
  * her /v1/chat/completions isteği deponun nitelendirilmiş Claude CLI bağdaştırıcısına (scripts/planner-model-adapter.mjs)
- * iletilir: model kimliği her çağrıda claude-haiku-4-5-20251001 olarak doğrulanır, düşünme kapalıdır (0 belirteç), tek API
+ * iletilir: model kimliği her çağrıda claude-haiku-4-5-20251001 (ya da açıkça seçilen `BRIDGE_MODEL`) olarak doğrulanır, düşünme kapalıdır (0 belirteç), tek API
  * çağrısıdır. Başka bir model istenirse istek reddedilir ve devir girişimi olarak sayılır. İçerik günlüğe yazılmaz.
  */
 import { spawn } from 'node:child_process';
@@ -13,7 +13,8 @@ const ADAPTER = fileURLToPath(new URL('../planner-model-adapter.mjs', import.met
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 const PORT = Number(process.env.BRIDGE_PORT || 18731);
-const MODEL = 'claude-haiku-4-5-20251001';
+// `BRIDGE_MODEL`: nitelendirme modelinin açık seçimi (ör. daha yeni ve ucuz Haiku); verilmezse varsayılan model korunur.
+const MODEL = process.env.BRIDGE_MODEL || 'claude-haiku-4-5-20251001';
 const LEDGER = process.env.BRIDGE_LEDGER;
 const CALLS = process.env.BRIDGE_CALLS;
 let queue = Promise.resolve();

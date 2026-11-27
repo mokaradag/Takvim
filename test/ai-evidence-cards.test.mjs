@@ -1,0 +1,687 @@
+/**
+ * Bilgin etkileşimli kanıt kartları (ICE-1) · alan, sunucu, güvenlik ve yaşam döngüsü.
+ *
+ * Sınananlar: olgu → kanıt bağının belirlenimci kurulması (aynı sayının farklı nüfusları, aynı kanıtı paylaşan
+ * olgular), işaretlerin sökülmesi ve kapalı ret, katkıda bulunan nüfus ve kısmi önizleme, kart izdüşümünün gizli ve
+ * korumalı alanları taşımaması, tanımlayıcının katı doğrulaması (sahte, bozuk, aşırı büyük), tarayıcıdaki geçici yaşam
+ * döngüsü (yalnızca canlı yanıt, süre, en yeni yanıtlar, oturum hatası) ve kalın düğüm sırasının çizimle aynılığı.
+ */
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
+import { findElement } from './helpers/clientComponentHarness.mjs';
+
+registerServerOnlyShim();
+
+const cardsDomain = await import('../src/domain/ai/evidenceCards.js');
+const { EVIDENCE_CARD_LIMITS, bindingMark, hasBindingMarks, normalizeEvidenceCards, resolveBindingAnchors, stripBindingMarks, cleanEvidenceCardText, evidenceCardsExpired } = cardsDomain;
+const { countProposition, fluentParagraph, tablePropositions, taskCountLead } = await import('../src/domain/ai/groundedPropositions.js');
+const { renderComposition } = await import('../src/domain/ai/groundedComposition.js');
+const { renderGroupDetails } = await import('../src/domain/ai/evidenceNarrative.js');
+const { escapedFactText } = await import('../src/domain/ai/evidenceFacts.js');
+const { strongTexts, blockStrongStarts } = await import('../src/features/ai/assistant/evidenceCardAnchors.js');
+const { parseAssistantMarkdown } = await import('../src/features/ai/assistant/assistantMarkdown.js');
+const { buildEvidenceCards, settleEvidenceBindings } = await import('../src/server/ai/assistant/evidenceCards.js');
+const { createAssistantController, pruneEvidenceCards, turnsFromMessages } = await import('../src/features/ai/assistant/assistantController.js');
+const { createAssistantStreamDecoder } = await import('../src/features/ai/assistant/assistantClient.js');
+const { renderBlock } = await import('../src/features/ai/assistant/AssistantMarkdown.jsx');
+const { EvidenceReference } = await import('../src/features/ai/assistant/EvidenceCard.jsx');
+
+const GENERATED_AT = '2026-11-27T08:00:00.000Z';
+const PROJECT_A = '11000000-0000-4000-8000-000000000001';
+const PROJECT_B = '11000000-0000-4000-8000-000000000002';
+const taskId = (n) => `21000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+function taskRow(n, overrides = {}) {
+  return {
+    taskId: taskId(n), title: `Görev ${n}`, project: { projectId: PROJECT_A, name: 'Altyapı', code: 'ALT' }, status: 'in_progress', statusLabel: 'Devam ediyor',
+    priority: 'high', overdue: true, overdueDays: 30 - n, targetFinish: '2026-11-10', progressPercent: 40, access: 'FULL',
+    assignees: [{ name: 'Ayşe Demir', sicil: 900100 + (n % 3) }], assignment: 'visible', description: 'GİZLİ NOT METNİ', keyword: 'anahtar', ...overrides
+  };
+}
+
+const entry = (id, rows, { totalCount = rows.length, complete = rows.length === totalCount, tool = 'rota_task_search' } = {}) => ({
+  id, tool, args: {}, round: 1,
+  payload: { tool, data: { tasks: rows, filters: { deadline: 'overdue' } }, complete, truncated: false, returnedCount: rows.length, totalCount }
+});
+const summary = (id, partial = false) => ({ id, kind: 'task-list', label: 'Görev listesi', generatedAt: GENERATED_AT, complete: true, truncated: false, partial, counts: { returned: 1, total: 1 }, highlights: [] });
+
+/** Sunucunun işaretli metninden bağları çıkarır (yanıt düzeninin yaptığı gibi). */
+function bound(markedText, bindings) {
+  const settled = settleEvidenceBindings({ normalized: markedText }, bindings);
+  return { text: settled.normalized, evidenceBindings: settled.evidenceBindings };
+}
+
+/* ── Belirlenimci bağ ───────────────────────────────────────── */
+
+test('aynı sayı farklı nüfuslarda ayrı ve doğru kartlara bağlanır', () => {
+  const groupA = { tool: 'rota_task_search', evidenceId: 'R1', envelope: [] };
+  const groupB = { tool: 'rota_task_search', evidenceId: 'R2', envelope: [] };
+  const fact = (projectId, project, deadline) => ({ field: 'totalCount', value: 10, semantic: { complete: true, filters: { projectId, project, ...(deadline ? { deadline } : { statuses: ['done'] }) } } });
+  const left = countProposition(groupA, fact(PROJECT_A, 'Proje A', null), 'tr', null);
+  const right = countProposition(groupB, fact(PROJECT_B, 'Proje B', 'overdue'), 'tr', null);
+  // Varsayılan çizim (model ve doğrulayıcı) işaretsizdir; bağ yalnızca parçada taşınır.
+  assert.equal(hasBindingMarks(left.markdown + right.markdown + left.plain + right.plain), false);
+  const bindings = [];
+  const mark = (spec) => { const text = bindingMark(bindings.length + 1); bindings.push(spec); return text; };
+  const text = fluentParagraph([{ proposition: left }, { proposition: right }], 'tr', null, null, mark);
+  assert.equal(stripBindingMarks(text), fluentParagraph([{ proposition: left }, { proposition: right }], 'tr'));
+  const { text: clean, evidenceBindings } = bound(text, bindings);
+  const strong = strongTexts(clean);
+  const tens = strong.map((value, index) => (value === '10' ? index : -1)).filter((index) => index >= 0);
+  assert.equal(tens.length, 2, clean);
+  const byStrong = new Map(evidenceBindings.anchors.map((anchor) => [anchor.strong, evidenceBindings.bindings[anchor.key - 1]]));
+  assert.equal(byStrong.get(tens[0]).evidenceId, 'R1');
+  assert.equal(byStrong.get(tens[0]).tone, 'done');
+  assert.equal(byStrong.get(tens[1]).evidenceId, 'R2');
+  assert.equal(byStrong.get(tens[1]).tone, 'overdue');
+  // Kartlar kendi kanıtlarının satırlarıyla kurulur; satırlar karışmaz.
+  const rowsA = Array.from({ length: 10 }, (_, index) => taskRow(index + 1, { status: 'done', overdue: false, overdueDays: undefined, actualFinish: '2026-11-01' }));
+  const rowsB = Array.from({ length: 4 }, (_, index) => taskRow(index + 20));
+  const built = buildEvidenceCards({ evidenceBindings, finalText: clean, entries: [entry('R1', rowsA), entry('R2', rowsB, { totalCount: 10, complete: false })],
+    summaries: [summary('R1'), summary('R2')], citedIds: ['R1', 'R2'] });
+  const cards = built.descriptor;
+  const cardAt = (strongIndex) => cards.cards.find((card) => card.id === cards.anchors.find((anchor) => anchor.strong === strongIndex).card);
+  assert.deepEqual(cardAt(tens[0]).items.map((item) => item.id), rowsA.map((row) => row.taskId));
+  assert.deepEqual(cardAt(tens[1]).items.map((item) => item.id), rowsB.map((row) => row.taskId));
+  assert.equal(cardAt(tens[1]).total, 10, 'kısmi önizlemenin toplamı iddia edilen sayıdır');
+});
+
+test('aynı kanıtı paylaşan sayım ve tekil görev olguları ayrı kart türlerine bağlanır', () => {
+  const rows = [taskRow(1), taskRow(2)];
+  const bindings = [{ type: 'tasks', evidenceId: 'R1', count: 2, title: 'Gecikmiş görevleriniz', tone: 'overdue' }, { type: 'task', evidenceId: 'R1', taskId: rows[0].taskId }];
+  const { text, evidenceBindings } = bound(`Şu anda **${bindingMark(1)}2** gecikmiş göreviniz var; en uzun süredir geciken görev **${bindingMark(2)}Görev 1** (**29 gün**).`, bindings);
+  const built = buildEvidenceCards({ evidenceBindings, finalText: text, entries: [entry('R1', rows)], summaries: [summary('R1')], citedIds: ['R1'] });
+  assert.deepEqual(built.descriptor.cards.map((card) => [card.kind, card.items.length, card.total]), [['tasks', 2, 2], ['task', 1, 1]]);
+  assert.deepEqual(built.descriptor.anchors.map((anchor) => anchor.text), ['2', 'Görev 1']);
+});
+
+test('görev adıyla aynı ölçü yalnız ad konumunda bağlanır, birleşik anlatım metni korunur', () => {
+  const group = { tool: 'rota_task_search', evidenceId: 'R1', envelope: [{ field: 'totalCount', value: 2, semantic: { complete: true, filters: { deadline: 'overdue', assignee: 'me' } } }] };
+  const described = {
+    columns: [{ numeric: true, label: 'Gecikme' }],
+    rows: ['5 gün', '2 gün'].map((title, index) => {
+      const fact = { value: index === 0 ? 5 : 2, semantic: { complete: true, metric: 'task.overdueDays', measure: 'days', row: { collectionSize: 2, identity: taskId(index + 1) } } };
+      return { title, entries: [{ fact }], cells: [[fact]] };
+    })
+  };
+  const extremes = tablePropositions({ group, described, collection: 'data.tasks', locale: 'tr' });
+  const maximum = extremes.find((row) => row.kind === 'maximum');
+  const minimum = extremes.find((row) => row.kind === 'minimum');
+  const count = countProposition(group, group.envelope[0], 'tr', null);
+  for (const propositions of [[maximum], [count, maximum], [maximum, minimum]]) {
+    const bindings = [];
+    const items = propositions.map((proposition) => ({ proposition }));
+    const marked = fluentParagraph(items, 'tr', null, null, (spec) => bindingMark(bindings.push(spec)));
+    const plain = fluentParagraph(items, 'tr');
+    assert.equal(stripBindingMarks(marked), plain);
+    const strong = strongTexts(plain);
+    const actual = resolveBindingAnchors(marked, strongTexts).anchors
+      .filter((anchor) => bindings[anchor.key - 1].type === 'task');
+    assert.deepEqual(actual.map((anchor) => anchor.strong), ['5 gün', ...(propositions.includes(minimum) ? ['2 gün'] : [])].map((name) => strong.indexOf(name)));
+    assert.equal(strong.filter((value) => value === '5 gün').length, 2);
+  }
+});
+
+test('sayım giriş cümlesi işaretli biçimde varsayılan cümleyle birebir aynıdır', () => {
+  const group = { tool: 'rota_task_search', evidenceId: 'R3', envelope: [{ field: 'totalCount', value: 4, semantic: { complete: true, filters: { assignee: 'me', deadline: 'overdue' } } }] };
+  const plain = taskCountLead(group, 'tr');
+  const marked = taskCountLead(group, 'tr', { mark: () => bindingMark(1) });
+  assert.notEqual(marked, plain);
+  assert.equal(stripBindingMarks(marked), plain);
+  assert.match(plain, /\*\*4\*\*/);
+});
+
+test('işaretli çizim yalnızca açıkça istendiğinde üretilir; varsayılan düzen çizimi değişmez', () => {
+  // Boş düzen: bağ seçeneği olmadan sonuçta bağ alanı ve işaret yoktur.
+  const composition = { render: { locale: 'tr', propositions: new Map(), details: new Map(), tables: new Map(), charts: new Map(), titles: new Map() } };
+  const plain = renderComposition(composition, { blocks: [] });
+  assert.equal(plain.bindings, undefined);
+  assert.equal(hasBindingMarks(plain.text), false);
+});
+
+/* ── İşaret sökme ve kapalı ret ─────────────────────────────── */
+
+test('işaretler kalın düğüm sırasına çevrilir ve metinden tamamen sökülür', () => {
+  const marked = `**Not:** Şu anda **${bindingMark(1)}5** görev var; **3** kişi ve **${bindingMark(2)}İş ğüşıöç**.`;
+  const resolved = resolveBindingAnchors(marked, strongTexts);
+  assert.equal(resolved.rejected, null);
+  assert.equal(hasBindingMarks(resolved.text), false);
+  assert.deepEqual(resolved.anchors, [{ key: 1, strong: 1, text: '5' }, { key: 2, strong: 3, text: 'İş ğüşıöç' }]);
+});
+
+test('bozuk, yinelenen, kalın dışı ya da artık işaret bütün bağları düşürür; metin yine işaretsizdir', () => {
+  const cases = [
+    `Şu anda **${bindingMark(1)}5** ve **${bindingMark(1)}6**.`,
+    `Şu anda ${bindingMark(1)}5 görev var.`,
+    `Şu anda **${bindingMark(1)}5** \u001e görev var.`,
+    `Şu anda **5${bindingMark(1)}** görev var.`,
+    `\`kod ${bindingMark(1)}\` ve **5**`
+  ];
+  for (const text of cases) {
+    const resolved = resolveBindingAnchors(text, strongTexts);
+    assert.notEqual(resolved.rejected, null, text);
+    assert.deepEqual(resolved.anchors, []);
+    assert.equal(hasBindingMarks(resolved.text), false);
+  }
+});
+
+test('veri metni işaret taklit edemez: kaçış denetim karakterlerini boşluğa çevirir', () => {
+  const forged = `Kötü\u001e1\u001fAd **x** <script>alert(1)</script>`;
+  const escaped = escapedFactText(forged);
+  assert.equal(hasBindingMarks(escaped), false);
+  assert.equal(resolveBindingAnchors(`**${escaped}**`, strongTexts).anchors.length, 0);
+});
+
+test('Markdown sınırları ve Türkçe karakterler kalın düğüm sırasını bozmaz', () => {
+  const text = '#### Başlık **a**\n\n- **b** ve **ç**\n\n| Görev | Değer |\n| --- | --- |\n| **Şık** | 2 |\n\n> [!warning]\n> **Dikkat:** **Ğ**\n\n```rota-chart\n{"x":"**y**"}\n```';
+  assert.deepEqual(strongTexts(text), ['a', 'b', 'ç', 'Şık', 'Dikkat:', 'Ğ']);
+  const blocks = parseAssistantMarkdown(text, { rotaData: true });
+  assert.deepEqual(blockStrongStarts(blocks), [0, 1, 3, 4, 6]);
+});
+
+/* ── Katkıda bulunan nüfus ve izdüşüm ──────────────────────── */
+
+function single(count, rows, options = {}) {
+  const bindings = [{ type: 'tasks', evidenceId: 'R1', count, title: 'Görevler', tone: 'neutral' }];
+  const { text, evidenceBindings } = bound(`Toplam **${bindingMark(1)}${count}** görev var.`, bindings);
+  return buildEvidenceCards({ evidenceBindings, finalText: options.finalText ?? text, entries: options.entries ?? [entry('R1', rows, options)],
+    summaries: options.summaries ?? [summary('R1', options.partial)], citedIds: options.citedIds ?? ['R1'] });
+}
+
+test('kısmi önizleme kesin toplamla bildirilir; tutarsız sayı kart üretmez', () => {
+  const rows = Array.from({ length: 20 }, (_, index) => taskRow(index + 1));
+  const partial = single(47, rows, { totalCount: 47, complete: false });
+  assert.equal(partial.descriptor.cards[0].total, 47);
+  assert.equal(partial.descriptor.cards[0].items.length, 20);
+  assert.equal(single(47, rows, { totalCount: 46, complete: false }), null, 'kanıtın toplamı sayıyla aynı değil');
+  assert.equal(single(10, rows, { totalCount: 20 }), null, 'satırlar sayıdan fazla');
+  assert.equal(single(20, rows, { totalCount: null, complete: false }), null, 'kesin toplam yok ve kanıt tam değil');
+  assert.equal(single(0, [], { totalCount: 0 }), null, 'boş nüfusun kartı yok');
+  assert.equal(single(20, rows, { tool: 'rota_task_analytics' }), null, 'satırsız toplu araç kart üretmez');
+});
+
+test('kart satırları otuzla sınırlıdır ve toplam yine iddia edilen sayıdır', () => {
+  const rows = Array.from({ length: 40 }, (_, index) => taskRow(index + 1, { overdueDays: 50 - index }));
+  const built = single(40, rows);
+  assert.equal(built.descriptor.cards[0].items.length, EVIDENCE_CARD_LIMITS.maxItemsPerCard);
+  assert.equal(built.descriptor.cards[0].total, 40);
+});
+
+test('görünür sorumlu önizlemesi dört ve otuz sınırlarında kesilmeyi belirtir', () => {
+  const person = (n) => ({ name: `Kişi ${n}`, sicil: n });
+  for (const size of [4, 5]) {
+    const card = single(1, [taskRow(1, { assignees: Array.from({ length: size }, (_, index) => person(index + 1)) })]).descriptor.cards[0];
+    assert.equal(card.items[0].assignees.length, 4);
+    assert.equal(Boolean(card.items[0].assigneesClipped), size === 5);
+  }
+  for (const size of [30, 31]) {
+    const people = Array.from({ length: size }, (_, index) => person(index + 1));
+    const rows = [];
+    while (people.length) rows.push(taskRow(rows.length + 1, { assignees: people.splice(0, 3) }));
+    const [card] = single(rows.length, rows).descriptor.cards;
+    assert.equal(card.items.length, card.total);
+    assert.equal(card.people.length, 30);
+    assert.equal(Boolean(card.peopleClipped), size === 31);
+  }
+});
+
+test('karışık atamada yalnız çözülen görünür ad listelenir, diğer kimlikler sayı olarak kalır', () => {
+  const row = taskRow(1, { assignees: [
+    { name: 'Seçilen kişi', sicil: 10 }, { name: 'Bilinen kişi', sicil: 20 }, { name: 'Gizli kişi', identityHidden: true }
+  ] });
+  const source = { ...entry('R1', [row]), cardAssignments: new Map([[row.taskId, { unresolved: [0], visibleCount: 1 }]]) };
+  const [card] = single(1, [row], { entries: [source] }).descriptor.cards;
+  assert.deepEqual(card.people, [{ name: 'Bilinen kişi', tasks: 1 }]);
+  assert.deepEqual(card.items[0].assignees, ['Bilinen kişi']);
+  assert.equal(card.items[0].unresolvedAssignees, 1);
+  assert.equal(card.items[0].hiddenAssignees, 1);
+  assert.doesNotMatch(JSON.stringify(card), /Seçilen kişi|Gizli kişi|sicil/i);
+});
+
+test('izdüşüm korumalı ve gizli alanları taşımaz; farklı sorumlular Sicil ile ayrılır', () => {
+  const rows = [
+    taskRow(1, { assignees: [{ name: 'Ali Kaya', sicil: 1 }, { name: 'Gizli Eş', identityHidden: true }] }),
+    taskRow(2, { assignees: [{ name: 'Ali Kaya', sicil: 2 }] }),
+    taskRow(3, { assignees: [{ name: 'Ali Kaya', sicil: 1 }, { name: 'Zeynep Ak', sicil: 3 }] }),
+    taskRow(4, { assignees: [], assignment: 'unassigned' }),
+    taskRow(5, { assignees: [{ name: 'Gizli', identityHidden: true }], assignment: 'undisclosed' })
+  ];
+  const card = single(5, rows).descriptor.cards[0];
+  const serialized = JSON.stringify(card);
+  for (const forbidden of ['GİZLİ NOT METNİ', 'anahtar', 'sicil', 'Gizli Eş', '"Gizli"', 'FULL', 'access']) assert.equal(serialized.includes(forbidden), false, forbidden);
+  // Aynı adlı iki farklı kişi ayrı; aynı kişi bir kez ve görev sayısıyla.
+  assert.deepEqual(card.people, [{ name: 'Ali Kaya', tasks: 2 }, { name: 'Ali Kaya', tasks: 1 }, { name: 'Zeynep Ak', tasks: 1 }]);
+  assert.equal(card.unassigned, 1);
+  assert.equal(card.undisclosed, 1);
+  assert.equal(card.items[0].hiddenAssignees, 1);
+});
+
+test('kötü niyetli görev adı metin olarak kalır; denetim ve yön karakterleri temizlenir', () => {
+  const card = single(1, [taskRow(1, { title: '<img src=x onerror=alert(1)> ‮ters\u001e1\u001f' })]).descriptor.cards[0];
+  assert.equal(card.items[0].title, '<img src=x onerror=alert(1)> ters 1');
+});
+
+test('yetkisiz ya da atfedilmemiş kanıt ve son metinde kaymış bağ kart üretmez', () => {
+  const rows = [taskRow(1)];
+  assert.equal(single(1, rows, { citedIds: [] }), null, 'atfedilmemiş kanıt');
+  assert.equal(single(1, rows, { entries: [] }), null, 'defterde (geçerli) olmayan kanıt');
+  assert.equal(single(1, rows, { finalText: 'Başka **1** metin.' }), null, 'son metin düzen metniyle başlamıyor');
+  assert.equal(single(1, rows, { summaries: [] }), null, 'kanıt künyesi yok');
+});
+
+test('kart tanımlayıcısı yanıt bütçesini aşarsa sondaki kartlar düşer', () => {
+  const longTitle = 'Ş'.repeat(150);
+  const bindings = Array.from({ length: 8 }, (_, index) => ({ type: 'tasks', evidenceId: `R${index + 1}`, count: 30, title: `Kart ${index}`, tone: 'neutral' }));
+  const text = bindings.map((_, index) => `**${bindingMark(index + 1)}30**`).join(' ');
+  const entries = bindings.map((bind, index) => entry(bind.evidenceId, Array.from({ length: 30 }, (__, row) => taskRow(index * 100 + row + 1, { title: longTitle }))));
+  const { text: clean, evidenceBindings } = bound(text, bindings);
+  const built = buildEvidenceCards({ evidenceBindings, finalText: clean, entries, summaries: bindings.map((bind) => summary(bind.evidenceId)), citedIds: bindings.map((bind) => bind.evidenceId) });
+  assert.ok(built.descriptor.cards.length < 8);
+  assert.ok(JSON.stringify(built.descriptor).length <= EVIDENCE_CARD_LIMITS.maxPayloadChars);
+  assert.ok(built.descriptor.cards.reduce((sum, card) => sum + card.items.length, 0) <= EVIDENCE_CARD_LIMITS.maxTotalItems);
+});
+
+/* ── Tanımlayıcının katı doğrulaması ───────────────────────── */
+
+const validDescriptor = () => single(2, [taskRow(1), taskRow(2)]).descriptor;
+
+test('geçerli tanımlayıcı doğrulanır; her bozuk alan bütün tanımlayıcıyı düşürür', () => {
+  const base = JSON.parse(JSON.stringify(validDescriptor()));
+  assert.ok(normalizeEvidenceCards(base));
+  const mutations = [
+    (value) => { value.v = 2; },
+    (value) => { value.anchors[0].card = 'c9'; },
+    (value) => { value.anchors.push({ ...value.anchors[0] }); },
+    (value) => { value.cards[0].items[0].id = 'R1'; },
+    (value) => { value.cards[0].items[0].title = '<b>\u0000</b>'; },
+    (value) => { value.cards[0].items[0].status = 'deleted'; },
+    (value) => { value.cards[0].items[0].progress = 140; },
+    (value) => { value.cards[0].items[0].due = '2026-02-30'; },
+    (value) => { value.cards[0].total = 1; },
+    (value) => { value.cards[0].items[1] = value.cards[0].items[0]; },
+    (value) => { value.cards[0].kind = 'html'; },
+    (value) => { value.cards[0].generatedAt = 'dün'; },
+    (value) => { value.cards[0].items[0].assignees = ['a', 'b', 'c', 'd', 'e']; },
+    (value) => { value.cards[0].items[0].overdue = false; },
+    (value) => { value.anchors[0].strong = -1; },
+    (value) => { value.cards[0].items = Array.from({ length: 31 }, () => value.cards[0].items[0]); },
+    (value) => { value.cards[0].items[0].title = 'x'.repeat(161); }
+  ];
+  for (const [index, mutate] of mutations.entries()) {
+    const copy = JSON.parse(JSON.stringify(base));
+    mutate(copy);
+    assert.equal(normalizeEvidenceCards(copy), null, `bozulma ${index}`);
+  }
+  assert.equal(normalizeEvidenceCards(Object.assign(Object.create({ v: 1 }), base)), null, 'düz olmayan nesne');
+  assert.equal(normalizeEvidenceCards('{"v":1}'), null);
+});
+
+test('akış çözücüsü bozuk kart tanımlayıcısını atar, yanıtı korur', () => {
+  const conversation = { id: '6f1c2d3e-4a5b-4c6d-8e7f-001122334455', title: 'D', createdAt: GENERATED_AT, updatedAt: GENERATED_AT, messageCount: 2 };
+  const user = { id: '11111111-2222-4333-8444-555555555555', sequence: 1, role: 'user', content: 'Soru', turnId: '0a1b2c3d-4e5f-4a6b-9c7d-8e9fa0b1c2d3', replyToId: null, mode: 'standard', finishReason: null, createdAt: GENERATED_AT, length: 4 };
+  const answer = { id: '99999999-8888-4777-8666-555555555555', sequence: 2, role: 'assistant', turnId: null, replyToId: user.id, mode: 'standard', finishReason: 'stop', createdAt: 'x', length: 5, content: 'Metin', rotaData: true };
+  const wrongIds = [null, 1, ['c1'], { label: 'c1' }].flatMap((id) => {
+    const card = structuredClone(validDescriptor());
+    const task = structuredClone(validDescriptor());
+    card.cards[0].id = id;
+    task.cards[0].items[0].id = id;
+    return [[card, false], [task, false]];
+  });
+  for (const [cards, kept] of [[validDescriptor(), true], ...wrongIds, [{ v: 1, cards: [], anchors: [] }, false], [{ ...validDescriptor(), anchors: [{ strong: 0, text: '2', card: 'c5' }] }, false]]) {
+    const decoder = createAssistantStreamDecoder({ turnId: user.turnId });
+    const frames = `event: accepted\ndata: ${JSON.stringify({ v: 1, conversation, userMessage: user, mode: 'standard', replay: false, context: {} })}\n\n`
+      + `event: done\ndata: ${JSON.stringify({ conversation, assistantMessage: answer, replayed: false, evidenceCards: cards })}\n\n`;
+    const events = decoder.push(frames);
+    const done = events.find((event) => event.type === 'done');
+    assert.equal(done.data.assistantMessage.content, 'Metin');
+    assert.equal(Boolean(done.data.evidenceCards), kept);
+  }
+});
+
+/* ── Tarayıcıdaki geçici yaşam döngüsü ─────────────────────── */
+
+test('kayıtlı iletilerden kurulan turlar hiçbir zaman kart taşımaz', () => {
+  const turns = turnsFromMessages([
+    { id: 'u', sequence: 1, role: 'user', content: 'Soru', turnId: 't' },
+    { id: 'a', sequence: 2, role: 'assistant', content: 'Yanıt', replyToId: 'u', rotaData: true, evidence: [], evidenceCards: validDescriptor() }
+  ]);
+  assert.equal(turns[0].answer.evidenceCards, undefined);
+});
+
+test('kartlar yalnızca en yeni yanıtlarda ve süresi dolmadan tutulur', () => {
+  const now = Date.parse(GENERATED_AT);
+  const turn = (key, receivedAt) => ({ key, answer: { status: 'complete', content: 'x', evidenceCards: { value: {}, receivedAt } } });
+  const turns = Array.from({ length: 9 }, (_, index) => turn(`t${index}`, now - index * 1000));
+  turns.push(turn('expired', now - EVIDENCE_CARD_LIMITS.ttlMs - 1));
+  turns.push({ key: 'kartsız', answer: { status: 'complete', content: 'Kartsız' } });
+  turns.push({ key: 'bekleyen', answer: { status: 'waiting' } });
+  const pruned = pruneEvidenceCards(turns, now);
+  assert.equal(pruned.filter((item) => item.answer.evidenceCards).length, EVIDENCE_CARD_LIMITS.maxLiveAnswers - 2);
+  assert.equal(pruned.at(-3).answer.evidenceCards, undefined, 'süresi dolan kart silinir');
+  assert.equal(pruned[0].answer.evidenceCards, undefined, 'en eski yanıtın kartı silinir');
+  assert.ok(pruned.at(-4).answer.evidenceCards, 'en yeni yanıtın kartı kalır');
+  assert.equal(evidenceCardsExpired(now, now + EVIDENCE_CARD_LIMITS.ttlMs), true);
+  assert.equal(evidenceCardsExpired(now, now + 1000), false);
+  assert.equal(evidenceCardsExpired(now + 3600000, now), true, 'gelecekten gelen zaman damgası geçersizdir');
+  assert.equal(evidenceCardsExpired(now, now - 30_000, 1000, 1000), true, 'duvar saati geri gitse de geçen süre kartı bitirir');
+});
+
+function fakeRuns() {
+  const turns = [];
+  return {
+    turns,
+    api: {
+      loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { available: true, reason: null, modes: [{ id: 'standard', label: 'Standart', available: true }],
+        limits: { maxMessageChars: 8000, maxConversationMessages: 100 } } }),
+      listAssistantConversationsRequest: async () => ({ ok: true, conversations: [], nextCursor: null }),
+      loadAssistantConversationRequest: async (id) => ({ ok: true, conversation: { id, title: 'Konuşma' }, messages: [] }),
+      deleteAssistantConversationRequest: async () => ({ ok: true, deleted: true }),
+      streamAssistantTurnRequest(input) {
+        return new Promise((resolve) => turns.push({ input, resolve, onEvent: (event) => input.onEvent(event) }));
+      }
+    }
+  };
+}
+
+test('denetleyici kartı yalnızca bu üretimin başarılı yanıtına ekler; oturum hatası bütün kartları siler', async () => {
+  const { api, turns } = fakeRuns();
+  let counter = 0;
+  const controller = createAssistantController({ api, createId: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`, reconciliationDelaysMs: [], schedule: () => () => {} });
+  await controller.activate();
+  const conversation = { id: '6f1c2d3e-4a5b-4c6d-8e7f-001122334455', title: 'D', messageCount: 2 };
+  controller.send('Soru');
+  const [run] = turns;
+  run.onEvent({ type: 'accepted', data: { conversation, userMessage: { id: 'u1', content: 'Soru', turnId: run.input.turnId }, context: {}, rotaData: true } });
+  run.resolve({ ok: true, done: { conversation, evidenceCards: validDescriptor(), assistantMessage: { id: 'a1', content: 'Toplam **2** görev var.', rotaData: true, evidence: [] } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const answer = controller.getState().active.turns[0].answer;
+  assert.ok(answer.evidenceCards?.value?.cards?.length, 'canlı yanıt kart taşır');
+  assert.ok(Number.isFinite(answer.evidenceCards.receivedAt));
+  // Rota verisi olmayan (genel) yanıt kart taşımaz.
+  controller.send('İkinci');
+  const second = turns[1];
+  second.onEvent({ type: 'accepted', data: { conversation, userMessage: { id: 'u2', content: 'İkinci', turnId: second.input.turnId }, context: {} } });
+  second.resolve({ ok: true, done: { conversation, evidenceCards: validDescriptor(), assistantMessage: { id: 'a2', content: 'Genel', rotaData: false } } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(controller.getState().active.turns[1].answer.evidenceCards, undefined);
+  // Gözlenen oturum hatası: panel hatası kurulur ve kartlar hemen silinir.
+  controller.send('Üçüncü');
+  const third = turns[2];
+  third.resolve({ ok: false, code: 'UNAUTHORIZED', phase: 'request' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(controller.getState().status, 'error');
+  assert.equal(controller.getState().active.turns.some((turn) => turn.answer?.evidenceCards), false);
+  controller.dispose();
+});
+
+/* ── Çizimle aynı sıra ─────────────────────────────────────── */
+
+test('çizim bağlı kalın düğümü tetikleyiciye sarar; metni uyuşmayan bağ olağan kalın metin kalır', () => {
+  const text = '**Not:** Toplam **2** görev var ve **Görev 1** öne çıkıyor.';
+  const descriptor = validDescriptor();
+  const [block] = parseAssistantMarkdown(text, { rotaData: true });
+  const bindingsFor = (anchors) => ({ anchors: new Map(anchors.map((anchor) => [anchor.strong, anchor])), cards: new Map(descriptor.cards.map((card) => [card.id, card])),
+    receivedAt: Date.now(), counter: { next: 0 } });
+  const element = renderBlock(block, 'b0', new Set(), bindingsFor([{ strong: 1, text: '2', card: 'c1' }]));
+  const reference = findElement(element, (node) => node.type === EvidenceReference);
+  assert.ok(reference, 'bağlı düğüm tetikleyiciye sarılmalı');
+  assert.equal(reference.props.text, '2');
+  assert.equal(findElement(reference.props.children, (node) => node.type === 'strong') !== null, true, 'metin kalın kalır');
+  // Sıra doğru ama metin farklı (ör. kaymış bağ): sarılmaz.
+  const mismatched = renderBlock(block, 'b0', new Set(), bindingsFor([{ strong: 2, text: '2', card: 'c1' }]));
+  assert.equal(findElement(mismatched, (node) => node.type === EvidenceReference), null);
+  // Kart yoksa çizim eskisiyle aynıdır.
+  assert.equal(findElement(renderBlock(block, 'b0', new Set()), (node) => node.type === EvidenceReference), null);
+});
+
+/* ── Kök neden regresyon testleri (R1–R5) ──────────────────── */
+
+test('bütçe kırpmasıyla düşen kartın kanıt kimliği bağımlılıklardan çıkarılır, kalan kartlarınki korunur', () => {
+  const longTitle = 'Ü'.repeat(150);
+  const bindings = [
+    { type: 'tasks', evidenceId: 'R1', count: 30, title: 'Birinci kart', tone: 'overdue' },
+    { type: 'task', evidenceId: 'R1', taskId: taskId(1) },
+    { type: 'tasks', evidenceId: 'R2', count: 30, title: 'İkinci kart', tone: 'neutral' },
+    { type: 'tasks', evidenceId: 'R3', count: 30, title: 'Üçüncü kart', tone: 'neutral' },
+    { type: 'tasks', evidenceId: 'R4', count: 30, title: 'Dördüncü kart', tone: 'neutral' },
+    { type: 'tasks', evidenceId: 'R5', count: 30, title: 'Beşinci kart', tone: 'neutral' }
+  ];
+  const text = bindings.map((_, index) => `**${bindingMark(index + 1)}30**`).join(' ');
+  const rowsFor = (offset) => Array.from({ length: 30 }, (_, row) => taskRow(offset + row + 1, { title: longTitle }));
+  const entries = ['R1', 'R2', 'R3', 'R4', 'R5'].map((id, index) => entry(id, rowsFor(index * 100)));
+  const summaries = entries.map((item) => summary(item.id));
+  const { text: clean, evidenceBindings } = bound(text, bindings);
+  const built = buildEvidenceCards({ evidenceBindings, finalText: clean, entries, summaries, citedIds: entries.map((item) => item.id) });
+  assert.ok(built, 'bütçeye sığan kartlar kalmalı');
+  assert.ok(built.descriptor.cards.length < 5, 'sondaki kartlar bütçe nedeniyle düşmeli');
+  assert.equal(built.evidenceIds.includes('R1'), true, 'kalan kartların ortak kanıtı korunmalı');
+  assert.equal(built.evidenceIds.includes('R5'), false, 'düşen kartın kanıtı bağımlılıkta kalmamalı');
+  assert.equal(new Set(built.evidenceIds).size, built.evidenceIds.length, 'ortak kanıt kimliği tekilleştirilmeli');
+  // Düşen kartın kanıtı (R5) teslimde yoksa bile kalan kartlar yetki denetiminden geçer; kalan kartın kanıtı (R1) kalkarsa reddedilir.
+  const deliveredWithoutDropped = new Set(built.evidenceIds);
+  assert.equal(built.evidenceIds.every((id) => deliveredWithoutDropped.has(id)), true);
+  deliveredWithoutDropped.delete('R1');
+  assert.equal(built.evidenceIds.every((id) => deliveredWithoutDropped.has(id)), false);
+});
+
+test('markedDetail uyuşmazlığında hayalet bağ ayrılmaz ve sonraki geçerli bağlar doğru anahtar alır', () => {
+  const mkGroup = (evidenceId, count) => ({
+    tool: 'rota_task_search',
+    evidenceId,
+    envelope: [{ field: 'totalCount', value: count, semantic: { complete: true, filters: { assignee: 'me', deadline: 'overdue' } } }],
+    main: { entries: [] },
+    collections: new Map()
+  });
+  const badGroup = mkGroup('R1', 3);
+  const goodGroup = mkGroup('R2', 5);
+  const badLead = taskCountLead(badGroup, 'tr');
+  const goodLead = taskCountLead(goodGroup, 'tr');
+  // İlk ayrıntının önceden çizilmiş metni `detailText(detail, lead)` çıktısından bilerek farklı tutulur (uyuşmazlık simülasyonu).
+  const goodText = renderGroupDetails(goodGroup, { locale: 'tr', empty: [], layout: 'list', lead: goodLead, criteriaStated: false });
+  const details = new Map([
+    ['D1', { id: 'D1', evidenceId: 'R1', part: 0, text: 'Farklı ayrıntı metni.', source: { group: badGroup, lead: badLead, empty: [], layout: 'list', criteriaStated: false } }],
+    ['D2', { id: 'D2', evidenceId: 'R2', part: 0, text: goodText, source: { group: goodGroup, lead: goodLead, empty: [], layout: 'list', criteriaStated: false } }]
+  ]);
+  const composition = { render: { locale: 'tr', propositions: new Map(), details, tables: new Map(), charts: new Map(), titles: new Map() } };
+  const validated = { blocks: [{ type: 'details', source: 'D1' }, { type: 'details', source: 'D2' }] };
+  const plain = renderComposition(composition, validated);
+  const marked = renderComposition(composition, validated, { bind: true });
+  assert.equal(stripBindingMarks(marked.text), plain.text, 'işaretsiz metin bayt bayt aynı kalmalı');
+  assert.equal(marked.bindings.length, 1, 'reddedilen ayrıntı bağ ayırmamalı');
+  assert.equal(marked.bindings[0].evidenceId, 'R2');
+  const resolved = resolveBindingAnchors(marked.text, strongTexts);
+  assert.equal(resolved.rejected, null);
+  assert.deepEqual(resolved.anchors.map((anchor) => [anchor.key, anchor.text]), [[1, '5']]);
+});
+
+test('fluentParagraph uyuşmaz önermede bağ ayırmaz ve 16 bağ sınırında geçerli bağları korur', () => {
+  const mkProp = (evidenceId, count) => {
+    const group = { tool: 'rota_task_search', evidenceId, envelope: [] };
+    const fact = { field: 'totalCount', value: count, semantic: { complete: true, filters: { deadline: 'overdue', assignee: 'me' } } };
+    return countProposition(group, fact, 'tr', null);
+  };
+  const valid = mkProp('R2', 4);
+  const mismatched = { ...mkProp('R1', 9), markdown: 'Uyuşmayan sabit önerme metni.' };
+  // 16 geçerli önermeden önce 3 uyuşmaz önerme: hiçbiri bağ bütçesi tüketmemeli.
+  const entries = [
+    { proposition: mismatched },
+    { proposition: mismatched },
+    { proposition: mismatched },
+    ...Array.from({ length: EVIDENCE_CARD_LIMITS.maxAnchors }, (_, index) => ({ proposition: mkProp(`R${index + 10}`, 4) }))
+  ];
+  const bindings = [];
+  const mark = (spec) => {
+    const value = bindingMark(bindings.length + 1);
+    if (value) bindings.push(spec);
+    return value;
+  };
+  const plain = fluentParagraph(entries, 'tr');
+  const marked = fluentParagraph(entries, 'tr', null, null, mark);
+  assert.equal(stripBindingMarks(marked), plain, 'varsayılan çizim değişmemeli');
+  assert.equal(bindings.length, EVIDENCE_CARD_LIMITS.maxAnchors, 'reddedilen önermeler bağ bütçesini tüketmemeli');
+  assert.equal(bindings[0].evidenceId, 'R10');
+  assert.equal(bindings.at(-1).evidenceId, `R${EVIDENCE_CARD_LIMITS.maxAnchors + 9}`);
+  const resolved = resolveBindingAnchors(marked, strongTexts);
+  assert.equal(resolved.rejected, null);
+  assert.equal(resolved.anchors.length, EVIDENCE_CARD_LIMITS.maxAnchors);
+  assert.equal(resolved.anchors[0].key, 1);
+  assert.equal(resolved.anchors.at(-1).key, EVIDENCE_CARD_LIMITS.maxAnchors);
+  // Tekil geçerli önerme de korunur.
+  const singleBindings = [];
+  const singleText = fluentParagraph([{ proposition: mismatched }, { proposition: valid }], 'tr', null, null, (spec) => bindingMark(singleBindings.push(spec)));
+  assert.equal(singleBindings.length, 1);
+  assert.equal(singleBindings[0].evidenceId, 'R2');
+  assert.equal(stripBindingMarks(singleText), fluentParagraph([{ proposition: mismatched }, { proposition: valid }], 'tr'));
+});
+
+test('farklı okumalardan gelen çelişkili sorumluluk durumu kart izdüşümünü kapalı reddeder', () => {
+  // İlk okuma sorumlusuz, ikinci okuma görünür sorumlu: çelişkili kart reddedilir.
+  assert.equal(single(1, [taskRow(1, { assignment: 'unassigned', assignees: [{ name: 'Ayşe Demir', sicil: 10 }] })]), null);
+  // İlk okuma sorumlusuz, ikinci okuma gizli sorumlu: çelişkili kart reddedilir.
+  assert.equal(single(1, [taskRow(1, { assignment: 'unassigned', assignees: [{ name: 'Gizli', identityHidden: true }] })]), null);
+  // İlk okuma görünür atanmış, ikinci okuma boş sorumlu listesi: çelişkili kart reddedilir.
+  assert.equal(single(1, [taskRow(1, { assignment: 'visible', assignees: [] })]), null);
+  // İlk okuma çözülemeyen atama, ikinci okuma dizinde çözülen görünür sorumlu: çelişkili kart reddedilir.
+  const unresolvedRow = taskRow(1, { assignment: 'unresolved', assignees: [{ name: 'Ayşe Demir', sicil: 10 }] });
+  assert.equal(single(1, [unresolvedRow], {
+    entries: [{ ...entry('R1', [unresolvedRow]), cardAssignments: new Map([[unresolvedRow.taskId, { unresolved: [], visibleCount: 1 }]]) }]
+  }), null);
+  // İlk okuma gizli atama, ikinci okuma görünür sorumlu: çelişkili kart reddedilir.
+  assert.equal(single(1, [taskRow(1, { assignment: 'undisclosed', assignees: [{ name: 'Ayşe Demir', sicil: 10 }] })]), null);
+  // Alan doğrulaması da sorumlusuz satırda sorumlu adını reddeder.
+  const badDescriptor = structuredClone(validDescriptor());
+  badDescriptor.cards[0].items[0].assignment = 'unassigned';
+  badDescriptor.cards[0].items[0].assignees = ['Ayşe Demir'];
+  assert.equal(normalizeEvidenceCards(badDescriptor), null);
+  // Tutarlı sorumlusuz, görünür ve gizli atamalar korunur.
+  assert.ok(single(1, [taskRow(1, { assignment: 'unassigned', assignees: [] })]));
+  assert.ok(single(1, [taskRow(1, { assignment: 'visible', assignees: [{ name: 'Ayşe Demir', sicil: 10 }] })]));
+  assert.ok(single(1, [taskRow(1, { assignment: 'undisclosed', assignees: [{ name: 'Gizli', identityHidden: true }] })]));
+});
+
+test('denetleyici süresi dolan kanıt yükünü yeni tur olmadan bellekten siler ve zamanlayıcıları temizler', async (t) => {
+  const start = Date.parse(GENERATED_AT);
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
+  const { api, turns } = fakeRuns();
+  let counter = 0;
+  let scheduledCount = 0;
+  let cancelledCount = 0;
+  let monotonicOffset = 0;
+  let lastScheduled;
+  const controller = createAssistantController({
+    api,
+    createId: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`,
+    reconciliationDelaysMs: [],
+    monotonicNow: () => Date.now() + monotonicOffset,
+    schedule: (callback, delayMs) => {
+      scheduledCount += 1;
+      lastScheduled = { callback, delayMs };
+      const timer = setTimeout(callback, delayMs);
+      return () => {
+        cancelledCount += 1;
+        clearTimeout(timer);
+      };
+    }
+  });
+  t.after(() => controller.dispose());
+  await controller.activate();
+  const conversation = { id: '6f1c2d3e-4a5b-4c6d-8e7f-001122334455', title: 'Süre', messageCount: 2 };
+
+  const completeTurn = async (index, content) => {
+    controller.send(`Soru ${index}`);
+    const run = turns.at(-1);
+    run.onEvent({ type: 'accepted', data: { conversation: { ...conversation, messageCount: index * 2 }, userMessage: { id: `u${index}`, content: `Soru ${index}`, turnId: run.input.turnId }, context: {}, rotaData: true } });
+    run.resolve({ ok: true, done: { conversation: { ...conversation, messageCount: index * 2 }, evidenceCards: validDescriptor(), assistantMessage: { id: `a${index}`, content, rotaData: true, evidence: [] } } });
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  // Tur 1 (T=0) ve Tur 2 (T=+5 dk): iki farklı süre sonu.
+  await completeTurn(1, 'İlk yanıt **2** görev.');
+  t.mock.timers.tick(5 * 60 * 1000);
+  await completeTurn(2, 'İkinci yanıt **2** görev.');
+  assert.ok(controller.getState().active.turns[0].answer.evidenceCards);
+  assert.ok(controller.getState().active.turns[1].answer.evidenceCards);
+
+  // Panel yeniden açılması (activate) süreyi uzatmaz.
+  await controller.activate();
+  t.mock.timers.tick(10 * 60 * 1000);
+  assert.equal(controller.getState().active.turns[0].answer.evidenceCards, undefined, 'ilk turun kartı 15. dakikada bellekten silinmeli');
+  assert.equal(controller.getState().active.turns[0].answer.content, 'İlk yanıt **2** görev.', 'yanıt metni korunmalı');
+  assert.ok(controller.getState().active.turns[1].answer.evidenceCards, 'ikinci turun kartı henüz süresi dolmadığı için kalmalı');
+
+  // 5 dakika daha geçince ikinci turun kartı da bellekten silinir.
+  t.mock.timers.tick(5 * 60 * 1000);
+  assert.equal(controller.getState().active.turns[1].answer.evidenceCards, undefined, 'ikinci turun kartı 20. dakikada bellekten silinmeli');
+  assert.equal(controller.getState().active.turns[1].answer.content, 'İkinci yanıt **2** görev.');
+
+  // Konuşma değişimi ve dispose bekleyen zamanlayıcıyı iptal eder.
+  await completeTurn(3, 'Üçüncü yanıt **2** görev.');
+  const beforeSwitch = cancelledCount;
+  controller.newConversation();
+  assert.ok(cancelledCount > beforeSwitch, 'konuşma değişiminde süre sonu zamanlayıcısı iptal edilmeli');
+
+  // Uyuyan sekme simülasyonu: zamanlayıcı ateşlemeden duvar saati ileri giderse activate() süresi dolanı temizler.
+  await completeTurn(4, 'Dördüncü yanıt **2** görev.');
+  t.mock.timers.setTime(Date.now() + EVIDENCE_CARD_LIMITS.ttlMs + 1000);
+  await controller.activate();
+  assert.equal(controller.getState().active.turns[0].answer.evidenceCards, undefined, 'uykudan dönüşte activate() süresi dolan kartı temizlemeli');
+  assert.ok(scheduledCount >= 3);
+
+  const beforeDispose = cancelledCount;
+  await completeTurn(5, 'Beşinci yanıt **2** görev.');
+  t.mock.timers.setTime(Date.now() - 30_000);
+  assert.equal(lastScheduled.delayMs, EVIDENCE_CARD_LIMITS.ttlMs);
+  monotonicOffset = EVIDENCE_CARD_LIMITS.ttlMs + 30_000;
+  lastScheduled.callback();
+  assert.equal(controller.getState().active.turns.at(-1).answer.evidenceCards, undefined,
+    'geriye alınan duvar saati temizleme zamanlayıcısını geciktirmez');
+
+  await completeTurn(6, 'Altıncı yanıt **2** görev.');
+  controller.dispose();
+  assert.ok(cancelledCount > beforeDispose, 'dispose() bekleyen zamanlayıcıyı iptal etmeli');
+});
+
+test('yük öneki dışındaki sorumlular kimlik açığa çıkarmadan doğru kapsamla gösterilir', () => {
+  const first = taskRow(1, { assignees: [{ name: 'Ayşe Demir', sicil: 11 }] });
+  const second = taskRow(2, { assignees: [] });
+  const rows = [first, second];
+  const source = { ...entry('R1', rows), cardAssignments: new Map([
+    [first.taskId, { unresolved: [], visibleCount: 1, hiddenCount: 2 }],
+    [second.taskId, { unresolved: [], visibleCount: 1, hiddenCount: 0 }]
+  ]) };
+  const [card] = single(2, rows, { entries: [source] }).descriptor.cards;
+  assert.equal(card.items[0].hiddenAssignees, 2);
+  assert.equal(card.items[1].assigneesClipped, true);
+  assert.equal(card.peopleClipped, true);
+  assert.deepEqual(card.people, [{ name: 'Ayşe Demir', tasks: 1 }]);
+  assert.doesNotMatch(JSON.stringify(card), /sicil|hiddenCount|visibleCount/i);
+});
+
+test('boş temizlenen dizin adı görünür ad sayılmaz ve dizin kaydı eksik gösterilir', () => {
+  const row = taskRow(1, { assignees: [{ name: ' \u0085\u202E\t ', sicil: 10 }] });
+  const source = { ...entry('R1', [row]), cardAssignments: new Map([[row.taskId, { unresolved: [0], visibleCount: 0, hiddenCount: 0, hasUnusableName: true }]]) };
+  const [card] = single(1, [row], { entries: [source] }).descriptor.cards;
+  assert.equal(cleanEvidenceCardText(row.assignees[0].name), null);
+  assert.equal(card.items[0].assignment, 'unresolved');
+  assert.equal(card.items[0].unresolvedAssignees, 1);
+  assert.equal(card.items[0].assigneesClipped, undefined);
+  assert.deepEqual(card.people, []);
+  source.cardAssignments.get(row.taskId).hasUnusableName = false;
+  assert.equal(single(1, [row], { entries: [source] }), null, 'okumalar arasında değişen gerçek dizin durumu kapalı reddedilir');
+});
+
+test('kart metni yön denetimlerini ve bozuk Unicode dizilerini reddeder, geçerli metni korur', () => {
+  const controls = [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
+    0x2066, 0x2067, 0x2068, 0x2069, 0x0085, 0x001e, 0x001f, 0xd800, 0xdc00];
+  for (const code of controls) {
+    const descriptor = structuredClone(validDescriptor());
+    descriptor.cards[0].items[0].title = `A${String.fromCharCode(code)}B`;
+    assert.equal(normalizeEvidenceCards(descriptor), null, code.toString(16));
+    assert.equal(cleanEvidenceCardText(descriptor.cards[0].items[0].title), 'A B');
+  }
+  const descriptor = structuredClone(validDescriptor());
+  descriptor.cards[0].items[0].title = 'İş akışı 🧪';
+  assert.equal(normalizeEvidenceCards(descriptor).cards[0].items[0].title, 'İş akışı 🧪');
+});

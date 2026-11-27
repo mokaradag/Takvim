@@ -293,7 +293,9 @@ export function assistantStreamResponse(turn, {
       finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
         conversation: result.conversation,
         assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true || result.contentAuthoritative === true }),
-        ...(result.reconciled ? { reconciled: true } : {}), replayed
+        ...(result.reconciled ? { reconciled: true } : {}), replayed,
+        // ICE: yeni üretilmiş yanıtın geçici kanıt kartları (kayıtlı ileti görünümünün parçası değildir; yeniden oynatma taşımaz).
+        ...(!replayed && !result.reconciled && result.evidenceCards ? { evidenceCards: result.evidenceCards } : {})
       });
       return result;
     } finally {
