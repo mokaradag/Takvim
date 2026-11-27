@@ -351,6 +351,7 @@ export function parseReportDraft(rawText, { plan, evidencePackage }) {
     }
     if (claim.sinif === 'desteksiz_maddi_iddia') warnings.push({ kod: 'yazar_desteksiz_iddia_beyan_etti', yol: warningPath });
     if (claim.sinif === 'nesnel_olgu' && kanitlar.length === 0) warnings.push({ kod: 'nesnel_iddia_kanitsiz', yol: warningPath });
+    if (claim.sinif === 'desteklenen_yorum' && kanitlar.length === 0) warnings.push({ kod: 'desteklenen_yorum_kanitsiz', yol: warningPath });
     return Object.freeze({
       bolum: claim.bolum,
       paragraf: claim.paragraf,

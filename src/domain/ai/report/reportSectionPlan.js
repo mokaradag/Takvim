@@ -42,7 +42,7 @@ const KNOWN_OPEN_TASK_STATUSES = Object.freeze(new Set(['baslamadi', 'devam_ediy
 export function isKnownOpenTaskStatus(value) {
   return typeof value === 'string' && KNOWN_OPEN_TASK_STATUSES.has(value);
 }
-const HIGH_PRIORITIES = new Set(['critical', 'high', 'kritik', 'yuksek']);
+const HIGH_PRIORITIES = new Set(['critical', 'high', 'kritik', 'yuksek', 'yüksek']);
 /** 4I-A `isDueWithin(..., 7)` ile aynı kapsayıcı 7 takvim günü penceresi (`bugün .. bugün + 6`). */
 const DUE_SOON_WINDOW_DAYS = 7;
 const MAX_SECTION_EVIDENCE = 60;
@@ -280,7 +280,7 @@ function classifyEvidence(pkg) {
       if (item.olcu === 'yaklasan_7_gun') groups.yaklasanOlcu.push(item.id);
     }
     if (item.tur !== 'gorev') continue;
-    if (typeof item.gorev === 'string') tasksByRef.set(item.gorev, item);
+    if (typeof item.gorev === 'string' && !tasksByRef.has(item.gorev)) tasksByRef.set(item.gorev, item);
     // Dönem tamamlaması yalnızca üreticinin yetkili `donemde_tamamlandi` işaretinden okunur (yeniden açılan işler dâhil).
     if (item.donemde_tamamlandi === true) {
       groups.tamamlanan.push(item.id);
@@ -377,7 +377,8 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     });
   }
   const isPartialActivityItem = (item) => isPlainObject(item)
-    && (item.kayit_kapsami === 'partial' || (item.tur === 'olcu' && item.olcu === 'hareket' && item.tamlik === 'partial'));
+    && (item.tur === 'hareket' || (item.tur === 'olcu' && item.olcu === 'hareket'))
+    && (item.kayit_kapsami === 'partial' || (item.tur === 'olcu' && item.tamlik === 'partial'));
   const reportPeriodPartialActivityItems = pkg.kanitlar.filter((item) => isPartialActivityItem(item) && isReportPeriodItem(item, reportPeriod));
   const comparisonPartialActivityItems = pkg.kanitlar.filter((item) => isPartialActivityItem(item) && !isReportPeriodItem(item, reportPeriod));
   const partialActivity = tamlik.hareket === 'partial' || reportPeriodPartialActivityItems.length > 0;
@@ -441,11 +442,13 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     const nanos = parseIsoTimestampNanos(trimmed);
     return nanos !== null ? { kind: 'ns', value: nanos } : null;
   };
-  // Kronolojik öncelik yalnızca en az iki farklı zaman noktası VE tekil bir en güncel kayıt olduğunda verilir;
-  // en son zamanı paylaşan iki kayıt varsa tek kayıt esas alınamaz.
+  // Kronolojik öncelik yalnızca karşılaştırılan TÜM kayıtlarda geçerli zaman bulunup
+  // en az iki farklı zaman noktası VE tekil bir en güncel kayıt olduğunda verilir;
+  // tarihsiz kayıt varsa ya da en son zamanı paylaşan iki kayıt varsa tek kayıt esas alınamaz.
   const hasUniqueLatestTime = (rawList) => {
-    const parsed = rawList.map(parseConflictTime).filter(Boolean);
-    if (parsed.length < 2) return false;
+    if (!Array.isArray(rawList) || rawList.length < 2) return false;
+    const parsed = rawList.map(parseConflictTime);
+    if (parsed.some((entry) => entry === null)) return false;
     const kind = parsed[0].kind;
     if (parsed.some((entry) => entry.kind !== kind)) return false;
     const distinct = new Set(parsed.map((entry) => String(entry.value)));
@@ -487,11 +490,24 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   });
   if (validConflicts.length > MAX_INDIVIDUAL_CONFLICT_DISCLOSURES) {
     const remaining = validConflicts.slice(MAX_INDIVIDUAL_CONFLICT_DISCLOSURES);
-    const remainingRefs = [...new Set(remaining.flatMap((c) => c.kanitlar))].slice(0, MAX_SECTION_EVIDENCE);
-    out.push({
-      kimlik: 'celiski_diger', bolum: 'faaliyetler', kanitlar: remainingRefs,
-      yonerge: `Pakette ayrıca ${remaining.length} çelişki kaydı daha var (toplam ${validConflicts.length}); kayıt zamanı belirliyse zaman sırasıyla, değilse sıra uydurmadan ve taraf seçmeden işle.`
-    });
+    const remainingOrdered = remaining.filter(hasOrderableConflictTime);
+    const remainingNeutral = remaining.filter((c) => !hasOrderableConflictTime(c));
+    if (remainingOrdered.length > 0) {
+      const orderedRefs = [...new Set(remainingOrdered.flatMap((c) => c.kanitlar))].slice(0, MAX_SECTION_EVIDENCE);
+      out.push({
+        kimlik: 'celiski_diger', bolum: 'faaliyetler', kanitlar: orderedRefs,
+        yonerge: `Pakette ayrıca kesin zaman sırası belirli ${remainingOrdered.length} çelişki kaydı daha var (toplam ${validConflicts.length}); bunları zaman sırasıyla ve taraf seçmeden işle.`
+      });
+    }
+    if (remainingNeutral.length > 0) {
+      const neutralRefs = [...new Set(remainingNeutral.flatMap((c) => c.kanitlar))].slice(0, MAX_SECTION_EVIDENCE);
+      out.push({
+        kimlik: remainingOrdered.length > 0 ? 'celiski_diger_zamansiz' : 'celiski_diger',
+        bolum: 'faaliyetler',
+        kanitlar: neutralRefs,
+        yonerge: `Pakette ayrıca kesin zaman sırası bulunmayan ${remainingNeutral.length} çelişki kaydı daha var (toplam ${validConflicts.length}); zaman sırası uydurmadan karşıt bildirimleri eşit mesafeyle ve taraf seçmeden aktar.`
+      });
+    }
   }
   const comparisonRequested = pkg.istek.karsilastirma && pkg.istek.karsilastirma !== 'yok';
   if (comparisonRequested && !derived('karsilastirma').length) {

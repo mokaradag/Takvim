@@ -207,6 +207,24 @@ export function verifyWriterPackageSet(set, fixture) {
     if (!contract.ok) {
       problems.push(`kanit_zarfi_gecersiz:${entry.senaryo}`);
     }
+    if (!Array.isArray(entry.zorunlu_olgular)) {
+      problems.push(`zorunlu_olgular_gecersiz:${entry.senaryo}`);
+    } else {
+      for (const fact of entry.zorunlu_olgular) {
+        const validGroups = Boolean(
+          fact && typeof fact === 'object' && !Array.isArray(fact)
+          && typeof fact.id === 'string' && fact.id.trim().length > 0
+          && Array.isArray(fact.anahtarlar)
+          && fact.anahtarlar.every((group) => Array.isArray(group) && group.length > 0
+            && group.every((kw) => typeof kw === 'string' && kw.trim().length > 0))
+        );
+        if (!validGroups) problems.push(`zorunlu_olgu_gecersiz:${entry.senaryo}`);
+      }
+    }
+    if (!Array.isArray(entry.yetkisiz_varliklar)
+      || entry.yetkisiz_varliklar.some((name) => typeof name !== 'string' || !name.trim())) {
+      problems.push(`yetkisiz_varliklar_gecersiz:${entry.senaryo}`);
+    }
     for (const name of properNamesIn(entry.paket)) {
       if (!isRecognizedSyntheticName(name)) problems.push(`sentetik_olmayan_ad:${entry.senaryo}`);
     }
@@ -300,8 +318,11 @@ function parseTurkishNumberPhrase(tokens) {
   return total + current;
 }
 
-/** Ondalık kesir kısmında baştaki "sıfır" sözcüklerini korur ("sıfır beş" → "05"). */
+/** Ondalık kesir kısmında tek tek okunan rakamları ("iki beş" → "25") ve baştaki "sıfır" sözcüklerini ("sıfır beş" → "05") korur. */
 function parseTurkishDecimalFraction(tokens) {
+  if (tokens.length > 1 && tokens.every((t) => Object.hasOwn(TURKISH_UNITS, t))) {
+    return tokens.map((t) => String(TURKISH_UNITS[t])).join('');
+  }
   let leadingZeros = 0;
   while (leadingZeros < tokens.length && tokens[leadingZeros] === 'sifir') {
     leadingZeros += 1;
@@ -335,9 +356,10 @@ export function normalizeProse(text) {
     const value = parseTurkishNumberPhrase(tokens);
     return value === null ? match : String(value);
   });
-  // 3. Kalan tek başına "bir": ay adından önce takvim günüdür ("bir Kasım" → "1 kasim"), "yüzde bir" açık niceliktir ("yüzde 1").
+  // 3. Kalan tek başına "bir": ay adından önce takvim günüdür ("bir Kasım" → "1 kasim"), "yüzde bir" ve "eksi bir" açık niceliktir.
   out = out.replace(BIR_BEFORE_MONTH_PATTERN, '1');
   out = out.replace(/(?<=[\s(])yüzde\s+bir(?=[\s.,;:)'])/gu, 'yüzde 1');
+  out = out.replace(/(?<=[\s(])eksi\s+bir(?=[\s.,;:)'])/gu, '-1');
   // 4. Yazıyla belirtilen negatif işaret ("eksi 100", "yüzde eksi 100", "eksi 3,5") rakama bitişik işarete çevrilir.
   out = out.replace(/(?<=[\s(])eksi\s+(?=\d)/gu, '-');
   return out;
@@ -467,9 +489,9 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null, maskHor
     maskYearIfAllowed(/(?<!\d)((?:19|20)\d{2})(?:\s+yil[a-zçğıöşü]*|'?(?:da|de|ta|te|nin|nun|nün|in|un|ün))(?![\p{L}\d])/gu, 1);
   }
   if (maskHorizonSeven) {
-    // 7 günlük yaklaşan termin penceresi yalnızca zaman ifadesinde ("7 gün", "7 günlük", "7 takvim günü") istisnadır;
-    // "7 görev tamamlandı" gibi nicelik kullanımları normal sayı taramasına girer.
-    const horizonRegex = /(?<![\p{L}\d])7\s+(?:takvim\s+)?gün(?:lük|de|e|ü|ün|lük|ler|leri|lerde|içinde)?(?![\p{L}\d])/gu;
+    // 7 günlük yaklaşan termin penceresi yalnızca bağımsız zaman ifadesinde ("7 gün", "7 günlük", "7 takvim günü") istisnadır;
+    // "1,7 gün" gibi ondalık nicelikler ve "7 görev tamamlandı" normal sayı taramasına girer.
+    const horizonRegex = /(?<![\p{L}\d,.\-−])7\s+(?:takvim\s+)?gün(?:lük|de|e|ü|ün|ler|leri|lerde|içinde)?(?![\p{L}\d])/gu;
     const current = working.join('');
     for (const m of current.matchAll(horizonRegex)) {
       maskRange(working, m.index, m.index + m[0].length);
@@ -479,8 +501,8 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null, maskHor
   const numToken = '(?:\\d{1,3}(?:\\.\\d{3})+(?:,\\d+)?|\\d+(?:[.,]\\d+)?)';
   // Türkçe sayı çekim ekleri ("yüzde 60ı", "60'ı", "10'da") tanınır; kimlik/birim ekleri ("60km", "E60") eşleşmez.
   const trNumSuffix = "(?:'?(?:[aeiioöuü]|[dt][ae]n?|[ny][aeiiuü]))?";
-  // Tarih dışı sayı aralığı ("3-4 görev", "2–5 iş"): her iki uç ayrı ayrı taranır.
-  const rangeRegex = new RegExp(`(?<![\\p{L}\\d])(${numToken})\\s*[–-]\\s*(${numToken})${trNumSuffix}(?![\\p{L}\\d])`, 'gu');
+  // Tarih dışı sayı aralığı ("3-4 görev", "yüzde -50–25"): her iki uç kendi işaretiyle ayrı ayrı taranır.
+  const rangeRegex = new RegExp(`(?<![\\p{L}\\d])([-−]?${numToken})\\s*[–-]\\s*([-−]?${numToken})${trNumSuffix}(?![\\p{L}\\d])`, 'gu');
   const afterYear = working.join('');
   for (const m of afterYear.matchAll(rangeRegex)) {
     const a = parseTurkishNumber(m[1]);
@@ -498,15 +520,15 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null, maskHor
   return [...new Set(numbers)];
 }
 
-/** Paketteki bütün geçerli tarih değerleri (kanıt alanları, dönem sınırları, İstanbul gününe çevrilmiş veri anı, notlar). */
+/** Paketteki bütün geçerli tarih değerleri (kanıt alanları, dönem sınırları, İstanbul gününe çevrilmiş veri anı/termin, notlar). */
 export function packageDates(pkg) {
   const days = new Set();
   const rootSnapshotDay = snapshotBusinessDay(pkg?.veri_ani);
   const defaultYear = Number(String(rootSnapshotDay ?? pkg?.veri_ani ?? '2026').slice(0, 4)) || 2026;
   const visit = (value, key = '') => {
     if (typeof value === 'string') {
-      // `veri_ani` alanı yazar bölüm planıyla tutarlı olarak İstanbul takvim gününe çevrilir.
-      if (key === 'veri_ani') {
+      // `veri_ani` ve zaman damgalı `hedef_bitis` alanları yazar bölüm planıyla tutarlı olarak İstanbul takvim gününe çevrilir.
+      if (key === 'veri_ani' || key === 'hedef_bitis') {
         const istanbulDay = snapshotBusinessDay(value);
         if (istanbulDay) {
           days.add(istanbulDay);

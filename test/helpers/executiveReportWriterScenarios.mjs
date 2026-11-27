@@ -337,7 +337,7 @@ export const WRITER_SCENARIOS = Object.freeze([
     ],
     zorunlu: [
       { id: 'Z1', olgu: 'Dönemde 18 görev tamamlandı.', anahtarlar: [['18']] },
-      { id: 'Z2', olgu: 'Veri anında 52 açık ve 7 geciken görev var.', anahtarlar: [['52'], ['7 geciken', '7 görev', 'yedi geciken', '7 açık görev', 'geciken 7']] },
+      { id: 'Z2', olgu: 'Veri anında 52 açık ve 7 geciken görev var.', anahtarlar: [['52'], ['7 geciken', '7 gecikmiş', 'geciken 7', 'gecikmiş 7', '7 görev gecik', '7 iş gecik', 'geciken görev sayısı 7', "7'si gecik", '7 si gecik']] },
       { id: 'Z3', olgu: 'Ufuk projesindeki müşteri veri aktarımı hedef tarihini aştı; kaynak sistem erişimi bekleniyor.', anahtarlar: [['müşteri veri aktarım'], ['erişim']] }
     ]
   },
@@ -516,7 +516,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Kuzey', t: 'Proje planı yeniden takvimlemesi', s: 'in-progress', pr: 'high', tf: '2026-10-30', as: ['Ece Tunalı'] },
       { p: 'Doruk', t: 'Doğrulama laboratuvarı kurulumu', s: 'in-progress', pr: 'high', tf: '2026-11-20', as: ['Deniz Akalın'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Yetkili direktörlük kapsamında iki görev tamamlandı; proje planı yeniden takvimlemesi hedefini aştı.', anahtarlar: [['yeniden takvim'], ['kümesi', 'kararlılık']] }],
+    zorunlu: [{ id: 'Z1', olgu: 'Yetkili direktörlük kapsamında iki görev tamamlandı; proje planı yeniden takvimlemesi hedefini aştı.', anahtarlar: [['yeniden takvim'], ['kümesi', 'kararlılık', '2 görev tamamlan', '2 iş tamamlan', '2 tamamlanan', 'tamamlanan 2']] }],
     yetkisiz: ['Doğrulama ve Kalite Müdürlüğü', 'Doğrulama laboratuvarı']
   },
   {
@@ -829,7 +829,18 @@ function attachSupplementary(pkg, spec) {
  * 48 senaryonun dondurulmuş kanıt paketi kümesini üretir (belirlenimci). Temsili vakalar fikstürden sarılır;
  * S09 4I-A kıyas tohumundan, diğerleri senaryo evrenlerinden 4I-A kurucusuyla kurulur.
  */
-export async function buildWriterPackageSet() {
+let writerPackageBuildQueue = Promise.resolve();
+
+/**
+ * 48 sentetik kıyas paketini süreç-geneli test yığını çakışmayacak biçimde sırayla üretir.
+ */
+export function buildWriterPackageSet() {
+  const run = writerPackageBuildQueue.then(() => buildWriterPackageSetImpl());
+  writerPackageBuildQueue = run.catch(() => {});
+  return run;
+}
+
+async function buildWriterPackageSetImpl() {
   const { registerServerOnlyShim } = await import('./serverOnlyShim.mjs');
   registerServerOnlyShim();
   const { createActualStack } = await import('./actualStack.mjs');

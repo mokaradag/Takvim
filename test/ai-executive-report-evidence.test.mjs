@@ -5024,3 +5024,46 @@ test('SQL ve sentetik ikiz eşliği: aynı satırdan yeniden açılma/AuditId, s
     assert.equal(roster.members.some((m) => m.sicil === U.CAN), true);
   });
 });
+
+test('proje etiket ayrıştırması: kanonik eşdeğer NFC ve NFD proje adları çakışmasız ayrıştırılır', async () => {
+  const baseSeed = executiveReportBenchmarkSeed();
+  const nfcProjectId = '11111111-1111-4111-8111-111111111201';
+  const nfdProjectId = '11111111-1111-4111-8111-111111111202';
+  await withReportStack({
+    projects: [
+      ...baseSeed.projects,
+      { ProjectId: nfcProjectId, SourceType: 'MANUAL', ProjectCode: '', ProjectName: 'Café', LeadSicil: U.YONETICI, IsActive: 1 },
+      { ProjectId: nfdProjectId, SourceType: 'MANUAL', ProjectCode: '', ProjectName: 'Cafe\u0301', LeadSicil: U.YONETICI, IsActive: 1 }
+    ],
+    tasks: [
+      ...baseSeed.tasks,
+      {
+        TaskId: '22222222-2222-4222-8222-222222221201', ProjectId: nfcProjectId, Title: 'NFC proje görevi',
+        Status: 'done', Priority: 'normal', ActualFinish: '2026-11-05',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: '2026-11-05T10:00:00.000Z'
+      },
+      {
+        TaskId: '22222222-2222-4222-8222-222222221202', ProjectId: nfdProjectId, Title: 'NFD proje görevi',
+        Status: 'done', Priority: 'normal', ActualFinish: '2026-11-05',
+        CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: '2026-11-05T10:00:00.000Z'
+      }
+    ]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik',
+        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'projeler', kimlikler: [nfcProjectId, nfdProjectId] },
+        notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW,
+      today: REPORT_BENCH_TODAY
+    });
+    const labels = evidencePackage.kanitlar
+      .filter((item) => item.tur === 'gorev')
+      .map((item) => item.proje)
+      .sort();
+    assert.deepEqual(labels, ['Café #1', 'Café #2']);
+  });
+});
+

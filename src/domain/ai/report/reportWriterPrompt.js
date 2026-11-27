@@ -217,8 +217,8 @@ function projectTaskRef(value, refs, omittedRefs) {
  * sunucuya ait yürütme alanları çıkarılır. Olgu değerleri, metinler ve köken alanları değişmez.
  */
 const DAY_MS = 86400000;
-/** Kesit sonrası değişmiş görevlerde anlık durum/termin/bitiş/kilometre taşı iddiasına yol açabilecek alanlar. */
-const POST_CUTOFF_OMITTED_TASK_KEYS = new Set(['durum', 'hedef_bitis', 'oncelik', 'gerceklesen_bitis', 'kilometre_tasi']);
+/** Kesit sonrası değişmiş görevlerde anlık durum/termin/bitiş/kilometre taşı ve canlı proje iddiasına yol açabilecek alanlar. */
+const POST_CUTOFF_OMITTED_TASK_KEYS = new Set(['durum', 'hedef_bitis', 'oncelik', 'gerceklesen_bitis', 'kilometre_tasi', 'proje', 'proje_kodu']);
 
 /** İki geçerli ISO gün arasındaki takvim günü farkı (sunucu aritmetiği). */
 function calendarDaysBetween(fromDay, toDay) {
@@ -233,9 +233,17 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
   const out = {};
   const postCutoffTask = item.tur === 'gorev' && item.kesit_sonrasi_degisti === true;
   for (const [key, value] of Object.entries(item)) {
-    // Hesaplanan gecikme alanı, çıkışa özgü `gorev_kaniti` ve eski iç proje kimliği ham girdiden kopyalanmaz.
-    if (key === 'veri_anina_gore_gecikme_takvim_gunu' || key === 'proje_kimligi' || key === 'gorev_kaniti') continue;
-    // Kesit sonrası değişen görevlerin güncel durum/termin/öncelik/bitiş/kilometre taşı alanları kesit anı iddiasına dönüşmemesi için çıkarılır.
+    // Hesaplanan sunucu alanları (`veri_anina_gore_gecikme_takvim_gunu`, `hedef_bitis_gunu`, `kapsam_grubu`),
+    // çıkışa özgü `gorev_kaniti` ve eski iç proje kimliği ham girdiden kopyalanmaz.
+    if (
+      key === 'veri_anina_gore_gecikme_takvim_gunu'
+      || key === 'hedef_bitis_gunu'
+      || key === 'kapsam_grubu'
+      || key === 'proje_kimligi'
+      || key === 'gorev_kaniti'
+    ) continue;
+    // Kesit sonrası değişen görevlerin güncel durum/termin/öncelik/bitiş/kilometre taşı ve canlı proje alanları
+    // kesit anı iddiasına dönüşmemesi için çıkarılır (denetim destekli `tamamlandigi_proje` korunur).
     if (postCutoffTask && POST_CUTOFF_OMITTED_TASK_KEYS.has(key)) continue;
     if (key === 'gorev') {
       if (item.tur === 'gorev') continue;
@@ -249,8 +257,12 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
     }
   }
   // Aritmetik sunucunundur: yalnızca bilinen açık, kesit tutarlı ve geçerli hedef tarihi veri anından önce kalmış
-  // görevin gecikmesi takvim günüyle verilir; bilinmeyen durum (`null`) ve geçersiz tarihler gecikme üretmez.
+  // görevin gecikmesi takvim günüyle verilir; zaman damgalı terminlerde gecikme hesabında kullanılan İstanbul takvim
+  // günü `hedef_bitis_gunu` alanında açıkça sunulur (salt gün biçimindeki terminler değişmez).
   const target = parseStrictEvidenceDay(item.hedef_bitis);
+  if (item.tur === 'gorev' && !postCutoffTask && target && typeof item.hedef_bitis === 'string' && !isIsoDay(item.hedef_bitis)) {
+    out.hedef_bitis_gunu = target;
+  }
   if (item.tur === 'gorev' && isKnownOpenTaskStatus(item.durum) && !postCutoffTask && target && snapshotDay && target < snapshotDay) {
     const days = calendarDaysBetween(target, snapshotDay);
     if (Number.isSafeInteger(days) && days > 0) out.veri_anina_gore_gecikme_takvim_gunu = days;
@@ -264,6 +276,7 @@ function projectConflict(conflict, refs, omittedRefs) {
   for (const [key, value] of Object.entries(conflict)) {
     if (key === 'gorev_kaniti') continue;
     if (key === 'gorev') out.gorev_kaniti = projectTaskRef(value, refs, omittedRefs);
+    else if (key === 'kanitlar' && Array.isArray(value)) out.kanitlar = [...new Set(value)];
     else out[key] = value;
   }
   return out;
@@ -453,6 +466,32 @@ export function buildReportEvidenceMessages(evidencePackage, { maxBytes = REPORT
     }
     const { kapsam: _omitted, ...rest } = item;
     return { ...rest, kapsam_grubu: groupId };
+  }).flatMap((item) => {
+    // Uzun belge parçaları (ör. çok baytlı UTF-8 metin) 32 KiB ileti sınırını aşarsa
+    // aynı kanıt kimliği ve köken alanları korunarak bayt sınırlı parçalara bölünür; kısa belgeler tek parça kalır.
+    if (!isPlainObject(item) || item.tur !== 'belge' || typeof item.metin !== 'string' || !item.metin.length) return [item];
+    if (size({ kanitlar: [item] }) + widestPreamble + 1 <= maxBytes) return [item];
+    const partLimit = Math.min(budget, maxBytes - widestPreamble - 1);
+    const probe = (text) => size({ kanitlar: [{ ...item, metin: text, metin_parcasi: 999, metin_toplam_parca: 999 }] });
+    if (probe('') >= partLimit) return [item];
+    const parts = [];
+    let currentText = '';
+    for (const ch of item.metin) {
+      const next = currentText + ch;
+      if (currentText.length > 0 && probe(next) > partLimit) {
+        parts.push(currentText);
+        currentText = ch;
+      } else {
+        currentText = next;
+      }
+    }
+    if (currentText.length > 0) parts.push(currentText);
+    return parts.map((metin, index) => ({
+      ...item,
+      metin,
+      metin_parcasi: index + 1,
+      metin_toplam_parca: parts.length
+    }));
   });
 
   const appendRecord = (bucketKey, item) => {

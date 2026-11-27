@@ -4193,10 +4193,14 @@
       ],
       [
        "7 geciken",
-       "7 görev",
-       "yedi geciken",
-       "7 açık görev",
-       "geciken 7"
+       "7 gecikmiş",
+       "geciken 7",
+       "gecikmiş 7",
+       "7 görev gecik",
+       "7 iş gecik",
+       "geciken görev sayısı 7",
+       "7'si gecik",
+       "7 si gecik"
       ]
      ]
     },
@@ -10085,7 +10089,11 @@
       ],
       [
        "kümesi",
-       "kararlılık"
+       "kararlılık",
+       "2 görev tamamlan",
+       "2 iş tamamlan",
+       "2 tamamlanan",
+       "tamamlanan 2"
       ]
      ]
     }
@@ -16599,5 +16607,5 @@
    "paket_ozeti_sha256": "375c58baaa09ce012735ad396821985204e29464847d2526f520b054c9a1bbe5"
   }
  ],
- "ozet_sha256": "7b5ddb0bf9e436d156e7736750643ebedc3983a0219dc52cbe0bfe5c1890d1dd"
+ "ozet_sha256": "9955c8553b707fdd2c734f88afb7154d7bb1eb6e2f10ccd920d23efb18cbf2ff"
 }

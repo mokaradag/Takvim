@@ -128,10 +128,13 @@ function buildModelSafeProjectLabels(projectIds, projects) {
   const groups = new Map();
   for (const id of uniqueIds) {
     const project = projects.get(id);
-    // Boşluktan oluşan kod proje adını gölgelememelidir; ikisi de yoksa ham UUID yerine paket-yerel opak etiket kullanılır.
-    const normalizedCode = clampModelSafeLabel(project?.code, REPORT_REQUEST_LIMITS.maxIdentifierLength);
-    const normalizedName = clampModelSafeLabel(project?.name, REPORT_REQUEST_LIMITS.maxIdentifierLength);
-    const base = normalizedCode || normalizedName || 'PRJ-ADSIZ';
+    // Boşluktan oluşan kod proje adını gölgelememelidir; kanonik eşdeğer Unicode yazımlar (NFC/NFD)
+    // gruplama ve çakışma denetiminden önce NFC biçimine indirgenir, UTF-16 sınırları korunur.
+    const rawCode = typeof project?.code === 'string' ? project.code.normalize('NFC') : project?.code;
+    const rawName = typeof project?.name === 'string' ? project.name.normalize('NFC') : project?.name;
+    const normalizedCode = clampModelSafeLabel(rawCode, REPORT_REQUEST_LIMITS.maxIdentifierLength);
+    const normalizedName = clampModelSafeLabel(rawName, REPORT_REQUEST_LIMITS.maxIdentifierLength);
+    const base = sliceWithinUtf16Limit((normalizedCode || normalizedName || 'PRJ-ADSIZ').normalize('NFC'), REPORT_REQUEST_LIMITS.maxIdentifierLength) || 'PRJ-ADSIZ';
     rawById.set(id, base);
     const key = base.toLocaleLowerCase('tr-TR');
     if (!groups.has(key)) groups.set(key, []);
@@ -157,7 +160,7 @@ function buildModelSafeProjectLabels(projectIds, projects) {
         const suffix = ` #${seq++}`;
         const maxBase = Math.max(1, REPORT_REQUEST_LIMITS.maxIdentifierLength - suffix.length);
         const prefix = sliceWithinUtf16Limit(base, maxBase) || 'PRJ-ADSIZ';
-        candidate = `${prefix}${suffix}`;
+        candidate = `${prefix}${suffix}`.normalize('NFC');
       } while (usedKeys.has(candidate.toLocaleLowerCase('tr-TR')));
       usedKeys.add(candidate.toLocaleLowerCase('tr-TR'));
       labels.set(id, candidate);

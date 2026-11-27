@@ -66,12 +66,12 @@
   "taslak_ozeti": "40ec3724176cc10f28ddcafd5066ed96fd194571844013b2360efbe3f4b414ac"
  },
  "S07": {
-  "dogru": 23,
-  "yanlis": 0,
+  "dogru": 22,
+  "yanlis": 1,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null,
+  "not": "Kuzey montaj kalemleri için bir bölümde 4 Kasım 2026, başka bölümde yedi işin tamamı için 5 Kasım 2026 bitiş tarihi verilmesi çelişkili tarih atfı olarak 1 yanlış iddia sayıldı.",
   "taslak_ozeti": "3f4d12e33f4d1e4a07e8eeab4ac711ccef1a515275ba3d11cbafb76cf2effd31"
  },
  "S09": {
@@ -201,12 +201,12 @@
   "taslak_ozeti": "c203dc3f45ddb1071afe87efa445a898caba1155892494aea1fae72b7c108703"
  },
  "S22": {
-  "dogru": 9,
-  "yanlis": 0,
+  "dogru": 8,
+  "yanlis": 1,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Not kayıt saati (15.00) yazılmış: biçim kuralı ihlali, olgu hatası değil.",
+  "not": "Dönem hareketlerinin her iki projeyi birlikte kapsadığı ifadesi Kuzey projesinde hareket olmaması ve etkilenen iki görevin de Ufuk'ta yer almasıyla çeliştiği için 1 yanlış iddia sayıldı. Not kayıt saati (15.00) yazılmış: biçim kuralı ihlali, olgu hatası değil.",
   "taslak_ozeti": "32c2126391cc4a79c7b3eba6f83701a520e3ad06a643aac9c612ce287382ac72"
  },
  "S23": {

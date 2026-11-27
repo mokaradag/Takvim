@@ -175,6 +175,14 @@ function parseStrictNumberOption(raw, flagName) {
   return Number(raw);
 }
 
+/** Örnekleme ayarlarının canlı koşu sınırlarında olduğunu doğrular (`temperature: 0` geçerli, `topP: 0` geçersiz). */
+function isValidSamplingConfig(sampling) {
+  if (!sampling || typeof sampling !== 'object') return false;
+  const { temperature, topP } = sampling;
+  return typeof temperature === 'number' && Number.isFinite(temperature) && temperature >= 0 && temperature <= 2
+    && typeof topP === 'number' && Number.isFinite(topP) && topP > 0 && topP <= 1;
+}
+
 export function parseSamplingOptions(options) {
   const temperature = options.sicaklik !== undefined ? parseStrictNumberOption(options.sicaklik, '--sicaklik') : DEFAULT_ONPREM_SAMPLING.temperature;
   const topP = options['top-p'] !== undefined ? parseStrictNumberOption(options['top-p'], '--top-p') : DEFAULT_ONPREM_SAMPLING.topP;
@@ -551,10 +559,23 @@ export function selectHomogeneousRun(records, { runId = null } = {}) {
     istek_suresi_ms: r?.istek_suresi_ms ?? null
   });
   const baselineSig = signature(first);
+  const observedEfforts = new Set();
   for (const record of filtered) {
+    if (typeof record?.kosu !== 'string' || !record.kosu.trim()) {
+      throw new Error('Koşu kaydında geçersiz koşu kimliği bulundu.');
+    }
     if (signature(record) !== baselineSig) {
       throw new Error('Karışık koşu kaydı algılandı (farklı koşu, model, taşıyıcı, yapılandırma, düşünme kipi ya da eşzamanlılık); tek koşu seçilmeden özetlenemez.');
     }
+    if (record?.efor !== undefined && record?.efor !== null) {
+      if (typeof record.efor !== 'string' || !record.efor.trim()) {
+        throw new Error('Koşu kaydında geçersiz vekil efor değeri bulundu.');
+      }
+      observedEfforts.add(record.efor.trim());
+    }
+  }
+  if (observedEfforts.size > 1) {
+    throw new Error('Karışık koşu kaydı algılandı (farklı gözlemlenen vekil eforu); tek koşu seçilmeden özetlenemez.');
   }
   const byScenario = new Map();
   for (const record of filtered) {
@@ -586,6 +607,25 @@ function inputMessageDigestsMatch(digestsA, digestsB) {
   return true;
 }
 
+/** Senaryo bazlı çıktı bütçelerinin her iki koşuda da pozitif sonlu sayı olduğunu ve birebir eşleştiğini doğrular. */
+function outputBudgetsMatch(budgetsA, budgetsB) {
+  const isPositiveFinite = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  if (isPositiveFinite(budgetsA) && isPositiveFinite(budgetsB)) return budgetsA === budgetsB;
+  if (!budgetsA || typeof budgetsA !== 'object' || Array.isArray(budgetsA)) return false;
+  if (!budgetsB || typeof budgetsB !== 'object' || Array.isArray(budgetsB)) return false;
+  const keysA = Object.keys(budgetsA).sort();
+  const keysB = Object.keys(budgetsB).sort();
+  if (keysA.length === 0 || keysA.length !== keysB.length) return false;
+  for (let i = 0; i < keysA.length; i += 1) {
+    const key = keysA[i];
+    if (key !== keysB[i]) return false;
+    const valA = budgetsA[key];
+    const valB = budgetsB[key];
+    if (!isPositiveFinite(valA) || !isPositiveFinite(valB) || valA !== valB) return false;
+  }
+  return true;
+}
+
 /** İki ayrı aday koşusunun aynı girdi ve çalışma koşullarında karşılaştırılabilir olduğunu doğrular. */
 export function compareQualificationRuns(summaryA, summaryB) {
   const mismatches = [];
@@ -600,7 +640,9 @@ export function compareQualificationRuns(summaryA, summaryB) {
   if ((a.dusunme_kipi ?? null) !== (b.dusunme_kipi ?? null)) mismatches.push('dusunme_kipi');
   const obsA = a.gozlemlenen_vekil_dusunme ?? null;
   const obsB = b.gozlemlenen_vekil_dusunme ?? null;
-  if (obsA !== obsB || obsA === 'karisik' || obsB === 'karisik') mismatches.push('gozlemlenen_vekil_dusunme');
+  if (obsA !== obsB || obsA === 'karisik' || obsB === 'karisik' || obsA === 'eksik' || obsB === 'eksik') {
+    mismatches.push('gozlemlenen_vekil_dusunme');
+  }
   if ((a.nicemleme ?? null) !== (b.nicemleme ?? null)) mismatches.push('nicemleme');
   if ((a.istek_suresi_ms ?? null) !== (b.istek_suresi_ms ?? null)) mismatches.push('istek_suresi_ms');
   if (!inputMessageDigestsMatch(a.girdi_iletileri_ozetleri, b.girdi_iletileri_ozetleri)) {
@@ -608,7 +650,7 @@ export function compareQualificationRuns(summaryA, summaryB) {
   }
   const budgetsA = a.etkin_cikti_sinirlari ?? a.etkin_cikti_siniri ?? null;
   const budgetsB = b.etkin_cikti_sinirlari ?? b.etkin_cikti_siniri ?? null;
-  if (bench.canonicalJson(budgetsA) !== bench.canonicalJson(budgetsB)) {
+  if (!outputBudgetsMatch(budgetsA, budgetsB)) {
     mismatches.push('etkin_cikti_siniri');
   }
   return { karsilastirilabilir: mismatches.length === 0, uyusmazliklar: mismatches };
@@ -672,7 +714,15 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
     const row = scenario ? rowByScenario.get(scenario) : null;
     if (!row) throw new Error(`Editoryal değerlendirmede koşuya eşleşmeyen taslak anahtarı: ${key}`);
     const expectedDigest = draftDigest(row);
-    const boundDigest = declaredDigests?.[key] ?? codeToDigest.get(key) ?? null;
+    const keyDigest = isBlindCode ? (codeToDigest.get(key) ?? null) : null;
+    const declaredDigest = declaredDigests && Object.hasOwn(declaredDigests, key) ? declaredDigests[key] : null;
+    if (isBlindCode && keyDigest && keyDigest !== expectedDigest) {
+      throw new Error(`Kör puanlama anahtarındaki taslak özeti değerlendirilen taslakla eşleşmiyor (${key} → ${scenario}).`);
+    }
+    if (isBlindCode && keyDigest && declaredDigest && declaredDigest !== keyDigest) {
+      throw new Error(`Editoryal dosyadaki taslak özeti koordinatör anahtarıyla çelişiyor (${key} → ${scenario}).`);
+    }
+    const boundDigest = keyDigest ?? declaredDigest ?? null;
     if (!boundDigest || boundDigest !== expectedDigest) {
       throw new Error(`Editoryal puan taslak özetiyle eşleşmiyor (${key} → ${scenario}); başka aday/taslak puanı uygulanamaz.`);
     }
@@ -805,8 +855,9 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
   const genelOrtalama = applicableCriterionMeans.length
     ? applicableCriterionMeans.reduce((a, b) => a + b, 0) / applicableCriterionMeans.length
     : null;
-  const mechanical = scoredEntries.filter(([, s]) => s.mekanik === true).map(([id]) => id);
-  const mechanicalRate = scoredEntries.length ? mechanical.length / scoredEntries.length : null;
+  const resolvedMechanicalEntries = scoredEntries.filter(([, s]) => typeof s.mekanik === 'boolean');
+  const mechanical = resolvedMechanicalEntries.filter(([, s]) => s.mekanik === true).map(([id]) => id);
+  const mechanicalRate = resolvedMechanicalEntries.length ? mechanical.length / resolvedMechanicalEntries.length : null;
   const fullCoverage = scoredEntries.length === validRows.length && incompleteRatings === 0 && unresolvedDisagreements.length === 0;
   // B kapısı ancak koordinatör kör anahtarı üzerinden bağlanan puanlarla ve güncel kanıt eşleşmesiyle geçilebilir.
   const assessmentComplete = isMultiHuman && distinctHumanRaters && allKeysBlindBound && allDigestsMatched && fullCoverage && validRows.length === packageByScenario.size;
@@ -840,6 +891,7 @@ function aggregateEditorial(editorial, validRows, { blindKey = null, packageBySc
     genel_ortalama: genelOrtalama,
     olcut_ortalamalari: averages,
     mekanik: mechanical,
+    mekanik_degerlendirilen: resolvedMechanicalEntries.length,
     mekanik_orani: mechanicalRate,
     cozulmemis_uyusmazliklar: unresolvedDisagreements
   };
@@ -870,8 +922,10 @@ export function isValidStoredDraftShape(draft) {
 /** Kaydedilmiş `gecerli` satırın model kimliğinin beklenen modelle birebir doğrulandığını denetler. */
 function hasVerifiedStoredModelIdentity(record) {
   const expected = expectedModelOf(record);
+  const raw = record?.model?.bildirilen;
+  const rawValid = Array.isArray(raw) ? raw.length === 1 && raw[0] === expected : raw === expected;
   const reported = reportedModelsOf(record);
-  return Boolean(expected && record?.model?.dogrulandi === true && reported.length === 1 && reported[0] === expected);
+  return Boolean(expected && record?.model?.dogrulandi === true && rawValid && reported.length === 1 && reported[0] === expected);
 }
 
 /** Koşu kaydından A/B/D özetini hesaplar; hakem ve editoryal dosyaları yalnızca koşu ve taslak özetiyle bağlıysa birleştirir. */
@@ -880,10 +934,9 @@ export function summarizeRun(records, {
   editorial = null,
   blindKey = null,
   runId = null,
-  allowHistoricalDigestMismatch = false,
-  allowMixedProxyThinking = false
+  allowHistoricalDigestMismatch = false
 } = {}) {
-  const selectedRows = selectHomogeneousRun(records, { runId, allowMixedProxyThinking });
+  const selectedRows = selectHomogeneousRun(records, { runId });
   const set = bench.loadWriterPackageSet();
   const fixture = bench.loadBenchmarkFixture();
   const packageByScenario = new Map(set.paketler.map((item) => [item.senaryo, item]));
@@ -1023,10 +1076,14 @@ export function summarizeRun(records, {
     const dateVerdictKnown = Boolean(judge && isNonNegInt(judge.uydurma_tarih));
     const datePending = offLedgerDates.length > 0 && !dateVerdictKnown ? offLedgerDates.length : 0;
     const numberPending = offLedgerNumbers.length > 0 && !hasValidCounts ? offLedgerNumbers.length : 0;
+    const chronologyDecisionKnown = Boolean(
+      judge && (typeof judge.kronoloji_incelendi === 'boolean' || isNonNegInt(judge.kronoloji_hatasi))
+    );
     // Eksik kronoloji taraması temiz (0) sayılmaz; yeni tarama yapılana kadar bekleyen kronoloji incelemesi olarak sayılır.
+    // Aday varsa yalnızca bağlı hakem dosyasında açık kronoloji kararı verildiğinde kapanır.
     const chronologyPending = !hasChronologyScan
       ? 1
-      : (chronologyCandidates.length > 0 && !hasValidCounts ? chronologyCandidates.length : 0);
+      : (chronologyCandidates.length > 0 && !chronologyDecisionKnown ? chronologyCandidates.length : 0);
     const inventedDateConfirmed = !hasDateScan
       ? null
       : (dateVerdictKnown ? judge.uydurma_tarih : (offLedgerDates.length === 0 ? 0 : null));
@@ -1113,20 +1170,22 @@ export function summarizeRun(records, {
   const reportedModels = [...new Set(rescored.flatMap(reportedModelsOf))];
   const inputDigests = Object.fromEntries(rescored.map((row) => [row.senaryo, row.girdi_iletileri_sha256 ?? null]));
   const outputBudgets = Object.fromEntries(rescored.map((row) => [row.senaryo, row.etkin_cikti_siniri ?? row.cikti_siniri ?? null]));
-  const observedProxyModes = first.tasiyici === 'vekil'
-    ? [...new Set(rescored.map((row) => row.dusunme).filter((v) => typeof v === 'string' && v.length > 0))]
-    : [];
-  const observedProxyThinking = observedProxyModes.length === 0
-    ? null
-    : (observedProxyModes.length === 1 ? observedProxyModes[0] : 'karisik');
+  let observedProxyThinking = null;
+  if (first.tasiyici === 'vekil') {
+    const missingObserved = rescored.filter((row) => typeof row.dusunme !== 'string' || !row.dusunme.trim()).length;
+    const observedProxyModes = [...new Set(rescored.map((row) => (typeof row.dusunme === 'string' ? row.dusunme.trim() : '')).filter(Boolean))];
+    if (observedProxyModes.length > 1) observedProxyThinking = 'karisik';
+    else if (missingObserved > 0) observedProxyThinking = 'eksik';
+    else if (observedProxyModes.length === 1) observedProxyThinking = observedProxyModes[0];
+  }
   const isOnPrem = first.tasiyici === 'kurum-ici';
-  const hasCompleteSampling = Boolean(
-    first.ornekleme && typeof first.ornekleme === 'object'
-    && Number.isFinite(first.ornekleme.temperature)
-    && Number.isFinite(first.ornekleme.topP)
-  );
+  const hasCompleteSampling = isValidSamplingConfig(first.ornekleme);
+  const supportedQuality = typeof first.kalite === 'string' && Object.hasOwn(WRITER_P95_CAP_SECONDS, first.kalite);
+  const hasDeploymentEnv = typeof first.dagitim_ortami === 'string' && first.dagitim_ortami.trim().length > 0;
   const missingOnPremSettings = isOnPrem
     ? [
+      ...(hasDeploymentEnv ? [] : ['dagitim_ortami']),
+      ...(supportedQuality ? [] : ['kalite']),
       ...(hasCompleteSampling ? [] : ['ornekleme']),
       ...(first.dusunme_kipi ? [] : ['dusunme_kipi']),
       ...(first.nicemleme ? [] : ['nicemleme'])
@@ -1135,9 +1194,9 @@ export function summarizeRun(records, {
   const exactRoster = rescored.length === set.paketler.length && set.paketler.every((entry) => rowByScenario.has(entry.senaryo));
   const completeRun = exactRoster && valid.length === set.paketler.length && parseFailures.length === 0 && infraFailures.length === 0;
   const standardP95 = bench.nearestRankP95(standard);
-  const p95CapSeconds = WRITER_P95_CAP_SECONDS[first.kalite] ?? WRITER_P95_CAP_SECONDS.otomatik;
-  // Eksik standart süre ölçümü varken eşik geçti bayrağı true olamaz.
-  const p95WithinCap = allStandardTimingsValid && standardP95 !== null && standardP95 <= p95CapSeconds;
+  const p95CapSeconds = supportedQuality ? WRITER_P95_CAP_SECONDS[first.kalite] : null;
+  // Eksik standart süre ölçümü veya desteklenmeyen kalite etiketi varken eşik geçti bayrağı true olamaz.
+  const p95WithinCap = supportedQuality && allStandardTimingsValid && standardP95 !== null && standardP95 <= p95CapSeconds;
   const latencyGateValid = isOnPrem && completeRun && missingOnPremSettings.length === 0 && allDigestsMatched && allStandardTimingsValid && p95WithinCap;
   const latencyGateStatus = !isOnPrem
     ? 'vekil_bilgi_amaci'
@@ -1162,10 +1221,10 @@ export function summarizeRun(records, {
   const pendingDateTotal = perReport.reduce((sum, row) => sum + row.bekleyen_tarih_adayi, 0);
   const pendingNumberTotal = perReport.reduce((sum, row) => sum + row.bekleyen_sayi_adayi, 0);
   const pendingChronologyTotal = perReport.reduce((sum, row) => sum + row.bekleyen_kronoloji_adayi, 0);
-  const confirmedDisclosures = perReport.every((row) => row.yetkisiz_aciklama !== null)
+  const confirmedDisclosures = perReport.length > 0 && perReport.every((row) => row.yetkisiz_aciklama !== null)
     ? perReport.reduce((sum, row) => sum + row.yetkisiz_aciklama, 0)
     : null;
-  const confirmedInvented = perReport.every((row) => row.uydurma_kimlik !== null)
+  const confirmedInvented = perReport.length > 0 && perReport.every((row) => row.uydurma_kimlik !== null)
     ? perReport.reduce((sum, row) => sum + row.uydurma_kimlik, 0)
     : null;
 
@@ -1255,7 +1314,7 @@ export function markdownSummary(summary, selectedRows, samples = []) {
     '',
     `Denenen ${summary.denenen} · geçerli ${summary.gecerli} · ayrıştırma hatası ${summary.ayristirma_hatasi.length} · altyapı/kimlik hatası ${summary.altyapi_hatasi.length}`,
     '',
-    `Yetkisiz açıklama: ${fmtMetric(summary.yetkisiz_aciklama_toplam)} (bekleyen aday: ${summary.bekleyen_yetkisiz_aciklama_incelemesi_toplam}) · uydurma kimlik/tarih: ${fmtMetric(summary.uydurma_kimlik_tarih_toplam)} (bekleyen tarih: ${summary.bekleyen_tarih_incelemesi_toplam}, bekleyen sayı: ${summary.bekleyen_sayi_incelemesi_toplam}) · zorunlu olgusu onaylı tam rapor: ${summary.zorunlu_tamlik_tam_rapor}/${summary.gecerli} (bekleyen: ${summary.zorunlu_tamlik_bekleyen_rapor})`,
+    `Yetkisiz açıklama: ${fmtMetric(summary.yetkisiz_aciklama_toplam)} (bekleyen aday: ${summary.bekleyen_yetkisiz_aciklama_incelemesi_toplam}) · uydurma kimlik/tarih: ${fmtMetric(summary.uydurma_kimlik_tarih_toplam)} (bekleyen tarih: ${summary.bekleyen_tarih_incelemesi_toplam}, bekleyen sayı: ${summary.bekleyen_sayi_incelemesi_toplam}, bekleyen kronoloji: ${summary.bekleyen_kronoloji_incelemesi_toplam}) · zorunlu olgusu onaylı tam rapor: ${summary.zorunlu_tamlik_tam_rapor}/${summary.gecerli} (bekleyen: ${summary.zorunlu_tamlik_bekleyen_rapor})`,
     '',
     `Rapor başı %95 nesnel doğruluk eşiği: başarısız ${failedAcc.length} (${failedAcc.length ? failedAcc.join(', ') : 'yok'}) · bekleyen ${pendingAcc.length} (${pendingAcc.length ? pendingAcc.join(', ') : 'yok'})`,
     '',
@@ -1267,8 +1326,9 @@ export function markdownSummary(summary, selectedRows, samples = []) {
   if (summary.editoryal) {
     const ed = summary.editoryal;
     const criteriaLine = EDITORIAL_CRITERIA.map((c) => `${c}=${fmtScore(ed.olcut_ortalamalari?.[c])}`).join(', ');
+    const mechDenom = Number.isSafeInteger(ed.mekanik_degerlendirilen) ? ed.mekanik_degerlendirilen : ed.rapor_sayisi;
     lines.push(
-      `Editoryal (B kapısı · ${ed.kapi_b_durumu}): genel ortalama ${fmtScore(ed.genel_ortalama)} · mekanik oran ${ed.mekanik_orani == null ? '-' : `${(ed.mekanik_orani * 100).toFixed(1)}%`} (${ed.mekanik.length}/${ed.rapor_sayisi}) · ölçütler: ${criteriaLine}`,
+      `Editoryal (B kapısı · ${ed.kapi_b_durumu}): genel ortalama ${fmtScore(ed.genel_ortalama)} · mekanik oran ${ed.mekanik_orani == null ? '-' : `${(ed.mekanik_orani * 100).toFixed(1)}%`} (${ed.mekanik.length}/${mechDenom}) · ölçütler: ${criteriaLine}`,
       ''
     );
   }
@@ -1302,8 +1362,7 @@ async function commandSummary(options) {
   const records = readJsonl(options.girdi);
   const allowHistoricalDigestMismatch = options['tarihsel-uyusmazlik-izni'] === 'evet';
   const selectedRows = selectHomogeneousRun(records, {
-    runId: options.kosu ?? null,
-    allowMixedProxyThinking: allowHistoricalDigestMismatch
+    runId: options.kosu ?? null
   });
   const adjudication = options.hakem ? JSON.parse(readFileSync(options.hakem, 'utf8')) : {};
   const editorial = options.editoryal ? JSON.parse(readFileSync(options.editoryal, 'utf8')) : null;
@@ -1313,8 +1372,7 @@ async function commandSummary(options) {
     editorial,
     blindKey,
     runId: options.kosu ?? null,
-    allowHistoricalDigestMismatch,
-    allowMixedProxyThinking: allowHistoricalDigestMismatch
+    allowHistoricalDigestMismatch
   });
   if (options.json) writeFileSync(options.json, `${JSON.stringify(summary, null, 1)}\n`);
   const samples = (options.ornekler || '').split(',').map((item) => item.trim()).filter(Boolean);
@@ -1350,10 +1408,9 @@ export function literalFence(text) {
 export function buildBlindScoringPacket(records, {
   runId = null,
   saltGenerator = () => randomBytes(16).toString('hex'),
-  allowHistoricalDigestMismatch = false,
-  allowMixedProxyThinking = false
+  allowHistoricalDigestMismatch = false
 } = {}) {
-  const selectedRows = selectHomogeneousRun(records, { runId, allowMixedProxyThinking });
+  const selectedRows = selectHomogeneousRun(records, { runId });
   const valid = selectedRows.filter((record) => record.durum === 'gecerli');
   if (!valid.length) throw new Error('Kör puanlama paketi için geçerli taslak bulunamadı.');
   const set = bench.loadWriterPackageSet();

@@ -49,7 +49,7 @@ test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
     if (isMeasurementData) {
       assert.doesNotMatch(source, /-p\s*8009\b/, relativePath);
       assert.doesNotMatch(source, /"port"\s*:\s*"?8009"?/, relativePath);
-      assert.doesNotMatch(source, /\bPORT\s*=\s*8009\b/, relativePath);
+      assert.doesNotMatch(source, /\bPORT\s*=\s*["']?8009["']?(?!\d)/, relativePath);
       assert.doesNotMatch(source, /https?:\/\/[^\s"'`]+:8009\b/i, relativePath);
       continue;
     }
@@ -66,7 +66,7 @@ test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
     }
     assert.doesNotMatch(source, /-p\s*8009\b/, relativePath);
     assert.doesNotMatch(source, /"port"\s*:\s*"?8009"?/, relativePath);
-    assert.doesNotMatch(source, /\bPORT\s*=\s*8009\b/, relativePath);
+    assert.doesNotMatch(source, /\bPORT\s*=\s*["']?8009["']?(?!\d)/, relativePath);
     assert.doesNotMatch(source, /https?:\/\/[^\s"'`]+:8009\b/i, relativePath);
   }
 });
@@ -180,11 +180,22 @@ test('depoda gerçek sicil, gerçek jeton veya gerçek kurumsal adres bulunmaz',
     if (!statSync(file).isFile()) continue;
     const source = readFileSync(file, 'utf8');
     const relative = path.relative(ROOT, file).split(path.sep).join('/');
-    // Yalnızca docs/kayitlar/ altındaki kayıt ve özet dosyalarındaki 64 haneli onaltılık SHA-256 özetleri gerçek sicil sayılmaz;
-    // boşlukla değiştirilerek komşu karakter birleşimi önlenir.
-    const scannable = relative.startsWith('docs/kayitlar/') && /\.(sha256|json|jsonl)$/i.test(relative)
-      ? source.replace(/[0-9a-f]{64}/gi, ' ')
-      : source;
+    // Yalnızca docs/kayitlar/ altındaki kayıt ve özet dosyalarındaki 64 haneli onaltılık SHA-256 özetleri ile
+    // kör puanlama başlık/çizelge alanlarındaki üretilen K-XXXXXX kodları gerçek sicil sayılmaz;
+    // belgenin geri kalanındaki olası gerçek siciller taranmaya devam eder.
+    let scannable = source;
+    if (relative.startsWith('docs/kayitlar/')) {
+      if (/\.(sha256|json|jsonl)$/i.test(relative)) {
+        scannable = scannable.replace(/[0-9a-f]{64}/gi, ' ');
+      }
+      if (/\.md$/i.test(relative)) {
+        scannable = scannable.replace(/^(#{1,6}\s+[^\n]*?)\bK-[0-9A-F]{6}\b/gmu, '$1K-KOD');
+      } else if (/\.csv$/i.test(relative)) {
+        scannable = scannable.replace(/^K-[0-9A-F]{6}(?=,)/gmu, 'K-KOD');
+      } else if (/\.json$/i.test(relative)) {
+        scannable = scannable.replace(/"K-[0-9A-F]{6}"/gu, '"K-KOD"');
+      }
+    }
     // Kaldırılan gerçek sicil değerleri geri gelmemelidir.
     for (const sicil of ['10276', '18068', '23977', '17205']) {
       assert.equal(scannable.includes(sicil), false, `${relative}: gerçek sicil değeri (${sicil}) bulunmamalıdır`);

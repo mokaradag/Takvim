@@ -18,7 +18,7 @@ import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
 registerServerOnlyShim();
 const { renderReportDraftText } = await import('../src/domain/ai/report/reportDraft.js');
 const { loadBenchmarkFixture } = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
-const { isValidStoredDraftShape, literalFence, selectHomogeneousRun } = await import('./report-writer-qualification.mjs');
+const { draftDigest, isValidStoredDraftShape, literalFence, selectHomogeneousRun } = await import('./report-writer-qualification.mjs');
 
 function canonicalPath(filePath) {
   const resolved = path.resolve(filePath);
@@ -93,6 +93,11 @@ if (options.senaryolar !== undefined) {
   }
 } else {
   wanted = [...records.keys()].sort();
+  const unknownRecorded = wanted.filter((id) => !scenarios.has(id));
+  if (unknownRecorded.length) {
+    process.stderr.write(`Koşu kaydında bilinmeyen senaryo: ${unknownRecorded.join(', ')}\n`);
+    process.exit(2);
+  }
 }
 
 const out = [
@@ -111,16 +116,26 @@ for (const id of wanted) {
     continue;
   }
   const model = Array.isArray(record.model?.bildirilen) ? record.model.bildirilen.join(', ') : record.model?.bildirilen ?? '-';
+  const durationLabel = typeof record.sure_ms === 'number' && Number.isFinite(record.sure_ms)
+    ? `${Math.round(record.sure_ms / 1000)} sn`
+    : 'ölçülmedi';
   out.push(`## ${id} — ${scenario.durum}`, '');
   out.push(`- Sınanan: ${scenario.sinanan}`);
   out.push(`- İstek: ${scenario.donem} · ${scenario.kapsam} · ayrıntı ${scenario.ayrinti} · odak ${scenario.odak} · notlar ${scenario.notlar} · karşılaştırma ${scenario.karsilastirma}`);
-  out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${record.durum} · süre ${Math.round((record.sure_ms || 0) / 1000)} sn${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
-  // Model düzyazısı HTML yorumu ya da Markdown sözdizimiyle gizlenmemesi için düz metin çitinde birebir sunulur.
+  out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${record.durum} · süre ${durationLabel}${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
+  // Model düzyazısı HTML yorumu ya da Markdown sözdizimiyle gizlenmemesi için düz metin çitinde birebir sunulur;
+  // kayıtlı taslak özeti uyuşmayan satırlar değiştirilmiş taslak olarak bildirilir, diğer geçerli satırlar etkilenmez.
   if (record.durum === 'gecerli') {
     if (!isValidStoredDraftShape(record.taslak)) {
       out.push('_Kayıtlı taslak yapısı bozuk; önizleme oluşturulamadı._', '');
+    } else if (typeof record.taslak_ozeti === 'string' && record.taslak_ozeti.length > 0) {
+      if (record.taslak_ozeti !== draftDigest(record)) {
+        out.push('_Kayıtlı taslak özeti uyuşmuyor; değiştirilmiş taslak önizlemede gösterilmedi._', '');
+      } else {
+        out.push(literalFence(renderReportDraftText(record.taslak)), '');
+      }
     } else {
-      out.push(literalFence(renderReportDraftText(record.taslak)), '');
+      out.push('_Uyarı: kayıtlı taslak özeti yok (doğrulanmamış tarihsel taslak)._', '', literalFence(renderReportDraftText(record.taslak)), '');
     }
   } else {
     out.push(`_Taslak üretilemedi: ${record.hata_kodu || record.durum}._`, '');
