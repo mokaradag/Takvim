@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Icons } from '../../../components/icons';
 import { Spinner } from '../../../components/Loader';
 import { useDataMode } from '../../../components/shell/DataModeContext.jsx';
@@ -277,14 +277,37 @@ export function RotaAssistantPanel({ assistant, onOpenSettings, openEvidenceTask
   const held = heldDrafts[draftKey] || null;
   const restoreFocusEnabledRef = useRef(true);
   useEffect(() => { if (open) restoreFocusEnabledRef.current = modal; }, [open, modal]);
+  const taskOpenRequest = useRef(null);
+  const [taskOpenFailed, setTaskOpenFailed] = useState(false);
+  useLayoutEffect(() => {
+    setTaskOpenFailed(false);
+    return () => { taskOpenRequest.current = null; };
+  }, [controller, open, actual, draftKey, state.view, state.status, state.active.loading]);
   const cardActions = useMemo(() => ({ openTask: openEvidenceTask ? async (taskId) => {
     const panel = panelRef.current;
-    const result = await openEvidenceTask(taskId);
-    // Görev seçildiyse kipli panel çekmeceye yer açar; Bilgin'in taslağı ve konuşması bellekte kalır.
-    if (result?.ok && panel && panelRef.current === panel && panel.getAttribute('aria-modal') === 'true') {
+    const request = {};
+    taskOpenRequest.current = request;
+    const isCurrent = () => {
+      const current = controller.getState();
+      return taskOpenRequest.current === request && panel && panelRef.current === panel && panel.isConnected
+        && current.status === 'ready' && current.view === 'chat' && !current.active.loading && !current.active.closed
+        && (current.active.viewKey || current.active.key) === draftKey;
+    };
+    setTaskOpenFailed(false);
+    let result;
+    try {
+      result = await openEvidenceTask(taskId, { isCurrent });
+    } catch {
+      if (isCurrent()) setTaskOpenFailed(true);
+      return;
+    }
+    if (!isCurrent()) return;
+    if (!result?.ok) setTaskOpenFailed(true);
+    else if (panel.getAttribute('aria-modal') === 'true') {
+      // Görev seçildiyse kipli panel çekmeceye yer açar; taslak ve konuşma bellekte kalır.
       close({ restoreFocus: false });
     }
-  } : null }), [openEvidenceTask, close]);
+  } : null }), [controller, draftKey, openEvidenceTask, close]);
   const focusTargetRef = useMemo(() => ({
     get current() {
       return inputRef.current && !inputRef.current.disabled ? inputRef.current : headingRef.current;
@@ -568,6 +591,10 @@ export function RotaAssistantPanel({ assistant, onOpenSettings, openEvidenceTask
       </header>
       <div className="rota-assistant-body">
         {(active.notice || capacityNotice) && <Notice notice={active.notice || capacityNotice} onAction={runAction} />}
+        {taskOpenFailed && (
+          <div role="alert"><Notice notice={{ tone: 'error', title: 'Görev açılamadı',
+            message: 'Görev bulunamadı veya görüntülenemiyor.' }} /></div>
+        )}
         {held && (
           <Notice notice={HELD_DRAFT_NOTICE} onAction={runAction}>
             <button

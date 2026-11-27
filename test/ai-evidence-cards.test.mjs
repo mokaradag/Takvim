@@ -14,7 +14,7 @@ import { findElement } from './helpers/clientComponentHarness.mjs';
 registerServerOnlyShim();
 
 const cardsDomain = await import('../src/domain/ai/evidenceCards.js');
-const { EVIDENCE_CARD_LIMITS, bindingMark, hasBindingMarks, normalizeEvidenceCards, resolveBindingAnchors, stripBindingMarks, evidenceCardsExpired } = cardsDomain;
+const { EVIDENCE_CARD_LIMITS, bindingMark, hasBindingMarks, normalizeEvidenceCards, resolveBindingAnchors, stripBindingMarks, cleanEvidenceCardText, evidenceCardsExpired } = cardsDomain;
 const { countProposition, fluentParagraph, tablePropositions, taskCountLead } = await import('../src/domain/ai/groundedPropositions.js');
 const { renderComposition } = await import('../src/domain/ai/groundedComposition.js');
 const { renderGroupDetails } = await import('../src/domain/ai/evidenceNarrative.js');
@@ -354,14 +354,17 @@ test('kartlar yalnızca en yeni yanıtlarda ve süresi dolmadan tutulur', () => 
   const turn = (key, receivedAt) => ({ key, answer: { status: 'complete', content: 'x', evidenceCards: { value: {}, receivedAt } } });
   const turns = Array.from({ length: 9 }, (_, index) => turn(`t${index}`, now - index * 1000));
   turns.push(turn('expired', now - EVIDENCE_CARD_LIMITS.ttlMs - 1));
+  turns.push({ key: 'kartsız', answer: { status: 'complete', content: 'Kartsız' } });
+  turns.push({ key: 'bekleyen', answer: { status: 'waiting' } });
   const pruned = pruneEvidenceCards(turns, now);
-  assert.equal(pruned.filter((item) => item.answer.evidenceCards).length, EVIDENCE_CARD_LIMITS.maxLiveAnswers);
-  assert.equal(pruned.at(-1).answer.evidenceCards, undefined, 'süresi dolan kart silinir');
+  assert.equal(pruned.filter((item) => item.answer.evidenceCards).length, EVIDENCE_CARD_LIMITS.maxLiveAnswers - 2);
+  assert.equal(pruned.at(-3).answer.evidenceCards, undefined, 'süresi dolan kart silinir');
   assert.equal(pruned[0].answer.evidenceCards, undefined, 'en eski yanıtın kartı silinir');
-  assert.ok(pruned.at(-2).answer.evidenceCards, 'en yeni yanıtın kartı kalır');
+  assert.ok(pruned.at(-4).answer.evidenceCards, 'en yeni yanıtın kartı kalır');
   assert.equal(evidenceCardsExpired(now, now + EVIDENCE_CARD_LIMITS.ttlMs), true);
   assert.equal(evidenceCardsExpired(now, now + 1000), false);
   assert.equal(evidenceCardsExpired(now + 3600000, now), true, 'gelecekten gelen zaman damgası geçersizdir');
+  assert.equal(evidenceCardsExpired(now, now - 30_000, 1000, 1000), true, 'duvar saati geri gitse de geçen süre kartı bitirir');
 });
 
 function fakeRuns() {
@@ -564,12 +567,16 @@ test('denetleyici süresi dolan kanıt yükünü yeni tur olmadan bellekten sile
   let counter = 0;
   let scheduledCount = 0;
   let cancelledCount = 0;
+  let monotonicOffset = 0;
+  let lastScheduled;
   const controller = createAssistantController({
     api,
     createId: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`,
     reconciliationDelaysMs: [],
+    monotonicNow: () => Date.now() + monotonicOffset,
     schedule: (callback, delayMs) => {
       scheduledCount += 1;
+      lastScheduled = { callback, delayMs };
       const timer = setTimeout(callback, delayMs);
       return () => {
         cancelledCount += 1;
@@ -624,6 +631,57 @@ test('denetleyici süresi dolan kanıt yükünü yeni tur olmadan bellekten sile
 
   const beforeDispose = cancelledCount;
   await completeTurn(5, 'Beşinci yanıt **2** görev.');
+  t.mock.timers.setTime(Date.now() - 30_000);
+  assert.equal(lastScheduled.delayMs, EVIDENCE_CARD_LIMITS.ttlMs);
+  monotonicOffset = EVIDENCE_CARD_LIMITS.ttlMs + 30_000;
+  lastScheduled.callback();
+  assert.equal(controller.getState().active.turns.at(-1).answer.evidenceCards, undefined,
+    'geriye alınan duvar saati temizleme zamanlayıcısını geciktirmez');
+
+  await completeTurn(6, 'Altıncı yanıt **2** görev.');
   controller.dispose();
   assert.ok(cancelledCount > beforeDispose, 'dispose() bekleyen zamanlayıcıyı iptal etmeli');
+});
+
+test('yük öneki dışındaki sorumlular kimlik açığa çıkarmadan doğru kapsamla gösterilir', () => {
+  const first = taskRow(1, { assignees: [{ name: 'Ayşe Demir', sicil: 11 }] });
+  const second = taskRow(2, { assignees: [] });
+  const rows = [first, second];
+  const source = { ...entry('R1', rows), cardAssignments: new Map([
+    [first.taskId, { unresolved: [], visibleCount: 1, hiddenCount: 2 }],
+    [second.taskId, { unresolved: [], visibleCount: 1, hiddenCount: 0 }]
+  ]) };
+  const [card] = single(2, rows, { entries: [source] }).descriptor.cards;
+  assert.equal(card.items[0].hiddenAssignees, 2);
+  assert.equal(card.items[1].assigneesClipped, true);
+  assert.equal(card.peopleClipped, true);
+  assert.deepEqual(card.people, [{ name: 'Ayşe Demir', tasks: 1 }]);
+  assert.doesNotMatch(JSON.stringify(card), /sicil|hiddenCount|visibleCount/i);
+});
+
+test('boş temizlenen dizin adı görünür ad sayılmaz ve dizin kaydı eksik gösterilir', () => {
+  const row = taskRow(1, { assignees: [{ name: ' \u0085\u202E\t ', sicil: 10 }] });
+  const source = { ...entry('R1', [row]), cardAssignments: new Map([[row.taskId, { unresolved: [0], visibleCount: 0, hiddenCount: 0, hasUnusableName: true }]]) };
+  const [card] = single(1, [row], { entries: [source] }).descriptor.cards;
+  assert.equal(cleanEvidenceCardText(row.assignees[0].name), null);
+  assert.equal(card.items[0].assignment, 'unresolved');
+  assert.equal(card.items[0].unresolvedAssignees, 1);
+  assert.equal(card.items[0].assigneesClipped, undefined);
+  assert.deepEqual(card.people, []);
+  source.cardAssignments.get(row.taskId).hasUnusableName = false;
+  assert.equal(single(1, [row], { entries: [source] }), null, 'okumalar arasında değişen gerçek dizin durumu kapalı reddedilir');
+});
+
+test('kart metni yön denetimlerini ve bozuk Unicode dizilerini reddeder, geçerli metni korur', () => {
+  const controls = [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
+    0x2066, 0x2067, 0x2068, 0x2069, 0x0085, 0x001e, 0x001f, 0xd800, 0xdc00];
+  for (const code of controls) {
+    const descriptor = structuredClone(validDescriptor());
+    descriptor.cards[0].items[0].title = `A${String.fromCharCode(code)}B`;
+    assert.equal(normalizeEvidenceCards(descriptor), null, code.toString(16));
+    assert.equal(cleanEvidenceCardText(descriptor.cards[0].items[0].title), 'A B');
+  }
+  const descriptor = structuredClone(validDescriptor());
+  descriptor.cards[0].items[0].title = 'İş akışı 🧪';
+  assert.equal(normalizeEvidenceCards(descriptor).cards[0].items[0].title, 'İş akışı 🧪');
 });

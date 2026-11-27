@@ -180,3 +180,18 @@ test('görev ve sorumlu okumaları arasında atama değişirse yanıt tamamlanı
   assert.equal(hasBindingMarks(done.assistantMessage.content), false);
   assert.equal(done.evidenceCards, undefined, 'çelişkili sorumluluk bilgisi karta taşınmamalı');
 });
+
+test('denetim karakterlerinden oluşan ad kartta görünür sayılmaz ve model kaydı genişlemez', async (t) => {
+  const seed = rotaToolSeed();
+  seed.people.find((person) => person.Sicil === AYSE).DisplayName = '\u200E\u202E';
+  const stack = stackFor(t, { seed });
+  stack.provider.enqueue(plan(), composer());
+  const done = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION }));
+  const collection = done.evidenceCards.cards.find((card) => card.kind === 'tasks');
+  const row = collection.items.find((item) => item.id === TASKS.OVERDUE);
+  assert.equal(row.assignment, 'unresolved');
+  assert.equal(row.unresolvedAssignees, 1);
+  assert.equal(row.assigneesClipped, undefined);
+  assert.deepEqual(row.assignees, []);
+  assert.doesNotMatch(JSON.stringify(stack.db.aiMessageEvidence), /cardAssignments|hiddenCount/);
+});

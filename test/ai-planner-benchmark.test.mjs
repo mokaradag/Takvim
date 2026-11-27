@@ -3241,3 +3241,21 @@ test('önbellek uygunluğu oluşturma toplamını durağan önek sanmaz; kısa t
   assert.equal(cacheReuseState([{ ...short, models: ['başka-model'], cacheEligibility: 'below_minimum' }], changed, now).eligibility, 'unverified');
   assert.equal(cacheReuseState([{ ...short, cacheEligibility: 'below_minimum' }, first], { ...changed, promptHash: first.promptHash }, now).error, 'PLANNER_CACHE_NOT_REUSED');
 });
+
+test('model bağdaştırıcısı: düşünme yalnız açık seçimle kabul edilir ve model kimliği korunur', async (t) => {
+  const { responseProblem } = await import('../scripts/planner-model-adapter.mjs');
+  const original = process.env.PLANNER_CLAUDE_THINKING;
+  t.after(() => {
+    if (original === undefined) delete process.env.PLANNER_CLAUDE_THINKING;
+    else process.env.PLANNER_CLAUDE_THINKING = original;
+  });
+  const model = 'sentetik-model';
+  delete process.env.PLANNER_CLAUDE_THINKING;
+  assert.equal(responseProblem({ models: [model], thinking: 'off' }, model), null);
+  assert.equal(responseProblem({ models: [model], thinking: 'on' }, model), 'PLANNER_THINKING_ON');
+  process.env.PLANNER_CLAUDE_THINKING = 'true';
+  assert.equal(responseProblem({ models: [model], thinking: 'on' }, model), 'PLANNER_THINKING_ON');
+  process.env.PLANNER_CLAUDE_THINKING = 'allow';
+  assert.equal(responseProblem({ models: [model], thinking: 'on' }, model), null);
+  assert.equal(responseProblem({ models: ['farklı-model'], thinking: 'off' }, model), 'PLANNER_MODEL_MISMATCH');
+});

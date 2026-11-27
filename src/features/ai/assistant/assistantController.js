@@ -127,36 +127,26 @@ function initialState() {
  * tutulur. Kartlar yalnızca bellekteki tur nesnesindedir; kayıtlı iletiden kurulan turlar (konuşma açma, uzlaştırma)
  * hiçbir zaman kart taşımaz.
  */
-export function pruneEvidenceCards(turns = [], now = Date.now()) {
-  let kept = 0;
-  let changed = false;
-  const next = [...turns].reverse().map((turn) => {
+export function pruneEvidenceCards(turns = [], now = Date.now(), elapsed = globalThis.performance.now()) {
+  let completed = 0;
+  let next = turns;
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (turn.answer?.status === 'complete') completed += 1;
     const cards = turn.answer?.evidenceCards;
-    if (!cards) return turn;
-    if (kept < EVIDENCE_CARD_LIMITS.maxLiveAnswers && !evidenceCardsExpired(cards.receivedAt, now)) {
-      kept += 1;
-      return turn;
-    }
-    changed = true;
+    if (!cards || (completed <= EVIDENCE_CARD_LIMITS.maxLiveAnswers
+      && !evidenceCardsExpired(cards.receivedAt, now, cards.expiresAt, elapsed))) continue;
+    if (next === turns) next = [...turns];
     const { evidenceCards: _dropped, ...answer } = turn.answer;
-    return { ...turn, answer };
-  }).reverse();
-  return changed ? next : turns;
-}
-
-/** Oturum hatasında bütün geçici kartlar hemen silinir. */
-function withoutEvidenceCards(active) {
-  if (!active?.turns?.some((turn) => turn.answer?.evidenceCards)) return active;
-  return { ...active, turns: pruneEvidenceCards(active.turns, Number.POSITIVE_INFINITY) };
+    next[index] = { ...turn, answer };
+  }
+  return next;
 }
 
 /** Etkin konuşmadaki canlı kanıt kartlarının en erken süre sonu (ms) ya da `null`. */
 function earliestEvidenceDeadline(turns = []) {
   let earliest = Infinity;
-  for (const turn of turns) {
-    const receivedAt = turn.answer?.evidenceCards?.receivedAt;
-    if (Number.isFinite(receivedAt)) earliest = Math.min(earliest, receivedAt + EVIDENCE_CARD_LIMITS.ttlMs);
-  }
+  for (const turn of turns) earliest = Math.min(earliest, turn.answer?.evidenceCards?.expiresAt ?? Infinity);
   return Number.isFinite(earliest) ? earliest : null;
 }
 
@@ -206,6 +196,7 @@ export function createAssistantController({
   api = assistantApi,
   createId = createUuidV4,
   schedule = defaultSchedule,
+  monotonicNow = () => globalThis.performance.now(),
   flushIntervalMs = ASSISTANT_FLUSH_INTERVAL_MS,
   reconciliationDelaysMs = [250, 500, 1000, 2000, 4000, 8000, 10000]
 } = {}) {
@@ -249,7 +240,7 @@ export function createAssistantController({
   function pruneActiveEvidenceCards(now = Date.now()) {
     const turns = state.active?.turns;
     if (!turns?.length) return;
-    const pruned = pruneEvidenceCards(turns, now);
+    const pruned = pruneEvidenceCards(turns, now, monotonicNow());
     if (pruned === turns) {
       syncEvidenceExpiry();
       return;
@@ -271,13 +262,23 @@ export function createAssistantController({
     const ownView = view;
     evidenceExpiryDeadline = deadline;
     evidenceExpiryView = ownView;
-    cancelEvidenceExpiry = schedule(() => {
-      cancelEvidenceExpiry = null;
-      evidenceExpiryDeadline = null;
-      evidenceExpiryView = null;
+    const hostDocument = globalThis.document;
+    const hostWindow = globalThis.window;
+    const check = () => pruneActiveEvidenceCards();
+    const cancelTimer = schedule(() => {
+      clearEvidenceExpiry();
       if (ownSession !== session || state.active?.viewKey !== ownView) return;
-      pruneActiveEvidenceCards();
-    }, Math.max(0, deadline - Date.now()));
+      check();
+    }, Math.ceil(Math.max(0, deadline - monotonicNow())));
+    hostDocument?.addEventListener('visibilitychange', check);
+    hostWindow?.addEventListener('pageshow', check);
+    hostWindow?.addEventListener('focus', check);
+    cancelEvidenceExpiry = () => {
+      cancelTimer();
+      hostDocument?.removeEventListener('visibilitychange', check);
+      hostWindow?.removeEventListener('pageshow', check);
+      hostWindow?.removeEventListener('focus', check);
+    };
   }
 
   function emit() {
@@ -287,7 +288,11 @@ export function createAssistantController({
   function update(recipe) {
     const next = recipe(state);
     // Panel düzeyindeki hata yalnızca oturum hatasıdır: gözlenen oturum/yetki geçersizliği geçici kartları hemen siler.
-    state = next.status === 'error' && next.active ? { ...next, active: withoutEvidenceCards(next.active) } : next;
+    state = next;
+    if (next.active && (cancelEvidenceExpiry || next.status === 'error')) {
+      const turns = pruneEvidenceCards(next.active.turns, next.status === 'error' ? Infinity : Date.now(), monotonicNow());
+      if (turns !== next.active.turns) state = { ...next, active: { ...next.active, turns } };
+    }
     syncEvidenceExpiry();
     emit();
   }
@@ -442,6 +447,7 @@ export function createAssistantController({
       // ICE: yalnızca bu üretimin doğrulanmış Rota yanıtının geçici kartları; kayıtlı iletiye ya da tarayıcı deposuna yazılmaz.
       const cards = assistantMessage.rotaData === true ? normalizeEvidenceCards(result.done.evidenceCards) : null;
       const receivedAt = Date.now();
+      const elapsed = monotonicNow();
       update((current) => {
         const active = patchTurn(current, run, (turn) => ({
           ...turn,
@@ -456,7 +462,7 @@ export function createAssistantController({
             createdAt: assistantMessage.createdAt,
             evidence: Array.isArray(assistantMessage.evidence) ? assistantMessage.evidence : null,
             rotaData: assistantMessage.rotaData === true,
-            ...(cards ? { evidenceCards: { value: cards, receivedAt } } : {}),
+            ...(cards ? { evidenceCards: { value: cards, receivedAt, expiresAt: elapsed + EVIDENCE_CARD_LIMITS.ttlMs } } : {}),
             error: null
           }
         }));
@@ -464,7 +470,7 @@ export function createAssistantController({
           ...current,
           running: setRunning(current, run.key, null),
           list: withListConversation(current.list, conversation),
-          active: active === current.active ? active : { ...active, turns: pruneEvidenceCards(active.turns, receivedAt) },
+          active: active === current.active ? active : { ...active, turns: pruneEvidenceCards(active.turns, receivedAt, elapsed) },
           announcement: current.active?.key === run.key ? announce('Yanıt tamamlandı.') : current.announcement
         };
       });

@@ -1,6 +1,7 @@
 import 'server-only';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
+import { cleanEvidenceCardText } from '../../../../domain/ai/evidenceCards.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
@@ -302,12 +303,18 @@ const taskSearch = {
     const cardAssignments = new Map(pageFacts.map((fact) => {
       const unresolved = [];
       let visibleCount = 0;
+      let hiddenCount = 0;
+      let hasUnusableName = false;
       (pageAssignees.get(fact.id) || []).forEach((person, index) => {
-        if (!person.identityVisible) return;
-        if (!person.resolved || !person.name) unresolved.push(index);
-        else visibleCount += 1;
+        if (!person.identityVisible) hiddenCount += 1;
+        else if (!person.resolved) unresolved.push(index);
+        else if (cleanEvidenceCardText(person.name)) visibleCount += 1;
+        else {
+          unresolved.push(index);
+          hasUnusableName = true;
+        }
       });
-      return [fact.id, { unresolved, visibleCount }];
+      return [fact.id, { unresolved, visibleCount, hiddenCount, hasUnusableName }];
     }));
     return {
       cardAssignments,

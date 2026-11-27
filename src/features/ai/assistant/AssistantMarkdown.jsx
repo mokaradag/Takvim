@@ -66,7 +66,7 @@ export function renderInline(nodes = [], keyPrefix = 'i', evidenceIds = null, bi
         const anchor = bindings?.anchors.get(ordinal);
         const card = anchor ? bindings.cards.get(anchor.card) : null;
         if (!card || inlineText(node.children) !== anchor.text) return element;
-        return <EvidenceReference key={key} card={card} receivedAt={bindings.receivedAt} text={anchor.text}>{element}</EvidenceReference>;
+        return <EvidenceReference key={key} card={card} receivedAt={bindings.receivedAt} expiresAt={bindings.expiresAt} focusFallbackRef={bindings.focusFallbackRef} text={anchor.text}>{element}</EvidenceReference>;
       }
       case 'em':
         return <em key={key}>{renderInline(node.children, key, evidenceIds, bindings)}</em>;
@@ -189,11 +189,13 @@ export function AssistantMarkdown({ text, evidence = null, rotaData = false, car
     () => new Set((Array.isArray(evidence) ? evidence : []).map((item) => item?.id).filter(Boolean)),
     [evidence]
   );
+  const focusFallbackRef = useRef(null);
   const [expiredAt, setExpiredAt] = useState(null);
   const receivedAt = rotaData ? cards?.receivedAt : undefined;
-  const expired = expiredAt === receivedAt || evidenceCardsExpired(receivedAt);
+  const expiresAt = cards?.expiresAt;
+  const expired = expiredAt === receivedAt || evidenceCardsExpired(receivedAt, Date.now(), expiresAt);
   useEffect(() => {
-    if (expired) return undefined;
+    if (expired || expiresAt !== undefined) return undefined;
     // Her yanıt için tek zamanlayıcı; askıdan dönüşte de duvar saati denetlenir.
     let timer;
     const check = () => {
@@ -207,15 +209,15 @@ export function AssistantMarkdown({ text, evidence = null, rotaData = false, car
       clearTimeout(timer);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [expired, receivedAt]);
+  }, [expired, expiresAt, receivedAt]);
   const bindings = useMemo(() => (!expired && cards?.value ? {
     anchors: new Map(cards.value.anchors.map((anchor) => [anchor.strong, anchor])),
     cards: new Map(cards.value.cards.map((card) => [card.id, card])),
-    receivedAt
-  } : null), [cards, expired, receivedAt]);
+    receivedAt, expiresAt, focusFallbackRef
+  } : null), [cards, expired, expiresAt, receivedAt]);
   const starts = useMemo(() => (bindings ? blockStrongStarts(blocks) : null), [bindings, blocks]);
   return (
-    <div className="assistant-md">
+    <div className="assistant-md" ref={focusFallbackRef} tabIndex={-1}>
       {blocks.map((block, index) => <MarkdownBlock key={index} blockKey={`b${index}`} block={block} evidenceIds={evidenceIds} rotaData={rotaData}
         bindings={bindings} start={starts ? starts[index] : 0} />)}
     </div>

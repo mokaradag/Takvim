@@ -103,7 +103,9 @@ function TaskRow({ item, onOpen, close }) {
 
 function PeopleSection({ card }) {
   const unresolved = card.items.filter((item) => item.unresolvedAssignees || item.assignment === 'unresolved').length;
-  if (!card.people.length && !card.unassigned && !card.undisclosed && !unresolved && !card.items.some((item) => item.assigneesClipped)) return null;
+  const hasChips = Boolean(card.people.length || card.unassigned || card.undisclosed || unresolved);
+  const partial = card.peopleClipped || (!card.people.length && card.items.some((item) => item.assigneesClipped));
+  if (!hasChips && !partial) return null;
   return (
     <div className="ice-people">
       <div className="ice-section-label">
@@ -111,19 +113,19 @@ function PeopleSection({ card }) {
         <span>{card.people.length > 0 ? `${card.people.length} görünür sorumlu listeleniyor` : 'Sorumlu'}</span>
         {card.items.length < card.total && <span className="ice-section-hint">gösterilen görevlerde</span>}
       </div>
-      {card.peopleClipped && <p className="ice-section-hint">Kişi listesi kısmi önizlemedir.</p>}
-      <ul className="ice-chips" tabIndex={0} aria-label="Sorumlular">
+      {partial && <p className="ice-section-hint">Kişi listesi kısmi önizlemedir.{card.people.length > 0 ? ' Kişi başına görev sayısı en az değeri gösterir.' : ''}</p>}
+      {hasChips && <ul className="ice-chips" tabIndex={0} aria-label="Sorumlular">
         {card.people.map((person, index) => (
-          <li key={`${person.name}-${index}`} className="ice-chip" title={`${person.name} · ${person.tasks} görev`}>
+          <li key={`${person.name}-${index}`} className="ice-chip" title={`${person.name} · ${partial ? 'en az ' : ''}${person.tasks} görev`}>
             <Avatar name={person.name} size="sm" />
             <span className="ice-chip-name">{person.name}</span>
-            <span className="ice-chip-count">{person.tasks}</span>
+            <span className="ice-chip-count">{partial ? '≥' : ''}{person.tasks}</span>
           </li>
         ))}
         {card.unassigned > 0 && <li className="ice-chip is-muted"><span className="ice-chip-name">Sorumlusuz</span><span className="ice-chip-count">{card.unassigned}</span></li>}
         {unresolved > 0 && <li className="ice-chip is-muted"><span className="ice-chip-name">Dizin kaydı çözülemeyen sorumlusu olan görev</span><span className="ice-chip-count">{unresolved}</span></li>}
         {card.undisclosed > 0 && <li className="ice-chip is-muted"><span className="ice-chip-name">Sorumlu bilgisi gösterilemiyor</span><span className="ice-chip-count">{card.undisclosed}</span></li>}
-      </ul>
+      </ul>}
     </div>
   );
 }
@@ -185,9 +187,9 @@ function TaskSummary({ card }) {
  * Doğrulanmış olgunun etkileşimli tetikleyicisi. Metin değişmez; yalnızca ince noktalı alt çizgiyle ayırt edilir. Süresi
  * dolan kart açılmaz ve ifade sade metne döner.
  */
-export function EvidenceReference({ card, receivedAt, text, children }) {
+export function EvidenceReference({ card, receivedAt, expiresAt, focusFallbackRef, text, children }) {
   const { openTask } = useContext(EvidenceCardActionsContext);
-  const canOpen = () => !evidenceCardsExpired(receivedAt);
+  const canOpen = () => !evidenceCardsExpired(receivedAt, Date.now(), expiresAt);
   if (!card || !canOpen()) return children;
   const openFreshTask = openTask ? (id) => { if (canOpen()) openTask(id); } : null;
   const tone = TONES[card.tone] || TONES.neutral;
@@ -217,6 +219,7 @@ export function EvidenceReference({ card, receivedAt, text, children }) {
       cardLabel={label}
       triggerLabel={`${text} — ${label}. Kayıtları göster`}
       manageFocus
+      focusFallbackRef={focusFallbackRef}
       closeOnScroll
       canOpen={canOpen}
     >

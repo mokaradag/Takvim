@@ -1,8 +1,8 @@
 'use client';
 /* Ek arayüz öğeleri: Tooltip, InfoButton, AnimatedNumber, ColumnFilter, AnimatedBar, ChartTooltip.*/
-import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx, useId as useIx } from 'react';
+import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useLayoutEffect as useLx, useRef as useRx, useId as useIx } from 'react';
 import ReactDOM from 'react-dom';
-import { keyboardOwnedElsewhere, modalTrapDepth } from '../hooks/useModalFocusTrap.js';
+import { FOCUSABLE_SELECTOR, keyboardOwnedElsewhere, modalTrapDepth } from '../hooks/useModalFocusTrap.js';
 import { DATE_FILTER_PRESETS } from './dateMatchesFilter.js';
 import { DateInput } from './DateInput';
 import { isOwnedDatePickerEvent } from './datePickerOwnership.js';
@@ -749,7 +749,7 @@ export function HoverListCard({
   children, title, icon, accent, summary, items = [], renderItem,
   listLabel = 'Görevler', listHint, onViewAll, emptyText = 'Kayıt yok.',
   wrapperStyle, wrapperClass = 'hovercard-trigger',
-  cardClass = '', cardLabel, triggerLabel, manageFocus = false, closeOnScroll = false, hideListHead = false, canOpen
+  cardClass = '', cardLabel, triggerLabel, manageFocus = false, closeOnScroll = false, hideListHead = false, canOpen, focusFallbackRef
 }) {
   const [show, setShow] = useSx(false);
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
@@ -813,9 +813,9 @@ export function HoverListCard({
     const inside = manageFocus && cardRef.current?.contains(document.activeElement);
     setPinned(false);
     setShow(false);
-    if (inside && restoreFocus) {
+    if (inside && restoreFocus && wrapRef.current?.isConnected) {
       suppressFocusOpen.current = true;
-      wrapRef.current?.focus();
+      wrapRef.current.focus({ preventScroll: true });
       suppressFocusOpen.current = false;
     }
   }, [manageFocus]);
@@ -850,12 +850,21 @@ export function HoverListCard({
     // Odakla zaten açık kart Enter ile sabitlendiğinde de (yalnızca `pinned` değişir) odak karta taşınır.
   }, [manageFocus, show, pos.ready, pinned]);
 
+  // Süre sonu ya da bellekten çıkarma tetikleyiciyi de silerse odak yanıt metnine döner.
+  useLx(() => () => {
+    const trigger = wrapRef.current;
+    const active = document.activeElement;
+    const fallback = focusFallbackRef?.current;
+    if (fallback?.isConnected && (trigger?.contains(active) || cardRef.current?.contains(active))
+      && !keyboardOwnedElsewhere(trigger?.closest('[data-focus-scope]'))) fallback.focus({ preventScroll: true });
+  }, [focusFallbackRef]);
+
   // Kart dışındaki kaydırma kartı kapatır (yalnızca `closeOnScroll`).
   useEx(() => {
     if (!closeOnScroll || !show) return undefined;
     const onScroll = (event) => {
       if (cardRef.current && event.target instanceof Node && cardRef.current.contains(event.target)) return;
-      closeNow({ restoreFocus: false });
+      closeNow();
     };
     window.addEventListener('scroll', onScroll, true);
     return () => window.removeEventListener('scroll', onScroll, true);
@@ -866,7 +875,23 @@ export function HoverListCard({
     if (!(manageFocus ? show : pinned)) return undefined;
     const depth = modalTrapDepth();
     const onKey = (event) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (event.key === 'Tab' && manageFocus && cardRef.current?.contains(document.activeElement)) {
+        const trigger = wrapRef.current;
+        if (!trigger?.isConnected || keyboardOwnedElsewhere(trigger.closest('[data-focus-scope]'))) return;
+        const active = document.activeElement;
+        const controls = [...cardRef.current.querySelectorAll(FOCUSABLE_SELECTOR)]
+          .filter((element) => element.offsetParent !== null || element === active);
+        const index = controls.indexOf(active);
+        if (index < 0 && !event.shiftKey && controls.length) return;
+        if (index >= 0 && index !== (event.shiftKey ? 0 : controls.length - 1)) return;
+        // Portalın sonundan sonra tarayıcı tetikleyicinin ardından devam eder.
+        // Geri yönde tetikleyicinin kendisi karttan önceki denetimdir.
+        closeNow();
+        if (event.shiftKey) event.preventDefault();
+        return;
+      }
+      if (event.key !== 'Escape') return;
       if (manageFocus) {
         const owner = wrapRef.current?.closest('[data-focus-scope]');
         if (keyboardOwnedElsewhere(owner) || [...document.querySelectorAll('[data-hover-list-focus]')].at(-1) !== cardRef.current) return;

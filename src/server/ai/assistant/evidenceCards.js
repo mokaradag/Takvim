@@ -3,6 +3,7 @@ import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import {
   EVIDENCE_CARD_LIMITS,
   EVIDENCE_CARD_VERSION,
+  cleanEvidenceCardText as cleanText,
   hasBindingMarks,
   normalizeEvidenceCards,
   resolveBindingAnchors
@@ -25,20 +26,7 @@ import { strongTexts } from '../../../features/ai/assistant/evidenceCardAnchors.
 const STATUSES = new Set(['todo', 'in_progress', 'done']);
 const ASSIGNMENTS = new Set(['visible', 'unresolved', 'unassigned', 'undisclosed']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-// eslint-disable-next-line no-control-regex
-const UNSAFE = /[\u0000-\u001f\u007f‪-‮⁦-⁩]/g;
 const collator = new Intl.Collator('tr-TR', { sensitivity: 'base' });
-
-/** Görünen metin: denetim ve yön karakterleri boşluğa çevrilir, boşluk sadeleşir, sınırda kısaltılır. */
-function cleanText(value, max = EVIDENCE_CARD_LIMITS.maxTextChars) {
-  if (typeof value !== 'string') return null;
-  const text = value.replace(UNSAFE, ' ').replace(/\s+/g, ' ').trim();
-  if (!text) return null;
-  if (text.length <= max) return text;
-  let cut = text.slice(0, max - 1);
-  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
-  return `${cut.trimEnd()}…`;
-}
 
 const validDay = (value) => typeof value === 'string' && DAY.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 
@@ -80,8 +68,11 @@ function projectTask(row, directory) {
   });
   const maxNames = EVIDENCE_CARD_LIMITS.maxAssigneesPerItem;
   const availableNames = Math.min(maxNames, visible.length);
-  const assignment = ASSIGNMENTS.has(row.assignment) ? row.assignment : visible.length ? 'visible' : 'undisclosed';
+  let assignment = ASSIGNMENTS.has(row.assignment) ? row.assignment : visible.length ? 'visible' : 'undisclosed';
   const totalVisible = Math.max(visible.length, directory?.visibleCount ?? 0);
+  hidden = Math.max(hidden, directory?.hiddenCount ?? 0);
+  // Dizin adı temizlenince boşsa görevde açıklanabilir atama vardır, fakat kişi adı çözülemez.
+  if (assignment === 'visible' && totalVisible === 0 && directory?.hasUnusableName && unresolvedCount > 0) assignment = 'unresolved';
   // Görev olgusu ile sorumlu okuması arasında atama durumu değiştiyse çelişkili satır kapalı reddedilir.
   if (assignment === 'unassigned' && (people.length > 0 || totalVisible > 0 || unresolvedCount > 0 || hidden > 0)) return null;
   if (assignment === 'visible' && totalVisible === 0) return null;
@@ -106,7 +97,8 @@ function projectTask(row, directory) {
       assignment
     },
     // Farklı sorumluların ayrılması yalnızca sunucuda (Sicil ile); tarayıcıya yalnızca ad ve görev sayısı gider.
-    people: visible
+    people: visible,
+    peopleIncomplete: totalVisible > visible.length
   };
 }
 
@@ -122,7 +114,7 @@ function distinctPeople(projected) {
   }
   const limit = EVIDENCE_CARD_LIMITS.maxPeoplePerCard;
   const people = [...byKey.values()].sort((left, right) => right.tasks - left.tasks || collator.compare(left.name, right.name)).slice(0, limit);
-  return { people, ...(byKey.size > limit ? { peopleClipped: true } : {}) };
+  return { people, ...(byKey.size > limit || projected.some((row) => row.peopleIncomplete) ? { peopleClipped: true } : {}) };
 }
 
 function taskTone(item) {

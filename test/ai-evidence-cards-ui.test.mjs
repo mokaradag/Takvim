@@ -142,7 +142,7 @@ test('HoverListCard mevcut kullanımı değişmez: rol, odak taşıma ve iki ba�
   view.unmount();
 });
 
-test('kipli kart Tab sırasını sahiplenir ve ilk Esc yalnız kartı kapatır', () => {
+test('kipli kart Tab sınırında pencereye döner ve ilk Esc yalnız kartı kapatır', () => {
   let closed = 0;
   function Panel() {
     const containerRef = React.useRef(null);
@@ -164,10 +164,16 @@ test('kipli kart Tab sırasını sahiplenir ve ilk Esc yalnız kartı kapatır',
     assert.equal(key('Tab', rows[0]).defaultPrevented, false);
     assert.equal(key('Tab', rows[0], { shiftKey: true }).defaultPrevented, false);
     act(() => chips.focus());
-    key('Tab', chips, { shiftKey: true });
-    assert.equal(document.activeElement, rows.at(-1));
-    key('Tab', rows.at(-1));
-    assert.equal(document.activeElement, chips);
+    assert.equal(key('Tab', chips, { shiftKey: true }).defaultPrevented, true);
+    assert.equal(document.activeElement, trigger);
+    assert.equal(cardNode(), null);
+    key('Enter', trigger);
+    assert.equal(key('Tab', cardNode().querySelectorAll('button')[2]).defaultPrevented, false);
+    act(() => cardNode().querySelectorAll('button')[2].focus());
+    assert.equal(key('Tab').defaultPrevented, false, 'tarayıcı tetikleyicinin ardından devam eder');
+    assert.equal(document.activeElement, trigger);
+    assert.equal(cardNode(), null);
+    key('Enter', trigger);
     key('Escape');
     assert.equal(cardNode(), null);
     assert.equal(document.activeElement, trigger);
@@ -200,8 +206,10 @@ test('sabitlenmiş kart yanıt süresi dolunca veya sekme geri gelince kaybolur'
   for (const resume of [false, true]) {
     const view = mountDom(AssistantMarkdown, { text: 'Toplam **12** görev.', rotaData: true, cards: { value: descriptor, receivedAt: Date.now() } });
     const trigger = view.host.querySelector('.ice-ref');
-    click(trigger);
+    act(() => trigger.focus());
+    if (resume) key('Enter', trigger);
     assert.ok(cardNode());
+    assert.ok(resume ? cardNode().contains(document.activeElement) : document.activeElement === trigger);
     act(() => {
       if (resume) {
         t.mock.timers.setTime(Date.now() + EVIDENCE_CARD_LIMITS.ttlMs);
@@ -211,6 +219,7 @@ test('sabitlenmiş kart yanıt süresi dolunca veya sekme geri gelince kaybolur'
     assert.equal(cardNode(), null);
     assert.equal(view.host.querySelector('.ice-ref'), null);
     assert.equal(view.host.querySelector('strong').textContent, '12');
+    assert.equal(document.activeElement, view.host.querySelector('.assistant-md'));
     view.unmount();
   }
 });
@@ -272,7 +281,7 @@ test('fareyle sabitlenen kart tetikleyiciden başka öğeye odak gidince kapanı
   }
 });
 
-test('odaklanabilir alt öğesi olmayan salt okunur kanıt kartı diyalog köküne odaklanır ve modal tuzağında kalır', () => {
+test('salt okunur kartın kökü odaklanabilir ve ters Tab ile tetikleyiciye dönülür', () => {
   const singleCard = normalizeEvidenceCards({
     v: 1,
     cards: [{ id: 'c1', kind: 'task', title: 'Tekil görev', tone: 'neutral', generatedAt: '2026-11-27T08:00:00.000Z',
@@ -298,11 +307,7 @@ test('odaklanabilir alt öğesi olmayan salt okunur kanıt kartı diyalog kökü
     assert.ok(dialog);
     assert.equal(dialog.getAttribute('tabindex'), '-1');
     assert.equal(document.activeElement, dialog, 'alt öğe yoksa odak diyalog köküne yerleşmeli');
-    key('Tab', dialog);
-    assert.equal(document.activeElement, dialog, 'Tab odağı belgenin dışına kaçırmamalı');
-    key('Tab', dialog, { shiftKey: true });
-    assert.equal(document.activeElement, dialog, 'Shift+Tab odağı diyalog kökünde tutmalı');
-    key('Escape', dialog);
+    assert.equal(key('Tab', dialog, { shiftKey: true }).defaultPrevented, true);
     assert.equal(cardNode(), null);
     assert.equal(document.activeElement, trigger);
   } finally {
@@ -330,19 +335,8 @@ test('taşan sorumlu listesi klavyeyle odaklanabilir ve uygun Türkçe erişileb
 });
 
 test('görev seçimi başarılıysa yalnız kipli Bilgin paneli çekmeceye alan açar', async (t) => {
-  const conversation = { id: '6f1c2d3e-4a5b-4c6d-8e7f-001122334455', title: 'Kanıt', messageCount: 2 };
-  const controller = createAssistantController({ api: {
-    loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { available: true, modes: [{ id: 'standard', label: 'Standart', available: true }] } }),
-    listAssistantConversationsRequest: async () => ({ ok: true, conversations: [], nextCursor: null }),
-    async streamAssistantTurnRequest({ turnId, onEvent }) {
-      onEvent({ type: 'accepted', data: { conversation, userMessage: { id: 'u1', turnId, content: 'Soru' }, context: {}, rotaData: true } });
-      return { ok: true, done: { conversation, evidenceCards: descriptor, assistantMessage: { id: 'a1', content: 'Toplam **12** görev.', rotaData: true, evidence: [] } } };
-    }
-  } });
+  const controller = await taskPanelController();
   t.after(() => controller.dispose());
-  await controller.activate();
-  controller.send('Soru');
-  await new Promise((resolve) => setImmediate(resolve));
 
   for (const [focused, ok, shouldClose] of [[true, false, false], [false, true, false], [true, true, true]]) {
     const closed = [];
@@ -358,8 +352,108 @@ test('görev seçimi başarılıysa yalnız kipli Bilgin paneli çekmeceye alan 
       await act(async () => click(row));
       assert.deepEqual(opened, [taskId(1)]);
       assert.deepEqual(closed, shouldClose ? [{ restoreFocus: false }] : []);
+      assert.equal(Boolean(view.host.querySelector('[role=alert]')), !ok);
     } finally {
       view.unmount();
     }
+  }
+});
+
+async function taskPanelController() {
+  const conversation = { id: '6f1c2d3e-4a5b-4c6d-8e7f-001122334455', title: 'Kanıt', messageCount: 2 };
+  const controller = createAssistantController({ api: {
+    loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { available: true, modes: [{ id: 'standard', label: 'Standart', available: true }] } }),
+    listAssistantConversationsRequest: async () => ({ ok: true, conversations: [], nextCursor: null }),
+    async streamAssistantTurnRequest({ turnId, onEvent }) {
+      onEvent({ type: 'accepted', data: { conversation, userMessage: { id: 'u1', turnId, content: 'Soru' }, context: {}, rotaData: true } });
+      return { ok: true, done: { conversation, evidenceCards: descriptor, assistantMessage: { id: 'a1', content: 'Toplam **12** görev.', rotaData: true, evidence: [] } } };
+    }
+  } });
+  await controller.activate();
+  controller.send('Soru');
+  await new Promise((resolve) => setImmediate(resolve));
+  return controller;
+}
+
+test('görev açma reddi bildirilir, eski istek ve eski konuşma paneli kapatamaz', async (t) => {
+  const controller = await taskPanelController();
+  t.after(() => controller.dispose());
+  const pending = [];
+  const closed = [];
+  const view = mountDom(RotaAssistantPanel, {
+    assistant: { controller, open: true, actual: true, focused: true, launcherRef: { current: null }, close: () => closed.push(true) },
+    openEvidenceTask: (id, { isCurrent }) => new Promise((resolve, reject) => pending.push({ isCurrent, resolve, reject }))
+  });
+  try {
+    const openRow = () => {
+      click(view.host.querySelector('.ice-ref'));
+      click(cardNode().querySelector('button.ice-row'));
+    };
+    openRow();
+    openRow();
+    assert.equal(pending[0].isCurrent(), false);
+    assert.equal(pending[1].isCurrent(), true);
+    await act(async () => pending[0].resolve({ ok: true }));
+    assert.deepEqual(closed, []);
+    await act(async () => pending[1].reject(new Error('İç ayrıntı')));
+    assert.match(view.host.querySelector('[role=alert]').textContent, /Görev açılamadı/);
+    assert.doesNotMatch(view.host.textContent, /İç ayrıntı/);
+    openRow();
+    act(() => controller.newConversation());
+    assert.equal(pending[2].isCurrent(), false);
+    await act(async () => pending[2].resolve({ ok: true }));
+    assert.deepEqual(closed, []);
+    assert.equal(view.host.querySelector('[role=alert]'), null);
+  } finally {
+    view.unmount();
+  }
+});
+
+test('dış kaydırma odaktaki kartı kaydırmadan kapatır ve tetikleyiciyi yeniden açmaz', (t) => {
+  const view = mountDom(Harness, { receivedAt: Date.now(), openTask: () => {} });
+  try {
+    const trigger = view.host.querySelector('.ice-ref');
+    act(() => trigger.focus());
+    key('Enter', trigger);
+    assert.ok(cardNode().contains(document.activeElement));
+    const focus = t.mock.method(trigger, 'focus');
+    act(() => view.host.dispatchEvent(new Event('scroll')));
+    assert.equal(cardNode(), null);
+    assert.equal(document.activeElement, trigger);
+    assert.deepEqual(focus.mock.calls[0].arguments, [{ preventScroll: true }]);
+    click(trigger);
+    const outside = view.host.querySelector('#disari');
+    act(() => outside.focus());
+    act(() => view.host.dispatchEvent(new Event('scroll')));
+    assert.equal(document.activeElement, outside);
+  } finally {
+    view.unmount();
+  }
+});
+
+test('bütün görünür adlar kırpıldığında boş sekme durağı yerine kısmi önizleme açıklanır', () => {
+  const shownCard = { ...card, people: [], unassigned: 0, undisclosed: 0, peopleClipped: true,
+    items: [item(1, { assignees: [], assigneesClipped: true })] };
+  const view = mountDom(Harness, { shownCard, receivedAt: Date.now(), openTask: () => {} });
+  try {
+    click(view.host.querySelector('.ice-ref'));
+    assert.match(cardNode().textContent, /Kişi listesi kısmi önizlemedir/);
+    assert.equal(cardNode().querySelector('.ice-chips'), null);
+  } finally {
+    view.unmount();
+  }
+});
+
+test('Markdown yalnız güvenli şemalarda bağlantı çizer ve Türkçe metni korur', () => {
+  const text = '[Bir](JaVaScRiPt:alert%281%29) [İki](javascript%3Aalert%281%29) [Üç](java&#x73;cript:alert%281%29) '
+    + '[Dört](java\tscript:alert%281%29) <data:text/plain,örnek> [İş](HTTPS://example.test/%C4%B1) <mailto:rota@example.test>';
+  const view = mountDom(AssistantMarkdown, { text });
+  try {
+    assert.deepEqual([...view.host.querySelectorAll('a')].map((element) => element.getAttribute('href')),
+      ['https://example.test/%C4%B1', 'mailto:rota@example.test']);
+    assert.match(view.host.textContent, /Bir İki Üç Dört/);
+    assert.match(view.host.textContent, /İş/);
+  } finally {
+    view.unmount();
   }
 });

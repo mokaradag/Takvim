@@ -450,7 +450,7 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
         if (existsSync(path.join(directory, 'claude.cmd')) && existsSync(entry)) { command = process.execPath; prefixArgs = [entry]; break; }
       }
     }
-    const child = spawnModelCommand(command, [...prefixArgs, ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawnModelCommand(command, [...prefixArgs, ...args], { cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     const events = [];
     let launched = false;
     let timedOut = false;

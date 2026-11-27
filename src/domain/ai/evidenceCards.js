@@ -119,12 +119,22 @@ const isPlain = (value) => value != null && typeof value === 'object' && !Array.
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const CARD_ID = /^c[1-9]\d?$/;
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u001f\u007f‪-‮⁦-⁩]/;
+const UNSAFE_TEXT = /[\p{Cc}\p{Bidi_Control}\p{Surrogate}]/gu;
+const HAS_UNSAFE_TEXT = new RegExp(UNSAFE_TEXT.source, 'u');
+
+/** Kart metninde denetim ve yön karakterlerini, bozuk Unicode'u ve gereksiz boşlukları temizler. */
+export function cleanEvidenceCardText(value, max = EVIDENCE_CARD_LIMITS.maxTextChars) {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(UNSAFE_TEXT, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, '');
+  return `${cut.trimEnd()}…`;
+}
 
 function text(value, { optional = false, max = EVIDENCE_CARD_LIMITS.maxTextChars } = {}) {
   if (value == null && optional) return { ok: true, value: null };
-  if (typeof value !== 'string' || !value.trim() || value.length > max || CONTROL.test(value)) return { ok: false };
+  if (typeof value !== 'string' || !value.trim() || value.length > max || HAS_UNSAFE_TEXT.test(value)) return { ok: false };
   return { ok: true, value };
 }
 
@@ -185,15 +195,15 @@ function normalizeCard(card) {
   if (!title.ok || !total.ok || !unassigned.ok || !undisclosed.ok || typeof card.generatedAt !== 'string' || !INSTANT.test(card.generatedAt)
     || Number.isNaN(Date.parse(card.generatedAt)) || typeof card.scopePartial !== 'boolean'
     || !Array.isArray(card.items) || !card.items.length || card.items.length > EVIDENCE_CARD_LIMITS.maxItemsPerCard
-    || typeof clipped !== 'boolean' || !Array.isArray(card.people) || card.people.length > EVIDENCE_CARD_LIMITS.maxPeoplePerCard
-    || (clipped && card.people.length !== EVIDENCE_CARD_LIMITS.maxPeoplePerCard)) return null;
+    || typeof clipped !== 'boolean' || !Array.isArray(card.people) || card.people.length > EVIDENCE_CARD_LIMITS.maxPeoplePerCard) return null;
   const items = card.items.map(normalizeItem);
   const people = card.people.map(normalizePerson);
   if (items.some((item) => !item) || people.some((person) => !person)) return null;
   // Satırlar ve kişiler tekil; gösterilen satır sayısı toplamı aşamaz; tekil görev kartı tek satırdır.
   if (new Set(items.map((item) => item.id)).size !== items.length || items.length > total.value
     || (card.kind === 'task' && (items.length !== 1 || total.value !== 1))
-    || unassigned.value + undisclosed.value > items.length) return null;
+    || unassigned.value + undisclosed.value > items.length
+    || (clipped && people.length < EVIDENCE_CARD_LIMITS.maxPeoplePerCard && !items.some((item) => item.assigneesClipped))) return null;
   return Object.freeze({ id: card.id, kind: card.kind, title: title.value, tone: card.tone, generatedAt: card.generatedAt, total: total.value,
     scopePartial: card.scopePartial, items: Object.freeze(items), people: Object.freeze(people), ...(clipped ? { peopleClipped: true } : {}), unassigned: unassigned.value, undisclosed: undisclosed.value });
 }
@@ -226,6 +236,7 @@ export function normalizeEvidenceCards(value) {
 }
 
 /** Kartın süresi doldu mu? (`receivedAt` tarayıcının alma anıdır.) */
-export function evidenceCardsExpired(receivedAt, now = Date.now()) {
-  return !Number.isFinite(receivedAt) || now - receivedAt >= EVIDENCE_CARD_LIMITS.ttlMs || now < receivedAt - 60000;
+export function evidenceCardsExpired(receivedAt, now = Date.now(), expiresAt = Infinity, elapsed = globalThis.performance.now()) {
+  return !Number.isFinite(receivedAt) || now - receivedAt >= EVIDENCE_CARD_LIMITS.ttlMs
+    || now < receivedAt - 60000 || elapsed >= expiresAt;
 }

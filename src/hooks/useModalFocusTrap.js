@@ -93,7 +93,7 @@ function trapOwnsElement(token, element) {
   return element.closest?.('[data-modal-owner]')?.getAttribute('data-modal-owner') === token.scopeId;
 }
 
-const FOCUSABLE_SELECTOR = [
+export const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
   'textarea:not([disabled])',
@@ -214,7 +214,10 @@ export function useModalFocusTrap({ containerRef, initialFocusRef, restoreFocusR
       const modal = containerRef.current;
       if (!modal) return;
       const portal = document.activeElement?.closest?.('[data-modal-owner]');
-      const container = portal?.getAttribute('data-modal-owner') === scopeId ? portal : modal;
+      const ownedPortal = portal?.getAttribute('data-modal-owner') === scopeId ? portal : null;
+      // Kanıt kartı kendi içinde dolaşır; sınırda odağı ana pencerenin sırasına geri bağlar.
+      if (ownedPortal?.getAttribute('data-hover-list-focus') === '') return;
+      const container = ownedPortal || modal;
       const focusable = [...container.querySelectorAll(FOCUSABLE_SELECTOR)]
         .filter((element) => element.offsetParent !== null || element === document.activeElement);
       const active = document.activeElement;
