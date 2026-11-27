@@ -47,10 +47,10 @@ const KNOWN_SCHEMA_KEYS = new Set([...ROOT_KEYS, ...SECTION_KEYS, ...PARAGRAPH_K
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // Paket sözleşmesi (`reportRequest.js`) ile aynı kanıt kimliği dilbilgisi; üyelik denetimi `known.has(ref)` ile kapalıdır.
 const REF_PATTERN = /^[EF][1-9]\d{0,14}$/u;
-// Paragraf içinde yalnızca yazdırılabilir metin; satır sonu dışındaki C0/C1 denetim karakterleri (U+0085 dâhil),
+// Paragraf içinde yalnızca yazdırılabilir metin; yatay sekme (U+0009) ve satır sonu dışındaki C0/C1 denetim karakterleri (U+0085 dâhil),
 // Unicode çift yönlü metin denetimleri (`Bidi_Control`, U+200F dâhil), görünmez biçim karakterleri ve etiket bloğu reddedilir.
 // eslint-disable-next-line no-control-regex -- güvenilmez model metnindeki denetim karakterleri bilinçli olarak eşleştirilir
-const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\uFEFF\u{E0000}-\u{E007F}\p{Bidi_Control}]/u;
+const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\uFEFF\u{E0000}-\u{E007F}\p{Bidi_Control}]/u;
 // Görünür/çizilebilir en az bir temel karakter gerektirir (boşluk, sıfır genişlikli, birleşen işaret ve boş Braille U+2800 kabul edilmez).
 const RENDERABLE_CHAR = /[^\s\p{C}\p{M}\u2800]/u;
 const FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu;

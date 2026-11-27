@@ -1561,12 +1561,19 @@ export async function buildExecutiveReportEvidence({
     const taskCandidates = selectedTasks.map((task) => {
       const project = projects.get(task.projectId);
       const deps = dependencyMap.get(task.id);
+      const currentProjectLabel = projectLabelOf(task.projectId);
+      const completedProjectId = task._completedInPeriod ? auditCompletedProjectByTaskId.get(task.id) : null;
+      const completedProjectLabel = completedProjectId && completedProjectId !== task.projectId
+        ? projectLabelOf(completedProjectId)
+        : null;
       const taskItemObj = {
         _taskId: task.id,
         tur: 'gorev',
         kaynak: 'rota_task_search',
         gorev: task.id,
-        proje: projectLabelOf(task.projectId),
+        proje: currentProjectLabel,
+        // Görev dönemde başka bir projede tamamlanıp kesitten önce taşındıysa tamamlanma projesi ayrıca belirtilir.
+        ...(completedProjectLabel && completedProjectLabel !== currentProjectLabel ? { tamamlandigi_proje: completedProjectLabel } : {}),
         ...(project?.name ? { proje_adi: project.name } : {}),
         baslik: dataText(task.title, 160),
         durum: STATUS_TO_CANONICAL[task.status] || 'baslamadi',

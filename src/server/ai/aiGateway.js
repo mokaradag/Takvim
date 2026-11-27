@@ -481,9 +481,15 @@ export function createAiGateway({
             recordEmptyCompletion({ profile: route.profile, model: route.model, diagnostics: emptyCompletionDiagnostics({
               final: completion, startedAt: attemptStartedAt, at: now(), textChars: String(completion.text ?? '').length
             }) });
-            const safeFinishReason = ['stop', 'end_turn', 'length', 'content_filter', 'tool_calls', 'function_call'].includes(completion.finishReason)
-              ? completion.finishReason
-              : (typeof completion.finishReason === 'string' && completion.finishReason ? 'other' : null);
+            const normalizedFinish = typeof completion.finishReason === 'string'
+              ? completion.finishReason.trim().toLowerCase()
+              : '';
+            const mappedFinish = normalizedFinish === 'max_tokens' || normalizedFinish === 'max_output_tokens'
+              ? 'length'
+              : normalizedFinish;
+            const safeFinishReason = ['stop', 'end_turn', 'stop_sequence', 'eos', 'eos_token', 'length', 'content_filter', 'tool_calls', 'function_call'].includes(mappedFinish)
+              ? mappedFinish
+              : (mappedFinish ? 'other' : null);
             throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
               details: {
                 reason: 'EMPTY_COMPLETION',

@@ -754,7 +754,11 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
   // PLANNER_CLAUDE_ALLOW_THINKING=1: düşünmeyi efor düzeyinin kendi davranışına bırakır (ör. yönetici raporu yazarı vekil koşusu);
   // düşünme belirteçleri kayda yazılır. Varsayılan planlayıcı kuralı (düşünme kapalı ve denetimli) değişmez. Araçlı turlarda kullanılamaz.
   const allowThinking = process.env.PLANNER_CLAUDE_ALLOW_THINKING === '1';
-  if (allowThinking && payload.toolChoice !== 'none') return fail('PLANNER_THINKING_REQUIRES_NO_TOOLS');
+  // Araçsız isteklerde `toolChoice` atlanmış olabilir; yalnızca etkin araç varsa ya da `none` dışı araç seçimi istendiyse reddedilir.
+  const hasEffectiveTools = Array.isArray(all) && all.length > 0;
+  if (allowThinking && (hasEffectiveTools || (payload.toolChoice != null && payload.toolChoice !== 'none'))) {
+    return fail('PLANNER_THINKING_REQUIRES_NO_TOOLS');
+  }
   const forced = !namedAuto && payload.toolChoice?.name ? all.find((tool) => tool.name === payload.toolChoice.name) || null : null;
   // Zorunlu araç turunda yalnızca zorunlu şema (PLANNER_CLAUDE_FORCED_RETRY yeniden denemesi): üretimin adlı araç seçimi
   // modelin başka araç çağırmasını kısıtlı çözümle engeller; CLI bunu yapamaz, bu yüzden yeniden deneme ayrıca sayılır.

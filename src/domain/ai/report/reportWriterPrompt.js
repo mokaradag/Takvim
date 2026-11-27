@@ -1,6 +1,6 @@
 import { isIsoDay } from '../isoDay.js';
 import { REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } from './reportRequest.js';
-import { isKnownOpenTaskStatus, REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan.js';
+import { isKnownOpenTaskStatus, parseStrictEvidenceDay, REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan.js';
 
 /**
  * Bilgin Aşama 4I-B — modelden bağımsız yönetici raporu yazar istemi (saf).
@@ -170,7 +170,7 @@ export function buildReportWriterSystemPrompt(style) {
     'BİÇİM',
     numbered([
       'Sayılar ve tarihler Türkçe yazılır: "18 görev", "5 Kasım 2026", "2–8 Kasım 2026". ISO tarih biçimi (2026-11-05) ve saat yazılmaz.',
-      'Görevleri başlıklarıyla, projeleri adlarıyla ("proje_adi" varsa onunla, yoksa proje koduyla) anarsın; kanıt kimliklerini yalnızca JSON\'daki "kanitlar" dizilerinde kullanırsın.',
+      'Görevleri başlıklarıyla, projeleri adlarıyla ("proje_adi" varsa onunla, yoksa proje koduyla) anarsın; birden çok proje aynı "proje_adi" değerini paylaşıyorsa karışıklığı önlemek için tekil "proje" etiketini de eklersin; kanıt kimliklerini yalnızca JSON\'daki "kanitlar" dizilerinde kullanırsın.',
       `Bölüm planındaki sözcük aralığının üst sınırını aşmazsın; alt sınır, kanıt yeterliyse beklenen ölçüdür. Ayrıntı düzeyi kısa ise ana fikirler korunarak kısaltılır; kapsamlı ise derinlik artar ama tekrar artmaz.`
     ]),
     '',
@@ -217,8 +217,8 @@ function projectTaskRef(value, refs, omittedRefs) {
  * sunucuya ait yürütme alanları çıkarılır. Olgu değerleri, metinler ve köken alanları değişmez.
  */
 const DAY_MS = 86400000;
-/** Kesit sonrası değişmiş görevlerde anlık durum/termin/bitiş iddiasına yol açabilecek alanlar. */
-const POST_CUTOFF_OMITTED_TASK_KEYS = new Set(['durum', 'hedef_bitis', 'oncelik', 'gerceklesen_bitis']);
+/** Kesit sonrası değişmiş görevlerde anlık durum/termin/bitiş/kilometre taşı iddiasına yol açabilecek alanlar. */
+const POST_CUTOFF_OMITTED_TASK_KEYS = new Set(['durum', 'hedef_bitis', 'oncelik', 'gerceklesen_bitis', 'kilometre_tasi']);
 
 /** İki geçerli ISO gün arasındaki takvim günü farkı (sunucu aritmetiği). */
 function calendarDaysBetween(fromDay, toDay) {
@@ -233,9 +233,9 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
   const out = {};
   const postCutoffTask = item.tur === 'gorev' && item.kesit_sonrasi_degisti === true;
   for (const [key, value] of Object.entries(item)) {
-    // Hesaplanan gecikme alanı ve eski iç proje kimliği ham girdiden kopyalanmaz.
-    if (key === 'veri_anina_gore_gecikme_takvim_gunu' || key === 'proje_kimligi') continue;
-    // Kesit sonrası değişen görevlerin güncel durum/termin/öncelik/bitiş alanları kesit anı iddiasına dönüşmemesi için çıkarılır.
+    // Hesaplanan gecikme alanı, çıkışa özgü `gorev_kaniti` ve eski iç proje kimliği ham girdiden kopyalanmaz.
+    if (key === 'veri_anina_gore_gecikme_takvim_gunu' || key === 'proje_kimligi' || key === 'gorev_kaniti') continue;
+    // Kesit sonrası değişen görevlerin güncel durum/termin/öncelik/bitiş/kilometre taşı alanları kesit anı iddiasına dönüşmemesi için çıkarılır.
     if (postCutoffTask && POST_CUTOFF_OMITTED_TASK_KEYS.has(key)) continue;
     if (key === 'gorev') {
       if (item.tur === 'gorev') continue;
@@ -250,10 +250,7 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
   }
   // Aritmetik sunucunundur: yalnızca bilinen açık, kesit tutarlı ve geçerli hedef tarihi veri anından önce kalmış
   // görevin gecikmesi takvim günüyle verilir; bilinmeyen durum (`null`) ve geçersiz tarihler gecikme üretmez.
-  const rawTarget = typeof item.hedef_bitis === 'string' && /^\d{4}-\d{2}-\d{2}/u.test(item.hedef_bitis)
-    ? item.hedef_bitis.slice(0, 10)
-    : null;
-  const target = rawTarget && isIsoDay(rawTarget) ? rawTarget : null;
+  const target = parseStrictEvidenceDay(item.hedef_bitis);
   if (item.tur === 'gorev' && isKnownOpenTaskStatus(item.durum) && !postCutoffTask && target && snapshotDay && target < snapshotDay) {
     const days = calendarDaysBetween(target, snapshotDay);
     if (Number.isSafeInteger(days) && days > 0) out.veri_anina_gore_gecikme_takvim_gunu = days;
@@ -265,6 +262,7 @@ function projectConflict(conflict, refs, omittedRefs) {
   if (!isPlainObject(conflict)) return conflict;
   const out = {};
   for (const [key, value] of Object.entries(conflict)) {
+    if (key === 'gorev_kaniti') continue;
     if (key === 'gorev') out.gorev_kaniti = projectTaskRef(value, refs, omittedRefs);
     else out[key] = value;
   }
@@ -414,7 +412,48 @@ export function buildReportEvidenceMessages(evidencePackage, { maxBytes = REPORT
   const chunks = [];
   let current = { paket: header, kanitlar: [] };
   const size = (chunk) => byteLength(JSON.stringify(chunk));
-  if (size(current) > budget) throw new ReportPromptError('EVIDENCE_HEADER_TOO_LARGE');
+  // Tek başına gönderilen başlık 64 baytlık paketleme payıyla değil, gerçek nihai ileti tavanıyla karşılaştırılır.
+  if (size(current) + widestPreamble + 1 > maxBytes) throw new ReportPromptError('EVIDENCE_HEADER_TOO_LARGE');
+
+  // Geniş ekip kapsamlarında tek bir ölçü kaydı içindeki `kapsam` dizisi 32 KiB ileti tavanını aşabilir;
+  // böyle bir kayıt olduğunda yinelenen kapsam listesi kararlı `kapsam_grubu` kimliğiyle sınırlı parçalara ayrılır.
+  const scopeChunks = [];
+  const scopeGroupByKey = new Map();
+  const compactEvidence = kanitlar.map((item) => {
+    if (!isPlainObject(item) || !Array.isArray(item.kapsam) || item.kapsam.length <= 1) return item;
+    if (size({ kanitlar: [item] }) + widestPreamble + 1 <= maxBytes) return item;
+    const key = JSON.stringify(item.kapsam);
+    let groupId = scopeGroupByKey.get(key);
+    if (!groupId) {
+      groupId = `K${scopeGroupByKey.size + 1}`;
+      scopeGroupByKey.set(key, groupId);
+      const partBudget = Math.max(256, budget - 160);
+      let part = [];
+      const flushPart = () => {
+        if (!part.length) return;
+        scopeChunks.push({ kapsam_grubu: groupId, parca: 0, toplam_parca: 0, kapsam: part });
+        part = [];
+      };
+      for (const entry of item.kapsam) {
+        const next = [...part, entry];
+        const candidateSize = size({ kapsam_parcalari: [{ kapsam_grubu: groupId, parca: 99, toplam_parca: 99, kapsam: next }] });
+        if (part.length > 0 && candidateSize > partBudget) {
+          flushPart();
+          part = [entry];
+        } else {
+          part = next;
+        }
+      }
+      flushPart();
+      const groupParts = scopeChunks.filter((entry) => entry.kapsam_grubu === groupId);
+      groupParts.forEach((entry, index) => {
+        entry.parca = index + 1;
+        entry.toplam_parca = groupParts.length;
+      });
+    }
+    const { kapsam: _omitted, ...rest } = item;
+    return { ...rest, kapsam_grubu: groupId };
+  });
 
   const appendRecord = (bucketKey, item) => {
     const existing = Array.isArray(current[bucketKey]) ? current[bucketKey] : [];
@@ -423,7 +462,7 @@ export function buildReportEvidenceMessages(evidencePackage, { maxBytes = REPORT
       current = candidate;
       return;
     }
-    if (current.paket || current.kanitlar?.length || current.celiskiler?.length || current.turetilmis?.length) {
+    if (current.paket || current.kanitlar?.length || current.celiskiler?.length || current.turetilmis?.length || current.kapsam_parcalari?.length) {
       chunks.push(current);
     }
     current = { [bucketKey]: [item] };
@@ -431,9 +470,10 @@ export function buildReportEvidenceMessages(evidencePackage, { maxBytes = REPORT
     if (size(current) + widestPreamble + 1 > maxBytes) throw new ReportPromptError('EVIDENCE_ITEM_TOO_LARGE');
   };
 
+  for (const scopePart of scopeChunks) appendRecord('kapsam_parcalari', scopePart);
   for (const conflict of celiskiler) appendRecord('celiskiler', conflict);
   for (const finding of turetilmis) appendRecord('turetilmis', finding);
-  for (const item of kanitlar) appendRecord('kanitlar', item);
+  for (const item of compactEvidence) appendRecord('kanitlar', item);
   chunks.push(current);
   if (chunks.length > REPORT_WRITER_MAX_EVIDENCE_MESSAGES) throw new ReportPromptError('EVIDENCE_TOO_MANY_MESSAGES');
   const messages = chunks.map((chunk, index) => `${EVIDENCE_PREAMBLE(index + 1, chunks.length)}\n${JSON.stringify(chunk)}`);

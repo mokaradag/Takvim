@@ -42,7 +42,16 @@ const FIXED_OUTPUT_TOKENS = 1500;
 const REASONING_HEADROOM_TOKENS = 40960;
 const MAX_REQUESTED_OUTPUT_TOKENS = 65536;
 
-const NORMAL_FINISH_REASONS = new Set(['stop', 'end_turn']);
+const NORMAL_FINISH_REASONS = new Set(['stop', 'end_turn', 'stop_sequence', 'eos', 'eos_token']);
+const TRUNCATED_FINISH_REASONS = new Set(['length', 'max_tokens', 'max_output_tokens']);
+
+/** Sağlayıcı bitiş nedenini küçük harfe indirger ve kesilme eşanlamlılarını `length` altında toplar. */
+function normalizeFinishReason(finishReason) {
+  if (typeof finishReason !== 'string') return null;
+  const normalized = finishReason.trim().toLowerCase();
+  if (!normalized) return null;
+  return TRUNCATED_FINISH_REASONS.has(normalized) ? 'length' : normalized;
+}
 
 function writerFailure(code, reason, extra = {}) {
   return new AiError(code, { details: { reason, ...extra } });
@@ -159,7 +168,7 @@ export function assessReportWriterModelIdentity({ model = null, configuredModel 
 const KNOWN_ABNORMAL_FINISH_REASONS = new Set(['content_filter', 'tool_calls', 'function_call']);
 
 export function finalizeReportWriterResponse({ text, finishReason = null, plan, evidencePackage }) {
-  const normalizedFinish = typeof finishReason === 'string' ? finishReason.trim().toLowerCase() : null;
+  const normalizedFinish = normalizeFinishReason(finishReason);
   if (normalizedFinish === 'length') throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
   if (normalizedFinish && !NORMAL_FINISH_REASONS.has(normalizedFinish)) {
     const safeReason = KNOWN_ABNORMAL_FINISH_REASONS.has(normalizedFinish) ? normalizedFinish : 'other';
@@ -235,14 +244,18 @@ export async function writeExecutiveReportDraft({
     if (error instanceof AiError
       && error.code === AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID
       && error.details?.reason === 'EMPTY_COMPLETION'
-      && String(error.details?.finishReason || '').trim().toLowerCase() === 'length') {
+      && normalizeFinishReason(error.details?.finishReason) === 'length') {
       throw writerFailure(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, 'REPORT_DRAFT_TRUNCATED');
     }
     throw error;
   }
   cancelled(signal);
-  // Uzun süren yazım sırasında yetki ya da rıza değişmiş olabilir: yanıt ayrıştırılmadan önce güncel yetki doğrulanır.
-  await assertStillAuthorized(revalidate, signal, revalidationTimeoutMs);
+  // Uzun süren yazım sırasında yetki ya da rıza değişmiş olabilir: geçersiz zaman aşımı girdisinde dahi varsayılan üst sınır korunur.
+  const boundedRevalidationTimeoutMs = typeof revalidationTimeoutMs === 'number'
+    && Number.isFinite(revalidationTimeoutMs) && revalidationTimeoutMs > 0
+    ? revalidationTimeoutMs
+    : REPORT_WRITER_REVALIDATION_TIMEOUT_MS;
+  await assertStillAuthorized(revalidate, signal, boundedRevalidationTimeoutMs);
   const identity = assessReportWriterModelIdentity(result);
   const draft = finalizeReportWriterResponse({ text: result.text, finishReason: result.finishReason, plan: request.plan, evidencePackage: evidenceSnapshot });
   return Object.freeze({
