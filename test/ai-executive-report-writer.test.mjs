@@ -3227,16 +3227,21 @@ test('düzyazı uyarıları Unicode satır sonlarında listeyi, başlığı ve M
   const pkg = pkgOf('S01');
   const writerPlan = plan.buildReportSectionPlan(pkg, style);
   const raw = JSON.parse(validDraftText(writerPlan));
-  const text = 'Dönem özeti.\u2028- Bir madde\u2029## Bir başlık\n[Ek bilgi](https://ornek.invalid)';
-  raw.bolumler[0].paragraflar[0].metin = text;
-  raw.iddialar[0].alinti = 'Dönem özeti.';
-  const parsed = draftModule.parseReportDraft(JSON.stringify(raw), { plan: writerPlan, evidencePackage: pkg });
-  const warnings = parsed.uyarilar.map((warning) => warning.kod);
-  for (const warning of ['madde_isareti', 'markdown', 'paragraf_ici_satir_sonu']) assert.ok(warnings.includes(warning));
-  assert.equal(parsed.bolumler[0].paragraflar[0].metin, text);
-
-  raw.bolumler[0].paragraflar[0].metin = 'Dönem özeti. (Ek bilgi, çalışmaya dahildir.)';
-  const ordinary = draftModule.parseReportDraft(JSON.stringify(raw), { plan: writerPlan, evidencePackage: pkg });
+  const parseProse = (metin) => {
+    raw.bolumler[0].paragraflar[0].metin = metin;
+    raw.iddialar[0].alinti = 'Dönem özeti.';
+    return draftModule.parseReportDraft(JSON.stringify(raw), { plan: writerPlan, evidencePackage: pkg });
+  };
+  for (const [prose, code] of [
+    ['Dönem özeti.\u2028- Bir madde', 'madde_isareti'],
+    ['Dönem özeti.\u2029## Bir başlık', 'markdown'],
+    ['Dönem özeti. [Ek bilgi](https://ornek.invalid)', 'markdown']
+  ]) {
+    const parsed = parseProse(prose);
+    assert.ok(parsed.uyarilar.some((warning) => warning.kod === code), prose);
+    assert.equal(parsed.bolumler[0].paragraflar[0].metin, prose);
+  }
+  const ordinary = parseProse('Dönem özeti. (Ek bilgi, çalışmaya dahildir.)');
   assert.equal(ordinary.uyarilar.some((warning) => warning.kod === 'markdown'), false);
 });
 
@@ -3314,6 +3319,7 @@ test('kıyas doğrulayıcısı boş paket satırını ve başka bir sayının i�
   assert.ok(bench.verifyWriterPackageSet(invalidSet, fixture).includes('paket_satiri_gecersiz:0'));
   const fact = [{ id: 'Z1', anahtarlar: [['120'], ['kural']] }];
   assert.equal(bench.mandatoryCoverage('120 kural taşındı.', fact)[0].yer_aliyor, true);
+  assert.equal(bench.mandatoryCoverage('Yüz yirmi kural taşındı.', fact)[0].yer_aliyor, true);
   for (const text of ['1120 kural taşındı.', '1200 kural taşındı.', '120,5 kural taşındı.', '0,120 kural taşındı.']) {
     assert.equal(bench.mandatoryCoverage(text, fact)[0].yer_aliyor, false, text);
     assert.equal(bench.mandatoryCoverage(text, [{ id: 'Z1', anahtarlar: [['120 kural']] }])[0].yer_aliyor, false, text);

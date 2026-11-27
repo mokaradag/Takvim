@@ -223,8 +223,8 @@ function normalizeForQuote(text) {
 /** Düzyazıdaki dikkat gerektiren biçim kusurları; yapısal hata değildir, editoryal değerlendirmeye uyarı olarak gider. */
 function styleWarnings(text, path) {
   const warnings = [];
-  if (/(^|[\r\n\u2028\u2029])\s*(?:[-*•]|\d+[.)])\s+/u.test(text)) warnings.push({ kod: 'madde_isareti', yol: path });
-  if (/(^|[\r\n\u2028\u2029])\s*#{1,6}\s/u.test(text)
+  if (/(^|[\r\n\u2028\u2029])[^\S\r\n\u2028\u2029]*(?:[-*•]|\d+[.)])\s+/u.test(text)) warnings.push({ kod: 'madde_isareti', yol: path });
+  if (/(^|[\r\n\u2028\u2029])[^\S\r\n\u2028\u2029]*#{1,6}\s/u.test(text)
     || /\*\*[^*]+\*\*/u.test(text) || /\[[^\[\]\r\n\u2028\u2029]+\]\([^()\r\n\u2028\u2029]*\)/u.test(text)) warnings.push({ kod: 'markdown', yol: path });
   if (/\b[EF][1-9]\d*\b/u.test(text)) warnings.push({ kod: 'duzyazida_kanit_kimligi', yol: path });
   if (/\b\d{4}-\d{2}-\d{2}\b/u.test(text)) warnings.push({ kod: 'iso_tarih', yol: path });
