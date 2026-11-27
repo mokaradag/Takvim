@@ -31,7 +31,7 @@ import { createAiDeadline } from '../aiDeadline.js';
 import { concreteCollections, rankedRowIndexes, REQUEST_LIMITS, taskResultScope } from '../../../domain/ai/requestContract.js';
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { layerAspectLabel, PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderLayerOmissions, renderOverlappingSeries, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
-import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
+import { bindNarrativeLeads, buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
 import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, analysisWindows, normalizedBrief, pinnedWindowFields, pinsFollowUpWindow, resolveAnalysisBrief, parseAnalysis, TEMPORAL_FOCUS } from '../tools/analysisPlan.js';
 import { COMPARE_WINDOWS, resolveWindow } from '../../../domain/ai/temporalWindow.js';
 import { isIsoDay } from '../../../domain/ai/isoDay.js';
@@ -41,6 +41,7 @@ import { ANALYSIS_CONTEXT_VERSION, analysisContextSummary, normalizeAnalysisCont
 import { composeGroundedAnswer, compositionWindowMs } from './answerComposition.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
 import { addDays } from '../tools/rota/taskFacts.js';
+import { buildEvidenceCards, settleEvidenceBindings } from './evidenceCards.js';
 
 /**
  * Rota verisine dayanan yanıtın SINIRLI döngüsü.
@@ -1939,9 +1940,12 @@ export async function presentVerdict(turn, verdict, compose) {
     const validated = (visual && composition.render.charts.size) || analytical || table ? defaultComposition(composition) : null;
     if (!validated) {
       turn.trace.presentation = { ...(turn.trace.presentation || {}), mode: 'narrative', reason };
-      return visual ? withChartNote(turn, verdict) : verdict;
+      // ICE: belirlenimci anlatımın görev sayımı cümlesi de (yalnızca kanıt grubunun kendi tam cümlesiyse) karta bağlanır.
+      const narrative = turn.composeAnswers && verdict.kind === 'grounded' ? bindNarrativeLeads(composition, verdict.normalized) : null;
+      const bound = narrative ? settleEvidenceBindings({ ...verdict, normalized: narrative.text }, narrative.bindings) : verdict;
+      return visual ? withChartNote(turn, bound) : bound;
     }
-    const rendered = renderComposition(composition, validated);
+    const rendered = renderComposition(composition, validated, { bind: turn.composeAnswers });
     if (!rendered.citedIds.every((id) => verdict.citedIds.includes(id))) {
       turn.trace.presentation = { mode: 'narrative', reason: 'CITATION_SCOPE' };
       return visual ? withChartNote(turn, verdict) : verdict;
@@ -1954,7 +1958,8 @@ export async function presentVerdict(turn, verdict, compose) {
       ...(rendered.suppressed ? { suppressed: rendered.suppressed } : {}), tables: rendered.tables, notes: rendered.notes, titled: rendered.titled, ...(rendered.findings ? { findings: rendered.findings } : {}) };
     const laidOut = { ...verdict, normalized: presentationNotes(rendered, [...input.notes, ...chartTypeNote(turn, composition, rendered)]) };
     // Analitik düzen grafiksiz kurulduysa açık grafik isteği yine sessizce düşmez.
-    return visual && !rendered.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, laidOut, rendered.closing) : laidOut;
+    // ICE: düzenin konum işaretleri burada sökülür; bundan sonraki her adım işaretsiz metinle çalışır.
+    return settleEvidenceBindings(visual && !rendered.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, laidOut, rendered.closing) : laidOut, rendered.bindings);
   };
   if (route === 'server') return serverLayout(compose ? 'DISABLED' : 'NO_MODEL');
   if (!hasCompositionChoice(composition)) {
@@ -1992,7 +1997,7 @@ export async function presentVerdict(turn, verdict, compose) {
   turn.renderedRowParts = result.rowParts;
   turn.renderedEvidence = result.citedIds;
   const composed = { ...verdict, normalized: presentationNotes(result, [...input.notes, ...chartTypeNote(turn, composition, result)]) };
-  return visual && !result.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, composed, result.closing) : composed;
+  return settleEvidenceBindings(visual && !result.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, composed, result.closing) : composed, result.bindings);
 }
 
 /** Sunucu notları kanıtlı sonuç veya sonraki adım bloğundan önce yerleşir. */
@@ -2116,6 +2121,16 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   const cited = ledger.summaries(verdict.citedIds);
   turn.trace.evidence = cited.length;
   const finalText = disclosure.text;
+  // ICE: son yetki yeniden doğrulamasından sonra, yalnızca düzen yanıtı aynen korunduysa (geri dönüş ya da kullanılamaz yanıt
+  // konmadıysa) atfedilen kanıtlardan geçici kart tanımlayıcısı kurulur. Kart isteğe bağlıdır: hata yanıtı etkilemez.
+  let evidenceCards = null;
+  if (verdict.kind === 'grounded' && verdict.evidenceBindings && !bounded.overflow && !bounded.exhausted && !ledger.revoked()) {
+    try {
+      evidenceCards = buildEvidenceCards({ evidenceBindings: verdict.evidenceBindings, finalText, entries: ledger.requestEntries({ forCards: true }), summaries: cited, citedIds: verdict.citedIds });
+    } catch {
+      evidenceCards = null;
+    }
+  }
   await onText(finalText);
   const outcome = verdict.kind;
   const resultScope = completedResultScope(turn, verdict);
@@ -2148,6 +2163,7 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
     outcome,
     evidence: cited,
     evidenceRows,
+    ...(evidenceCards ? { evidenceCards } : {}),
     streamedLive: false,
     repaired: turn.repaired,
     disclosed: disclosure.disclosed,

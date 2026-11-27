@@ -184,7 +184,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     });
   }, [workspaceReady, workspaceWriteReady, state.dataStatus, state.workspaceMode, state.selectedProjectId]);
 
-  const openTask = useCallback(async (taskOrId) => {
+  const openTask = useCallback(async (taskOrId, { isCurrent } = {}) => {
     const rawId = typeof taskOrId === 'string' ? taskOrId : taskOrId?.id;
     const findTask = () => stateRef.current.tasks.find((item) => sameActualReference(item.id, rawId));
     let task = findTask();
@@ -193,6 +193,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
       if (refreshed?.ok === false) return refreshed;
       task = findTask();
     }
+    if (isCurrent && !isCurrent()) return { ok: false };
     if (!task) return { ok: false, error: { message: 'Görev bulunamadı veya artık görüntüleme yetkiniz yok.' } };
     taskCreationDraftRef.current = null;
     setTaskCreationDraft(null);

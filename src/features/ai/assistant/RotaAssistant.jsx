@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Icons } from '../../../components/icons';
 import { Spinner } from '../../../components/Loader';
 import { useDataMode } from '../../../components/shell/DataModeContext.jsx';
@@ -9,6 +9,7 @@ import { ASSISTANT_DEFAULT_TITLE } from '../../../domain/ai/assistantContract.js
 import { keyboardOwnedElsewhere, modalTrapDepth, useModalFocusTrap } from '../../../hooks/useModalFocusTrap.js';
 import { useReducedMotion } from '../../../hooks/useReducedMotion.js';
 import { appZoom } from '../../../lib/zoom.js';
+import { EvidenceCardActionsContext } from './EvidenceCard.jsx';
 import { AssistantComposer } from './AssistantComposer.jsx';
 import { AssistantConversationList } from './AssistantConversationList.jsx';
 import { AssistantThread, FAILURE_ACTION_LABELS } from './AssistantThread.jsx';
@@ -241,7 +242,7 @@ function Welcome({ readiness, mode, onSuggest, recent }) {
 }
 
 /** Panel. Kabukta her zaman monte edilir; kapalıyken hiçbir şey çizmez ama durumunu korur. */
-export function RotaAssistantPanel({ assistant, onOpenSettings }) {
+export function RotaAssistantPanel({ assistant, onOpenSettings, openEvidenceTask }) {
   const { controller, open, actual, focusRequest, launcherRef, close } = assistant;
   const state = useAssistantState(controller);
   const sheet = useSheetLayout();
@@ -276,6 +277,38 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const held = heldDrafts[draftKey] || null;
   const restoreFocusEnabledRef = useRef(true);
   useEffect(() => { if (open) restoreFocusEnabledRef.current = modal; }, [open, modal]);
+  const taskOpenRequest = useRef(null);
+  const [taskOpenFailed, setTaskOpenFailed] = useState(false);
+  useLayoutEffect(() => {
+    setTaskOpenFailed(false);
+    return () => { taskOpenRequest.current = null; };
+  }, [controller, open, actual, draftKey, state.view, state.status, state.active.loading]);
+  const cardActions = useMemo(() => ({ openTask: openEvidenceTask ? async (taskId) => {
+    const panel = panelRef.current;
+    const request = {};
+    taskOpenRequest.current = request;
+    const isCurrent = () => {
+      const current = controller.getState();
+      return taskOpenRequest.current === request && panel && panelRef.current === panel && panel.isConnected
+        && current.status === 'ready' && current.view === 'chat' && !current.active.loading && !current.active.closed
+        && (current.active.viewKey || current.active.key) === draftKey;
+    };
+    setTaskOpenFailed(false);
+    let result;
+    try {
+      result = await openEvidenceTask(taskId, { isCurrent });
+    } catch {
+      if (isCurrent()) setTaskOpenFailed(true);
+      return;
+    }
+    if (!isCurrent()) return;
+    if (!result?.ok) setTaskOpenFailed(true);
+    else if (panel.getAttribute('aria-modal') === 'true') {
+      // Görev seçildiyse kipli panel çekmeceye yer açar; taslak ve konuşma bellekte kalır.
+      restoreFocusEnabledRef.current = false;
+      close({ restoreFocus: false });
+    }
+  } : null }), [controller, draftKey, openEvidenceTask, close]);
   const focusTargetRef = useMemo(() => ({
     get current() {
       return inputRef.current && !inputRef.current.disabled ? inputRef.current : headingRef.current;
@@ -559,6 +592,10 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
       </header>
       <div className="rota-assistant-body">
         {(active.notice || capacityNotice) && <Notice notice={active.notice || capacityNotice} onAction={runAction} />}
+        {taskOpenFailed && (
+          <div role="alert"><Notice notice={{ tone: 'error', title: 'Görev açılamadı',
+            message: 'Görev bulunamadı veya görüntülenemiyor.' }} /></div>
+        )}
         {held && (
           <Notice notice={HELD_DRAFT_NOTICE} onAction={runAction}>
             <button
@@ -575,7 +612,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
             <button type="button" className="btn ghost sm" onClick={() => setHeldDraft(null)}>Kapat</button>
           </Notice>
         )}
-        {body}
+        <EvidenceCardActionsContext.Provider value={cardActions}>{body}</EvidenceCardActionsContext.Provider>
       </div>
       {(canCompose || (actual && generating)) && (
         <AssistantComposer

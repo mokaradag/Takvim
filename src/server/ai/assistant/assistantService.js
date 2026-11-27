@@ -1127,8 +1127,13 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
       answer = liveAuthorized && !savedMessageMissing(stored.message, presence)
         ? { ...stored.message, evidence: grounded.evidence, rotaData: true }
         : discloseSavedMessages([stored.message], { ...evidence, ...presence })[0];
+      // ICE: geçici kanıt kartları yalnızca turun KENDİ yanıtı aynen teslim ediliyorsa ve kartların dayandığı her kanıt
+      // teslim edilen (güncel yetkiden geçmiş) kanıt listesinde kaldıysa gönderilir. Kart kalıcı kayda girmez.
+      const delivered = new Set((answer.evidence || []).map((item) => item?.id));
+      const evidenceCards = own && grounded.evidenceCards && answer.content === grounded.text && answer.finishReason === grounded.finishReason
+        && grounded.evidenceCards.evidenceIds.every((id) => delivered.has(id)) ? grounded.evidenceCards.descriptor : null;
       return { conversation: stored.conversation, answer: { ...answer, evidence: answer.evidence || [] },
-        reconciled: !own, finishReason: answer.finishReason, contentAuthoritative: true, firstTokenMs: null };
+        reconciled: !own, finishReason: answer.finishReason, contentAuthoritative: true, firstTokenMs: null, ...(evidenceCards ? { evidenceCards } : {}) };
     };
     // Erişim, kuyrukta yer açıldıktan sonra ve görünür teslimin hemen öncesinde doğrulanır.
     if (onDelivery) await onDelivery(prepareDelivery);

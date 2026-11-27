@@ -95,7 +95,7 @@ export async function composeGroundedAnswer({ session, composition, onStart = nu
       const fallback = defaultComposition(composition);
       if (fallback?.ok && fallback.blocks.some((block) => block.type === 'chart')) { validated = { ...fallback, chartInserted: true }; serverFallback = true; }
     }
-    const rendered = renderComposition(composition, validated);
+    const rendered = renderComposition(composition, validated, { bind: true });
     // Düzyazı onarım sayıları (içeriksiz): düşen/kısaltılan cümle, düşen grafik bloğu, sunucu tamamlaması.
     const prose = !serverFallback && checked.prose ? { dropped: checked.prose.dropped, cut: checked.prose.cut, charts: checked.prose.charts, supplemented: checked.prose.supplemented } : null;
     return rendered.text.trim() ? { ok: true, ...rendered, ...(serverFallback ? { serverFallback: true } : {}), ...(validated.chartInserted ? { chartInserted: true } : {}), ...(prose ? { prose } : {}) }
