@@ -295,7 +295,8 @@ grupları otomatik eşleşmiş olsa bile her taslak için bağlı `atlanan_zorun
 atlanan zorunlu olgu olmadığını doğruladığında) ve `dogru`/`yanlis` sayıları koşu kaydında tutulur. Defter dışı sayı
 adayları bu genel sayılarla kapanmaz: hakem kararı sayı adaylarının tek tek incelendiğini `sayilar_incelendi: true` ile
 açıkça bildirmedikçe aday `bekleyen_sayi_incelemesi_toplam` içinde bekler (kronoloji adayı ise `kronoloji_incelendi: true`
-ya da geçerli bir `kronoloji_hatasi` sayısıyla kapanır; `kronoloji_incelendi: false` incelemeyi açık bırakır). Bu kural 2026-11-25 vekil koşusunun özgün yanıtlarını ve hakem kayıtlarını değiştirmez. **Yeniden değerlendirme
+ya da `kronoloji_incelendi` alanı verilmemişken geçerli bir `kronoloji_hatasi` sayısıyla kapanır; `kronoloji_incelendi: false`
+veya geçersiz karar alanları incelemeyi açık bırakır). Bu kural 2026-11-25 vekil koşusunun özgün yanıtlarını ve hakem kayıtlarını değiştirmez. **Yeniden değerlendirme
 (2026-11-28):** arşiv kaydı güncel dondurulmuş küme özetiyle uyuşmadığından olağan `ozet` satır değerlendirmez;
 `--tarihsel-uyusmazlik-izni evet` ile değerlendirildiğinde arşiv hakem kayıtlarında `sayilar_incelendi` alanı
 bulunmadığı için 12 senaryoda toplam 14 defter dışı sayı adayı bekleyen kalır (önceki kural bunları genel iddia

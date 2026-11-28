@@ -2841,6 +2841,7 @@ test('son yakınsama kök neden regresyonları: nitelendirme, kör bağlama, kan
   assert.ok(scanDraft('S02', 'Güç bütçesi tablosu tamamlandı.').atlanan_zorunlu_otomatik.includes('Z1'));
   assert.equal(scanDraft('S11', 'Ekimde sıfır görev tamamlandı; protokol katmanı, hata yönetimi ve düzenek kurulumu ilerledi.').atlanan_zorunlu_otomatik.includes('Z1'), false);
   assert.ok(scanDraft('S11', 'Ekimde sıfır görev tamamlandı.').atlanan_zorunlu_otomatik.includes('Z1'));
+  assert.equal(scanDraft('S11', 'Ekimde 0 görev tamamlanmıştır; protokol katmanı, hata yönetimi ve düzenek kurulumu ilerledi.').atlanan_zorunlu_otomatik.includes('Z1'), false);
   assert.equal(scanDraft('S42', 'Elli iki açık görevin yedisi gecikmiş; önümüzdeki yedi günde on dört görevin termini var.').atlanan_zorunlu_otomatik.includes('Z2'), false);
   assert.equal(scanDraft('S42', '52 açık görevin 7’si gecikmiş; önümüzdeki yedi günde 14 görevin termini var.').atlanan_zorunlu_otomatik.includes('Z2'), false);
 
