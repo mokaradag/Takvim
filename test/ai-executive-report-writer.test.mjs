@@ -3325,6 +3325,7 @@ test('düzyazı uyarıları listeyi, başlığı, vurguyu, satır içi kodu ve M
   }
   for (const text of [
     'Dönem özeti. (Ek bilgi, çalışmaya dahildir.)',
+    'Dönem özeti. ' + '[A]('.repeat(500),
     'Dönem özeti. gorev_durumu ve ölçüm_sonucu 2 * 3 üzerinden okundu.',
     'Dönem özeti. Tek ` işareti kapatılmadı.'
   ]) {
@@ -3498,7 +3499,11 @@ test('kör pakete doğrulanmış model adını belirten düzyazı alınmaz', asy
   assert.equal(qual.hasVerifiedStoredModelIdentity(short), true);
   assert.equal(qual.hasVerifiedStoredModelIdentity({ ...short, model: { ...short.model, bildirilen: ['GPT4'] } }), false);
   assert.equal(qual.hasVerifiedStoredModelIdentity({ ...short, tasiyici: 'vekil', model: { ...short.model, bildirilen: ['GPT4'] } }), true);
-  for (const [text, leaks] of [['Bu rapor GPT4 ile hazırlandı.', true], ['Bu rapor XGPT42 kaydını özetler.', false]]) {
+  for (const [text, leaks] of [
+    ['Bu rapor GPT4 ile hazırlandı.', true],
+    ['Bu rapor (GPT4) tarafından hazırlandı.', true],
+    ['Bu rapor XGPT42 ve 𐐀GPT4 kaydını özetler.', false]
+  ]) {
     raw.bolumler[0].paragraflar[0].metin = text;
     short.taslak = draftModule.parseReportDraft(JSON.stringify(raw), { plan: writerPlan, evidencePackage: fixtureEntry.paket });
     short.taslak_ozeti = qual.draftDigest(short);

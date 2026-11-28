@@ -230,15 +230,16 @@ function hasInlineCodeSpan(text) {
 }
 
 function hasInlineMarkdownLink(text) {
-  for (const match of text.matchAll(/\[[^\[\]\r\n\u2028\u2029]+\]\(/gu)) {
-    let depth = 1;
-    for (let index = match.index + match[0].length; index < text.length; index += 1) {
-      const char = text[index];
-      if (/[\r\n\u2028\u2029]/u.test(char)) break;
-      if (char === '\\' && /[()\\]/u.test(text[index + 1] ?? '')) index += 1;
-      else if (char === '(') depth += 1;
-      else if (char === ')' && --depth === 0) return true;
-    }
+  // Her parantez bir kez işlenir; kapanmamış bağlantılar sonraki taramayı baştan başlatmaz.
+  const links = new Set(Array.from(text.matchAll(/\[[^\[\]\r\n\u2028\u2029]+\]\(/gu),
+    (match) => match.index + match[0].length - 1));
+  if (links.size === 0) return false;
+  const open = [];
+  for (const token of text.matchAll(/\\[()\\]|[()\r\n\u2028\u2029]/gu)) {
+    if (token[0] === '(') open.push(links.has(token.index));
+    else if (token[0] === ')') {
+      if (open.pop()) return true;
+    } else if (token[0].length === 1) open.length = 0;
   }
   return false;
 }

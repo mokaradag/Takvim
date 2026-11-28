@@ -1540,8 +1540,14 @@ function mentionsGeneratingModel(record) {
     const name = compact(alias);
     if (name.length >= 5) return prose.includes(name);
     if (!name) return false;
-    const exact = alias.normalize('NFKC').toLowerCase().replace(/[.*+?^$(){}|[\]\\]/gu, '\\$&');
-    return new RegExp('(?:^|[^\\p{L}\\p{N}])' + exact + '(?=$|[^\\p{L}\\p{N}])', 'u').test(rawProse);
+    const exact = alias.normalize('NFKC').toLowerCase();
+    for (let at = rawProse.indexOf(exact); at !== -1; at = rawProse.indexOf(exact, at + 1)) {
+      const end = at + exact.length;
+      const before = Array.from(rawProse.slice(Math.max(0, at - 2), at)).at(-1) ?? '';
+      const after = Array.from(rawProse.slice(end, end + 2))[0] ?? '';
+      if (!/[\p{L}\p{N}]/u.test(before) && !/[\p{L}\p{N}]/u.test(after)) return true;
+    }
+    return false;
   }));
 }
 
