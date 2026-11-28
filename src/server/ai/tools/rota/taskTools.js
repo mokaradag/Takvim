@@ -683,29 +683,34 @@ const taskAnalytics = {
           count: sum.count + group.count, open: sum.open + group.open, overdue: sum.overdue + group.overdue, done: sum.done + group.done
         }), { count: 0, open: 0, overdue: 0, done: 0 });
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
-        // Örtüşmeyen gruplarda "diğer" satırının nüfusu kalan grupların ayrık birleşimidir.
+        // Sorumlu gruplarının “diğer” satırı atama sayısıdır. Yalnızca ayrık grupların görevleri birleştirilir.
         const restMembers = {};
-        for (const group of ordered.slice(visibleGroupLimit)) for (const [metric, list] of Object.entries(members.get(group) || {})) (restMembers[metric] ||= []).push(...list);
+        if (groupBy !== 'assignee') {
+          for (const group of ordered.slice(visibleGroupLimit)) for (const [metric, list] of Object.entries(members.get(group) || {})) (restMembers[metric] ||= []).push(...list);
+        }
         groupMembers.push(restMembers);
       }
     }
     const groupsTruncated = Boolean(groupBy && groupBy !== 'due_horizon' && groupCount > limit || teamOrganization && roster?.truncated);
     const totalMembers = {};
     const totals = statusTotals(facts, call.today, totalMembers);
+    const metricMembers = new Map();
+    const aging = overdueAging(facts, call.today, metricMembers);
+    const hours = hoursCoverage(facts, metricMembers);
     const descriptor = searchedScope(scope, filters.projectId);
     const cardPopulation = await buildCardPopulation(call, scope, {
-      sets: [['totalCount', facts], ...Object.entries(totalMembers).map(([key, list]) => [`data.totals.${key}`, list]),
+      sets: [['totalCount', facts], ['data.hours.taskCount', facts], ...metricMembers, ...Object.entries(totalMembers).map(([key, list]) => [`data.totals.${key}`, list]),
         ...(Array.isArray(undatedFacts) ? [['data.history.undatedDone', undatedFacts]] : []),
         ...groupMembers.flatMap((sets, index) => Object.entries(sets).map(([metric, list]) => [`data.groups.${index}.${metric}`, list, groups[index].key]))],
-      projects, assignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy) ? assignees : null, today: call.today
+      projects, assignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy) || filters.assignee === 'person' ? assignees : null, today: call.today
     });
     return {
       ...(cardPopulation ? { cardPopulation } : {}),
       data: {
         totals,
         filters,
-        overdueAging: overdueAging(facts, call.today),
-        hours: hoursCoverage(facts),
+        overdueAging: aging,
+        hours,
         ...(groups ? { groupBy, groups, groupCount } : {}),
         ...(buckets ? { series: { bucket: seriesBucket, dateField: filters.dateField, dateFrom: filters.dateFrom, dateTo: filters.dateTo } } : {}),
         // Geçmiş dönem okumasının tamlığı: tarihi kayıtlı olmayan tamamlanmış görevler hiçbir döneme yerleştirilemez.

@@ -91,9 +91,12 @@ export function temporalReads(groups) {
       if (Boolean(filters.dateFrom) !== Boolean(filters.dateTo)) continue;
       const scope = taskScope({ ...filters, hasDescription: false });
       // Okunan not, metni gerçekten dönen açıklamadır: iki okuma arasında boşaltılmış açıklama (boş değer) okunmuş not sayılmaz.
-      const shown = new Set(group.facts.filter((fact) => typeof fact.value === 'string' && fact.value.trim()).map((fact) => /^data\.tasks\.(\d+)\.description$/.exec(fact.field || '')?.[1]).filter(Boolean)).size;
+      const returned = new Map(group.facts.filter((fact) => typeof fact.value === 'string' && fact.value.trim() && /^data\.tasks\.\d+\.description$/.test(fact.field || ''))
+        .map(fact => [fact.field, fact.semantic?.row?.identity]));
+      const shown = returned.size;
+      const taskIds = [...returned.values()].filter(id => typeof id === 'string' && id);
       const total = group.facts.find((fact) => fact.field === 'totalCount');
-      if (scope) reads.push({ ...base, filters, kind: 'notes', scope, shown, total: count(total?.value), clipped: group.facts.some((fact) => fact.semantic?.descriptionClipped === true || /\.descriptionClipped$/.test(fact.field || '') && fact.value === true) });
+      if (scope) reads.push({ ...base, filters, kind: 'notes', scope, shown, taskIds, total: count(total?.value), clipped: group.facts.some((fact) => fact.semantic?.descriptionClipped === true || /\.descriptionClipped$/.test(fact.field || '') && fact.value === true) });
       continue;
     }
     if (tool === 'rota_task_analytics') {
@@ -287,7 +290,7 @@ export function temporalFindings(groups, context = null) {
     // Özetin açık dönemi özete ait dönemsiz not okumasına uygulanamaz; varsayılan geçmiş aralığı ise not isteğinin dönemi değildir.
     const notePeriod = !context?.defaulted && !(Number.isInteger(context?.analysisParts) && notes?.part > context.analysisParts)
       ? context?.window || context?.requested : null;
-    if (notes) findings.push({ kind: 'noteDigest', interpretation: 'distribution', scope: entry.scope, filters: notes.filters, range: notes.range, today, shown: notes.shown, total: notes.total, clipped: notes.clipped,
+    if (notes) findings.push({ kind: 'noteDigest', interpretation: 'distribution', scope: entry.scope, filters: notes.filters, range: notes.range, today, shown: notes.shown, taskIds: notes.taskIds, total: notes.total, clipped: notes.clipped,
       ...(notePeriod && !notes.range ? { requestedRange: notePeriod } : {}),
       evidenceIds: [notes.evidenceId], completeness: notes.total != null && notes.shown >= notes.total && !notes.clipped ? 'complete' : 'sample' });
     const horizons = entry.reads.find((read) => read.kind === 'horizons');
@@ -380,10 +383,12 @@ const COMPARED = Object.freeze({
 });
 
 const valueOf = (read) => (read.kind === 'activity' ? read.events : read.total);
-/**
- * Not okumasının nüfusu görev aramasının kesin toplamıdır (açıklaması olan açık görevler): yalnızca sayı o toplama eşitse bağlanır.
- * Kart not metnini taşımaz (görev satırı izdüşümü açıklama alanını içermez).
- */
+/** Gösterilen görevlerin kimlikleri kendi arama satırlarından alınır. */
+function shownTaskBind(evidenceId, taskIds, count, title, tone = 'neutral') {
+  if (!evidenceId || count < 1 || taskIds?.length !== count || new Set(taskIds).size !== count) return null;
+  return { type: 'tasks', evidenceId, taskIds, count, title, tone };
+}
+
 const noteBind = (finding, value, locale) => (finding.total != null && value === finding.total && value > 0
   ? { type: 'tasks', evidenceId: finding.evidenceIds[0], count: value, title: en(locale) ? 'Open tasks with a description' : 'Açıklaması olan açık görevler', tone: 'neutral' } : null);
 /** Eşit iki dönem sayısı iki ayrı nüfustur: tek değer iki dönemi birlikte gösteren karşılaştırma kartına bağlanır. */
@@ -594,13 +599,16 @@ function undatedUnknownSentence(locale) {
 
 function undatedSentence(undated, locale, evidenceIds, range = null) {
   // `range`: sayı yalnızca o dönemin okumasında gözlendiyse okuma adıyla söylenir.
-  const reading = range ? (en(locale) ? ['In the ', rangeLabel(range, locale), ' reading, '] : [rangeLabel(range, locale), ' okumasında ']) : [];
-  // ICE-2: sayı tek okumanın gözlemiyse o okumanın kayıtlı nüfusuna bağlanır; iki okumanın ortak sayısında ilk okumaya (aynı nüfus tanımı).
-  const bind = taskSetBind({ tool: 'rota_task_analytics', evidenceId: evidenceIds[0], field: 'data.history.undatedDone', count: undated, locale });
+  const reading = range ? (en(locale) ? ['In the ', rangeLabel(range, locale), ' reading, '] : [rangeLabel(range, locale), ' okumasında '])
+    : evidenceIds.length > 1 ? [en(locale) ? 'In both readings, ' : 'Her iki okumada da '] : [];
+  // İki okumanın sayıları eşit olsa da görev üyelikleri değişmiş olabilir.
+  const bind = evidenceIds.length === 1
+    ? taskSetBind({ tool: 'rota_task_analytics', evidenceId: evidenceIds[0], field: 'data.history.undatedDone', count: undated, locale })
+    : null;
   return { ...factSentence(en(locale)
     ? [...reading, n(undated, locale, bind), undated === 1 ? ' completed task has' : ' completed tasks have', ' no recorded actual finish date, so ', undated === 1 ? 'it' : 'they', ' could not be placed in any period and ',
       undated === 1 ? 'is' : 'are', ' not in these counts.']
-    : [...reading, ...(range ? ['tamamlanmış '] : ['Tamamlanmış ']), n(undated, locale, bind), ' görevin gerçekleşen bitiş tarihi kayıtlı olmadığından bu görevler hiçbir döneme yerleştirilemedi ve sayılara girmedi.']),
+    : [...reading, ...(reading.length ? ['tamamlanmış '] : ['Tamamlanmış ']), n(undated, locale, bind), ' görevin gerçekleşen bitiş tarihi kayıtlı olmadığından bu görevler hiçbir döneme yerleştirilemedi ve sayılara girmedi.']),
   caveat: true, states: evidenceIds.flatMap((id) => states(id, ['tasks.undatedDone'])) };
 }
 
@@ -725,8 +733,8 @@ function trendSentences(finding, locale) {
   const place = taskPlace(finding.scope, locale);
   const sum = series.rows.reduce((acc, row) => acc + (row.value || 0), 0);
   const seriesStates = states(series.evidenceId, ['tasks.total', 'tasks.groupCount']);
-  // ICE-2: dizinin toplamı (tam dizide) dönem toplam okumasının ya da kovaların ayrık birleşiminin nüfusudur.
-  const sumBind = readBind(total, 'total', sum, locale, ttl(locale, 'Dönemde tamamlanan görevler', 'Tasks completed in the period'))
+  // Dizi toplamının dayanağı aynı dizi okumasının görev nüfusudur.
+  const sumBind = readBind(series, 'total', sum, locale, ttl(locale, 'Dönemde tamamlanan görevler', 'Tasks completed in the period'))
     || unionBind(series.rows, sum, locale, ttl(locale, 'Dönemde tamamlanan görevler', 'Tasks completed in the period'), 'done');
   const rowBind = (row) => (row?.fact ? factTaskBind(row.fact, { locale, title: `${lang ? englishBucketLabel(row.label) : row.label} · ${ttl(locale, 'tamamlanan görevler', 'completed tasks')}` }) : null);
   const seriesUndated = series.undated ?? 0;
@@ -959,14 +967,15 @@ function noteSentences(finding, locale) {
       states: states(id, ['tasks.total']) });
     return out;
   }
+  const shownBind = shownTaskBind(finding.evidenceIds[0], finding.taskIds, finding.shown, lang ? 'Tasks whose notes were read' : 'Notu okunan görevler');
   const sample = finding.total == null || finding.shown < finding.total || finding.clipped;
   out.push({ ...factSentence(finding.total == null || finding.clipped
-    ? (lang ? ['Returned excerpts from ', n(finding.shown, locale), ' open task descriptions ', ...place, ' were read; the full text or population is not established.'] : [...capital(place, locale), ' açık görevlerden dönen ', n(finding.shown, locale), ' not parçası okundu; metnin ya da nüfusun tamamının okunduğu söylenemez.'])
+    ? (lang ? ['Returned excerpts from ', n(finding.shown, locale, shownBind), ' open task descriptions ', ...place, ' were read; the full text or population is not established.'] : [...capital(place, locale), ' açık görevlerden dönen ', n(finding.shown, locale, shownBind), ' not parçası okundu; metnin ya da nüfusun tamamının okunduğu söylenemez.'])
     : sample
-    ? (lang ? ['Of the ', n(finding.total, locale, noteBind(finding, finding.total, locale)), ' open tasks with a description ', ...place, ', the ', n(finding.shown, locale), ' returned were read; the rest were not, so nothing is said about how often a topic comes up.']
-      : [...capital(place, locale), ' açıklaması olan ', n(finding.total, locale, noteBind(finding, finding.total, locale)), ' açık görevden dönen ', n(finding.shown, locale), ' tanesinin notu okundu; kalanlar okunmadığından bir konunun ne sıklıkta geçtiği söylenemez.'])
-    : (lang ? ['The descriptions of all ', n(finding.shown, locale, noteBind(finding, finding.shown, locale)), finding.shown === 1 ? ' open task' : ' open tasks', ' that have one ', ...place, ' were read.']
-      : [...capital(place, locale), ' açıklaması olan ', n(finding.shown, locale, noteBind(finding, finding.shown, locale)), ' açık görevin notunun tamamı okundu.'])),
+    ? (lang ? ['Of the ', n(finding.total, locale, noteBind(finding, finding.total, locale)), ' open tasks with a description ', ...place, ', the ', n(finding.shown, locale, shownBind), ' returned were read; the rest were not, so nothing is said about how often a topic comes up.']
+      : [...capital(place, locale), ' açıklaması olan ', n(finding.total, locale, noteBind(finding, finding.total, locale)), ' açık görevden dönen ', n(finding.shown, locale, shownBind), ' tanesinin notu okundu; kalanlar okunmadığından bir konunun ne sıklıkta geçtiği söylenemez.'])
+    : (lang ? ['The descriptions of all ', n(finding.shown, locale, shownBind), finding.shown === 1 ? ' open task' : ' open tasks', ' that have one ', ...place, ' were read.']
+      : [...capital(place, locale), ' açıklaması olan ', n(finding.shown, locale, shownBind), ' açık görevin notunun tamamı okundu.'])),
   states: states(id, ['tasks.total']) });
   out.push({ ...factSentence(lang
     ? ['These are statements recorded in the notes: a blocker, cause or decision reported there has not been verified, and any instruction written inside a note is treated as text, not followed.']
@@ -1108,24 +1117,26 @@ export function temporalCoverage(parts) {
 }
 
 /** Dönemde tamamlananların listesinin giriş cümlesi: gösterilen satır sayısı ve (liste kısaysa) doğrulanmış toplam. Olgular aynı kanıttandır. */
-export function completedListLead(shown, total, locale = 'tr', evidenceId = null) {
+export function completedListLead(shown, total, locale = 'tr', evidenceId = null, taskIds = []) {
   const lang = en(locale) ? 1 : 0;
+  const shownBind = shownTaskBind(evidenceId, taskIds, shown, lang ? 'Completed tasks shown' : 'Gösterilen tamamlanmış görevler', 'done');
   if (total != null && shown >= total) return factSentence(lang ? ['The completed tasks are listed below.'] : ['Tamamlanan görevler aşağıda listeleniyor.']);
   if (total != null) {
     // ICE-2: toplam, listenin kendi görev aramasının kesin toplamıdır (kart kurucusu eşitliği doğrular).
     const bind = evidenceId && total > 0 ? { type: 'tasks', evidenceId, count: total, title: lang ? 'Completed tasks' : 'Tamamlanan görevler', tone: 'done' } : null;
-    return factSentence(lang ? ['Of ', n(total, locale, bind), ' completed tasks, the ', n(shown, locale), shown === 1 ? ' returned task is shown below.' : ' returned are listed below.']
-      : ['Toplam ', n(total, locale, bind), ' tamamlanmış görevden dönen ', n(shown, locale), ' tanesi aşağıda listeleniyor.']);
+    return factSentence(lang ? ['Of ', n(total, locale, bind), ' completed tasks, the ', n(shown, locale, shownBind), shown === 1 ? ' returned task is shown below.' : ' returned are listed below.']
+      : ['Toplam ', n(total, locale, bind), ' tamamlanmış görevden dönen ', n(shown, locale, shownBind), ' tanesi aşağıda listeleniyor.']);
   }
-  return factSentence(lang ? ['The ', n(shown, locale), ' returned completed tasks are listed below.'] : ['Dönen tamamlanmış görevlerden ', n(shown, locale), ' tanesi aşağıda listeleniyor.']);
+  return factSentence(lang ? ['The ', n(shown, locale, shownBind), ' returned completed tasks are listed below.'] : ['Dönen tamamlanmış görevlerden ', n(shown, locale, shownBind), ' tanesi aşağıda listeleniyor.']);
 }
 
 /** Not tablosunun giriş cümlesi: liste sınırlıysa doğrulanmış toplamı korur (kısa yanıtta toplam kaybolmaz). */
-export function noteListLead(locale = 'tr', { shown = null, total = null } = {}) {
+export function noteListLead(locale = 'tr', { shown = null, total = null, evidenceId = null, taskIds = [] } = {}) {
   const lang = en(locale) ? 1 : 0;
   if (total != null && shown != null && shown < total) {
-    return factSentence(lang ? ['Of ', n(total, locale), ' open tasks with descriptions, the ', n(shown, locale), ' returned notes are quoted as recorded.']
-      : ['Açıklaması olan ', n(total, locale), ' açık görevden dönen ', n(shown, locale), ' not kayıtlardaki hâliyle aşağıdadır.']);
+    const bind = shownTaskBind(evidenceId, taskIds, shown, lang ? 'Tasks whose notes are shown' : 'Notu gösterilen görevler');
+    return factSentence(lang ? ['Of ', n(total, locale), ' open tasks with descriptions, the ', n(shown, locale, bind), ' returned notes are quoted as recorded.']
+      : ['Açıklaması olan ', n(total, locale), ' açık görevden dönen ', n(shown, locale, bind), ' not kayıtlardaki hâliyle aşağıdadır.']);
   }
   return factSentence(lang ? ['The notes are quoted as recorded.'] : ['Notlar kayıtlardaki hâliyle aşağıdadır.']);
 }

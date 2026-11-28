@@ -219,7 +219,7 @@ function CollectionTable({ card }) {
         <span className="ice-metric-value">{card.total}</span>
         <span className="ice-metric-label">{noun}{card.rows.length < card.total ? ` · ${card.rows.length} gösteriliyor` : ''}</span>
       </div>
-      <div className="ice-table-wrap" tabIndex={0} aria-label={`${card.title} tablosu`}>
+      <div className="ice-table-wrap">
         <table className="ice-table">
           <thead><tr><th scope="col">{noun === 'kişi' ? 'Kişi' : noun === 'proje' ? 'Proje' : 'Birim'}</th>{card.columns.map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
           <tbody>
@@ -299,6 +299,7 @@ export function EvidenceReference({ card, receivedAt, expiresAt, focusFallbackRe
       wrapperStyle={{ display: 'inline' }}
       cardClass={`ice-card${single || fact ? ' is-single' : ''}${collection ? ' is-table' : ''}`}
       cardLabel={label}
+      scrollLabel={collection ? `${card.title} tablosu ve kapsamı` : undefined}
       triggerLabel={`${text} — ${label}. Kayıtları göster`}
       manageFocus
       focusFallbackRef={focusFallbackRef}

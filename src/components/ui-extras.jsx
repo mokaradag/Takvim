@@ -750,7 +750,7 @@ export function HoverListCard({
   children, title, icon, accent, summary, items = [], renderItem,
   listLabel = 'Görevler', listHint, onViewAll, emptyText = 'Kayıt yok.',
   wrapperStyle, wrapperClass = 'hovercard-trigger',
-  cardClass = '', cardLabel, triggerLabel, manageFocus = false, closeOnScroll = false, hideListHead = false, hideList = false, canOpen, focusFallbackRef
+  cardClass = '', cardLabel, scrollLabel, triggerLabel, manageFocus = false, closeOnScroll = false, hideListHead = false, hideList = false, canOpen, focusFallbackRef
 }) {
   const [show, setShow] = useSx(false);
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
@@ -945,7 +945,7 @@ export function HoverListCard({
           {title && <span className="rich-tip-title">{title}</span>}
         </div>
       )}
-      <div className="rich-tip-body">
+      <div className="rich-tip-body" {...(scrollLabel ? { role: 'region', tabIndex: 0, 'aria-label': scrollLabel } : {})}>
         {summary}
         {!hideList && !hideListHead && (
           <div className="rt-list-head">

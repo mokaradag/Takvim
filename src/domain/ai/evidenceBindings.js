@@ -12,7 +12,8 @@
  * koleksiyonu bağı kurulmaz: kart kurulamayacak bağ bağ bütçesini tüketmez.
  */
 const TASK_SET_PATHS = Object.freeze({
-  rota_task_analytics: /^(?:totalCount|data\.history\.undatedDone|data\.totals\.(?:total|todo|inProgress|done|open|overdue|dueToday|dueNext7Days|openWithoutTargetFinish|doneWithoutActualFinish|milestonesOpen)|data\.groups\.\d+\.(?:count|open|overdue|done))$/,
+  rota_task_analytics: /^(?:totalCount|data\.history\.undatedDone|data\.totals\.(?:total|todo|inProgress|done|open|overdue|dueToday|dueNext7Days|openWithoutTargetFinish|doneWithoutActualFinish|milestonesOpen)|data\.groups\.\d+\.(?:count|open|overdue|done)|data\.overdueAging\.buckets\.\d+\.count|data\.hours\.(?:taskCount|(?:plannedHours|actualHours|budget|spent)\.tasks(?:With|Without)Value))$/,
+  rota_project_detail: /^data\.visibleTasks\.total$/,
   rota_workload_summary: /^data\.(?:openTaskCount|unassignedOpenTasks|unrepresentedOpenTasks|people\.\d+\.(?:openTasks|inProgress|overdue|dueNext7Days))$/,
   rota_portfolio_summary: /^data\.(?:totals\.(?:tasks|open|done|overdue|dueNext7Days|openWithoutTargetFinish)|projects\.\d+\.tasks\.(?:total|todo|inProgress|done|open|overdue|dueNext7Days|openWithoutTargetFinish|milestonesOpen))$/
 });

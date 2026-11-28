@@ -334,7 +334,9 @@ export function finalizeCompositionQualification(report) {
   if (Number.isInteger(report.selected)) assert.equal(report.cases, report.selected, 'COMPOSITION_CASES_NOT_RUN');
   assert.equal(report.passed, report.cases, 'COMPOSITION_CASES_FAILED');
   assert.equal(report.escalations, 0, 'COMPOSITION_ESCALATION_FORBIDDEN');
-  assert.equal(report.usage.thinking, 0, 'COMPOSITION_THINKING_FORBIDDEN');
+  if (report.provider !== 'claude' || process.env.PLANNER_CLAUDE_THINKING !== 'allow') {
+    assert.equal(report.usage.thinking, 0, 'COMPOSITION_THINKING_FORBIDDEN');
+  }
 }
 
 const direct = (() => {

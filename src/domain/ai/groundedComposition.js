@@ -417,16 +417,19 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       const cover = covered && (covered.part == null || covered.part === ordinal) ? covered : null;
       // Dönemde tamamlananların listesi: sayımı giriş paragrafı söylemiştir; liste kendi giriş cümlesini alır (ölçütlü sayım yinelenmez).
       const shownRows = new Set(presentation.facts.filter((item) => item.evidenceId === group.evidenceId).map((item) => /^data\.tasks\.(\d+)\./.exec(item.fact?.field || '')?.[1]).filter(Boolean)).size;
-      const hasNoteText = cover?.kind === 'notes' && presentation.facts.some((item) => item.evidenceId === group.evidenceId
-        && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '') && typeof item.fact?.value === 'string' && item.fact.value.trim().length > 0);
+      const shownTaskIds = [...new Set(presentation.facts.filter(item => item.evidenceId === group.evidenceId && /^data\.tasks\.\d+\./.test(item.fact?.field || ''))
+        .map(item => item.fact.semantic?.row?.identity).filter(id => typeof id === 'string' && id))];
+      const noteRows = cover?.kind === 'notes' ? presentation.facts.filter((item) => item.evidenceId === group.evidenceId
+        && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '') && typeof item.fact?.value === 'string' && item.fact.value.trim()) : [];
+      const noteTaskIds = noteRows.map(item => item.fact.semantic?.row?.identity).filter(id => typeof id === 'string' && id);
       // Tek satırlı liste ayrıntı cümlesiyle çizilir (satır o cümlededir): giriş önermesi onu örtmez.
       // Liste giriş cümlesi yalnızca listenin doğrulanmış toplamı girişin söylediği sayıyla aynıysa kullanılır; farklıysa (iki okuma
       // arasında yeni tamamlanan görev) listenin kendi sayımı ayrıntıda kalır.
       const listAgrees = cover?.kind !== 'completedList' || (cover.total != null && cover.total === cover.aggregate);
       const countId = cover?.kind === 'completedList' && shownRows > 1 && listAgrees
-        ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...completedListLead(shownRows, cover.total, locale, group.tool === 'rota_task_search' ? group.evidenceId : null) })
-        : cover?.kind === 'notes' && shownRows > 1 && hasNoteText
-          ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...noteListLead(locale, { shown: shownRows, total: cover.total }) })
+        ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...completedListLead(shownRows, cover.total, locale, group.tool === 'rota_task_search' ? group.evidenceId : null, shownTaskIds) })
+        : cover?.kind === 'notes' && shownRows > 1 && noteRows.length > 0
+          ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...noteListLead(locale, { shown: noteRows.length, total: cover.total, evidenceId: group.evidenceId, taskIds: noteTaskIds }) })
         : !cover && envelopeOnlyGroup(group, presentation.layout)
           ? propose(ordinal, countProposition(group, totalFact, locale, totalFact ? countFallback() : null)) : null;
       if (totalFact) entitle(ordinal, group, [totalFact]);
@@ -568,12 +571,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       if (cover?.kind === 'completedList' && shownRows === 0 && cover.aggregate === 0 && cover.total === 0) continue;
       // Notu tanıtan cümle yalnızca gerçekten dönen boş olmayan açıklamada kullanılır: iki okuma arasında boşaltılmış açıklamanın görev
       // satırı görünür kalır ama "notu okunan görev" denmez.
-      const noteRead = presentation.facts.some((item) => item.evidenceId === group.evidenceId && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '')
-        && typeof item.fact.value === 'string' && item.fact.value.trim());
-      const singleRow = shownRows === 1 && (cover?.kind === 'notes' && noteRead || cover?.kind === 'completedList' && cover.total === 1 && listAgrees);
+      const singleRow = shownRows === 1 && (cover?.kind === 'notes' && noteRows.length > 0 || cover?.kind === 'completedList' && cover.total === 1 && listAgrees);
       const clippedSingle = cover?.kind === 'completedList' && shownRows === 1 && cover.total > shownRows;
+      const subsetLead = clippedSingle ? completedListLead(shownRows, cover.total, locale, group.evidenceId, shownTaskIds) : null;
       const lead = singleRow ? singleRowLead(cover.kind, locale)
-        : clippedSingle ? completedListLead(shownRows, cover.total, locale).markdown
+        : subsetLead ? subsetLead.markdown
           : taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
       const criteriaStated = Boolean(lead && !singleRow && !clippedSingle);
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead, criteriaStated });
@@ -586,7 +588,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         // Aşama H: boş not okumasının yokluğunu giriş cümlesi söyler; giriş bu kanıtı anıyorsa ayrıntı yeniden yazılmaz.
         details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText, covers: countId, notices: Object.freeze(notices),
           ...(cover?.kind === 'notes' && shownRows === 0 ? { silent: true } : {}),
-          source: Object.freeze({ group, empty: presentation.empty || [], layout: presentation.layout, lead, criteriaStated }) }));
+          source: Object.freeze({ group, empty: presentation.empty || [], layout: presentation.layout, lead, subsetLead, criteriaStated }) }));
         for (const table of ownedTables) tables.set(table.id, Object.freeze({ ...table, detail: id }));
         if (!countId) viewDetails.push({ id, part: ordinal, text: clip(renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, cite: false }), COMPOSITION_LIMITS.maxValueChars) });
       }
@@ -1579,6 +1581,15 @@ export function renderComposition(composition, validated, { bind = false } = {})
       return entitiesBind({ tool: group.tool, evidenceId, rows: Array.from({ length: fact.value }, (_, index) => `data.projects.${index}`), locale,
         title: locale === 'en' ? 'Visible projects' : 'Görünür projeler' });
     }
+    if (fact.field === 'data.totals.projectsWithOverdue' && group.tool === 'rota_portfolio_summary'
+      && fact.semantic?.complete === true && Number.isSafeInteger(fact.value) && fact.value > 0 && evidenceId) {
+      const rows = [...(group.collections.get('data.projects')?.values() || [])].flatMap(record => record.entries).map(({ fact: item }) => item)
+        .filter(item => /^data\.projects\.\d+\.tasks\.overdue$/.test(item.field) && Number.isSafeInteger(item.value) && item.value > 0)
+        .map(item => item.field.slice(0, -'.tasks.overdue'.length));
+      if (rows.length !== fact.value) return null;
+      return entitiesBind({ tool: group.tool, evidenceId, rows, locale,
+        title: locale === 'en' ? 'Projects with overdue tasks' : 'Gecikmiş görevi olan projeler' });
+    }
     const scope = fact.semantic?.group?.label || (fact.semantic?.row ? fact.semantic.row.name : null);
     return factTaskBind(fact, { locale, scope: typeof scope === 'string' ? scope : null });
   };
@@ -1601,7 +1612,9 @@ export function renderComposition(composition, validated, { bind = false } = {})
     const { staged, local } = stagedMarker();
     let lead = source.lead ?? null;
     const empty = (source.empty || []).includes(detail.evidenceId);
-    if (lead && source.group.tool === 'rota_task_search' && taskCountLead(source.group, locale, { empty }) === source.lead) {
+    if (source.subsetLead?.parts && source.subsetLead.markdown === lead) {
+      lead = factSentence(source.subsetLead.parts, local).markdown;
+    } else if (lead && source.group.tool === 'rota_task_search' && taskCountLead(source.group, locale, { empty }) === source.lead) {
       lead = taskCountLead(source.group, locale, { empty, mark: local }) || lead;
     }
     const candidate = detailText(detail, lead, (fact, role, row) => {

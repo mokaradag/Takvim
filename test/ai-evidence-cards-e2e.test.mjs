@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { captureConsole, createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
-import { AYSE, NOW, TASKS, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { AYSE, NOW, PROJECTS, TASKS, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { composer, coveringBlocks, isCompositionCall } from './helpers/compositionScenario.mjs';
 import { declared } from './helpers/evidenceScenario.mjs';
 
@@ -99,7 +99,8 @@ test('ICE-2: grafik isteği model düzeni kapalıyken sunucu düzeniyle karşıl
   const strong = strongTexts(content);
   for (const anchor of cards.anchors) assert.equal(strong[anchor.strong], anchor.text);
   // Model yalnızca planlama turunu gördü; kart için düzen ya da başka bir model çağrısı yoktur.
-  assert.equal(stack.provider.calls.filter((call) => isCompositionCall(call)).length, 0);
+  assert.equal(stack.provider.calls.length, 1, 'yalnızca planlayıcı çağrılmalı');
+  assert.equal(stack.provider.calls.some(isCompositionCall), false);
 });
 
 test('dizin çözüm durumu kartı düzeltir, model ve kalıcı kanıt görünümü korunur', async (t) => {
@@ -140,6 +141,31 @@ test('yanıt düzeni sırasında yetki kalkarsa yanıt kullanılamaz olur ve kar
   const done = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION }));
   assert.equal(done.evidenceCards, undefined);
   assert.equal(done.assistantMessage.finishReason, 'unavailable');
+});
+
+test('teslim yetkisi daraldığında sayım ve izinli kart korunur', async (t) => {
+  const seed = rotaToolSeed();
+  seed.taskAssignees.push({ TaskId: TASKS.READ_1, Sicil: AYSE }, { TaskId: TASKS.READ_2, Sicil: AYSE });
+  const stack = stackFor(t, { seed });
+  const { AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL: writeAnswer } = await import('../src/server/ai/assistant/conversationQueries.js');
+  let changed = false;
+  stack.db.queryBarrier = { entered: 0, released: Promise.resolve(), match(sql) {
+    if (!changed && sql === writeAnswer) {
+      changed = true;
+      stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ || row.Sicil !== AYSE);
+    }
+    return false;
+  } };
+  const request = { operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'project' },
+    layout: 'list', filters: { assignee: 'me' } };
+  stack.provider.enqueue(plan(request), composer());
+  const done = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Görevlerimi proje başına say.' }));
+  assert.ok(changed);
+  assert.equal(done.assistantMessage.finishReason, 'stop');
+  assert.match(done.assistantMessage.content, /Okuma Projesi/u);
+  const cards = normalizeEvidenceCards(done.evidenceCards);
+  assert.ok(cards?.cards.some(card => card.items?.some(item => item.id === TASKS.OVERDUE)), 'etkilenmeyen kart kalmalı');
+  assert.equal(cards.cards.some(card => card.items?.some(item => item.id === TASKS.READ_1)), false);
 });
 
 test('kayıtlı konuşma yeniden açıldığında yanıtlar kart taşımaz; günlük kart içeriği yazmaz', async (t) => {

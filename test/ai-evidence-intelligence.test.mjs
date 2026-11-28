@@ -211,6 +211,21 @@ const validEntity = () => ({ id: 'c3', kind: 'person', title: 'Ayşe Demir', ton
 const descriptor = () => ({ v: EVIDENCE_CARD_VERSION, cards: [validFactCard(), validCollection(), validEntity()],
   anchors: [{ strong: 0, text: '%30', card: 'c1' }, { strong: 1, text: '2', card: 'c2' }, { strong: 2, text: 'Ayşe Demir', card: 'c3' }] });
 
+test('uzun başlık kendi çapasını düşürür ve sonraki geçerli çapayı korur', () => {
+  const text = `**${bindingMark(1)}${'Birim '.repeat(35)}sonu** ve **${bindingMark(2)}3** görev.`;
+  const settled = settleEvidenceBindings({ normalized: text }, [{}, {}]);
+  assert.deepEqual(settled.evidenceBindings.anchors.map(({ key, strong, text }) => [key, strong, text]), [[2, 1, '3']]);
+});
+
+test('varlık koleksiyonu satırları da yanıtın ortak bütçesine girer', () => {
+  const sample = validCollection();
+  const rows = Array.from({ length: 30 }, (_, index) => ({ name: `Proje ${index}`, values: [1, 0] }));
+  const cards = Array.from({ length: 13 }, (_, index) => ({ ...sample, id: `c${index + 1}`, rows, total: rows.length }));
+  const anchors = cards.map(({ id }, strong) => ({ strong, text: '30', card: id }));
+  assert.ok(normalizeEvidenceCards({ v: EVIDENCE_CARD_VERSION, cards: cards.slice(0, 12), anchors: anchors.slice(0, 12) }));
+  assert.equal(normalizeEvidenceCards({ v: EVIDENCE_CARD_VERSION, cards, anchors }), null);
+});
+
 test('ICE-2 v2 tanımlayıcısı hesap, koleksiyon ve kişi kartlarını katı doğrular', () => {
   const normalized = normalizeEvidenceCards(descriptor());
   assert.ok(normalized);
@@ -321,22 +336,49 @@ test('ICE-2 portföy kaydı SQL toplamlarıyla birebir aynıdır; iki okuma aras
   }
   // Eşzamanlı değişiklik: toplam sorgusundan sonra, olgu okumasından önce bir görev tamamlanır.
   const changed = stackFor(t);
-  let mutated = false;
+  let mutatedProject = null;
   changed.db.queryBarrier = { entered: 0, released: Promise.resolve(), match(sql) {
-    if (!mutated && /rota-ai-tool:task-facts/.test(sql)) {
-      mutated = true;
+    if (!mutatedProject && /rota-ai-tool:task-facts/.test(sql)) {
       const open = changed.db.tasks.find((task) => task.Status !== 'done');
-      if (open) open.Status = 'done';
+      mutatedProject = open.ProjectId.toLowerCase();
+      open.Status = 'done';
     }
     return false;
   } };
   const second = await callRotaTool(changed, AYSE, 'rota_portfolio_summary', {});
   const [after] = second.ledger.requestEntries({ forCards: true });
-  assert.equal(mutated, true);
+  assert.ok(mutatedProject);
   const recorded = [...(after.cardPopulation?.sets.keys() || [])].filter((field) => field.startsWith('data.projects.'));
-  const affected = after.payload.data.projects.findIndex((project, index) => !recorded.some((field) => field.startsWith(`data.projects.${index}.`)));
-  assert.ok(affected >= 0, 'değişen projenin kümeleri kaydedilmemeli');
+  const affected = after.payload.data.projects.findIndex(project => project.projectId === mutatedProject);
+  assert.ok(affected >= 0 && !recorded.some(field => field.startsWith(`data.projects.${affected}.`)), 'değişen projenin kümeleri kaydedilmemeli');
+  assert.ok(after.payload.data.projects.some((project, index) => project.projectId !== mutatedProject && project.tasks.total > 0
+    && recorded.includes(`data.projects.${index}.tasks.total`)), 'etkilenmeyen projenin nüfusu korunmalı');
   assert.equal([...(after.cardPopulation?.sets.keys() || [])].some((field) => field.startsWith('data.totals.')), false, 'toplam kümeleri yalnızca bütün projeler uyumluysa');
+});
+
+test('ICE-2 portföyde sayılar değişmese de gecikmiş ve yakın terminli görevlerin değişen üyeliği kartı düşürür', async (t) => {
+  const stack = stackFor(t);
+  const first = stack.db.tasks.find(task => task.TaskId === TASKS.OVERDUE);
+  const second = stack.db.tasks.find(task => task.TaskId === TASKS.DUE_SOON);
+  assert.equal(first.ProjectId, second.ProjectId);
+  let swapped = false;
+  stack.db.queryBarrier = { entered: 0, released: Promise.resolve(), match(sql) {
+    if (!swapped && /rota-ai-tool:task-facts/.test(sql)) {
+      swapped = true;
+      [first.TargetFinish, second.TargetFinish] = [second.TargetFinish, first.TargetFinish];
+    }
+    return false;
+  } };
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_portfolio_summary', {});
+  assert.ok(swapped && result.ok);
+  const [entry] = ledger.requestEntries({ forCards: true });
+  const index = result.data.projects.findIndex(project => project.projectId === first.ProjectId.toLowerCase());
+  assert.ok(index >= 0);
+  assert.ok(result.data.projects[index].tasks.overdue > 0 && result.data.projects[index].tasks.dueNext7Days > 0);
+  assert.equal(entry.cardPopulation?.sets.has(`data.projects.${index}.tasks.overdue`), false);
+  assert.equal(entry.cardPopulation?.sets.has(`data.projects.${index}.tasks.dueNext7Days`), false);
+  assert.ok(result.data.projects.some((project, position) => position !== index && project.tasks.total > 0
+    && entry.cardPopulation?.sets.has(`data.projects.${position}.tasks.total`)));
 });
 
 test('ICE-2 isteğe bağlı kart okuması başarısız olursa araç sonucu bozulmaz; yalnızca kart nüfusu kaydedilmez', async (t) => {

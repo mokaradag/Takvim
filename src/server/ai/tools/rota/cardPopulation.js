@@ -86,32 +86,39 @@ export async function buildCardPopulation(call, scope, { sets, projects, assigne
     if (!ranks.has(sort)) ranks.set(sort, new Map(sortFacts([...union.values()], sort, today).map((fact, index) => [fact.id, index])));
     return ranks.get(sort);
   };
-  const result = new Map();
   const preview = new Map();
-  for (const [path, facts, rowKey = null] of usable) {
+  const ranked = usable.map(([path, facts, rowKey]) => {
     const rank = rankOf(sortFor(path));
-    const order = Float64Array.from(facts, (fact) => rank.get(fact.id)).sort();
+    return { path, rowKey, size: facts.length, rank, order: Float64Array.from(facts, (fact) => rank.get(fact.id)).sort() };
+  });
+  // Önce her kümenin ilk satırına yer ayır; kalan bütçeyi bir sonraki sıradaki satırlara dağıt.
+  for (let offset = 0; offset < CARD_POPULATION_LIMITS.previewPerSet && preview.size < CARD_POPULATION_LIMITS.maxPreviewTasks; offset += 1) {
+    for (const { order, rank } of ranked) {
+      if (offset >= order.length || preview.size >= CARD_POPULATION_LIMITS.maxPreviewTasks) continue;
+      const id = byRank(rank, order[offset]);
+      if (union.has(id)) preview.set(id, union.get(id));
+    }
+  }
+  const result = new Map(ranked.map(({ path, rowKey, size, rank, order }) => {
     const ids = [];
     for (const position of order) {
-      if (ids.length >= CARD_POPULATION_LIMITS.previewPerSet) break;
-      const fact = facts.length && union.get(byRank(rank, position));
-      if (!fact) break;
-      // Önizleme birleşimi sınırı dolduysa yeni görev eklenmez: küme yalnızca zaten seçilmiş satırları kullanabilir.
-      if (!preview.has(fact.id) && preview.size >= CARD_POPULATION_LIMITS.maxPreviewTasks) break;
-      preview.set(fact.id, fact);
-      ids.push(fact.id);
+      const id = byRank(rank, position);
+      if (preview.has(id) && !ids.includes(id)) ids.push(id);
+      if (ids.length === CARD_POPULATION_LIMITS.previewPerSet) break;
     }
-    result.set(path, Object.freeze({ size: facts.length, ids: Object.freeze(ids), ...(rowKey != null ? { rowKey: String(rowKey) } : {}) }));
-  }
+    return [path, Object.freeze({ size, ids: Object.freeze(ids), ...(rowKey != null ? { rowKey: String(rowKey) } : {}) })];
+  }));
   const previewFacts = [...preview.values()];
   let people = assignees;
   if (!people && previewFacts.length) {
     // Kart zenginleştirmesi isteğe bağlıdır: okuma hatası (zaman aşımı, sınır, veri kaynağı) aracın sonucunu bozmaz, yalnızca kart
     // nüfusu kaydedilmez. İptal, oturum ve yetki hataları (tur düzeyinde) olduğu gibi yayılır.
     try {
-      people = (await call.sql((executor) => readTaskFacts(executor, scope, {
+      const read = await (call.optionalSql ?? call.sql)((executor) => readTaskFacts(executor, scope, {
         taskIds: previewFacts.map((fact) => fact.id), withAssignees: true, maxRows: previewFacts.length
-      }))).assignees;
+      }));
+      if (!read || read.truncated) return null;
+      people = read.assignees;
     } catch (error) {
       if (isTurnFatal(error)) throw error;
       return null;

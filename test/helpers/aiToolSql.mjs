@@ -703,7 +703,10 @@ function portfolio(db, params) {
       LeadSicil: project.LeadSicil, CalendarId: project.CalendarId, ...access, ...aggregate(tasks, params)
     };
   });
-  return [rows, populationRows([...scope.visible.values()])];
+  return [rows, [...scope.visible.values()].map(({ task }) => ({
+    TaskId: upper(task.TaskId), ProjectId: upper(task.ProjectId), Status: task.Status,
+    TargetFinish: task.TargetFinish, IsMilestone: task.IsMilestone
+  }))];
 }
 
 function projectDetail(db, params) {

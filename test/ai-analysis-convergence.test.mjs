@@ -386,8 +386,9 @@ test('yeni ekip analizi önceki bölüm düzeyini devralmaz', async (t) => {
 });
 
 test('proje satırı takibi üst nüfusu ve tek proje sınırlamasını korur', async (t) => {
+  const { AYSE } = await import('./helpers/aiToolFixtures.mjs');
   const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
-  const { ask } = phase4eConversation(t);
+  const { ask, stack } = phase4eConversation(t);
   const first = await ask({ text: 'İşlerimin projelere dağılımı', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['projects'] } } });
   assert.ok(first.analysisContext.rows.length);
   const next = await ask({ text: 'İlk projenin durum dağılımı', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'row', rows: [1], focus: ['status'] } } });
@@ -399,7 +400,14 @@ test('proje satırı takibi üst nüfusu ve tek proje sınırlamasını korur', 
   // ICE-2: nüfus okumaları kapsamı korur; kanıt kartı önizlemesinin sorumlu okuması yalnızca o nüfustan seçilen kimliklerle sınırlıdır.
   const population = reads.filter((row) => !String(row.params.taskIds || ''));
   assert.ok(population.length && population.every((row) => row.params.assigneeMode === 'me' && row.params.projectId));
-  assert.ok(reads.filter((row) => !population.includes(row)).every((row) => String(row.params.taskIds || '').length > 0 && row.params.withAssignees === 1));
+  const previews = reads.filter(row => !population.includes(row));
+  const project = String(population[0].params.projectId).toLowerCase();
+  const own = new Set(stack.db.taskAssignees.filter(row => row.Sicil === AYSE).map(row => row.TaskId.toLowerCase()));
+  const expected = new Set(stack.db.tasks.filter(task => task.ProjectId.toLowerCase() === project && own.has(task.TaskId.toLowerCase()))
+    .map(task => task.TaskId.toLowerCase()));
+  assert.ok(previews.length > 0 && expected.size > 0, 'önizleme sorgusu ve beklenen görevler bulunmalı');
+  assert.ok(previews.every(({ params }) => params.withAssignees === 1
+    && params.taskIds.split(',').every(id => expected.has(id.toLowerCase()))));
 });
 
 test('türü belirtilmeyen çizilemez grafik notu da kapanıştan önce gelir', async (t) => {

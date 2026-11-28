@@ -426,10 +426,14 @@ export function assigneeView(fact, assignees) {
 
 /* ── Toplamlar ─────────────────────────────────────────────── */
 
-export function hoursCoverage(facts) {
+export function hoursCoverage(facts, members = null) {
   const metric = (field, scale) => {
     const known = facts.filter((fact) => fact[field] != null);
     const total = known.length ? decimalFromScaled(known.reduce((sum, fact) => sum + scaledDecimal(fact[field], scale), 0n), scale) : null;
+    if (members) {
+      members.set(`data.hours.${field}.tasksWithValue`, known);
+      members.set(`data.hours.${field}.tasksWithoutValue`, facts.filter((fact) => fact[field] == null));
+    }
     return { total, tasksWithValue: known.length, tasksWithoutValue: facts.length - known.length };
   };
   return {
@@ -483,16 +487,21 @@ export function statusTotals(facts, today, members = null) {
   return totals;
 }
 
-export function overdueAging(facts, today) {
+export function overdueAging(facts, today, members = null) {
   const buckets = OVERDUE_AGING.map((bucket) => ({ id: bucket.id, label: bucket.label, count: 0 }));
+  const bucketMembers = members ? buckets.map(() => []) : null;
   let worst = 0;
   for (const fact of facts) {
     const late = overdueDays(fact, today);
     if (late < 1) continue;
     worst = Math.max(worst, late);
     const index = OVERDUE_AGING.findIndex((bucket) => late >= bucket.min && late <= bucket.max);
-    if (index >= 0) buckets[index].count += 1;
+    if (index >= 0) {
+      buckets[index].count += 1;
+      bucketMembers?.[index].push(fact);
+    }
   }
+  bucketMembers?.forEach((facts, index) => members.set(`data.overdueAging.buckets.${index}.count`, facts));
   return { buckets, worstOverdueDays: worst };
 }
 

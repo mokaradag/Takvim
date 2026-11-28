@@ -11,12 +11,12 @@ bellek içi SQL Server ikizi ve sentetik veri (`scripts/ui-acceptance/uiSeed.mjs
 
 | Kapı | Durum | Kanıt |
 | --- | --- | --- |
-| A — Olgusal doğruluk | KARŞILANDI | `test/ai-evidence-cards.test.mjs`: aynı sayının farklı nüfusları ayrı kartlara bağlanır; aynı kanıtı paylaşan sayım ve görev olguları ayrı kart türleridir; kısmi önizleme kesin toplamla bildirilir; tutarsız sayı, fazla satır, kesin toplamsız eksik kanıt, boş nüfus ve satırsız araç kart üretmez. Canlı Haiku 5.5 yanıtında aynı yanıttaki analitik "Gecikmiş **8** görevin…" cümlesi bağsız kaldı, yalnızca sayım önermesindeki "**8**" bağlandı. |
-| B — Güvenlik | KARŞILANDI | İzdüşüm not/açıklama, anahtar sözcük, erişim düzeyi, Sicil ve gizli eş sorumlu adı taşımaz; farklı sorumlular sunucuda Sicil ile ayrılır (aynı adlı iki kişi ayrı). Veri metni işaret taklit edemez (`escapedFactText` denetim karakterlerini boşluğa çevirir). Bozuk/sahte/yinelenen/kalın dışı işaret bütün bağları düşürür. Tanımlayıcının her bozuk alanı bütün tanımlayıcıyı düşürür (17 bozulma). Atfedilmemiş, defterde geçerli olmayan ya da künyesiz kanıt kart üretmez. Üretim sırasında yetki kalkınca yanıt `unavailable` olur ve kart gönderilmez (`test/ai-evidence-cards-e2e.test.mjs`). Kötü niyetli görev adı metin olarak kalır. |
-| C — Model bağımsızlığı | KARŞILANDI | Kart için model çağrısı, araç ya da yönerge yoktur. Uçtan uca testte düzen turu tektir ve model iletilerinde işaret yoktur; önerme `plain` metni ve varsayılan Markdown çizimi bayt bayt aynıdır. Model yönergeleri (`assistantPrompt.js`, `groundedPrompt.js`) değişmedi. |
-| D — Görsel kalite | KARŞILANDI | Gerçek uygulamada (profil B, ekip lideri) Özet referans kartları ile karşılaştırmalı inceleme: koyu ve açık tema, 1440 px, 1080 px + %125 yazı ölçeği, 390 px mobil (dokunma). Koleksiyon, tekil görev, kısmi önizleme, farklı sorumlular, kaydırılabilir liste, görev çekmecesinin açılması. İnceleme sonrası düzeltmeler: satırda yinelenen "gecikmiş + Geciken rozeti" kaldırıldı, tarih sağ sütuna taşındı, tekil "1 farklı sorumlu" → "Sorumlu", kart saati kaynak listesiyle aynı biçime (Türkiye saati) getirildi, ilerleme etiketli satır oldu, eylem rengi nötrleşti, tamamlanmış satırda yinelenen termin kaldırıldı. |
+| A — Görev sayısı kapsamı (birinci hedef) | KISMEN DOĞRULANDI | Düzeltilmiş belirlenimci koşuda 165/165 senaryo geçti. 666 görev sayısı geçerli çapaya bağlı, 142 bağsız sayı gerekçeli ve başarısız ya da kapsam dışı yanıtlardaki 12 sayı ölçüm dışında. Kimlik üyeliği 50 bağda sentetik veriye karşı ayrıca doğrulandı. |
+| B — Olgusal doğruluk | KISMEN DOĞRULANDI | Kapsam koşusunda yanlış bağ veya beklenmedik eksik bağ bulunmadı. Portföyde aynı sayılı üyelik değişimi, etkilenen ve etkilenmeyen projeler, teslimde yetki daralması ve bağımsız nüfus kontrolü hedefli sınamalardan geçti. Bütün birleşik iddiaların üyelikleri bağımsız biçimde ölçülmedi. |
+| C — Kişi, proje, hesap, karşılaştırma, dönem ve risk kanıtı | KISMEN DOĞRULANDI | Belirlenimci koşuda 166 yüzde, 219 varlık sayısı ve 614 ad bağı denetlendi. Fark yüzdesi iki dönemin işlenenleriyle doğrulanır. Tarihsel özetin iki ayrı kaynaktan gelen ortak sayısı ve gelecek terminleriyle güncel gecikmeleri birleştiren iddialar tek bir nüfusa bağlanmaz. |
+| D — Güvenlik ve yetki | SINAMALAR GEÇTİ | Canlı kayıt model zarfı, kalıcı kanıt ve günlük dışında kalır. Sayısal kanıtın yanında geçici önizleme alanları da teslim anında doğrulanır. Yetkisi daralan kart düşerken yanıt ve etkilenmeyen kart korunur. SQL doğrulaması bellek içi SQL Server ikiziyle yapıldı. |
 | E — Yaşam döngüsü | KARŞILANDI | Tarayıcıda gerçek akış: canlı yanıtta 3 bağ; başka konuşmaya geçip dönünce 0; eski konuşmada yeni soruda yalnızca yeni yanıtta bağ; sayfa yenileme ve geçmişten açmada 0. Birim: kayıtlı iletiden kurulan tur kart taşımaz; en yeni 6 yanıt ve 15 dk sınırı; oturum hatası kartları siler; genel (Rota verisiz) yanıt kart taşımaz; yeniden oynatılan tur kart taşımaz; bozuk tanımlayıcı çözücüde atılır. |
-| F — Başarım | KARŞILANDI | Sunucu: 30 satırlı kart, 3 bağ, 1.826 karakterlik yanıt için işaret sökme + kart kurma medyan 0,64 ms, p95 1,19 ms (500 tekrar); aynı ortamdaki betikli tam tur ~400–550 ms, canlı tur saniyeler mertebesinde (ek yük %0,3'ün altında). Tarayıcı: tıklamadan görünür karta medyan 13,5 ms (çizim karesi dahil); üzerine gelmede ~190 ms (bilinçli 90 ms gecikme ve sürücü yükü dahil). Kart açma/kaydırma/satır inceleme sırasında 0 ağ isteği (dolayısıyla SQL yok). Sınırlar: `EVIDENCE_CARD_LIMITS` (kart 8, bağ 16, satır 30/kart ve 120/yanıt, kişi 30, metin 160, 64.000 karakter). |
+| F — Görsel kalite ve etkileşim | KOLEKSİYON SENARYOSU GEÇTİ | Gerçek uygulamada sentetik veri ve betikli model ucu ile 1440 px, 1080 px + %125 ölçek, 390 px dokunma ve 667 × 300 koyu tema sınandı. 18 uzun adlı satırın bulunduğu koleksiyonun kaydırma alanı klavyeyle sona indi. Escape tetikleyicinin odağını geri verdi. Kart açma ve incelemede ağ isteği gözlenmedi. |
 | G — Gerileme koruması | KARŞILANDI | Tam takım, lint ve üretim derlemesi aşağıdaki sonuçlarla geçer. `HoverListCard` mevcut kullanımı (rol yok, odak taşınmaz, iki bağımsız değişkenli satır çizimi, Esc) ayrı testle korunur. Mevcut `renderComposition`/`presentVerdict` metin sözleşmeleri değişmedi. |
 | H — Mimari bütünlük | KARŞILANDI | Yeni HTTP ucu, tablo, geçiş, zamanlanmış/arka plan işi, küresel değişken durum ya da bağımlılık yok. Yönetici raporu modülleri (`src/server/ai/report`, `src/domain/ai/report`) değişen modüllere bağımlı değildir ve değiştirilmedi. |
 
@@ -55,7 +55,7 @@ bellek içi SQL Server ikizi, yalnızca sentetik veri (kıyas kümelerinin tohum
 | F — Görsel kalite ve etkileşim | KARŞILANDI | Gerçek uygulama (B profili, yönetici ve dönem tohumları, betikli uç): 1440 px, 1080 px + %125, 390 px mobil (dokunma), 667 × 300 yatay; açık ve koyu tema; normal ve odak görünümü. Dört karmaşık soruda 560 kart açılışında görünüm taşması 0, kırpma 0, istenmeyen kaydırma 0; klavyede odak karta taşınır, Esc kapatır ve odak tetikleyiciye döner. İnceleme sonrası düzeltmeler: ölçü etiketi sütunu genişletildi, koleksiyon tablosunda kısa sütun adları ve mobil sığdırma. Yatay görünümde koyu tema koşusu panel açılışında zaman aşımına uğradı (yatay açık tema ve diğer bütün koyu tema koşuları geçti). |
 | G — Yaşam döngüsü | KARŞILANDI | ICE-1 kuralları değişmedi: yalnızca yeni, başarılı yanıt; 15 dakika; en yeni 6 yanıt; oturum hatasında temizleme; geri yükleme ve yeniden oynatmada kart yok (mevcut sınamalar geçer). |
 | H — Başarım | KARŞILANDI | Aynı sentetik turlarda tam tur (12 tekrar, ilk 2 atılır): g31 214 → 262 ms, g05 185 → 243 ms, g45 değişmedi; ek SQL okuması tur başına 1–4, hepsi kimlikle sınırlı. Tanımlayıcı g31'de 87 KB. Kayıt kurulumu en kötü durumda (20.000 görev, 107 küme) ~112 ms. Tarayıcıda tıklamadan görünür karta medyan 17,0 ms, p95 21,7 ms (45 örnek); kart açma ve incelemede ağ isteği yok (görülen tek istek uygulamanın 60 saniyelik anlık görüntü yenilemesidir; etkileşimsiz ölçümle doğrulandı). |
-| I — Canlı model nitelendirmesi | KARŞILANDI (istisna aşağıda) | `scripts/evidence-qualification.mjs`, `claude-haiku-5-5`, çaba `low`: 16 soru (karmaşık analiz, kişi/proje, oran, dönem karşılaştırması, eğilim, ufuk, kilometre taşı, İngilizce, iki basit temel soru). Uygun görev sayısı **114 / 114 bağlı**, gerekçeli bağsız 7, yanlış 0, beklenmedik bağsız 0; 248 kart; yüzde 35 / 38, varlık sayısı 28 / 29, ad 71 / 88. g31'nin (en uzun yanıt) model düzeni iki denemede bağdaştırıcının "tek API çağrısı" denetimine takıldı (CLI iki iç çağrı yaptı); üretim sunucu düzenine döndü ve bu yanıtın kapsamı da temizdir (53 kart, yanlış 0, eksik 0). g09 (sektör geneli) sınır sorusu olarak desteklenmedi; kart yoktur. |
+| I — Canlı model nitelendirmesi | YENİDEN KOŞULMADI | Tarihsel 114/114 ölçümü güncel kabul kanıtı sayılmaz. Nitelendirme şimdi bitişi, soru kapsamını, kullanıcıya görünen çapayı ve koşunun bütünlüğünü denetler. Model düzeni ile sunucu anlatımı ayrı raporlanır. |
 | J — Gerileme ve mimari bütünlük | KARŞILANDI | Tam takım, lint ve derleme aşağıda. Yeni HTTP ucu, tablo, geçiş, zamanlanmış/arka plan işi, küresel değişken durum ya da bağımlılık yok. Yönetici raporu modülleri (`src/server/ai/report`, `src/domain/ai/report`) değiştirilmedi ve yeni modüllere bağımlı değildir. |
 
 ### Tam takım, lint ve derleme (ICE-2)
@@ -63,7 +63,7 @@ bellek içi SQL Server ikizi, yalnızca sentetik veri (kıyas kümelerinin tohum
 | Denetim | Sonuç |
 | --- | --- |
 | `npm test` (değişiklik öncesi, `72a04ca`) | 6.857 / 6.857 geçti |
-| `npm test` (ICE-2 sonrası) | 7.076 / 7.076 geçti (219 yeni sınama; başarısız, iptal ve atlanan 0) |
+| `npm test` (ilk ICE-2 ölçümü) | 7.076 / 7.076 geçti. Bu tarihsel sonuç güncel koşunun yerine geçmez. |
 | `npx next lint` | Uyarı ve hata yok |
 | `npx next build` | Başarılı |
 
@@ -71,7 +71,9 @@ Gerileme sınamalarında yalnızca davranışı bilinçli olarak değişen dört
 bütçe kırpması, model düzeni kapalıyken sunucu düzeninin kart taşıması ve kart önizlemesinin kimlikle sınırlı ek okuması (nüfus
 okumalarının kapsam denetimleri aynen korunur).
 
-### Canlı model kullanımı (ICE-2)
+### Tarihsel canlı model kullanımı (ilk ICE-2 koşusu)
+
+Aşağıdaki kullanım kayıtları ilk ICE-2 koşusundandır. Bunlar düzeltilen nitelendirme kapısının sonucu değildir.
 
 | Ölçü | Değer |
 | --- | --- |

@@ -129,7 +129,7 @@ const SAFE_KEY = (key) => key !== '__proto__' && key !== 'constructor' && key !=
 
 /** Yükteki alanın değeri (yalnızca kendi alanları; prototip zinciri okunmaz). */
 function valueAt(payload, field) {
-  if (typeof field !== 'string' || !FIELD_PATH.test(field)) return undefined;
+  if (typeof field !== 'string' || field.length > 128 || !FIELD_PATH.test(field)) return undefined;
   return field.split('.').reduce((value, key) => (value != null && typeof value === 'object' && SAFE_KEY(key) && Object.hasOwn(value, key) ? value[key] : undefined), payload);
 }
 
@@ -184,7 +184,8 @@ function unionSet(entry, fields, count) {
 /** Tam görev listesinde koşula uyan satırlar (yalnızca sunucunun kapalı koşul kümesi). */
 const ROW_PREDICATES = Object.freeze({
   overdue: (row) => row?.overdue === true && row.status !== 'done',
-  withoutTargetFinish: (row) => row != null && !row.targetFinish
+  withoutTargetFinish: (row) => row != null && !row.targetFinish,
+  withTargetFinish: (row) => validDay(row?.targetFinish)
 });
 
 /**
@@ -194,7 +195,7 @@ const ROW_PREDICATES = Object.freeze({
 function predicateRows(entry, predicate, count) {
   const payload = entry?.payload;
   const rows = payload?.data?.tasks;
-  const test = ROW_PREDICATES[predicate];
+  const test = Object.hasOwn(ROW_PREDICATES, predicate) ? ROW_PREDICATES[predicate] : null;
   if (entry?.tool !== 'rota_task_search' || !test || !Array.isArray(rows) || payload.complete !== true || payload.truncated === true
     || !Number.isSafeInteger(payload.totalCount) || rows.length !== payload.totalCount) return null;
   const matched = rows.filter(test);
@@ -274,7 +275,7 @@ function entityCard(base, bind, entry, budget) {
     total, items, ...(listLabel ? { listLabel } : {}) };
 }
 
-function collectionCard(base, bind, entry) {
+function collectionCard(base, bind, entry, budget) {
   const kind = COLLECTION_KIND[bind.entity];
   if (!kind || !Array.isArray(bind.rows) || bind.rows.length !== bind.count || bind.count < 1 || new Set(bind.rows).size !== bind.rows.length) return null;
   const found = bind.rows.map((path) => entityRow(entry, path));
@@ -282,7 +283,7 @@ function collectionCard(base, bind, entry) {
   const columns = found[0].spec.metrics.slice(0, EVIDENCE_CARD_LIMITS.maxEntityColumns);
   // Koleksiyon tablosu dar kartta okunur kalsın diye kısa sütun adları (tekil kartın ölçü adları uzundur).
   return { ...base, kind, title: cleanText(bind.title) || 'Kayıtlar', tone: bind.tone || 'neutral', total: bind.count, columns: columns.map(([, label, short]) => short || label),
-    rows: found.slice(0, EVIDENCE_CARD_LIMITS.maxEntityRows).map((row, index) => ({ name: row.name,
+    rows: found.slice(0, Math.min(budget, EVIDENCE_CARD_LIMITS.maxEntityRows)).map((row, index) => ({ name: row.name,
       values: columns.map(([field]) => { const value = valueAt(entry.payload, `${bind.rows[index]}.${field}`); return Number.isSafeInteger(value) && value >= 0 ? value : null; }) })) };
 }
 
@@ -335,11 +336,17 @@ function calcCard(base, bind, entries) {
   const shown = evidencePercent(numerator, denominator, bind.rule);
   // Yanıtta gösterilen yüzde sunucunun yeniden hesabıyla birebir aynı değilse kart yoktur.
   if (shown == null || shown !== bind.shown) return null;
-  const exact = (numerator * 100) % denominator === 0;
+  const raw = (numerator / denominator) * 100;
+  const exact = raw === shown;
+  const clamped = bind.rule === 'round' && shown !== Math.round(raw);
+  const note = clamped ? 'Yuvarlama sonrası %0 ve %100 yalnızca hiçbiri ve tamamı için gösterilir. Ara değerler %1–%99 ile sınırlanır.'
+    : bind.rule === 'round' ? 'Sonuç tam sayıya yuvarlanmıştır.'
+      : bind.rule === 'majority' && Math.round(raw) === 50 ? 'Çoğunluğu göstermek için %50’yi aşan ilk ondalık basamak kullanılır.'
+        : 'Sonuç yuvarlanmıştır; sıfır ya da tamamı olmayan pay %0 veya %100 gösterilmez.';
   return { ...base, kind: 'calc', title: cleanText(bind.title) || 'Hesaplama', tone: bind.tone || 'neutral',
     metrics: [{ label: cleanText(bind.numerator.label) || 'Pay', value: formatInt(numerator) }, { label: cleanText(bind.denominator.label) || 'Payda', value: formatInt(denominator) }],
-    result: percentText(shown), formula: `${formatInt(numerator)} / ${formatInt(denominator)} × 100 ${exact ? '=' : '≈'} ${percentText(shown)}`,
-    ...(!exact ? { note: bind.rule === 'round' ? 'Sonuç tam sayıya yuvarlanmıştır.' : 'Sonuç yuvarlanmıştır; sıfır ya da tamamı olmayan pay %0 veya %100 gösterilmez.' } : {}) };
+    result: percentText(shown), formula: `${formatInt(numerator)} / ${formatInt(denominator)} × 100 ${clamped ? `≈ ${percentText(raw)} →` : exact ? '=' : '≈'} ${percentText(shown)}`,
+    ...(!exact ? { note } : {}) };
 }
 
 function compareCard(base, bind, entries) {
@@ -379,8 +386,8 @@ function cardFor(bind, entries, summaries, budget = EVIDENCE_CARD_LIMITS.maxItem
   const entry = entries.get(bind.evidenceId);
   if (!entry?.payload || typeof entry.payload !== 'object' || entry.payload.tool !== entry.tool) return null;
   if (bind.type === 'entity') return entityCard(base, bind, entry, budget);
-  if (budget < 1 && bind.type !== 'entities') return null;
-  if (bind.type === 'entities') return collectionCard(base, bind, entry);
+  if (budget < 1) return null;
+  if (bind.type === 'entities') return collectionCard(base, bind, entry, budget);
   if (bind.type === 'tasks' && bind.field) {
     const set = registeredSet(entry, bind.field, bind.count);
     return set ? taskCollection(base, set, bind.count, bind, budget) : null;
@@ -442,10 +449,26 @@ function bindKey(bind) {
   return null;
 }
 
+/** Kalıcı kanıtta bulunmayan görev önizlemelerinin yalnızca sunucuda tutulan teslim gereksinimleri. */
+function previewRequirements(card, entry) {
+  return (card.items || []).flatMap((item) => {
+    const row = entry?.cardPopulation?.rows.get(item.id);
+    if (!row) return [];
+    const assignees = (row.assignees || []).filter(person => person.identityHidden !== true);
+    return [{
+      taskId: item.id,
+      projectId: canonicalActualId(row.project?.projectId),
+      assignees: assignees.map(({ sicil }) => sicil),
+      needsIdentityBase: item.assignment === 'unassigned',
+      needsOwnAssignment: item.hiddenAssignees > 0
+    }];
+  });
+}
+
 /**
  * Kart tanımlayıcısı. `finalText` teslim edilen (kalıcılaştırılan) metindir; işaretsiz düzen metni onun başı olmalıdır
  * (sonraki adımlar yalnızca sona ekler). Her bağ son metnin çözümünde yeniden doğrulanır.
- * @returns {{ descriptor: object, evidenceIds: string[] } | null}
+ * @returns {{ descriptor: object, evidenceIds: string[], requirements: Map } | null}
  */
 export function buildEvidenceCards({ evidenceBindings, finalText, entries = [], summaries = [], citedIds = [] }) {
   if (!evidenceBindings || typeof finalText !== 'string' || !finalText.startsWith(evidenceBindings.text.trimEnd())) return null;
@@ -453,38 +476,47 @@ export function buildEvidenceCards({ evidenceBindings, finalText, entries = [], 
   const cited = new Set(citedIds);
   const entryById = new Map(entries.filter((entry) => cited.has(entry.id)).map((entry) => [entry.id, entry]));
   const summaryById = new Map(summaries.filter((summary) => cited.has(summary?.id)).map((summary) => [summary.id, summary]));
-  const cards = [];
-  const cardIds = new Map();
-  const cardEvidence = new Map();
+  const candidates = new Map();
   const anchors = [];
-  let totalItems = 0;
+  const seen = new Set();
   const rejected = new Set();
-  // Satır bütçesi kartlara adil bölünür: çok kartlı yanıtta her görev kartı daha kısa (ama en az 5 satırlık) önizleme taşır; ilk
-  // kartlar bütçeyi tüketip sonrakileri düşürmez. Kısmi önizleme kartta açıkça yazılır.
-  const rowBearing = new Set(evidenceBindings.anchors.map((anchor) => evidenceBindings.bindings[anchor.key - 1])
-    .filter((bind) => bind && ['tasks', 'task', 'entity'].includes(bind.type)).map(bindKey).filter(Boolean)).size;
-  const share = Math.max(5, Math.min(EVIDENCE_CARD_LIMITS.maxItemsPerCard, Math.floor(EVIDENCE_CARD_LIMITS.maxTotalItems / Math.max(1, rowBearing))));
   for (const anchor of evidenceBindings.anchors) {
     if (anchors.length >= EVIDENCE_CARD_LIMITS.maxAnchors) break;
     const bind = evidenceBindings.bindings[anchor.key - 1];
-    if (!bind || typeof bind !== 'object' || finalStrong[anchor.strong] !== anchor.text) continue;
+    if (!bind || typeof bind !== 'object' || finalStrong[anchor.strong] !== anchor.text || seen.has(anchor.strong)) continue;
     const key = bindKey(bind);
     if (!key || rejected.has(key)) continue;
-    let id = cardIds.get(key);
-    if (!id) {
-      if (cards.length >= EVIDENCE_CARD_LIMITS.maxCards) continue;
-      const card = cardFor(bind, entryById, summaryById, Math.min(share, EVIDENCE_CARD_LIMITS.maxTotalItems - totalItems));
-      const size = card?.items?.length || 0;
-      if (!card || totalItems + size > EVIDENCE_CARD_LIMITS.maxTotalItems) { rejected.add(key); continue; }
-      id = `c${cards.length + 1}`;
-      cards.push({ id, ...card });
-      cardIds.set(key, id);
-      cardEvidence.set(id, bindEvidence(bind));
-      totalItems += size;
+    let candidate = candidates.get(key);
+    if (!candidate) {
+      if (candidates.size >= EVIDENCE_CARD_LIMITS.maxCards) continue;
+      const id = `c${candidates.size + 1}`;
+      const card = cardFor(bind, entryById, summaryById);
+      const valid = card && normalizeEvidenceCards({ v: EVIDENCE_CARD_VERSION, cards: [{ id, ...card }],
+        anchors: [{ strong: anchor.strong, text: anchor.text, card: id }] });
+      if (!valid) { rejected.add(key); continue; }
+      candidate = { id, bind, card, rows: card.items?.length ?? card.rows?.length ?? 0, allotted: 0 };
+      candidates.set(key, candidate);
     }
-    anchors.push({ strong: anchor.strong, text: anchor.text, card: id });
+    seen.add(anchor.strong);
+    anchors.push({ strong: anchor.strong, text: anchor.text, card: candidate.id });
   }
   if (!anchors.length) return null;
+  // Beş satırlık önizleme hakkı önce dağıtılır. Daha kısa kartların kullanmadığı hak sonraki turlarda paylaşılır.
+  const rowBearing = [...candidates.values()].filter(candidate => candidate.rows > 0);
+  let remaining = EVIDENCE_CARD_LIMITS.maxTotalItems;
+  for (let offset = 0; offset < EVIDENCE_CARD_LIMITS.maxItemsPerCard && remaining > 0; offset += 1) {
+    for (const candidate of rowBearing) {
+      if (remaining === 0) break;
+      if (candidate.rows <= offset) continue;
+      candidate.allotted += 1;
+      remaining -= 1;
+    }
+  }
+  const cardEvidence = new Map();
+  const cards = [...candidates.values()].map(({ id, bind, card, rows, allotted }) => {
+    cardEvidence.set(id, bindEvidence(bind));
+    return { id, ...(allotted === rows ? card : cardFor(bind, entryById, summaryById, allotted)) };
+  });
   // Boyut bütçesi: sondaki kartlar (ve bağları) düşer; yanıt metni değişmez.
   let descriptor = { v: EVIDENCE_CARD_VERSION, cards, anchors };
   while (descriptor.cards.length && JSON.stringify(descriptor).length > EVIDENCE_CARD_LIMITS.maxPayloadChars) {
@@ -496,5 +528,9 @@ export function buildEvidenceCards({ evidenceBindings, finalText, entries = [], 
   if (!normalized) return null;
   // Kanıt bağımlılıkları yalnızca bütçe kırpmasından sonra kalan kartlardan türetilir.
   const evidenceIds = [...new Set(normalized.cards.flatMap((card) => cardEvidence.get(card.id) || []).filter(Boolean))];
-  return { descriptor: normalized, evidenceIds };
+  const requirements = new Map(normalized.cards.map((card) => {
+    const ids = cardEvidence.get(card.id);
+    return [card.id, { evidenceIds: ids, previews: ids.flatMap(id => previewRequirements(card, entryById.get(id))) }];
+  }));
+  return { descriptor: normalized, evidenceIds, requirements };
 }

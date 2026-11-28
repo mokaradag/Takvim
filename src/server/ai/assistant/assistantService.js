@@ -488,7 +488,7 @@ export async function loadAssistantConversation({ conversationId, signal = null 
  * Kalıcı Rota yanıtı yalnızca güncel yetki dönemi doğrulanırsa açıklanır.
  * Kanıt ya da yetki okunamazsa korunan metin ve özetler birlikte gizlenir.
  */
-async function optionalEvidence(sicil, signal, target, { revalidate = true } = {}) {
+async function optionalEvidence(sicil, signal, target, { revalidate = true, cardRequirements = null } = {}) {
   let evidence;
   try {
     evidence = await loadEvidenceFor(sicil, signal, target);
@@ -539,9 +539,14 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
               visible.delete(id);
               continue;
             }
-            const still = await context.recheckEvidenceTasks(owned, messageDeadline.signal);
-            if (!owned.every(entry => still.has(entry))) visible.delete(id);
-            else if (page) {
+            const requirements = id === target.messageId ? cardRequirements : null;
+            const checked = await context.recheckEvidenceDisclosure(owned, messageDeadline.signal, requirements);
+            if (!owned.every(entry => checked.entries.has(entry))) {
+              visible.delete(id);
+              continue;
+            }
+            if (requirements) evidence.authorizedCards = checked.cards;
+            if (page) {
               visible.set(id, page.byMessage.get(id));
               evidence.epochsByMessage.set(id, page.epochsByMessage.get(id));
               for (const key of ['clarificationByMessage', 'resultScopeByMessage', 'analysisByMessage']) {
@@ -1110,15 +1115,16 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     }
     onProgress?.();
     const prepareDelivery = async () => {
+      const own = stored.message.id === messageId;
+      const builtCards = own ? grounded.evidenceCards : null;
       const evidence = await optionalEvidence(turn.sicil, signal, {
         conversationId: turn.conversation.id, messageId: stored.message.id
-      });
+      }, { cardRequirements: builtCards?.requirements });
       // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
       // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır. Kayıtlı kanıtın tekrar
       // okunamaması (geçici hata) güncel yetkinin bilinmemesi değildir: yetki bellekteki
       // defterle yeniden doğrulanır; doğrulanamazsa ya da erişim kalktıysa yanıt gösterilmez.
       if (!evidence.conversationPresent) throw conversationNotFound();
-      const own = stored.message.id === messageId;
       const reloadFailed = evidence?.unavailable === true || evidence?.ready === false
         || evidence?.unavailableMessages?.has(messageId) || evidence?.unverifiable?.has(messageId);
       const liveAuthorized = own && !savedMessageMissing(stored.message, evidence) && reloadFailed && await grounded.guardDisclosure?.(signal);
@@ -1127,11 +1133,17 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
       answer = liveAuthorized && !savedMessageMissing(stored.message, presence)
         ? { ...stored.message, evidence: grounded.evidence, rotaData: true }
         : discloseSavedMessages([stored.message], { ...evidence, ...presence })[0];
-      // ICE: geçici kanıt kartları yalnızca turun KENDİ yanıtı aynen teslim ediliyorsa ve kartların dayandığı her kanıt
-      // teslim edilen (güncel yetkiden geçmiş) kanıt listesinde kaldıysa gönderilir. Kart kalıcı kayda girmez.
+      // Kartın önizleme alanları, sayısal kanıttan daha dar yetki gerektirebilir.
       const delivered = new Set((answer.evidence || []).map((item) => item?.id));
-      const evidenceCards = own && grounded.evidenceCards && answer.content === grounded.text && answer.finishReason === grounded.finishReason
-        && grounded.evidenceCards.evidenceIds.every((id) => delivered.has(id)) ? grounded.evidenceCards.descriptor : null;
+      let evidenceCards = null;
+      if (builtCards && !reloadFailed && answer.content === grounded.text && answer.finishReason === grounded.finishReason) {
+        const cards = builtCards.descriptor.cards.filter(card => evidence.authorizedCards?.has(card.id)
+          && builtCards.requirements.get(card.id)?.evidenceIds.every(id => delivered.has(id)));
+        if (cards.length) {
+          const ids = new Set(cards.map(card => card.id));
+          evidenceCards = { ...builtCards.descriptor, cards, anchors: builtCards.descriptor.anchors.filter(anchor => ids.has(anchor.card)) };
+        }
+      }
       return { conversation: stored.conversation, answer: { ...answer, evidence: answer.evidence || [] },
         reconciled: !own, finishReason: answer.finishReason, contentAuthoritative: true, firstTokenMs: null, ...(evidenceCards ? { evidenceCards } : {}) };
     };

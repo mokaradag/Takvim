@@ -201,7 +201,7 @@ export async function readPortfolio(executor, scope, { today, soonEnd, source = 
   request.input('today', sql.Date, today);
   request.input('soonEnd', sql.Date, soonEnd);
   const [rows = [], populationRows = []] = recordsets(await request.query(AI_TOOL_PORTFOLIO_SQL));
-  return { rows, population: populationOf(populationRows) };
+  return { rows, population: populationOf(populationRows), snapshot: populationRows.map(factFromRow) };
 }
 
 export async function readProjectDetail(executor, scope, { projectId, today, soonEnd }) {

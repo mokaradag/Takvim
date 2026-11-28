@@ -17,8 +17,8 @@ export const EVIDENCE_CARD_VERSION = 2;
 /**
  * ICE-2 sınırları. Karmaşık analitik yanıt (ör. dört bölümlü yönetim özeti) gözlenen kıyas kümesinde 60'ı aşan kanıtlanabilir
  * sayı, ad ve oran taşır; bu yüzden bağ ve kart sınırları yükseltildi (bağ anahtarı biçimi en çok 99'a izin verir). En kötü
- * durum: 360 satır × ~260 karakter ≈ 94 KB satır verisi; tanımlayıcının tamamı 200.000 karakteri aşamaz ve tarayıcıda en çok 6
- * canlı yanıt tutulur (≈ 1,2 MB üst sınır). Satır bütçesi azalınca sonraki görev kartları daha kısa önizleme taşır (düşmez).
+ * durum: tanımlayıcının JSON uzunluğu 200.000 UTF-16 kod birimini aşamaz. En çok 6 canlı yanıt tutulur.
+ * Satır bütçesi görev ve varlık koleksiyonlarına birlikte uygulanır.
  */
 export const EVIDENCE_CARD_LIMITS = Object.freeze({
   /** Yanıt başına en fazla kart. */
@@ -27,7 +27,7 @@ export const EVIDENCE_CARD_LIMITS = Object.freeze({
   maxAnchors: 96,
   /** Kart başına en fazla görev satırı. */
   maxItemsPerCard: 30,
-  /** Yanıt başına toplam görev satırı. */
+  /** Yanıt başına toplam görev ve varlık koleksiyonu satırı. */
   maxTotalItems: 360,
   /** Varlık koleksiyonu kartının en fazla satırı (kişi/proje/birim). */
   maxEntityRows: 30,
@@ -125,13 +125,15 @@ export function resolveBindingAnchors(text, strongTexts) {
   }
   if (!Array.isArray(marked) || !Array.isArray(plain) || marked.length !== plain.length) return reject('STRONG_COUNT');
   const anchors = [];
+  let anchoredMarks = 0;
   marked.forEach((value, strong) => {
     const lead = leadingBindingMark(value);
-    if (!lead || hasBindingMarks(lead.text) || plain[strong] !== lead.text || !lead.text.trim() || lead.text.length > EVIDENCE_CARD_LIMITS.maxAnchorTextChars) return;
-    anchors.push({ key: lead.key, strong, text: lead.text });
+    if (!lead || hasBindingMarks(lead.text) || plain[strong] !== lead.text) return;
+    anchoredMarks += 1;
+    if (strong <= 4000 && textLabelAllowed(lead.text)) anchors.push({ key: lead.key, strong, text: lead.text });
   });
-  // Kalın düğümün başında bulunmayan (ör. düğüm dışına taşmış) işaret bağ değildir: bütün bağlar düşer.
-  if (anchors.length !== keys.length) return reject('UNANCHORED_MARK');
+  // Kalın düğümün dışına taşan işaret yapısal hatadır. Geçerli konumdaki uzun etiket yalnızca kendi bağını düşürür.
+  if (anchoredMarks !== keys.length) return reject('UNANCHORED_MARK');
   return { text: stripped, anchors, rejected: null };
 }
 
@@ -159,6 +161,8 @@ function text(value, { optional = false, max = EVIDENCE_CARD_LIMITS.maxTextChars
   if (typeof value !== 'string' || !value.trim() || value.length > max || HAS_UNSAFE_TEXT.test(value)) return { ok: false };
   return { ok: true, value };
 }
+
+const textLabelAllowed = (value) => text(value, { max: EVIDENCE_CARD_LIMITS.maxAnchorTextChars }).ok;
 
 function count(value, { optional = false } = {}) {
   if (value == null && optional) return { ok: true, value: null };
@@ -309,7 +313,7 @@ export function normalizeEvidenceCards(value) {
   if (size > EVIDENCE_CARD_LIMITS.maxPayloadChars) return null;
   const cards = value.cards.map(normalizeCard);
   if (cards.some((card) => !card) || new Set(cards.map((card) => card.id)).size !== cards.length
-    || cards.reduce((sum, card) => sum + (card.items?.length || 0), 0) > EVIDENCE_CARD_LIMITS.maxTotalItems) return null;
+    || cards.reduce((sum, card) => sum + (card.items?.length ?? card.rows?.length ?? 0), 0) > EVIDENCE_CARD_LIMITS.maxTotalItems) return null;
   const known = new Set(cards.map((card) => card.id));
   const anchors = [];
   for (const anchor of value.anchors) {

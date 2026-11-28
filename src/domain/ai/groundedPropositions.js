@@ -1060,9 +1060,10 @@ export function analystPropositions(parts, locale = 'tr') {
         // En düşük değer tek kişideyse o kişinin açık işlerine bağlanır; eşitlikte (birden çok nüfus) bağ kurulmaz.
         const lows = top.filter((row) => row.openTasks === low);
         const soleLow = lows.length === 1 ? factTaskBind(lows[0].facts.openTasks, { locale, scope: lows[0].name }) : null;
+        const soleHigh = unique ? factTaskBind(top[0].facts.openTasks, { locale, scope: top[0].name }) : null;
         add(rows[0].evidenceId, 'balance', en
-          ? sentence(['Open work is spread fairly evenly across people (highest ', v(number(top[0].openTasks, locale), factTaskBind(top[0].facts.openTasks, { locale, scope: top[0].name })), ', lowest ', v(number(low, locale), soleLow), ').'])
-          : sentence(['Açık işler kişiler arasında görece dengeli dağılmış (en yüksek ', v(number(top[0].openTasks, locale), factTaskBind(top[0].facts.openTasks, { locale, scope: top[0].name })), ', en düşük ', v(number(low, locale), soleLow), ').']), 'success');
+          ? sentence(['Open work is spread fairly evenly across people (highest ', v(number(top[0].openTasks, locale), soleHigh), ', lowest ', v(number(low, locale), soleLow), ').'])
+          : sentence(['Açık işler kişiler arasında görece dengeli dağılmış (en yüksek ', v(number(top[0].openTasks, locale), soleHigh), ', en düşük ', v(number(low, locale), soleLow), ').']), 'success');
       }
       const late = rows.filter((row) => Number.isSafeInteger(row.overdue) && row.overdue >= 0);
       const lateSum = late.length === rows.length ? late.reduce((total, row) => total + row.overdue, 0) : 0;

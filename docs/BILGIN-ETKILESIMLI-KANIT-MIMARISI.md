@@ -127,15 +127,16 @@ biçimde doğrular; bozuk alan bütün tanımlayıcıyı düşürür (yanıt kar
 | Kart taşıyan canlı yanıt | 6 (en yeniler) |
 
 Gerekçe: sahibinin kıyas kümesinde en uzun yanıt 65 bağ, 52 kart ve 279 satır taşıdı; eski sınırlar uygun bağların düşmesinin
-kök nedenlerinden biriydi. En kötü durum: 360 satır × ~260 karakter ≈ 94 KB satır verisi; tanımlayıcı 200.000 karakteri aşamaz;
-tarayıcıda en çok 6 canlı yanıt (≈ 1,2 MB üst sınır). Bütçe aşılırsa sondaki kartlar düşer; yanıt metni hiçbir durumda değişmez.
+kök nedenlerinden biriydi. En kötü durum: tanımlayıcının JSON uzunluğu 200.000 UTF-16 kod birimini aşamaz. Tarayıcıda en çok 6 canlı yanıt
+(seri hâle getirilmiş toplam uzunluk üst sınırı 1.200.000 UTF-16 kod birimidir). Bütçe aşılırsa sondaki kartlar düşer; yanıt metni hiçbir durumda değişmez.
 
 ## 5. Yetki
 
 - Kart yalnızca turun kanıt defterindeki, yanıtta atfedilen ve son yetki yeniden doğrulamasından geçmiş
   kanıtlardan kurulur (`finish()` içindeki mevcut `revalidate`).
 - Teslim sınırında (`prepareDelivery`) yanıt, kayıtlı kanıtla güncel yetkiden yeniden geçer. Kartlar yalnızca
-  turun kendi yanıtı aynen teslim edildiyse ve kartın kanıtı teslim edilen kanıt listesinde kaldıysa gönderilir.
+  turun kendi yanıtı aynen teslim edildiyse, kartın kanıtı yetkili kaldıysa ve geçici önizleme alanları aynı son yetki işleminde
+  doğrulandıysa gönderilir. Önizleme yetkisi daraldığında ilgili kart düşer, sayısal yanıt korunur.
   Uzlaştırma, yeniden oynatma ve geri yükleme kart taşımaz.
 - Kimliği gizli eş sorumlular yalnızca sayı olarak gösterilir; Sicil tarayıcıya gitmez (farklı sorumlular
   sunucuda Sicil ile ayrılır).
@@ -182,7 +183,7 @@ ayrı ayrı bulundu ve giderildi:
 | Kök neden | Giderim |
 | --- | --- |
 | Bağ yalnızca görev araması (`rota_task_search`) sayımlarında kuruluyordu. | Görev özeti, iş yükü ve portföy sayılarının canlı nüfus kaydı (§10) ve alan yolu bağı. |
-| Satırsız toplu kanıt (görev özeti, iş yükü, portföy) katkıda bulunan görevleri taşımıyordu. | Sayının hesaplandığı döngüde üyelik kaydı; portföyde SQL toplamlarıyla birebir doğrulanan tek okuma. |
+| Satırsız toplu kanıt (görev özeti, iş yükü, portföy) katkıda bulunan görevleri taşımıyordu. | Sayının hesaplandığı döngüde üyelik kaydı; portföyde SQL özetiyle aynı veri görüntüsünden alınan görev kimlikleri. |
 | Analitik bulgular (dikkat önceliği, yoğunlaşma, oranlar, yayılım, karşılaştırma, kilometre taşı) bağsız çiziliyordu. | Bulgular sayılarını üreten satırları (`refs`) taşır; cümle kurulurken bağ türetilir. |
 | Dönemsel bulgular (tamamlanan, oluşturulan, karşılaştırma, eğilim, ufuk) bağsızdı. | Okumanın toplam olguları ve kovaları bağlanır; fark ve oran karşılaştırma kartına. |
 | Dağılım/çoğunluk/en büyük grup/tamamlanma/döküm önermeleri bağsızdı. | Grup satırı nüfusu, toplam ve yüzde hesap kartı. |
@@ -200,9 +201,9 @@ satırda toplanır (`statusTotals(facts, today, members)`, grup döngüleri, ki�
 
 - Önizleme birleşimi araç çağrısı başına en çok 400 görevdir; sorumlu adları gerekiyorsa bu birleşim için **tek** ve kimlikle
   sınırlı bir okuma yapılır (görev aramasının sayfa okumasıyla aynı yol). Sayı başına sorgu yoktur.
-- Portföy sayıları SQL toplamıdır: sayfadaki projelerin portföy sorgusunun döndürdüğü görünür görev kimlikleri tek okumayla
-  alınır, aynı koşullarla yeniden sayılır ve **her ölçü** SQL toplamıyla karşılaştırılır; tek uyuşmazlık o projenin bütün kümelerini
-  düşürür (iki okuma arasında değişen görev). Toplam kümeleri yalnızca bütün projeler sayfada ve uyumluysa kaydedilir.
+- Portföy sayıları ve görev üyeliği aynı sınırlı SQL görüntüsünden üretilir. Önizleme için yeniden okunan görevler her ölçünün
+  ilk görev kimliği kümesiyle karşılaştırılır. Aynı sayıda kalan ama üyeliği değişen projenin kümeleri düşer. Toplam kümeleri
+  yalnızca bütün projeler sayfada ve üyelikleri uyumluysa kaydedilir.
 - Kart okumaları isteğe bağlıdır: okuma hatası aracın sonucunu bozmaz, yalnızca kayıt yapılmaz; iptal/oturum/yetki hataları yayılır.
 - Kayıt defterde `cardPopulation` olarak durur; yalnızca `requestEntries({ forCards: true })` görür. Model zarfına, kalıcı
   kanıta, özete, günlüğe ve tarayıcıya gitmez. Önizleme satırları kaydedilen nüfusun alt kümesidir; son yetki yeniden doğrulaması
@@ -221,7 +222,7 @@ satırda toplanır (`statusTotals(facts, today, members)`, grup döngüleri, ki�
 | `entity` | Kişi/proje/birim adı | Satır varlıktır (sorumlusuz/diğer değil); ölçüler yükten; önizleme satırın kayıtlı nüfusu. |
 | `entities` | "**N** projede/kişide" | Satır yolu sayısı = N; her satır varlık. |
 | `calc` | Yüzde ve oran | İşlenenler yükten (yanıt yazmadıysa yükten okunur); sunucunun kuralıyla (`share`, `majority`, `round`) yeniden hesap = yazılan yüzde. |
-| `compare` | İki dönem/öznenin farkı ve değişim oranı | İki işlenen yükten; oran yazıldıysa |fark| / önceki × 100 (yuvarlanmış) = yazılan oran; iki kanıta da bağımlı. |
+| `compare` | İki dönem/öznenin farkı ve değişim oranı | İki işlenen yükten; oran yazıldıysa \|fark\| / önceki × 100 (yuvarlanmış) = yazılan oran; iki kanıta da bağımlı. |
 
 Eşitlikte tek sayı birden çok nüfusu temsil ediyorsa (ör. "ikisinde de **5**"), satırlar arası toplam ya da atama toplamı gibi tek
 bir yük alanına karşılık gelmeyen değerlerde ve alt sınırda ("en az") bağ kurulmaz.

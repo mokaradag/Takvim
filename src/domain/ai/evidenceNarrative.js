@@ -327,7 +327,8 @@ function recordSentences(record, locale, { rowsCovered = false, mark = null } = 
   const codeEntry = take((rel) => rel === 'code')[0];
   const rawSubject = record.row && record.entries[0]?.fact ? canonicalGroupLabel(record.entries[0].fact, record.subject, locale) : record.subject;
   const subjectText = record.row ? escapedFactText(rawSubject) : nameEntry ? narrativeValue(nameEntry.fact, locale) : escapedFactText(record.subject);
-  const subject = `${strong(subjectText)}${codeEntry ? ` (${narrativeValue(codeEntry.fact, locale)})` : ''}`;
+  const subjectMark = record.tool === 'rota_workload_summary' && record.kind === 'person' ? mark?.(nameEntry?.fact, 'title', record) || '' : '';
+  const subject = `${strong(`${subjectMark}${subjectText}`)}${codeEntry ? ` (${narrativeValue(codeEntry.fact, locale)})` : ''}`;
   const qualifiers = qualifierText(record.entries, locale);
   // Proje adı zaten özne olarak yazıldığında ölçütte yinelenmez.
   const unnamedProjectQualifiers = qualifierText(record.entries, locale, { omit: ['project'] });

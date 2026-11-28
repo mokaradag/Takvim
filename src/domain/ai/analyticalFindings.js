@@ -371,7 +371,6 @@ function listFindings(list) {
     const late = dated.filter((row) => row.due < list.today);
     const upcoming = dated.filter((row) => row.due >= list.today);
     const next = upcoming[0] || null;
-    const exactLate = list.complete || Boolean(next) || shownUndated > 0;
     const worst = late.length && late.every((row) => count(row.days) != null) ? late.reduce((top, row) => (row.days > top.days ? row : top), late[0]) : null;
     // Aynı adlı başka bir kilometre taşı listedeyse (ör. farklı projelerde) proje adı ayırt edici olarak taşınır; adaş projede
     // doğrulanmış proje kodu da eklenir.
@@ -383,6 +382,7 @@ function listFindings(list) {
     // Termini olmayanların sayısı yalnızca kesinse söylenir: tam listede görünenler; ya da araç bütün açık kilometre taşlarını
     // döndürdüğü (sayfa = kesin toplam) ve sıralama sınırı dolmadığı hâlde termin sıralamasının bıraktığı satırlar.
     const fits = list.total != null && list.size === list.total && list.rows.length < Math.min(list.size, list.ranking?.limit ?? 0);
+    const exactLate = list.complete || fits || Boolean(next) || shownUndated > 0;
     const undated = list.complete ? shownUndated : fits ? list.size - dated.length : 0;
     if (dated.length || undated) {
       findings.push({ kind: 'milestoneStatus', interpretation: 'milestone', entity: null, project: null,
@@ -863,20 +863,16 @@ function introOrder(findings, locale, focus = []) {
   const window = findings.find((item) => item.kind === 'windowPressure');
   if (window) {
     const { entities, population, dateFrom, dateTo, atLeast, shown } = window.metrics;
-    const windowTitle = tr(locale, 'Dönemde teslimatı olan ve bugün gecikmiş işi bulunan projeler', 'Projects with deliveries in the period and overdue work today');
-    // Adı yazılan projelerde gecikmiş iş kesindir (listede görünür): adlar alt sınırda da varlık kartına bağlanır; kalan sayısı bağlanmaz.
-    const named = namesList(window.names, locale, entities - window.names.length, ['proje', 'projects'], (window.refs?.rows || []).map(rowEntity),
-      atLeast ? null : rowsBind(window.refs?.table, window.refs?.rest, windowTitle, locale));
-    // Alt sınırda ("en az") projelerin tamamı bilinmez: koleksiyon bağı yalnızca kesin sayıda kurulur.
-    const bothBind = atLeast ? null : rowsBind(window.refs?.table, window.refs?.all, windowTitle, locale);
+    // Gelecek termin tablosu bugünkü gecikmelerin ölçülerini taşımaz. Ortak iddianın sayısı ve adları bağsız kalır.
+    const named = namesList(window.names, locale, entities - window.names.length, ['proje', 'projects']);
     const dueBind = rowsBind(window.refs?.table, window.refs?.due, tr(locale, 'Dönemde teslimatı olan projeler', 'Projects with deliveries in the period'), locale);
     const from = s(formatFactDay(dateFrom, locale));
     const to = s(formatFactDay(dateTo, locale));
     out.push({ finding: window, ...factSentence(en(locale)
-      ? [...(entities === population && !atLeast ? ['Every one of the ', s(formatCount(population, locale), dueBind), ' projects'] : [...(atLeast ? ['At least '] : []), s(formatCount(entities, locale), bothBind), ' of the ', s(formatCount(population, locale), dueBind), ' projects']),
+      ? [...(entities === population && !atLeast ? ['Every one of the ', s(formatCount(population, locale), dueBind), ' projects'] : [...(atLeast ? ['At least '] : []), s(formatCount(entities, locale)), ' of the ', s(formatCount(population, locale), dueBind), ' projects']),
         ' with deliveries between ', from, ' and ', to, ' also ', entities === 1 ? 'has' : 'have', ' overdue work today: ', ...named, '.']
       : [from, ' ile ', to, ' arasında teslimatı olan ', s(formatCount(population, locale), dueBind), ' projenin ', ...(atLeast ? ['en az '] : []),
-        ...(entities === population && !atLeast ? ['tamamında'] : [s(`${formatCount(entities, locale)}${locativeCountSuffix(entities)}`, bothBind)]), ' bugün gecikmiş iş de var: ', ...named, '.']) });
+        ...(entities === population && !atLeast ? ['tamamında'] : [s(`${formatCount(entities, locale)}${locativeCountSuffix(entities)}`)]), ' bugün gecikmiş iş de var: ', ...named, '.']) });
     // Kesik gecikmiş listesinin alt sınırı ayrı ve açıklayıcı bir cümledir (parantez içi teknik not değil).
     if (atLeast) {
       out.push({ finding: window, ...factSentence(en(locale)
@@ -1234,7 +1230,10 @@ function gIntroSentences(findings, locale) {
     // kilometre taşı satırın tekil görev kartına bağlanır.
     const openBind = open != null ? listTotalBind(list, open, tr(locale, 'Açık kilometre taşları', 'Open milestones')) : null;
     // Kesin sayıda (bütün açık kilometre taşları bilinir) gecikmişler tam listenin koşullu alt kümesidir; alt sınırda bağ yoktur.
-    const lateBind = open != null || overdueExact ? listPredicateBind(list, 'overdue', overdue, tr(locale, 'Gecikmiş kilometre taşları', 'Overdue milestones'), 'overdue') : null;
+    const lateBind = overdueExact
+      ? listRowsBind(list, status.refs?.late, tr(locale, 'Gecikmiş kilometre taşları', 'Overdue milestones'), 'overdue')
+        || listPredicateBind(list, 'overdue', overdue, tr(locale, 'Gecikmiş kilometre taşları', 'Overdue milestones'), 'overdue')
+      : null;
     const worstBind = taskRowBind(list, status.refs?.worst);
     const nextBind = next?.sole ? taskRowBind(list, status.refs?.next) : null;
     const undatedBind = listPredicateBind(list, 'withoutTargetFinish', status.metrics.undated, tr(locale, 'Termini olmayan kilometre taşları', 'Milestones without a target date'));
@@ -1260,8 +1259,11 @@ function gIntroSentences(findings, locale) {
       // Termini olmayan kilometre taşı için gecikme yargısı kurulmaz: "hiçbiri gecikmiş değil" yalnızca termini olanlar için söylenir.
       const { dated } = status.metrics;
       const some = dated !== open;
-      // Termini olan açık kilometre taşlarının tamamı yalnızca bütün açıklar terminliyse aramanın kesin toplamıdır.
-      const datedBind = !some ? openBind : null;
+      // Kesin terminli alt küme sayfada kimlikleriyle bulunur.
+      const datedRows = list?.rows.filter((row) => typeof row.due === 'string') || [];
+      const datedBind = !some ? openBind : datedRows.length === dated
+        ? listRowsBind(list, datedRows, tr(locale, 'Termini olan açık kilometre taşları', 'Open milestones with a target date'))
+        : listPredicateBind(list, 'withTargetFinish', dated, tr(locale, 'Termini olan açık kilometre taşları', 'Open milestones with a target date'));
       add(status, en(locale) ? ['None of the ', s(formatCount(dated, locale), datedBind), some ? ' open milestones with a target date is overdue' : ' open milestones is overdue', ...(next ? [next.sole ? '; the next is ' : '; one of the next milestones is ', s(next.title, nextBind), ' (', nextDay, ...projectOf(next), ')'] : []), '.']
         : [some ? 'Termini olan açık ' : 'Açık ', s(formatCount(dated, locale), datedBind), ' kilometre taşının hiçbiri gecikmiş değil', ...(next ? [next.sole ? '; sıradaki ' : '; aynı en yakın termindeki kilometre taşlarından biri ', s(next.title, nextBind), ' (', nextDay, ...projectOf(next), ')'] : []), '.']);
     } else if (next) {

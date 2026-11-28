@@ -97,6 +97,21 @@ export function createToolExecutor({
         signal: deadline.signal,
         authorization: () => context.authorization(deadline.signal),
         sql: (work) => context.sql(deadline.signal, work),
+        optionalSql: async (work) => {
+          deadline.signal.throwIfAborted();
+          // Araç yanıtının hazırlanması için kalan sürenin son 100 ms'si isteğe bağlı sorguya verilmez.
+          const budget = deadline.remainingMs() - 100;
+          if (budget < 100) return null;
+          const optional = createAiDeadline({ timeoutMs: budget, parentSignal: deadline.signal, now: clock });
+          try {
+            return await raceWithAbort(() => context.sql(optional.signal, work), optional.signal);
+          } catch (error) {
+            if (optional.failure()?.code === AI_ERROR_CODES.AI_TIMEOUT) return null;
+            throw error;
+          } finally {
+            optional.dispose();
+          }
+        },
         snapshot: (key, cursor, load) => context.snapshot(key, cursor, load),
         notePopulation: (references) => { populationNoted = true; for (const reference of references) population.set(JSON.stringify([reference.taskId, reference.projectId]), reference); },
         noteProjects: (projectIds) => { projectPopulation.push(...projectIds); }

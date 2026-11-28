@@ -1084,13 +1084,12 @@ body.high-contrast .ice-ref { text-decoration-thickness: 2px; text-decoration-co
 .ice-facts dd.ice-num { font-variant-numeric: tabular-nums; font-weight: 600; }
 .ice-facts.is-metrics > div { grid-template-columns: minmax(118px, max-content) minmax(0, 1fr); }
 .rich-tip.ice-card.is-table { width: min(400px, calc(var(--app-viewport-w, 100vw) - 24px)); }
-.ice-table-wrap { max-height: 240px; overflow: auto; overscroll-behavior: contain; margin: 0 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm); }
-.ice-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ice-table-wrap { margin: 0 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm); }
+.ice-card.is-table .rich-tip-body:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ice-table { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .ice-table th, .ice-table td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .ice-table thead th { position: sticky; top: 0; background: var(--bg-elev); color: var(--text-dim); font-weight: 600; font-size: 10.5px; white-space: normal; vertical-align: bottom; }
-.ice-table th:first-child { text-align: left; max-width: 150px; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
-@media (max-width: 480px) { .ice-table th:first-child { max-width: 118px; } }
+.ice-table th:first-child { text-align: left; width: 38%; white-space: normal; overflow-wrap: anywhere; color: var(--text); font-weight: 500; }
 .ice-table thead th:first-child { color: var(--text-dim); font-weight: 600; }
 .ice-table tbody tr:last-child th, .ice-table tbody tr:last-child td { border-bottom: 0; }
 .ice-formula { display: grid; gap: 3px; margin: 0 0 8px !important; padding: 7px 9px; border-radius: var(--r-sm); background: color-mix(in oklab, var(--tip-accent) 7%, var(--bg-elev));

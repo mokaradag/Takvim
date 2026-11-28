@@ -130,6 +130,23 @@ function taskTotals(row) {
 
 /* ── rota_project_detail ──────────────────────────────────── */
 
+async function detailCardPopulation(call, scope, population, projectId, total) {
+  const taskIds = [...new Set(population.map((row) => row.taskId))];
+  if (!taskIds.length || taskIds.length !== total || taskIds.length !== population.length
+    || population.some((row) => row.projectId !== projectId)) return null;
+  try {
+    const read = await (call.optionalSql ?? call.sql)((executor) => readTaskFacts(executor, scope,
+      { projectId, taskIds, maxRows: taskIds.length }));
+    const returned = new Set(read?.facts.map((fact) => fact.id));
+    if (!read || read.truncated || returned.size !== total || read.facts.length !== total
+      || !taskIds.every(id => returned.has(id))) return null;
+    return buildCardPopulation(call, scope, { sets: [['data.visibleTasks.total', read.facts]], projects: projectIndex(read.projects), today: call.today });
+  } catch (error) {
+    if (isTurnFatal(error)) throw error;
+    return null;
+  }
+}
+
 const projectDetail = {
   name: 'rota_project_detail',
   version: 1,
@@ -160,7 +177,9 @@ const projectDetail = {
     const tags = detail.tags.slice(0, 20).map((tag) => dataText(tag, 60));
     const overLimit = { DependencyCount: 'dependencyCount', BaselineCount: 'baselineCount', WbsNodeCount: 'wbsNodeCount', TagCount: 'tagCount' };
     const countsOverLimit = detail.countsOverLimit.map((column) => overLimit[column]);
+    const cardPopulation = await detailCardPopulation(call, scope, detail.population, canonicalActualId(row.ProjectId), totals.total);
     return {
+      ...(cardPopulation ? { cardPopulation } : {}),
       data: {
         project: {
           projectId: canonicalActualId(row.ProjectId),
@@ -211,22 +230,22 @@ const PORTFOLIO_SORTS = Object.freeze({
 const PORTFOLIO_METRICS = Object.freeze(['total', 'todo', 'inProgress', 'done', 'open', 'overdue', 'dueNext7Days', 'openWithoutTargetFinish', 'milestonesOpen']);
 const PORTFOLIO_TOTALS = Object.freeze({ tasks: 'total', open: 'open', done: 'done', overdue: 'overdue', dueNext7Days: 'dueNext7Days', openWithoutTargetFinish: 'openWithoutTargetFinish' });
 
-/**
- * ICE-2 — portföy sayılarının katkıda bulunan görevleri. Portföy sayıları SQL toplamıdır; satırları kanıtta yoktur. Sayfadaki
- * projelerin AYNI görünür görev nüfusu (portföy sorgusunun döndürdüğü görev kimlikleri) tek ve sınırlı bir okumayla alınır,
- * sayılar aynı koşullarla yeniden hesaplanır ve her proje için SQL toplamlarıyla BİREBİR karşılaştırılır. Tek ölçü bile
- * uyuşmazsa (ör. iki okuma arasında değişen görev) o projenin hiçbir kümesi kaydedilmez; toplamlar yalnızca bütün projeler
- * sayfada ve uyumluysa kaydedilir. Okuma sınırı aşılırsa kayıt yoktur (kart üretilmez; yanıt değişmez).
- */
-async function portfolioCardPopulation(call, scope, { page, projects, population, totals }) {
-  const wanted = new Set(page.map((project) => project.projectId));
-  const taskIds = (population || []).filter((row) => wanted.has(canonicalActualId(row.projectId))).map((row) => row.taskId);
-  if (!page.length || !taskIds.length || taskIds.length > TOOL_LIMITS.maxAnalyzedTasks) return null;
+/** Portföy sayısının dayandığı kimlikler ve durumlar, önizleme okumasıyla küme bazında karşılaştırılır. */
+async function portfolioCardPopulation(call, scope, { page, projects, snapshot, totals }) {
+  const wanted = new Set(page.map(({ projectId }) => canonicalActualId(projectId)).filter(Boolean));
+  const snapshotByProject = new Map();
+  for (const fact of snapshot) {
+    if (!wanted.has(fact.projectId) || !fact.id) continue;
+    if (!snapshotByProject.has(fact.projectId)) snapshotByProject.set(fact.projectId, []);
+    snapshotByProject.get(fact.projectId).push(fact);
+  }
+  const taskIds = [...new Set([...snapshotByProject.values()].flatMap((facts) => facts.map(({ id }) => id)))];
+  if (!taskIds.length || taskIds.length > TOOL_LIMITS.maxAnalyzedTasks) return null;
   let read;
-  // Kart zenginleştirmesi isteğe bağlıdır: araç düzeyindeki okuma hatası portföy sonucunu bozmaz (kart kaydı yapılmaz); iptal yayılır.
-  try { read = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds, maxRows: taskIds.length })); }
+  // İsteğe bağlı sorgu, araç süresi dolmadan kendi iptal sınırına ulaşır.
+  try { read = await (call.optionalSql ?? call.sql)((executor) => readTaskFacts(executor, scope, { taskIds, withAssignees: false, maxRows: taskIds.length })); }
   catch (error) { if (isTurnFatal(error)) throw error; return null; }
-  if (read.truncated) return null;
+  if (!read || read.truncated) return null;
   const byProject = new Map();
   for (const fact of read.facts) {
     if (!byProject.has(fact.projectId)) byProject.set(fact.projectId, []);
@@ -235,9 +254,18 @@ async function portfolioCardPopulation(call, scope, { page, projects, population
   const sets = [];
   const verified = [];
   page.forEach((project, index) => {
+    const projectId = canonicalActualId(project.projectId);
+    if (!projectId || page.filter((row) => canonicalActualId(row.projectId) === projectId).length !== 1) return;
     const members = {};
-    const recount = statusTotals(byProject.get(project.projectId) || [], call.today, members);
-    if (!PORTFOLIO_METRICS.every((metric) => recount[metric] === project.tasks[metric])) return;
+    const original = {};
+    const originalCounts = statusTotals(snapshotByProject.get(projectId) || [], call.today, original);
+    const recount = statusTotals(byProject.get(projectId) || [], call.today, members);
+    if (!PORTFOLIO_METRICS.every((metric) => {
+      const ids = new Set((original[metric] || []).map(({ id }) => id));
+      const current = new Set((members[metric] || []).map(({ id }) => id));
+      return ids.size === originalCounts[metric] && current.size === recount[metric] && ids.size === project.tasks[metric]
+        && ids.size === current.size && [...current].every(id => ids.has(id));
+    })) return;
     verified.push(members);
     for (const metric of PORTFOLIO_METRICS) sets.push([`data.projects.${index}.tasks.${metric}`, members[metric] || [], project.projectId]);
   });
@@ -273,7 +301,7 @@ const portfolioSummary = {
     const source = args.source || 'all';
     const { scope } = await call.authorization();
     const soonEnd = addDays(call.today, DUE_SOON_DAYS - 1);
-    const { rows, population } = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source }));
+    const { rows, population, snapshot } = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source }));
     call.notePopulation?.(population);
     const filteredRows = rows
       .filter((row) => source === 'all' || (source === 'corporate') === (row.SourceType === 'CORPORATE'))
@@ -287,7 +315,7 @@ const portfolioSummary = {
       tasks: taskTotals(row)
     }));
     const compare = PORTFOLIO_SORTS[sort];
-    projects.sort((left, right) => compare(left, right) || left.name.localeCompare(right.name, 'tr') || left.projectId.localeCompare(right.projectId));
+    projects.sort((left, right) => compare(left, right) || left.name.localeCompare(right.name, 'tr') || String(left.projectId ?? '').localeCompare(String(right.projectId ?? '')));
     call.noteProjects?.(filteredRows.map((row) => canonicalActualId(row.ProjectId)));
     const totals = projects.reduce((sum, project) => ({
       projects: sum.projects + 1,
@@ -302,7 +330,7 @@ const portfolioSummary = {
     const descriptor = describeTaskScope(filteredRows.map(scopeAccess));
     const page = projects.slice(0, limit);
     const rankField = { overdue_desc: 'overdue', open_desc: 'open', due_soon_desc: 'dueNext7Days' }[sort];
-    const cardPopulation = await portfolioCardPopulation(call, scope, { page, projects, population, totals });
+    const cardPopulation = await portfolioCardPopulation(call, scope, { page, projects, snapshot, totals });
     return {
       ...(cardPopulation ? { cardPopulation } : {}),
       ...(rankField && projects.length > page.length ? { rankingBoundary: {

@@ -79,8 +79,10 @@ test('ICE-2 proje koleksiyonu kaydırılabilir tabloda ad ve doğrulanmış say�
     key('Enter', trigger);
     const dialog = cardNode();
     assert.ok(dialog.classList.contains('is-table'));
-    const wrap = dialog.querySelector('.ice-table-wrap');
-    assert.equal(wrap.getAttribute('tabindex'), '0', 'tablo klavyeyle kaydırılabilir');
+    const wrap = dialog.querySelector('[role=region]');
+    assert.equal(wrap.getAttribute('tabindex'), '0', 'tablo ve kapsam klavyeyle kaydırılabilir');
+    assert.equal(document.activeElement, wrap);
+    assert.ok(wrap.querySelector('.ice-notice'));
     const rows = [...dialog.querySelectorAll('tbody tr')].map((row) => [...row.children].map((cell) => cell.textContent));
     assert.deepEqual(rows, [['Altyapı Yenileme', '12', '5'], ['Mobil Uygulama', '9', '3'], ['Veri Ambarı Göçü', '8', '—']]);
     assert.match(dialog.textContent, /Yalnızca görüntüleme yetkiniz bulunan kayıtlar/);
@@ -113,7 +115,8 @@ test('ICE-2 kişi kartı ölçüleri ve kişinin görevlerini gösterir; kısmi 
   }
 });
 
-test('ICE-2 karşılaştırma kartı iki dönemi, farkı ve değişim işlemini gösterir', () => {
+test('ICE-2 karşılaştırma kartı iki dönemi, farkı ve değişim işlemini gösterir', (t) => {
+  const network = withoutNetwork(t);
   const view = mountDom(Harness, { shown: card('c4'), text: '%25' });
   try {
     key('Enter', view.host.querySelector('.ice-ref'));
@@ -123,12 +126,14 @@ test('ICE-2 karşılaştırma kartı iki dönemi, farkı ve değişim işlemini 
     assert.match(dialog.textContent, /Eylül 2026\s*6/);
     assert.match(dialog.textContent, /Değişim/);
     key('Escape', document.activeElement);
+    assert.equal(network.length, 0);
   } finally {
     view.unmount();
   }
 });
 
-test('ICE-2 kart türleri kötü niyetli metni HTML olarak çizmez', () => {
+test('ICE-2 kart türleri kötü niyetli metni HTML olarak çizmez', (t) => {
+  const network = withoutNetwork(t);
   const hostile = normalizeEvidenceCards({ v: EVIDENCE_CARD_VERSION, cards: [{ id: 'c1', kind: 'people', title: '<img src=x onerror=alert(1)>', tone: 'neutral', generatedAt: GENERATED_AT,
     scopePartial: false, total: 1, columns: ['<b>Açık</b>'], rows: [{ name: '<script>alert(1)</script>', values: [1] }] }], anchors: [{ strong: 0, text: '1', card: 'c1' }] });
   const view = mountDom(Harness, { shown: hostile.cards[0], text: '1' });
@@ -138,6 +143,7 @@ test('ICE-2 kart türleri kötü niyetli metni HTML olarak çizmez', () => {
     assert.equal(dialog.querySelector('img, script, b'), null);
     assert.match(dialog.textContent, /<script>alert\(1\)<\/script>/);
     key('Escape', document.activeElement);
+    assert.equal(network.length, 0);
   } finally {
     view.unmount();
   }
