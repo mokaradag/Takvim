@@ -325,8 +325,10 @@ export function selectQualificationCases(stage, requested = null) {
 }
 
 export function finalizeCompositionQualification(report) {
-  process.stderr.write(`${JSON.stringify(report)}\n`);
-  if (OUT) appendFileSync(OUT, `${JSON.stringify(report)}\n`);
+  const thinkingAllowed = report.provider === 'claude' && process.env.PLANNER_CLAUDE_THINKING === 'allow';
+  const serialized = JSON.stringify({ ...report, thinkingAllowed });
+  process.stderr.write(`${serialized}\n`);
+  if (OUT) appendFileSync(OUT, `${serialized}\n`);
   assert.deepEqual(report.results.filter((row) => row.failures.length).map((row) => `${row.id}#${row.turn}`), [], 'COMPOSITION_CHECKS_FAILED');
   if (['live', 'claude'].includes(report.provider)) assert.ok(report.calls > 0, 'COMPOSITION_NO_MODEL_CALLS');
   // Hiç vaka koşmayan kapı başarı değildir (seçilen her vaka koşmuş ve geçmiş olmalı).
@@ -334,7 +336,7 @@ export function finalizeCompositionQualification(report) {
   if (Number.isInteger(report.selected)) assert.equal(report.cases, report.selected, 'COMPOSITION_CASES_NOT_RUN');
   assert.equal(report.passed, report.cases, 'COMPOSITION_CASES_FAILED');
   assert.equal(report.escalations, 0, 'COMPOSITION_ESCALATION_FORBIDDEN');
-  if (report.provider !== 'claude' || process.env.PLANNER_CLAUDE_THINKING !== 'allow') {
+  if (!thinkingAllowed) {
     assert.equal(report.usage.thinking, 0, 'COMPOSITION_THINKING_FORBIDDEN');
   }
 }

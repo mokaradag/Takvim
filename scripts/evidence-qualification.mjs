@@ -53,6 +53,7 @@ export const LIVE_CASES = Object.freeze([
 
 const selected = selectEvidenceCases(LIVE_CASES, process.env.EVIDENCE_QUALIFICATION_CASES);
 const summary = { model: process.env.PLANNER_CLAUDE_MODEL || null, effort: process.env.PLANNER_CLAUDE_EFFORT || null,
+  thinkingAllowed: process.env.PLANNER_CLAUDE_THINKING === 'allow',
   expected: selected.length, attempted: 0, passed: 0, failed: 0, skipped: 0, rounds: 0, escalations: 0,
   results: selected.map(item => ({ id: item.id, status: 'koşulmadı' })) };
 const recorded = [];
@@ -94,21 +95,17 @@ for (const [index, item] of selected.entries()) {
       if (item.data === 'temporal') problems.push(...temporalViolations(result, expected, { includeText: item.includeText === true }),
         ...temporalPopulationViolations(result, analysisPlan, seed, expected));
       else {
-        problems.push(...turnViolations(result, { ...(analysisPlan ? { scope: analysisPlan.scope } : {}), ...expected }, { live: true }));
-        if (analysisPlan && finish === 'stop') {
-          const layers = [analysisPlan, ...(analysisPlan.also || [])];
-          for (const layer of layers) {
-            const people = layer.scope === 'person' ? (layer.names || [])
-              .map(name => seed.people.find(person => person.DisplayName === name)?.Sicil) : [];
-            const projectNames = layer.scope === 'project' ? layer.names || [] : layer.within ? [layer.within] : [];
-            const projectIds = projectNames.map(name => seed.projects.find(project => project.ProjectName === name)?.ProjectId?.toLowerCase());
-            if (people.some(id => !id) || projectIds.some(id => !id)) problems.push('beklenen kişi veya proje kimliği bulunamadı');
-            // Her katmanın beklenen yönlerini denetler. Bir katmanın filtresi diğer katmana dayatılmaz.
-            problems.push(...turnViolations(result, { scope: layer.scope, ...(layer.level && layers.length === 1 ? { level: layer.level } : {}),
-              ...(people.length ? { people } : {}), ...(projectIds.length && layers.length === 1 ? { projectIds } : {}),
-              scopeFocus: layer.focus || [] }, { live: true }).filter(problem => layers.length === 1 || problem.startsWith('yön kanıtı yok:')));
-          }
-        }
+        const layers = analysisPlan && [analysisPlan, ...(analysisPlan.also || [])].flatMap(layer => {
+          const focus = layer.focus || analysisPlan.focus || [];
+          if (!['person', 'project'].includes(layer.scope)) return [{ scope: layer.scope, level: layer.level, focus }];
+          return (layer.names || []).map(name => {
+            const sicil = layer.scope === 'person' ? seed.people.find(person => person.DisplayName === name)?.Sicil : null;
+            const projectId = layer.scope === 'project' ? seed.projects.find(project => project.ProjectName === name)?.ProjectId : null;
+            if (!sicil && !projectId) problems.push('beklenen kişi veya proje kimliği bulunamadı');
+            return { scope: layer.scope, names: [name], ...(sicil ? { sicil } : { projectId }), focus };
+          });
+        });
+        problems.push(...turnViolations(result, { ...(layers?.length && finish === 'stop' ? { layers } : {}), ...expected }, { live: true }));
       }
       if (item.direct && finish === 'stop') {
         const wanted = item.direct === 'own-overdue' ? 'me' : 'team';
@@ -135,7 +132,8 @@ for (const [index, item] of selected.entries()) {
       Object.assign(entry, { finish, presentation, compositionRejected: Boolean(trace?.presentation?.rejected?.length
         || trace?.presentation?.reason === 'MODEL_LAYOUT_REPLACED' || rounds.some(round => round.purpose === 'compose' && round.infrastructure)),
       cards: cards?.cards.length || 0, anchors: cards?.anchors.length || 0, problems,
-      taskCounts: { identityVerified: claims.filter(claim => claim.category === 'taskCount' && claim.identityVerified).length, bound: claims.filter(claim => claim.category === 'taskCount' && claim.result === 'doğru-bağlı').length,
+      taskCounts: { identityVerified: claims.filter(claim => claim.category === 'taskCount' && claim.identityVerified).length, bound: claims.filter(claim => claim.category === 'taskCount' && ['doğru-bağlı', 'biçim-doğrulandı'].includes(claim.result)).length,
+        shapeOnly: claims.filter(claim => claim.category === 'taskCount' && claim.result === 'biçim-doğrulandı').length,
         justified: claims.filter(claim => claim.category === 'taskCount' && claim.result === 'gerekçeli-bağsız').length,
         missing: claims.filter(claim => claim.category === 'taskCount' && claim.result === 'beklenmedik-bağsız').length },
       wrong: claims.filter(claim => claim.result === 'yanlış-bağlı').map(({ text, reason }) => ({ text, reason })),
@@ -169,9 +167,10 @@ test.after(() => {
   summary.presentation = {};
   for (const row of summary.results) {
     const key = row.presentation || 'tamamlanmadı';
-    const group = summary.presentation[key] ||= { cases: 0, bound: 0, missing: 0, wrong: 0 };
+    const group = summary.presentation[key] ||= { cases: 0, bound: 0, shapeOnly: 0, missing: 0, wrong: 0 };
     group.cases += 1;
     group.bound += row.taskCounts?.bound || 0;
+    group.shapeOnly += row.taskCounts?.shapeOnly || 0;
     group.missing += row.taskCounts?.missing || 0;
     group.wrong += row.wrong?.length || 0;
   }

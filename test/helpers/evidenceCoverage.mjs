@@ -226,8 +226,11 @@ export function accountAnswer({ content, cards, finish, names, expectedClaim = n
     if (card) {
       const expected = expectedClaim?.(enriched);
       const wrong = incorrectBinding(enriched, card, expected);
-      return { ...enriched, bound: true, card: card.kind, result: wrong ? 'yanlış-bağlı' : 'doğru-bağlı',
-        ...(!wrong && (expected?.taskIds || expected?.entityNames) ? { identityVerified: true } : {}), ...(wrong ? { reason: wrong } : {}) };
+      const identityVerified = !wrong && Boolean(expected?.taskIds || expected?.entityNames);
+      const needsIdentity = ['taskCount', 'name', 'entityCount'].includes(category);
+      return { ...enriched, bound: true, card: card.kind,
+        result: wrong ? 'yanlış-bağlı' : needsIdentity && !identityVerified ? 'biçim-doğrulandı' : 'doğru-bağlı',
+        ...(identityVerified ? { identityVerified } : {}), ...(wrong ? { reason: wrong } : {}) };
     }
     if (category !== 'taskCount') return { ...enriched, bound: false, result: 'bağsız' };
     const reason = unboundReason(enriched, { finish });

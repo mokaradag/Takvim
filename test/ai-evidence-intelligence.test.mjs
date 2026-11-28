@@ -396,3 +396,21 @@ test('ICE-2 isteğe bağlı kart okuması başarısız olursa araç sonucu bozul
   assert.equal(Number.isSafeInteger(result.data?.totals?.total), true);
   assert.equal(ledger.requestEntries({ forCards: true })[0].cardPopulation, undefined);
 });
+
+test('küçük payın formülü gösterilen ondalığın kesinliğini kullanır', () => {
+  const create = (denominator, label) => {
+    const entry = analyticsEntry('R1', { totals: { total: denominator, overdue: 1 } });
+    const numerator = bindings.operand({ evidenceId: 'R1', field: 'data.totals.overdue', value: 1, label: 'Pay' });
+    const total = bindings.operand({ evidenceId: 'R1', field: 'data.totals.total', value: denominator, label: 'Payda' });
+    const binding = bindings.calcBind({ numerator, denominator: total, shown: (1 / denominator) * 100, title: 'Pay' });
+    return build([[label, binding]], [entry]).descriptor.cards[0].formula;
+  };
+  assert.equal(create(300, '%0,333'), '1 / 300 × 100 ≈ %0,333');
+  assert.equal(create(400, '%0,25'), '1 / 400 × 100 = %0,25');
+});
+
+test('İngilizce not girişi gerçekten dönen tek notu tekil olarak bildirir', async () => {
+  const { noteListLead } = await import('../src/domain/ai/temporalFindings.js');
+  assert.match(noteListLead('en', { shown: 1, total: 3 }).plain, /1 returned note is quoted/u);
+  assert.match(noteListLead('en', { shown: 2, total: 3 }).plain, /2 returned notes are quoted/u);
+});

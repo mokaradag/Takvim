@@ -750,3 +750,21 @@ test('sıralanmış dağılım yalnız bütün gruplar gösterildiğinde halka o
     } else assert.equal(validation.issues[0], 'STYLE_INVALID');
   }
 });
+
+test('açık düşünme izni nitelendirme raporunda görünür ve varsayılan koşul korunur', async (t) => {
+  const { finalizeCompositionQualification } = await import('../scripts/answer-composition-qualification.mjs');
+  const previous = process.env.PLANNER_CLAUDE_THINKING;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PLANNER_CLAUDE_THINKING;
+    else process.env.PLANNER_CLAUDE_THINKING = previous;
+  });
+  const logs = [];
+  const writer = t.mock.method(process.stderr, 'write', chunk => { logs.push(JSON.parse(chunk)); return true; });
+  const report = { provider: 'claude', cases: 1, passed: 1, results: [], usage: { thinking: 2 }, calls: 1, escalations: 0 };
+  delete process.env.PLANNER_CLAUDE_THINKING;
+  assert.throws(() => finalizeCompositionQualification(report), /COMPOSITION_THINKING_FORBIDDEN/u);
+  process.env.PLANNER_CLAUDE_THINKING = 'allow';
+  assert.doesNotThrow(() => finalizeCompositionQualification(report));
+  writer.mock.restore();
+  assert.deepEqual(logs.map(row => [row.thinkingAllowed, row.usage.thinking]), [[false, 2], [true, 2]]);
+});

@@ -1135,7 +1135,7 @@ export function noteListLead(locale = 'tr', { shown = null, total = null, eviden
   const lang = en(locale) ? 1 : 0;
   if (total != null && shown != null && shown < total) {
     const bind = shownTaskBind(evidenceId, taskIds, shown, lang ? 'Tasks whose notes are shown' : 'Notu gösterilen görevler');
-    return factSentence(lang ? ['Of ', n(total, locale), ' open tasks with descriptions, the ', n(shown, locale, bind), ' returned notes are quoted as recorded.']
+    return factSentence(lang ? ['Of ', n(total, locale), ' open tasks with descriptions, the ', n(shown, locale, bind), shown === 1 ? ' returned note is quoted as recorded.' : ' returned notes are quoted as recorded.']
       : ['Açıklaması olan ', n(total, locale), ' açık görevden dönen ', n(shown, locale, bind), ' not kayıtlardaki hâliyle aşağıdadır.']);
   }
   return factSentence(lang ? ['The notes are quoted as recorded.'] : ['Notlar kayıtlardaki hâliyle aşağıdadır.']);

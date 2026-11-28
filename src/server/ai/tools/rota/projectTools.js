@@ -18,7 +18,7 @@ import {
   projectIndex,
   requireVisibleProject
 } from './rotaToolSupport.js';
-import { addDays, DUE_SOON_DAYS, sqlDay, sqlInstant, statusTotals } from './taskFacts.js';
+import { addDays, DUE_SOON_DAYS, sqlDay, sqlInstant, statusTotals, taskStatus } from './taskFacts.js';
 
 function sourceLabel(sourceType) {
   return sourceType === 'CORPORATE' ? 'Kurumsal (CN43N)' : 'Manuel';
@@ -234,10 +234,13 @@ const PORTFOLIO_TOTALS = Object.freeze({ tasks: 'total', open: 'open', done: 'do
 async function portfolioCardPopulation(call, scope, { page, projects, snapshot, totals }) {
   const wanted = new Set(page.map(({ projectId }) => canonicalActualId(projectId)).filter(Boolean));
   const snapshotByProject = new Map();
-  for (const fact of snapshot) {
-    if (!wanted.has(fact.projectId) || !fact.id) continue;
-    if (!snapshotByProject.has(fact.projectId)) snapshotByProject.set(fact.projectId, []);
-    snapshotByProject.get(fact.projectId).push(fact);
+  for (const row of snapshot) {
+    const projectId = canonicalActualId(row.ProjectId);
+    const id = canonicalActualId(row.TaskId);
+    if (!wanted.has(projectId) || !id) continue;
+    if (!snapshotByProject.has(projectId)) snapshotByProject.set(projectId, []);
+    snapshotByProject.get(projectId).push({ id, status: taskStatus(row.Status), targetFinish: sqlDay(row.TargetFinish),
+      milestone: Boolean(row.IsMilestone) });
   }
   const taskIds = [...new Set([...snapshotByProject.values()].flatMap((facts) => facts.map(({ id }) => id)))];
   if (!taskIds.length || taskIds.length > TOOL_LIMITS.maxAnalyzedTasks) return null;

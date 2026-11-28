@@ -337,7 +337,10 @@ function calcCard(base, bind, entries) {
   // Yanıtta gösterilen yüzde sunucunun yeniden hesabıyla birebir aynı değilse kart yoktur.
   if (shown == null || shown !== bind.shown) return null;
   const raw = (numerator / denominator) * 100;
-  const exact = raw === shown;
+  const result = percentText(shown);
+  // Eşitlik, ekranda gösterilen ondalık değer için tam sayı aritmetiğiyle denetlenir.
+  const [whole, fraction = ''] = result.slice(1).split(',');
+  const exact = BigInt(numerator) * 100n * 10n ** BigInt(fraction.length) === BigInt(whole + fraction) * BigInt(denominator);
   const clamped = bind.rule === 'round' && shown !== Math.round(raw);
   const note = clamped ? 'Yuvarlama sonrası %0 ve %100 yalnızca hiçbiri ve tamamı için gösterilir. Ara değerler %1–%99 ile sınırlanır.'
     : bind.rule === 'round' ? 'Sonuç tam sayıya yuvarlanmıştır.'
@@ -345,7 +348,7 @@ function calcCard(base, bind, entries) {
         : 'Sonuç yuvarlanmıştır; sıfır ya da tamamı olmayan pay %0 veya %100 gösterilmez.';
   return { ...base, kind: 'calc', title: cleanText(bind.title) || 'Hesaplama', tone: bind.tone || 'neutral',
     metrics: [{ label: cleanText(bind.numerator.label) || 'Pay', value: formatInt(numerator) }, { label: cleanText(bind.denominator.label) || 'Payda', value: formatInt(denominator) }],
-    result: percentText(shown), formula: `${formatInt(numerator)} / ${formatInt(denominator)} × 100 ${clamped ? `≈ ${percentText(raw)} →` : exact ? '=' : '≈'} ${percentText(shown)}`,
+    result, formula: `${formatInt(numerator)} / ${formatInt(denominator)} × 100 ${clamped ? `≈ ${percentText(raw)} →` : exact ? '=' : '≈'} ${result}`,
     ...(!exact ? { note } : {}) };
 }
 
