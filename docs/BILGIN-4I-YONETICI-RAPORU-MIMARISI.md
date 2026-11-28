@@ -403,6 +403,14 @@ değiştirilmesi; akıcılık için uydurma olguya izin verilmesi; bilinen bir y
 **Kesin kapılar:** güvenlik ihlali, yetkisiz açıklama, çözülemeyen kritik olgu hatası. Bunlar onarılamazsa rapor
 yayımlanamaz ama taslak kaybolmaz.
 
+### 8.4 Uygulama özeti (4I-C)
+
+- **Modüller:** `src/domain/ai/report/reportClaims.js` (Türkçe dilbilimsel normalleştirme, yetkili `4i-kanit-1` olgu defteri `buildEvidenceFactLedger`, bağlamsal nesnel olgu doğrulaması `verifyReportObjectiveFacts`, belirlenimci paragraf kanıt seçici `selectRelevantEvidenceForParagraph`); `src/domain/ai/report/reportReview.js` (bağımsız anlamsal denetim sözleşmesi `4i-denetim-1` ve yerel onarım sözleşmesi `4i-onarim-1` istem kurucuları, kapalı şema ayrıştırıcılar, kriptografik `rapor_ozeti_sha256` bağlaması, tek-paragraf değiştirici `replaceDraftParagraph` ve belirlenimci son çare `applyDeterministicParagraphFallback`); `src/server/ai/report/reportRepair.js` (`import 'server-only'`; katı çağrı bütçesi `createReportCallBudget`, bağımsız denetçi kimlik doğrulaması `assessIndependentReviewerIdentity`, `verifyAndRepairExecutiveReport` ve uçtan uca `generateVerifiedExecutiveReport`).
+- **Bağlamsal nesnel doğrulama:** Değer düzeyinde defter varlığı tek başına yeterli sayılmaz; sayılar, yüzdeler (negatif yönlü değişim dâhil), oranlar, süreler, tarihler/aralıklar, görev durumları, kesit sonrası değişim kısıtları, tarihsiz tamamlanan görev gecikme yasağı, kronoloji tersinmesi, bilinmeyen (`null`) değerin sıfır yazılması, planlı `Şekil`/`Tablo` göndermeleri, zorunlu olgu/bütünlük açıklamaları ve yazar iddia eki tutarsızlıkları varlık, ölçü ve dönem bağlamında belirlenimci olarak denetlenir. Yazarın `iddialar` eki doğrulama kapsamını asla daraltmaz.
+- **Bağımsız anlamsal denetim (`4i-denetim-1`):** `AI_REPORT_PROFILES.REVIEW` (`report.review`) profili sohbet profillerinden ayrı tanımlıdır ve nitelendirme tamamlanana kadar hiçbir üretim model kaydında eşlenmez. Denetçi çıktısı güvenilmez girdidir: yinelenen JSON anahtarı, prototip anahtarları, uyumsuz `rapor_ozeti_sha256`, eksik hedef kapsamı, paragrafta bulunmayan alıntı, yetkisiz `E#`/`F#` göndergesi ve çelişkili bulgular reddedilir. Denetçinin fiilî yazarla aynı model kimliği (yapılandırılan veya sağlayıcıca bildirilen) olması bağımsız sayılmaz; bağımsız denetçi erişilemediğinde eşdeğer kanıta dayalı inceleme veya insan incelemesi zorunlu tutulur ve doğrulanamayan maddi iddialar önizlemede güvenli inceleme işaretiyle gizlenir.
+- **Yerel onarım (`4i-onarim-1`) ve çağrı bütçesi:** Onarım istemi tüm raporu değil yalnızca hedef paragrafı, en çok birer komşu geçiş cümlesini ve belirlenimci seçilen ilgili yetkili kanıt alt kümesini taşır. Etkilenmeyen paragraflar bayt bayt korunur. Sunucu bütçesi eşzamanlı ve geri alınamaz biçimde `toplam ≤ 11` (`1` yazım + `≤ 8` onarım + denetim/yeniden sıralama için ortak `≤ 2`; paragraf başına `≤ 2`, anlamsal denetim gerektiren paragrafta `≤ 1`) olarak uygulanır; başarısız, zaman aşımına uğrayan veya bozuk yanıtlı çağrılar bütçeden düşer. İsteğe bağlı `rerankTexts` çağrısı (`allowRetry: false`) zorunlu ilk ve onarım sonrası toplu anlamsal denetim payı ayrıldıktan sonra kalan bütçe varsa çalışır.
+- **Yaşam döngüsü güvenliği ve gizlilik:** Başlangıçta, her model/yeniden sıralama çağrısı öncesinde (`beforeDispatch`) ve sonrasında ile teslimden hemen önce `revalidate` çağrılır; yetki/rıza değişimi `AUTHORIZATION_CHANGED`, doğrulama zaman aşımı `AI_TIMEOUT`, istemci iptali `AI_CANCELLED` ile kapalı başarısız olur. Yetkisiz varlık adları hata mesajlarına, bulgu alıntılarına ve telemetriye yansıtılmaz.
+
 ---
 
 ## 9. Model rolleri ve nitelendirme politikası
@@ -459,10 +467,7 @@ korur). Hangi modelin "en yetenekli" olduğu ölçülmeden söylenmez.
   geçen ve **D** süre eşiğini karşılayanların en yüksek B puanlısı; eşitlikte düşük p95 süre.
   `rapor_yazari_yuksek_kalite` = en yüksek B puanlısı (süre üst sınırı içinde). Ayrıntı:
   [Kıyas ve Kabul Çerçevesi §5](BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md).
-- 4I-B rapor profillerini (`report.writer`, `report.writer.quality`) profil sözlüğüne sohbet profillerinden ayrı
-  (`AI_REPORT_PROFILES`) ekledi; **eşlemeleri nitelendirmeden sonra** kayda yazılır (bugün hiçbir kayıtta eşli değil,
-  çağrı `AI_CONFIGURATION_ERROR` ile kapalı kalır). `report.review` 4I-C'de eklenecektir. Profil → model eşlemesi veridir. Yeni model geldiğinde: kayda eklenir → kıyas koşulur
-  → geçerse role yazılır. İş kodu değişmez.
+- 4I-B rapor profillerini (`report.writer`, `report.writer.quality`), 4I-C ise bağımsız denetçi profilini (`report.review`) profil sözlüğüne sohbet profillerinden ayrı (`AI_REPORT_PROFILES`) ekledi; **eşlemeleri nitelendirmeden sonra** kayda yazılır (bugün hiçbir kayıtta eşli değil, çağrı `AI_CONFIGURATION_ERROR` ile kapalı kalır). Profil → model eşlemesi veridir. Yeni model geldiğinde: kayda eklenir → kıyas koşulur → geçerse role yazılır. İş kodu değişmez.
 - Stüdyo'daki model seçici yalnızca `nitelikli_modeller` listesini gösterir. Otomatik, yüksek kalite ve yönetici
   seçimi için denetçinin bağımsızlığı fiilen kullanılan yazar modeline göre değerlendirilir. Aynı model
   eşleşmesinde §8.2'deki güvenli inceleme yolu uygulanır.

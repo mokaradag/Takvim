@@ -573,7 +573,7 @@ export function createAiGateway({
    * kullanmaz: sunucu kapasite anahtarı ve kurumsal anahtarla yürür. Paylaşılan
    * işin sonucu ve faturası onu başlatan kullanıcıya bağlı değildir.
    */
-  async function semanticCall({ profile, capability, operation, signal, fixed, serverOwned = false, prepare, request, beforeDispatch = null }) {
+  async function semanticCall({ profile, capability, operation, signal, fixed, serverOwned = false, prepare, request, beforeDispatch = null, allowRetry = true }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     let lease = null;
@@ -603,6 +603,7 @@ export function createAiGateway({
       const response = await callProvider({
         operation,
         beforeDispatch,
+        allowRetry,
         deadline,
         context,
         source: credential.source,
@@ -702,12 +703,13 @@ export function createAiGateway({
    * adresli `{ index, score }`) ve aday kümesinin bütünlüğü anlamsal sözleşmede
    * doğrulanır. İstek kullanıcının sorgusunu taşır.
    */
-  async function rerankTexts({ profile, query, documents, signal = null, beforeDispatch = null }) {
+  async function rerankTexts({ profile, query, documents, signal = null, beforeDispatch = null, allowRetry = true }) {
     const { response, ...call } = await semanticCall({
       profile,
       capability: AI_CAPABILITIES.RERANK,
       operation: 'ai.provider.rerank',
       beforeDispatch,
+      allowRetry,
       signal,
       fixed: false,
       prepare: () => {

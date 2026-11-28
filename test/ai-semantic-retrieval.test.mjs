@@ -949,7 +949,9 @@ test('anlamsal keşif yalnızca ağ geçidini çağırır; kimlik, yetki, SQL, a
   assert.deepEqual(callers(/\.embeddings\(\{/), ['src/server/ai/aiGateway.js']);
   assert.deepEqual(callers(/\.rerank\(\{/), ['src/server/ai/aiGateway.js']);
   assert.deepEqual(callers(/['`]\/(?:embeddings|rerank)['`]|\}\/(?:embeddings|rerank)`/), ['src/server/ai/providers/openAiCompatibleProvider.js']);
-  assert.deepEqual(callers(/\.embedTexts\(\{|\.rerankTexts\(\{/), ['src/server/ai/semanticRetrieval.js']);
+  assert.deepEqual(callers(/\.embedTexts\(\{/), ['src/server/ai/semanticRetrieval.js']);
+  // Aşama 4I-C: yönetici raporu yerel onarım kanıt yeniden sıralaması da ağ geçidi üzerinden `rerankTexts` kullanır.
+  assert.deepEqual(callers(/\.rerankTexts\(\{/), ['src/server/ai/report/reportRepair.js', 'src/server/ai/semanticRetrieval.js']);
   // Aşama 4C: danışman adayları yalnızca asistan turunun orkestrasyon sınırı (anlamsal planlama) kullanır;
   // araç yürütücüsü, istek doğrulayıcıları ve başka üretim modülleri keşfi içe aktarmaz.
   assert.deepEqual(callers(/semanticRetrieval/), ['src/server/ai/assistant/semanticPlanning.js']);
