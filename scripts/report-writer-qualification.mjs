@@ -233,7 +233,7 @@ export function resolveOnPremConfig(options = {}, env = process.env) {
 }
 
 /** Vekil köprüsüne bir yazar isteği gönderir; kabuk kullanılmaz, UTF-8 parçaları tamponlanarak çözülür. */
-export function callSurrogate(request, ledger, { adapterPath = ADAPTER, signal = null } = {}) {
+export function callSurrogate(request, ledger, { adapterPath = ADAPTER, signal = null, platform = process.platform } = {}) {
   if (signal?.aborted) return Promise.resolve({ code: null, parsed: null, spawnError: 'KOPRU_IPTAL' });
   return new Promise((resolve) => {
     let settled = false;
@@ -260,7 +260,17 @@ export function callSurrogate(request, ledger, { adapterPath = ADAPTER, signal =
       env,
       stdio: ['pipe', 'pipe', 'pipe']
     });
-    const stop = () => child.kill('SIGTERM');
+    // POSIX'te SIGTERM bağdaştırıcının işleyicisini çalıştırır ve model süreç grubunu temizler. Windows'ta
+    // `child.kill` bağdaştırıcıyı zorla sonlandırır, işleyici çalışmaz ve model süreci öksüz kalır; bu yüzden
+    // yalnızca bu koşunun başlattığı bağdaştırıcının ağacı (`/T`) kabuksuz `taskkill` ile durdurulur.
+    const stop = () => {
+      if (platform !== 'win32' || !child.pid) {
+        child.kill('SIGTERM');
+        return;
+      }
+      const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      killer.once('error', () => { child.kill('SIGKILL'); });
+    };
     signal?.addEventListener('abort', stop, { once: true });
     const stdoutChunks = [];
     let stdinError = null;
@@ -718,7 +728,9 @@ export function compareQualificationRuns(summaryA, summaryB) {
   if ((a.efor ?? null) !== (b.efor ?? null)) mismatches.push('efor');
   const obsA = a.gozlemlenen_vekil_dusunme ?? null;
   const obsB = b.gozlemlenen_vekil_dusunme ?? null;
-  if (obsA !== obsB || obsA === 'karisik' || obsB === 'karisik' || obsA === 'eksik' || obsB === 'eksik') {
+  // Gözlemlenen düşünme yalnızca `null` (vekil gözlemi yok), `on` ya da `off` olabilir; diğer değerler karşılaştırılamaz.
+  const supportedObservation = (value) => value === null || value === 'on' || value === 'off';
+  if (obsA !== obsB || !supportedObservation(obsA) || !supportedObservation(obsB)) {
     mismatches.push('gozlemlenen_vekil_dusunme');
   }
   if ((a.nicemleme ?? null) !== (b.nicemleme ?? null)) mismatches.push('nicemleme');
@@ -1162,7 +1174,10 @@ export function summarizeRun(records, {
     const chronologyCandidates = hasChronologyScan ? rawNesnel.kronoloji_celiskisi_adaylari : [];
     const dateVerdictKnown = Boolean(judge && isNonNegInt(judge.uydurma_tarih));
     const datePending = offLedgerDates.length > 0 && !dateVerdictKnown ? offLedgerDates.length : 0;
-    const numberPending = offLedgerNumbers.length > 0 && !hasValidCounts ? offLedgerNumbers.length : 0;
+    // Defter dışı nicelikler genel iddia sayılarıyla kapanmaz; hakemin sayı adaylarını açıkça incelediği
+    // (`sayilar_incelendi: true`) kayıt gerekir. Aksi hâlde aday bekleyen olarak kalır.
+    const numberReviewed = Boolean(judge && judge.sayilar_incelendi === true);
+    const numberPending = offLedgerNumbers.length > 0 && !numberReviewed ? offLedgerNumbers.length : 0;
     const reviewFlag = judge?.kronoloji_incelendi;
     const errorCount = judge?.kronoloji_hatasi;
     const validCount = isNonNegInt(errorCount);
@@ -1310,8 +1325,14 @@ export function summarizeRun(records, {
   const p95CapSeconds = supportedQuality ? WRITER_P95_CAP_SECONDS[first.kalite] : null;
   // Eksik standart süre ölçümü, eski istem/stil sürümü, desteklenmeyen kalite etiketi veya profil-kalite uyuşmazlığında süre kapısı geçemez.
   const p95WithinCap = supportedQuality && allStandardTimingsValid && standardP95 !== null && standardP95 <= p95CapSeconds;
+  // Her zorunlu standart senaryo, koşu öncesi sabitlenen pozitif ve sonlu bir çıktı sınırı kaydetmelidir.
+  const allStandardBudgetsRecorded = [...requiredStandardIds].every((id) => {
+    const budget = outputBudgets[id];
+    return typeof budget === 'number' && Number.isFinite(budget) && budget > 0;
+  });
   const latencyGateValid = isOnPrem && completeRun && missingOnPremSettings.length === 0 && allDigestsMatched
-    && promptVersionMatches && styleDigestMatches && profileMatchesQuality && allStandardTimingsValid && p95WithinCap;
+    && promptVersionMatches && styleDigestMatches && profileMatchesQuality && allStandardTimingsValid
+    && allStandardBudgetsRecorded && p95WithinCap;
   const latencyGateStatus = !isOnPrem
     ? 'vekil_bilgi_amaci'
     : (!completeRun ? (rescored.length < set.paketler.length ? 'eksik_kosu' : 'gecersiz_kosu')
@@ -1321,7 +1342,8 @@ export function summarizeRun(records, {
             : (!styleDigestMatches ? 'stil_surumu_uyusmuyor'
               : (!profileMatchesQuality ? 'profil_kalite_uyusmuyor'
                 : (!allStandardTimingsValid ? 'eksik_sure_olcumu'
-                  : (!p95WithinCap ? 'p95_esigi_asildi' : 'gecerli'))))))));
+                  : (!allStandardBudgetsRecorded ? 'eksik_cikti_siniri'
+                    : (!p95WithinCap ? 'p95_esigi_asildi' : 'gecerli')))))))));
   const eligibleForQualification = latencyGateValid;
   const eligibilityNote = !isOnPrem
     ? 'KURUM_ICI_NITELENDIRME_DEGIL (vekil koşusu)'
@@ -1332,7 +1354,8 @@ export function summarizeRun(records, {
             : (!styleDigestMatches ? 'GECERSIZ_KOSU (stil_surumu_uyusmuyor)'
               : (!profileMatchesQuality ? 'GECERSIZ_KOSU (profil_kalite_uyusmuyor)'
                 : (!allStandardTimingsValid ? 'GECERSIZ_KOSU (eksik_sure_olcumu)'
-                  : (!p95WithinCap ? `BASARISIZ (p95_esigi_asildi: ${standardP95} > ${p95CapSeconds} sn)` : 'kurum_ici_aday'))))))));
+                  : (!allStandardBudgetsRecorded ? 'GECERSIZ_KOSU (eksik_cikti_siniri)'
+                    : (!p95WithinCap ? `BASARISIZ (p95_esigi_asildi: ${standardP95} > ${p95CapSeconds} sn)` : 'kurum_ici_aday')))))))));
 
   const contradictionRows = perReport.filter((row) => row.celiski_islendi !== 'uygulanmaz');
   const k19Rows = perReport.filter((row) => row.gomulu_yonerge_izlenmedi !== 'uygulanmaz');
@@ -1545,10 +1568,25 @@ export function literalFence(text) {
 // Model adları tire, boşluk ve sürüm noktaları değişse de karşılaştırılır. Tarihli katalog takma adının kökü de denetlenir.
 function mentionsGeneratingModel(record) {
   const compact = (text) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-  const rawProse = bench.draftProse(record.taslak).normalize('NFKC').toLowerCase();
+  // Puanlayıcıya gösterilen metnin tamamı (bölüm başlıkları dâhil) taranır.
+  const titles = (Array.isArray(record.taslak?.bolumler) ? record.taslak.bolumler : [])
+    .map((section) => section?.baslik).filter((title) => typeof title === 'string');
+  const rawProse = [bench.draftProse(record.taslak), ...titles].join('\n').normalize('NFKC').toLowerCase();
   const prose = compact(rawProse);
   const identities = [expectedModelOf(record), ...reportedModelsOf(record)].filter((id) => typeof id === 'string');
-  return identities.some((id) => [id, id.replace(/[-_.](?:\d{8}|bf16|fp8|fp16|int4|int8)$/iu, '')].some((alias) => {
+  // Katalog kimliğinden türeyen takma adlar: kuruluş öneki, tarih/nicemleme eki ve yalnız harften oluşan
+  // üretici öneki (ör. `claude-haiku-5-5` → `haiku-5-5`) atılmış kısa adlar da denetlenir.
+  const aliasesOf = (id) => {
+    const base = id.split('/').at(-1);
+    const undated = base.replace(/[-_.](?:\d{8}|bf16|fp8|fp16|int4|int8)$/iu, '');
+    const aliases = [id, base, undated];
+    for (const value of [base, undated]) {
+      const short = value.match(/^\p{L}+[-_](.+)$/u)?.[1];
+      if (short && /\p{L}/u.test(short) && /\p{N}/u.test(short)) aliases.push(short);
+    }
+    return [...new Set(aliases)];
+  };
+  return identities.some((id) => aliasesOf(id).some((alias) => {
     const name = compact(alias);
     if (name.length >= 5) return prose.includes(name);
     if (!name) return false;

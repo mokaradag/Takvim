@@ -42,10 +42,16 @@ test('üretim komutu ve belgeler MERGEN Rota için 8008 portunu kullanır', () =
 
 function hasForeignDeploymentPort(source) {
   const jsonPorts = source.matchAll(/"(?:port|PORT)"\s*:\s*(?:"([^"\r\n]*)"|(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?))(?=\s|[,}\]]|$)/gu);
-  return /(?:^|[\s"'\x60])(?:-p\s*|--port(?:\s+|=))["']?8009["']?(?=\s|[,"'\x60;]|$)/mu.test(source)
-    || Array.from(jsonPorts).some(([, text, numeric]) => text === '8009' || Number(numeric) === 8009)
-    || /\bPORT\s*=\s*["']?8009["']?(?!\d)/u.test(source)
-    || /https?:\/\/[^\s"'`]+:8009\b/iu.test(source);
+  // Port yazımı değil değeri sınıflandırılır: baştaki sıfırlar (`08009`) aynı portu seçer.
+  return /(?:^|[\s"'\x60])(?:-p\s*|--port(?:\s+|=))["']?0*8009["']?(?=\s|[,"'\x60;]|$)/mu.test(source)
+    // Kapsayıcı yayımlama eşlemesi (`-p 8009:8008`, `--publish 127.0.0.1:8009:8008`): ana makine portu denetlenir.
+    || /(?:^|[\s"'\x60])(?:-p|--publish)(?:\s+|=)["']?(?:[\d.]+:|\[[\da-f:]+\]:)?0*8009:\d+/imu.test(source)
+    // Nginx `listen` yönergesi (`listen 8009;`, `listen 0.0.0.0:8009 ssl;`, `listen [::]:8009;`).
+    || /(?:^|[\s{;])listen\s+(?:\S*:)?0*8009(?=[\s;])/mu.test(source)
+    || Array.from(jsonPorts).some(([, text, numeric]) => (typeof text === 'string' && /^\d+$/u.test(text.trim()) && Number(text) === 8009)
+      || Number(numeric) === 8009)
+    || /\bPORT\s*=\s*["']?0*8009["']?(?!\d)/u.test(source)
+    || /https?:\/\/[^\s"'`]+:0*8009\b/iu.test(source);
 }
 
 test('arşiv ölçümlerindeki 8009 sayısını dağıtım portu ayarından ayırır', () => {
@@ -53,9 +59,16 @@ test('arşiv ölçümlerindeki 8009 sayısını dağıtım portu ayarından ayı
   assert.equal(hasForeignDeploymentPort('{"output_tokens":8009}'), false);
   assert.equal(hasForeignDeploymentPort('{"output_tokens":8.009e3}'), false);
   assert.equal(hasForeignDeploymentPort('next start --port=80090'), false);
+  assert.equal(hasForeignDeploymentPort('docker run -p 8008:8009 ornek'), false);
+  assert.equal(hasForeignDeploymentPort('listen 8008;'), false);
+  assert.equal(hasForeignDeploymentPort('Toplam 08009 kayıt listen edildi.'), false);
   for (const source of [
     '{"env":{"PORT":"8009"}}', '{"port":8009}', '{"port":8.009e3}', '{"PORT":8009.0}', 'PORT=8009',
-    'next start -p 8009', 'next start --port 8009', 'next start --port=8009', 'https://örnek:8009/'
+    'next start -p 8009', 'next start --port 8009', 'next start --port=8009', 'https://örnek:8009/',
+    // Kapsayıcı yayımlama, Nginx dinleme yönergesi ve baştaki sıfırlı yazımlar da aynı portu seçer.
+    'docker run -p 8009:8008 ornek', 'docker run --publish 127.0.0.1:8009:8008 ornek',
+    'listen 8009;', 'listen 0.0.0.0:8009 ssl;', 'listen [::]:8009;',
+    'next start --port 08009', 'next start -p 08009', 'PORT=08009', '{"PORT":"08009"}'
   ]) {
     assert.equal(hasForeignDeploymentPort(source), true, source);
   }

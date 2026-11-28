@@ -51,8 +51,9 @@ const REF_PATTERN = /^[EF][1-9]\d{0,14}$/u;
 // Unicode çift yönlü metin denetimleri (`Bidi_Control`, U+200F dâhil), görünmez biçim karakterleri ve etiket bloğu reddedilir.
 // eslint-disable-next-line no-control-regex -- güvenilmez model metnindeki denetim karakterleri bilinçli olarak eşleştirilir
 const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\uFEFF\u{E0000}-\u{E007F}\p{Bidi_Control}]/u;
-// Görünür/çizilebilir en az bir temel karakter gerektirir (boşluk, sıfır genişlikli, birleşen işaret ve boş Braille U+2800 kabul edilmez).
-const RENDERABLE_CHAR = /[^\s\p{C}\p{M}\u2800]/u;
+// Görünür/çizilebilir en az bir temel karakter gerektirir (boşluk, sıfır genişlikli, birleşen işaret, boş Braille U+2800 ve
+// Hangul doldurucu U+3164 gibi varsayılan olarak yok sayılan kod noktaları kabul edilmez; bunlar görünür metnin içinde korunur).
+const RENDERABLE_CHAR = /[^\s\p{C}\p{M}\u2800\p{Default_Ignorable_Code_Point}]/u;
 const FENCE = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu;
 const HIGHLIGHT_CLAIM_LOCATION = 'one_cikan_tespit';
 
@@ -231,7 +232,8 @@ function hasInlineCodeSpan(text) {
 
 function hasInlineMarkdownLink(text) {
   // Her parantez bir kez işlenir; kapanmamış bağlantılar sonraki taramayı baştan başlatmaz.
-  const links = new Set(Array.from(text.matchAll(/\[[^\[\]\r\n\u2028\u2029]+\]\(/gu),
+  // Etiket bir düzey dengeli köşeli ayraç içerebilir (`[Faz [A]](rapor)`).
+  const links = new Set(Array.from(text.matchAll(/\[(?:[^\[\]\r\n\u2028\u2029]|\[[^\[\]\r\n\u2028\u2029]*\])+\]\(/gu),
     (match) => match.index + match[0].length - 1));
   if (links.size === 0) return false;
   const open = [];
@@ -249,8 +251,9 @@ function styleWarnings(text, path) {
   const warnings = [];
   if (/(^|[\r\n\u2028\u2029])[^\S\r\n\u2028\u2029]*(?:[-*•]|\d+[.)])\s+/u.test(text)) warnings.push({ kod: 'madde_isareti', yol: path });
   if (/(^|[\r\n\u2028\u2029])[^\S\r\n\u2028\u2029]*#{1,6}\s/u.test(text)
-    || /(?<!\*)(\*{1,3})(?=[^\s*])[^*\r\n\u2028\u2029]*[^\s*]\1(?!\*)/u.test(text)
-    || /(?<![\p{L}\p{N}_])(_{1,3})(?=[^\s_])[^_\r\n\u2028\u2029]*[^\s_]\1(?![\p{L}\p{N}_])/u.test(text)
+    // Tek sayıda ters eğik çizgiyle kaçışlanmış açılış ayıracı (`\*A*`) düz metindir.
+    || /(?<!(?<!\\)(?:\\\\)*\\)(?<!\*)(\*{1,3})(?=[^\s*])[^*\r\n\u2028\u2029]*[^\s*]\1(?!\*)/u.test(text)
+    || /(?<!(?<!\\)(?:\\\\)*\\)(?<![\p{L}\p{N}_])(_{1,3})(?=[^\s_])[^_\r\n\u2028\u2029]*[^\s_]\1(?![\p{L}\p{N}_])/u.test(text)
     || hasInlineCodeSpan(text)
     || hasInlineMarkdownLink(text)) warnings.push({ kod: 'markdown', yol: path });
   if (/\b[EF][1-9]\d*\b/u.test(text)) warnings.push({ kod: 'duzyazida_kanit_kimligi', yol: path });
@@ -371,7 +374,8 @@ export function parseReportDraft(rawText, { plan, evidencePackage }) {
       throw new ReportDraftError(REPORT_DRAFT_ERROR_CODES.CLAIM, `${path}.kanitlar`, 'claim_ref_not_in_paragraph');
     }
     const targetText = targetBlock.metin;
-    const warningPath = `${claim.bolum}#${claim.paragraf}`;
+    // İddia uyarıları, aynı paragrafı paylaşan iddiaları ayırt edebilmek için iddianın kendi yolunu taşır.
+    const warningPath = path;
     const verbatimFound = targetText.includes(alinti);
     const normalizedFound = !verbatimFound && normalizeForQuote(targetText).includes(normalizeForQuote(alinti));
     if (!verbatimFound) {

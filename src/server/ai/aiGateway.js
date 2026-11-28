@@ -487,7 +487,9 @@ export function createAiGateway({
               signal: attemptSignal
             });
           } catch (error) {
-            if (!callerInput && isAiError(error) && error.code === AI_ERROR_CODES.AI_REQUEST_INVALID) throw fixedRequestRejected(error);
+            // Yalnızca sağlayıcının HTTP reddi sabit istek reddidir; yerel örnekleme doğrulaması (SAMPLING_INVALID) korunur.
+            if (!callerInput && isAiError(error) && error.code === AI_ERROR_CODES.AI_REQUEST_INVALID
+              && Number.isInteger(error.details?.providerStatus)) throw fixedRequestRejected(error);
             throw error;
           }
           if (requireText && !String(completion.text ?? '').trim()) {

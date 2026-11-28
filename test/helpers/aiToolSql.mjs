@@ -16,6 +16,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { parseIsoTimestampNanos } from '../../src/domain/ai/report/reportRequest.js';
 
 const canonicalStatus = (value) => ['done', 'completed', 'cancelled'].includes(value) ? 'done'
   : ['in-progress', 'in_progress', 'blocked'].includes(value) ? 'in_progress' : 'todo';
@@ -1116,23 +1117,40 @@ function reportProjectSelectors(db, params) {
   return [rows];
 }
 
+/**
+ * SQL Server `datetime2(7)` karşılaştırmasını kesirli basamak kaybı olmadan taklit eder:
+ * değer 100 ns tik cinsinden BigInt'e çevrilir (Date nesneleri milisaniye kesinliğindedir).
+ */
+function sqlTicks(value) {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? BigInt(ms) * 10000n : null;
+  }
+  const nanos = parseIsoTimestampNanos(String(value));
+  if (nanos != null) return nanos / 100n;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? BigInt(ms) * 10000n : null;
+}
+
 function reportDependencies(db, params) {
   const scope = scopeOf(db, params);
   const limit = Number(params.maxRows || 1001);
   const rawTaskIds = String(params.taskIds || '');
   const taskFilterActive = rawTaskIds.trim().length > 0;
   const taskFilter = new Set(rawTaskIds.split(',').map((id) => upper(id.trim())).filter(isGuid));
-  const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
-  const isPostCutoffDep = (dep) => {
-    if (cutOffMs == null) return false;
-    const createdMs = dep.CreatedAt != null ? new Date(dep.CreatedAt).getTime() : NaN;
-    const updatedMs = dep.UpdatedAt != null ? new Date(dep.UpdatedAt).getTime() : NaN;
-    return (Number.isFinite(createdMs) && createdMs > cutOffMs)
-      || (Number.isFinite(updatedMs) && updatedMs > cutOffMs);
+  const cutOffTicks = params.cutOffUtc ? sqlTicks(params.cutOffUtc) : null;
+  const afterCutoff = (value) => {
+    const ticks = sqlTicks(value);
+    return ticks != null && ticks > cutOffTicks;
   };
-  const boundedDeps = (db.taskDependencies || [])
+  const isPostCutoffDep = (dep) => cutOffTicks != null && (afterCutoff(dep.CreatedAt) || afterCutoff(dep.UpdatedAt));
+  // Üretim sorgusundaki sıra: FULL proje ve görev süzgeci, ardından kesit süzgeci, en son TOP.
+  const eligibleDeps = (db.taskDependencies || [])
     .filter((dep) => scope.projects.get(upper(dep.ProjectId))?.AccessLevel === 'FULL')
-    .filter((dep) => !taskFilterActive || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)))
+    .filter((dep) => !taskFilterActive || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)));
+  const boundedDeps = eligibleDeps
+    .filter((dep) => !isPostCutoffDep(dep))
     .sort((a, b) => (
       sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId))
       || sqlGuidSortKey(a.TaskId).localeCompare(sqlGuidSortKey(b.TaskId))
@@ -1140,28 +1158,28 @@ function reportDependencies(db, params) {
     ))
     .slice(0, limit);
   const isTruncated = boundedDeps.length >= limit;
-  const hasPostCutoffAudit = cutOffMs != null && (db.auditLog || []).some((entry) => {
+  // Kaldırılan kenarın karşı ucu süzgeç dışında kalabilir; denetim kaydı görev süzgecinden bağımsızdır.
+  // Kesit sonrasında oluşturulduğu kanıtlanan görevler dışlanır, satırı olmayan görevler sayılır.
+  const hasPostCutoffAudit = cutOffTicks != null && (db.auditLog || []).some((entry) => {
     if (entry.EntityType !== 'TASK' || !['UPDATE', 'DELETE'].includes(entry.ActionCode)) return false;
-    const occurredMs = entry.OccurredAt != null ? new Date(entry.OccurredAt).getTime() : NaN;
-    if (!Number.isFinite(occurredMs) || occurredMs <= cutOffMs) return false;
+    if (!afterCutoff(entry.OccurredAt)) return false;
     if (scope.projects.get(upper(entry.ProjectId))?.AccessLevel !== 'FULL') return false;
-    if (taskFilterActive && !taskFilter.has(upper(entry.EntityId))) return false;
+    const live = (db.tasks || []).find((task) => same(task.TaskId, entry.EntityId));
+    if (live && live.CreatedAt != null && afterCutoff(live.CreatedAt)) return false;
     return true;
   });
-  const hasPostCutoffChange = boundedDeps.some(isPostCutoffDep) || hasPostCutoffAudit;
-  const rows = boundedDeps
-    .filter((dep) => !isPostCutoffDep(dep))
-    .map((dep) => ({
-      ProjectId: dep.ProjectId,
-      TaskId: dep.TaskId,
-      PredecessorTaskId: dep.PredecessorTaskId,
-      DependencyType: dep.DependencyType,
-      LagDays: dep.LagDays,
-      LagValue: dep.LagValue,
-      LagUnit: dep.LagUnit,
-      CreatedAt: dep.CreatedAt ?? null,
-      UpdatedAt: dep.UpdatedAt ?? null
-    }));
+  const hasPostCutoffChange = eligibleDeps.some(isPostCutoffDep) || hasPostCutoffAudit;
+  const rows = boundedDeps.map((dep) => ({
+    ProjectId: dep.ProjectId,
+    TaskId: dep.TaskId,
+    PredecessorTaskId: dep.PredecessorTaskId,
+    DependencyType: dep.DependencyType,
+    LagDays: dep.LagDays,
+    LagValue: dep.LagValue,
+    LagUnit: dep.LagUnit,
+    CreatedAt: dep.CreatedAt ?? null,
+    UpdatedAt: dep.UpdatedAt ?? null
+  }));
   return [rows, [{ IsTruncated: isTruncated ? 1 : 0, HasPostCutoffChange: hasPostCutoffChange ? 1 : 0 }]];
 }
 

@@ -292,8 +292,13 @@ kapanış anına (ertesi gün `00:00:00+03:00`) eşler; başka hiçbir değer de
 açıklama), paket ve sunucu izdüşümü defterinde bulunmayan tarih ve sayı (hakem incelemesine gider) ve zorunlu olgu
 kapsamı. Defter dışı her değer ve her taslağın zorunlu olgu tamlığı hakem tarafından elle karara bağlanır; bütün anahtar
 grupları otomatik eşleşmiş olsa bile her taslak için bağlı `atlanan_zorunlu` kararı (`atlanan_zorunlu: []`, yalnızca hakem
-atlanan zorunlu olgu olmadığını doğruladığında) ve `dogru`/`yanlis` sayıları koşu kaydında tutulur. Bu tarama 4I-C nesnel
-doğrulayıcısı değildir.
+atlanan zorunlu olgu olmadığını doğruladığında) ve `dogru`/`yanlis` sayıları koşu kaydında tutulur. Defter dışı sayı
+adayları bu genel sayılarla kapanmaz: hakem kararı sayı adaylarının tek tek incelendiğini `sayilar_incelendi: true` ile
+açıkça bildirmedikçe aday `bekleyen_sayi_incelemesi_toplam` içinde bekler (kronoloji için `kronoloji_incelendi` ile
+aynı kural). Bu kural 2026-11-25 vekil koşusunun hakem kayıtlarını değiştirmez; güncel tarayıcıyla yeniden üretilen
+`ozet` o koşuda defter dışı sayı adayı bulmadığından bekleyen sayı incelemesi `0` kalır (2026-11-28 doğrulaması).
+Süre kapısı (D) ayrıca her zorunlu standart senaryoda pozitif bir çıktı sınırı kaydı ister; yoksa durum
+`eksik_cikti_siniri` olur. Bu tarama 4I-C nesnel doğrulayıcısı değildir.
 
 **Araçlar.** `scripts/report-writer-qualification.mjs`: `kosu` (taşıyıcı `vekil` ya da `kurum-ici`; aynı paket, plan,
 istem ve ayrıştırıcı), `katalog` (kurum içi `GET /models` ile aday kimlik doğrulaması), `ozet` (A/B/D özeti, en yakın

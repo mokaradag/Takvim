@@ -118,7 +118,10 @@ export function scenarioSeed(spec) {
     tasks.push({
       TaskId: id, ProjectId: projectId(t.p), Title: t.t, Status: status, Priority: t.pr || 'medium', IsMilestone: t.ms ? 1 : 0,
       TargetFinish: t.tf ?? null, ActualStart: t.ab ?? null, ActualFinish: finished ?? null,
-      CreatedBySicil: SCENARIO_PEOPLE[owners[0]]?.Sicil ?? actor.Sicil, CreatedAt: utc(t.olusturma || '2026-09-15T09:00:00+03:00'),
+      // Salt gün biçimli oluşturma günün başlangıcına yerleştirilir: aynı gün üretilen not ve tamamlanma denetim
+      // kayıtları görevin CreatedAt anından önce düşmez.
+      CreatedBySicil: SCENARIO_PEOPLE[owners[0]]?.Sicil ?? actor.Sicil,
+      CreatedAt: utc(t.olusturma ? (t.olusturma.length === 10 ? `${t.olusturma}T00:00:00+03:00` : t.olusturma) : '2026-09-15T09:00:00+03:00'),
       UpdatedAt: utc(updatedCandidates.map((v) => utc(v)).sort().at(-1)), Description: description
     });
     for (const owner of owners) assignees.push({ TaskId: id, Sicil: SCENARIO_PEOPLE[owner].Sicil });
@@ -219,7 +222,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { k: 'd', p: 'Yıldız', t: 'Sistem entegrasyon planı', s: 'in-progress', tf: '2026-11-28', as: ['Deniz Akalın'] }
     ],
     zorunlu: [
-      { id: 'Z1', olgu: 'Ay içinde tamamlanan görev yok; ilerleme ara kilometre taşlarıyla (protokol katmanı, hata yönetimi modülü, düzeneğin kurulması) notlarda görülüyor.', anahtarlar: [['tamamlanan görev bulunmu', 'tamamlanan görev yok', 'hiçbir görev tamamlan', 'görev tamamlanmadı', 'tamamlanmış görev bulunmu', 'tamamlanma kaydı', 'resmî tamamlanma', 'resmi tamamlanma', 'kapanan görev'], ['protokol katmanı'], ['hata yönetimi'], ['düzenek']] },
+      { id: 'Z1', olgu: 'Ay içinde tamamlanan görev yok; ilerleme ara kilometre taşlarıyla (protokol katmanı, hata yönetimi modülü, düzeneğin kurulması) notlarda görülüyor.', anahtarlar: [['tamamlanan görev bulunmu', 'tamamlanan görev yok', 'hiçbir görev tamamlan', '0 görev tamamlan', 'görev tamamlanmadı', 'tamamlanmış görev bulunmu', 'tamamlanma kaydı', 'resmî tamamlanma', 'resmi tamamlanma', 'kapanan görev'], ['protokol katmanı'], ['hata yönetimi'], ['düzenek']] },
       { id: 'Z2', olgu: 'Görüntü işleme kartı sürücüsünde DMA aktarımında ara sıra veri kaybı bildirildi.', anahtarlar: [['veri kaybı'], ['sürücü']] }
     ]
   },
@@ -263,7 +266,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { p: 'Liman', t: 'Ağ geçidi donanım seçimi', s: 'in-progress', tf: '2026-11-18', as: ['Ece Tunalı'] },
       { p: 'Liman', t: 'Kablo yerleşim planı', s: 'planned', tf: '2026-11-24', as: ['Ece Tunalı'] }
     ],
-    zorunlu: [{ id: 'Z1', olgu: 'Dönemde iki görev tamamlandı: şematik gözden geçirme ve güç bütçesi tablosu.', anahtarlar: [['şematik'], ['güç bütçesi']] }],
+    zorunlu: [{ id: 'Z1', olgu: 'Dönemde iki görev tamamlandı: şematik gözden geçirme ve güç bütçesi tablosu.', anahtarlar: [['şematik', 'şematiğ'], ['güç bütçesi']] }],
     yetkisiz: ['S02_RIZASIZ_NOT_ORNEGI']
   },
   {
@@ -340,7 +343,7 @@ export const WRITER_SCENARIOS = Object.freeze([
     ],
     zorunlu: [
       { id: 'Z1', olgu: 'Dönemde 18 görev tamamlandı.', anahtarlar: [['18']] },
-      { id: 'Z2', olgu: 'Veri anında 52 açık ve 7 geciken görev var.', anahtarlar: [['52'], ['7 geciken', '7 gecikmiş', 'geciken 7', 'gecikmiş 7', '7 görev gecik', '7 iş gecik', 'geciken görev sayısı 7', "7'si gecik", '7 si gecik']] },
+      { id: 'Z2', olgu: 'Veri anında 52 açık ve 7 geciken görev var.', anahtarlar: [['52'], ['7 geciken', '7 gecikmiş', 'geciken 7', 'gecikmiş 7', '7 görev gecik', '7 iş gecik', 'geciken görev sayısı 7', "7'si gecik", '7 si gecik', 'yedisi gecik']] },
       { id: 'Z3', olgu: 'Ufuk projesindeki müşteri veri aktarımı hedef tarihini aştı; kaynak sistem erişimi bekleniyor.', anahtarlar: [['müşteri veri aktarım'], ['erişim']] }
     ]
   },
@@ -765,7 +768,7 @@ export const WRITER_SCENARIOS = Object.freeze([
 export const REPRESENTATIVE_MANDATORY_KEYS = Object.freeze({
   R1: { Z1: [['montaj'], ['5 kasım']], Z2: [['test cihaz'], ['saha test']] },
   R2: { Z1: [['18'], ['ufuk'], ['pusula']], Z2: [['harici onay', 'entegrasyon plan'], ['4 kasım', 'hedef tarih']] },
-  R3: { Z1: [['18']], Z2: [['52'], ['14'], ['7 geciken', '7 gecikmiş', 'geciken 7', 'gecikmiş 7', '7 görev gecik', '7 iş gecik', 'geciken görev sayısı 7', "7'si gecik", '7 si gecik']] },
+  R3: { Z1: [['18']], Z2: [['52'], ['14'], ['7 geciken', '7 gecikmiş', 'geciken 7', 'gecikmiş 7', '7 görev gecik', '7 iş gecik', 'geciken görev sayısı 7', "7'si gecik", '7 si gecik', 'yedisi gecik']] },
   R4: { Z1: [['12 kasım'], ['ertelen']] },
   R5: { Z1: [['doğrulama rapor'], ['kayıtlı değil', 'kayıtlı olmadığ', 'tarihi yok', 'tarihi bulunmu', 'bilinmiyor', 'tarihsiz', 'kaydedilmemiş']] },
   R6: { Z1: [['sürüm paket'], ['devam', 'sürüyor', 'açık']], Z2: [['test cihaz'], ['5 kasım', 'hedef tarih']] },

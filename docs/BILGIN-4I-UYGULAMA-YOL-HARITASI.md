@@ -538,6 +538,6 @@ dondurulmuş sentetik kanıt paketi kümesi ve nitelendirme/vekil/önizleme ara�
   anlamsal destek denetiminin kapsamıdır. Formal B kapısı kurum içi adaylar ve iki kör insan puanlayıcıyla kapanır.
   İki kör insan puanlayıcı için paket `kor-puanlama-paketi.md` + `kor-puanlama-cizelgesi.csv` hazır (**bekliyor**).
 - **Bekleyen dış ön koşullar:** kurum içi `GET /models` ile aday kimliklerinin doğrulanması; DeepSeek, Qwen ve taban
-  modellerle 48 senaryonun koşulması (`node scripts/report-writer-qualification.mjs kosu --tasiyici kurum-ici --model <katalog_kimliği>`, doğrulanan her aday için ayrı); iki kör insan
+  modellerle 48 senaryonun koşulması (`node scripts/report-writer-qualification.mjs kosu --tasiyici kurum-ici --model <katalog_kimliği> --dagitim-ortami <ortam> --dusunme-kipi <ör. kapali> --nicemleme <ör. fp8> --cikti <kosu.jsonl>`, doğrulanan her aday için ayrı; üç üst veri bayrağı verilmezse `ozet` süre kapısını `eksik_ayar_bekliyor` olarak bırakır); iki kör insan
   puanlayıcı; kurum içi p95; nitelikli model çıkarsa `report.writer` eşlemesi ve stil belgesinde rol kaydı.
 - **Sonraki giriş noktası:** 4I-B nitelendirmesi (kurum içi). 4I-C, 4I-B kabulünden sonra başlar.

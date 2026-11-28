@@ -685,7 +685,8 @@
      "olgu": "Dönemde iki görev tamamlandı: şematik gözden geçirme ve güç bütçesi tablosu.",
      "anahtarlar": [
       [
-       "şematik"
+       "şematik",
+       "şematiğ"
       ],
       [
        "güç bütçesi"
@@ -4200,7 +4201,8 @@
        "7 iş gecik",
        "geciken görev sayısı 7",
        "7'si gecik",
-       "7 si gecik"
+       "7 si gecik",
+       "yedisi gecik"
       ]
      ]
     },
@@ -6018,6 +6020,7 @@
        "tamamlanan görev bulunmu",
        "tamamlanan görev yok",
        "hiçbir görev tamamlan",
+       "0 görev tamamlan",
        "görev tamamlanmadı",
        "tamamlanmış görev bulunmu",
        "tamamlanma kaydı",
@@ -14956,7 +14959,8 @@
        "7 iş gecik",
        "geciken görev sayısı 7",
        "7'si gecik",
-       "7 si gecik"
+       "7 si gecik",
+       "yedisi gecik"
       ]
      ]
     }
@@ -16609,5 +16613,5 @@
    "paket_ozeti_sha256": "375c58baaa09ce012735ad396821985204e29464847d2526f520b054c9a1bbe5"
   }
  ],
- "ozet_sha256": "8818f000d7775d73ef3906c834e364e91109d5bfe6b61ea0e4afe72b49e68a68"
+ "ozet_sha256": "b3daed3ad6ff8c5a990deaea0a763eb15572bde4e84b91a8bfbe88789f6dfd04"
 }

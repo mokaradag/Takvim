@@ -1,5 +1,5 @@
 import { isIsoDay } from '../isoDay.js';
-import { REPORT_EVIDENCE_SCHEMA, REPORT_WRITER_MAX_MESSAGE_BYTES, REPORT_WRITER_MAX_EVIDENCE_MESSAGES, reportEvidenceMessagePreamble } from './reportRequest.js';
+import { canonicalTaskRef, REPORT_EVIDENCE_SCHEMA, REPORT_WRITER_MAX_MESSAGE_BYTES, REPORT_WRITER_MAX_EVIDENCE_MESSAGES, reportEvidenceMessagePreamble } from './reportRequest.js';
 import { distinctConflictEvidence, isKnownOpenTaskStatus, parseStrictEvidenceDay, REPORT_WRITING_CONTRACT, resolveWriterStyle } from './reportSectionPlan.js';
 
 /**
@@ -194,8 +194,8 @@ export function buildReportWriterSystemPrompt(style) {
 function taskReferenceMap(kanitlar) {
   const map = new Map();
   for (const item of kanitlar) {
-    if (isPlainObject(item) && item.tur === 'gorev' && typeof item.gorev === 'string' && !map.has(item.gorev)) {
-      map.set(item.gorev, item.id);
+    if (isPlainObject(item) && item.tur === 'gorev' && typeof item.gorev === 'string' && !map.has(canonicalTaskRef(item.gorev))) {
+      map.set(canonicalTaskRef(item.gorev), item.id);
     }
   }
   return map;
@@ -207,11 +207,12 @@ function taskReferenceMap(kanitlar) {
  */
 function projectTaskRef(value, refs, omittedRefs) {
   if (typeof value !== 'string' || !value.trim()) return null;
-  if (refs.has(value)) return refs.get(value);
-  if (!omittedRefs.has(value)) {
-    omittedRefs.set(value, `pakette_olmayan_gorev_${omittedRefs.size + 1}`);
+  const key = canonicalTaskRef(value);
+  if (refs.has(key)) return refs.get(key);
+  if (!omittedRefs.has(key)) {
+    omittedRefs.set(key, `pakette_olmayan_gorev_${omittedRefs.size + 1}`);
   }
-  return omittedRefs.get(value);
+  return omittedRefs.get(key);
 }
 
 /**
@@ -219,6 +220,8 @@ function projectTaskRef(value, refs, omittedRefs) {
  * sunucuya ait yürütme alanları çıkarılır. Olgu değerleri, metinler ve köken alanları değişmez.
  */
 const DAY_MS = 86400000;
+/** Görev başına model girdisine yansıtılan en fazla bağımlılık başvurusu (tür başına). */
+const MAX_PROJECTED_DEPENDENCIES = 100;
 /** Kesit sonrası değişmiş görevlerde anlık durum/termin/bitiş/kilometre taşı, gecikme ve canlı proje iddiasına yol açabilecek alanlar. */
 const POST_CUTOFF_OMITTED_TASK_KEYS = new Set([
   'durum', 'hedef_bitis', 'oncelik', 'gerceklesen_bitis', 'kilometre_tasi',
@@ -256,9 +259,17 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
       if (item.tur === 'gorev') continue;
       out.gorev_kaniti = projectTaskRef(value, refs, omittedRefs);
     } else if (key === 'bagimliliklar' && isPlainObject(value)) {
-      out.bagimliliklar = Object.fromEntries(Object.entries(value).map(([kind, list]) => [
-        kind, Array.isArray(list) ? list.map((ref) => projectTaskRef(ref, refs, omittedRefs)) : list
-      ]));
+      // Bağımlılık listeleri ileti sınırını tek başına aşamasın diye sınırlıdır; gösterilmeyen sayı açıkça bildirilir.
+      const projected = {};
+      for (const [kind, list] of Object.entries(value)) {
+        if (!Array.isArray(list)) {
+          projected[kind] = list;
+          continue;
+        }
+        projected[kind] = list.slice(0, MAX_PROJECTED_DEPENDENCIES).map((ref) => projectTaskRef(ref, refs, omittedRefs));
+        if (list.length > MAX_PROJECTED_DEPENDENCIES) projected[`${kind}_gosterilmeyen_sayi`] = list.length - MAX_PROJECTED_DEPENDENCIES;
+      }
+      out.bagimliliklar = projected;
     } else {
       out[key] = value;
     }
@@ -350,15 +361,16 @@ function reportMeta(pkg) {
     : null;
   const hasNoteEvidence = Array.isArray(pkg.kanitlar) && pkg.kanitlar.some((item) => isPlainObject(item) && item.tur === 'not');
   const excludedNotes = Number.isSafeInteger(pkg.tamlik?.not_ozeti?.disarida_kalan) && pkg.tamlik.not_ozeti.disarida_kalan > 0;
-  const notesExcludedByLimits = excludedNotes || pkg.tamlik?.paket_kesildi === true;
-  const partialVisibility = pkg.tamlik?.kapsam_gorunurlugu === 'partial';
+  // Notların sınır nedeniyle dışarıda kaldığı yalnızca nota özgü sayaçla kanıtlanır; başka bir paket
+  // kesilmesi (ör. bağımlılık) not yokluğuna neden olarak gösterilmez.
+  const otherwiseIncomplete = pkg.tamlik?.paket_kesildi === true || pkg.tamlik?.kapsam_gorunurlugu === 'partial';
   const noteSummary = istek.notlar !== 'dahil'
     ? 'Görev notları bu rapora dahil edilmedi; notlara dayanan hiçbir iddia kurulmaz.'
     : (hasNoteEvidence
       ? 'Rapor için açık rıza verildi; görev notları kanıttadır.'
-      : (notesExcludedByLimits
+      : (excludedNotes
         ? 'Rapor için açık rıza verildi ancak kanıt paketi sınırları nedeniyle bu pakete görev notu alınmadı; not olmadığı sonucu çıkarılmaz.'
-        : (partialVisibility
+        : (otherwiseIncomplete
           ? 'Rapor için açık rıza verildi ancak görünür kanıt paketinde yer alan görev notu bulunmuyor; görünmeyen işler hakkında not olmadığı sonucu çıkarılmaz.'
           : 'Rapor için açık rıza verildi ancak bu kanıt paketinde yer alan görev notu bulunmuyor.')));
   return {

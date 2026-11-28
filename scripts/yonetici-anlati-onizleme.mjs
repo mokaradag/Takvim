@@ -138,6 +138,8 @@ for (const id of wanted) {
   );
   let status = record.durum;
   let message = null;
+  // Taslak yalnızca aşağıdaki doğrulama dalı izin verirse çizilir; kayıtta saklanan durum alanı bunu sağlayamaz.
+  let renderable = false;
   if (status === 'gecerli') {
     const digest = record.taslak_ozeti;
     if (!hasVerifiedStoredModelIdentity(record)) {
@@ -151,6 +153,7 @@ for (const id of wanted) {
       message = packageDigestMatches
         ? 'Uyarı: kayıtlı taslak özeti yok (doğrulanmamış tarihsel taslak).'
         : 'Uyarı: kayıtlı taslak özeti yok ve kanıt paketi özeti güncel kıyas kümesiyle uyuşmuyor (doğrulanmamış tarihsel taslak).';
+      renderable = true;
     } else if (typeof digest !== 'string' || !digest.trim()) {
       status = 'gecersiz_kayit';
       message = 'Kayıtlı taslak özeti geçersiz biçimde; bozuk kayıt önizlemede gösterilmedi.';
@@ -160,7 +163,14 @@ for (const id of wanted) {
     } else if (!packageDigestMatches) {
       status = 'tarihsel_paket_uyusmuyor';
       message = 'Uyarı: bu taslak güncel dondurulmuş kanıt paketi kümesiyle uyuşmayan tarihsel bir koşudan geliyor (güncel kıyas sonucu değildir).';
+      renderable = true;
+    } else {
+      renderable = true;
     }
+  } else if (status === 'dogrulanmamis_tarihsel' || status === 'tarihsel_paket_uyusmuyor') {
+    // Bu durumlar yalnızca önizleme doğrulamasında kazanılır; kayıtta hazır gelirse taslak gösterilmez.
+    status = 'gecersiz_kayit';
+    message = 'Kayıtlı durum önizleme doğrulamasıyla kazanılmadı; doğrulanmamış taslak önizlemede gösterilmedi.';
   } else {
     message = `Taslak üretilemedi: ${record.hata_kodu || status}.`;
   }
@@ -170,7 +180,7 @@ for (const id of wanted) {
   out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${status} · süre ${durationLabel}${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
   if (message) out.push(`_${message}_`, '');
   // Düzyazı, Markdown ya da HTML sözdizimiyle gizlenmemesi için düz metin çitinde sunulur.
-  if (status === 'gecerli' || status === 'dogrulanmamis_tarihsel' || status === 'tarihsel_paket_uyusmuyor') {
+  if (renderable) {
     out.push(literalFence(renderReportDraftText(record.taslak)), '');
   }
 }

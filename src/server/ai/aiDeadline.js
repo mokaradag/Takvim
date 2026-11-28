@@ -97,7 +97,8 @@ export function createAiDeadline({ timeoutMs, parentSignal = null, now = () => p
     controller.abort(failure);
   };
   const timer = setTimeout(() => abort(AI_ERROR_CODES.AI_TIMEOUT), budgetMs);
-  const onParentAbort = () => abort(AI_ERROR_CODES.AI_CANCELLED);
+  // Üst iptal, monoton süre zaten dolduktan sonra (zamanlayıcı geri çağrısından önce) gelirse zaman aşımıdır.
+  const onParentAbort = () => abort(now() - startedAt >= budgetMs ? AI_ERROR_CODES.AI_TIMEOUT : AI_ERROR_CODES.AI_CANCELLED);
   if (parentSignal?.aborted) onParentAbort();
   else parentSignal?.addEventListener?.('abort', onParentAbort, { once: true });
 

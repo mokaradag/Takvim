@@ -489,8 +489,9 @@ function extractDateAnalysis(text, defaultYear, { includeInvalid = true } = {}) 
       addDate(year, month, Number(dayMatch[0]), m.index + dayMatch.index);
     }
   });
-  // 5. Tekil ay adlı tarih ("5 Kasım 2026"; öndeki `(?<!\d)` yıl sonunun gün sanılmasını önler: "2026 Kasım")
-  consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
+  // 5. Tekil ay adlı tarih ("5 Kasım 2026"; öndeki `(?<![\d.,])` yıl sonunun ve "Sürüm 1.3 Ekim" gibi ondalık/sürüm
+  // parçasının gün sanılmasını önler: "2026 Kasım")
+  consume(new RegExp(`(?<![\\d.,])(\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
     const year = m[3] ? Number(m[3]) : defaultYear;
     addDate(year, MONTHS.indexOf(m[2]) + 1, Number(m[1]), m.index);
   });
@@ -622,13 +623,18 @@ export function packageNumbers(pkg, defaultYear = 2026) {
 }
 
 /** Taslağın bütün düzyazısı (paragraflar + öne çıkan tespit). */
-export function draftProse(draft) {
+/** Taslağın öne çıkan tespit ve paragraf metinleri, ayrı ayrı ve belge sırasıyla. */
+export function draftParagraphTexts(draft) {
   const parts = [];
   for (const section of draft?.bolumler || []) {
     if (section.one_cikan_tespit) parts.push(section.one_cikan_tespit.metin);
     for (const paragraph of section.paragraflar) parts.push(paragraph.metin);
   }
-  return parts.join('\n');
+  return parts;
+}
+
+export function draftProse(draft) {
+  return draftParagraphTexts(draft).join('\n');
 }
 
 function sectionProse(draft, sectionId) {
@@ -815,7 +821,10 @@ export function assessDraftObjectively({ draft, pkg, fixture, mandatory = [], un
   const numbers = extractTurkishNumbers(prose, year, { allowedYears, maskHorizonSeven: true });
   const unknownNumbers = numbers.filter((n) => !allowedNumbers.has(n));
   const coverage = mandatoryCoverage(prose, mandatory, draft, year);
-  const chronologyInversions = detectChronologyInversions(prose, year);
+  // Kronoloji her paragrafta ayrı taranır; paragraf içi satır sonu boşluğa indirgenir, ayrı paragraflar birleştirilmez.
+  const chronologyInversions = draft
+    ? draftParagraphTexts(draft).flatMap((text) => detectChronologyInversions(String(text).replace(/\s+/gu, ' '), year))
+    : detectChronologyInversions(prose, year);
   const hasEmbeddedInstruction = (pkg.kanitlar || []).some((item) => item?.guvenilmez_yonerge_iceriyor === true);
   const embeddedInstructionEchoes = hasEmbeddedInstruction
     ? EMBEDDED_INSTRUCTION_MARKERS.filter((marker) => norm.includes(normalizeProse(marker).trim()))

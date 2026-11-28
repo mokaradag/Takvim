@@ -1552,11 +1552,11 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
 
 /**
  * Aşama 4I-A — Seçili FULL erişimli projelerin bağımlılıklarını tek sınırlı sorguda okur.
- * READ ve PARTIAL projeler hiçbir zaman bağımlılık döndürmez; görev kimliği süzgeci ve
- * `TOP (@maxRows)` sınırı tek sınırlı tablo değişkeninde (`@ReportDeps`) uygulanır. Kesit sonrası
- * eklenen veya güncellenen bağlantılar dışlanır; kesit sonrası bağımlılık değişikliği veya
- * aynı FULL projelerde kesit sonrası görev güncelleme/silme denetim kaydı varsa ikinci sonuç
- * kümesinde `IsTruncated` ve `HasPostCutoffChange` olarak bildirilir.
+ * READ ve PARTIAL projeler hiçbir zaman bağımlılık döndürmez; görev kimliği süzgeci, kesit süzgeci ve
+ * `TOP (@maxRows)` sınırı bu sırayla tek sınırlı tablo değişkeninde (`@ReportDeps`) uygulanır.
+ * Kesit sonrası eklenen veya güncellenen bağlantılar dışlanır; kesit sonrası bağımlılık değişikliği
+ * veya aynı FULL projelerde kesit öncesinden var olan bir görevin kesit sonrası güncelleme/silme
+ * denetim kaydı varsa ikinci sonuç kümesinde `IsTruncated` ve `HasPostCutoffChange` bildirilir.
  */
 export const AI_TOOL_REPORT_DEPENDENCIES_SQL = `/* rota-ai-tool:report-dependencies */
 ${SCOPE_PROJECTS}
@@ -1583,32 +1583,44 @@ ${SCOPE_PROJECTS}
   WHERE (@AiTaskFilterActive = 0
     OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.TaskId)
     OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.PredecessorTaskId))
+    -- Kesit süzgeci TOP'tan ÖNCE uygulanır: kesit sonrası kenarlar tarihsel satır bütçesini tüketemez.
+    AND (@cutOffUtc IS NULL OR (
+      (d.CreatedAt IS NULL OR d.CreatedAt <= @cutOffUtc)
+      AND (d.UpdatedAt IS NULL OR d.UpdatedAt <= @cutOffUtc)
+    ))
   ORDER BY d.ProjectId, d.TaskId, d.PredecessorTaskId;
   SELECT ProjectId, TaskId, PredecessorTaskId, DependencyType, LagDays, LagValue, LagUnit, CreatedAt, UpdatedAt
   FROM @ReportDeps
-  WHERE @cutOffUtc IS NULL OR (
-    (CreatedAt IS NULL OR CreatedAt <= @cutOffUtc)
-    AND (UpdatedAt IS NULL OR UpdatedAt <= @cutOffUtc)
-  )
   ORDER BY ProjectId, TaskId, PredecessorTaskId;
   SELECT
     CAST(CASE WHEN (SELECT COUNT(*) FROM @ReportDeps) >= @maxRows THEN 1 ELSE 0 END AS bit) AS IsTruncated,
     CAST(CASE WHEN @cutOffUtc IS NOT NULL AND (
+      -- Kesit sonrası eklenen/güncellenen kenar, satır sınırına girip girmediğinden bağımsız olarak
+      -- aynı FULL proje kapsamı ve görev süzgeciyle kaynak tabloda aranır (EXISTS ilk eşleşmede durur).
       EXISTS (
         SELECT 1
-        FROM @ReportDeps
-        WHERE (CreatedAt IS NOT NULL AND CreatedAt > @cutOffUtc)
-          OR (UpdatedAt IS NOT NULL AND UpdatedAt > @cutOffUtc)
+        FROM dbo.MR_TaskDependencies d
+        JOIN #AiScopeProjects v ON v.ProjectId = d.ProjectId AND v.AccessLevel = 'FULL'
+        WHERE (@AiTaskFilterActive = 0
+          OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.TaskId)
+          OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.PredecessorTaskId))
+          AND ((d.CreatedAt IS NOT NULL AND d.CreatedAt > @cutOffUtc)
+            OR (d.UpdatedAt IS NOT NULL AND d.UpdatedAt > @cutOffUtc))
       )
+      -- Kaldırılan kenar tabloda iz bırakmaz; ardıl görevin kaydedilmesi, taşınması ya da iki uçtan
+      -- birinin silinmesi TASK UPDATE/DELETE denetim kaydı üretir. Silinen kenarın karşı ucu süzgeç
+      -- dışında kalabileceğinden bu denetim görev süzgecinden bağımsızdır. Kesit sonrasında oluşturulduğu
+      -- kanıtlanan görevler kesit anında kenar taşıyamayacağından dışlanır; satırı olmayan (silinmiş)
+      -- görevler tutucu biçimde sayılır.
       OR EXISTS (
         SELECT 1
         FROM dbo.MR_AuditLog a
         JOIN #AiScopeProjects v ON v.ProjectId = a.ProjectId AND v.AccessLevel = 'FULL'
+        LEFT JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)
         WHERE a.EntityType = 'TASK'
           AND a.ActionCode IN ('UPDATE', 'DELETE')
           AND a.OccurredAt > @cutOffUtc
-          AND (@AiTaskFilterActive = 0
-            OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)))
+          AND (t.TaskId IS NULL OR t.CreatedAt IS NULL OR t.CreatedAt <= @cutOffUtc)
       )
     ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffChange;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;

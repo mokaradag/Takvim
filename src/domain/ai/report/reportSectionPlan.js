@@ -1,5 +1,5 @@
 import { isIsoDay } from '../isoDay.js';
-import { parseIsoTimestampNanos, REPORT_DETAIL_LEVELS, REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } from './reportRequest.js';
+import { canonicalTaskRef, parseIsoTimestampNanos, REPORT_DETAIL_LEVELS, REPORT_EVIDENCE_SCHEMA, snapshotBusinessDay } from './reportRequest.js';
 
 /**
  * Bilgin Aşama 4I-B — belirlenimci yönetici raporu bölüm planı (`4i-yazim-1`, saf).
@@ -280,7 +280,7 @@ function classifyEvidence(pkg) {
       if (item.olcu === 'yaklasan_7_gun') groups.yaklasanOlcu.push(item.id);
     }
     if (item.tur !== 'gorev') continue;
-    if (typeof item.gorev === 'string' && !tasksByRef.has(item.gorev)) tasksByRef.set(item.gorev, item);
+    if (typeof item.gorev === 'string' && !tasksByRef.has(canonicalTaskRef(item.gorev))) tasksByRef.set(canonicalTaskRef(item.gorev), item);
     // Dönem tamamlaması yalnızca üreticinin yetkili `donemde_tamamlandi` işaretinden okunur (yeniden açılan işler dâhil).
     if (item.donemde_tamamlandi === true) {
       groups.tamamlanan.push(item.id);
@@ -315,7 +315,7 @@ function classifyEvidence(pkg) {
       ...(Array.isArray(deps?.ardil) ? deps.ardil : [])
     ];
     const hasOpenPeer = peerRefs.some((ref) => {
-      const peer = typeof ref === 'string' ? tasksByRef.get(ref) : null;
+      const peer = typeof ref === 'string' ? tasksByRef.get(canonicalTaskRef(ref)) : null;
       return Boolean(peer && isKnownOpenTaskStatus(peer.durum) && peer.kesit_sonrasi_degisti !== true);
     });
     if (openSelf || hasOpenPeer) groups.acikBagimli.push(item.id);
@@ -328,7 +328,7 @@ function classifyEvidence(pkg) {
   const noteTask = new Map();
   for (const item of items) {
     if (item?.tur !== 'not') continue;
-    const task = typeof item.gorev === 'string' ? tasksByRef.get(item.gorev) : null;
+    const task = typeof item.gorev === 'string' ? tasksByRef.get(canonicalTaskRef(item.gorev)) : null;
     if (task) noteTask.set(item.id, task.id);
   }
   return { groups, noteTask, itemTypeById };
@@ -368,6 +368,14 @@ function parseConflictTime(ts) {
   return nanos !== null ? { kind: 'ns', value: nanos } : null;
 }
 
+/** Zaman kesitte ya da öncesindeyse ham değeri, aksi hâlde (geçersiz ya da kesit sonrası) `null` döndürür. */
+function atOrBeforeCutoff(raw, cutoff) {
+  const time = parseConflictTime(raw);
+  if (!time) return null;
+  const limit = time.kind === 'day' ? snapshotDay(cutoff) : parseIsoTimestampNanos(cutoff);
+  return limit != null && time.value <= limit ? raw : null;
+}
+
 /** İlk kanıt sırasını korur; geçersiz, çelişen veya kesit sonrası zamanları kronolojiye katmaz. */
 export function distinctConflictEvidence(references, chronology, cutoff) {
   const positions = new Map();
@@ -402,7 +410,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   if (tamlik.kapsam_gorunurlugu === 'partial' || derived('kismi_gorunurluk_uyarisi').length) {
     out.push({
       kimlik: 'kismi_gorunurluk', bolum: 'yonetici_degerlendirmesi',
-      kanitlar: derived('kismi_gorunurluk_uyarisi'),
+      kanitlar: derived('kismi_gorunurluk_uyarisi').slice(0, MAX_SECTION_EVIDENCE),
       yonerge: 'Kapsam görünürlüğü kısmidir: sayılar ve toplamlar yalnızca bu rapor için yetkili görünür görevlerden hesaplanmıştır. Bunu doğal dille açıkça belirt; görünmeyen işler, projeler ya da kişiler hakkında tahmin yürütme ve proje bütünü için oran üretme.'
     });
   }
@@ -415,21 +423,29 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   if (partialActivity) {
     out.push({
       kimlik: 'kismi_hareket_kaydi', bolum: 'faaliyetler',
-      kanitlar: reportPeriodPartialActivityItems.map((item) => item.id),
+      kanitlar: reportPeriodPartialActivityItems.map((item) => item.id).slice(0, MAX_SECTION_EVIDENCE),
       yonerge: 'Hareket kaydı kısmidir: hareket sayıları dönemin bütün etkinliğini göstermez. Bu sınırı belirt; kısmi kayıttan eğilim, düşüş ya da artış yorumu çıkarma.'
     });
   }
   if (comparisonPartialActivityItems.length > 0) {
     out.push({
       kimlik: 'kismi_karsilastirma_hareket_kaydi', bolum: 'faaliyetler',
-      kanitlar: comparisonPartialActivityItems.map((item) => item.id),
+      kanitlar: comparisonPartialActivityItems.map((item) => item.id).slice(0, MAX_SECTION_EVIDENCE),
       yonerge: 'Karşılaştırma döneminin hareket kaydı kısmidir; bu sınırı yalnızca karşılaştırma dönemiyle ilişkilendir ve rapor döneminin kendi hareket kapsamıyla karıştırma.'
     });
   }
+  // Üretici, görev kesiti tutarsızsa kapsam görünürlüğünü de `partial` yapar; görünürlük `complete` iken
+  // `kesit_tutarli: false` yalnızca kesit sonrası bağımlılık değişikliğinden gelir ve görev sayılarını nitelemez.
+  const dependencyOnlySnapshotChange = tamlik.kesit_tutarli === false
+    && tamlik.kapsam_gorunurlugu === 'complete' && tamlik.bagimliliklar === 'partial';
+  const taskSnapshotInconsistent = tamlik.kesit_tutarli === false && !dependencyOnlySnapshotChange;
   if (tamlik.bagimliliklar === 'partial') {
     out.push({
       kimlik: 'kismi_bagimlilik_kapsami', bolum: 'faaliyetler', kanitlar: [],
       yonerge: 'Bağımlılık kaydının kapsamı kısmidir: pakette bağımlılık bağlantısı görünmemesi bağımlılık olmadığı anlamına gelmez. Bu sınırı kısaca belirt; görünmeyen bağımlılıklar hakkında tahmin yürütme.'
+        + (dependencyOnlySnapshotChange
+          ? ' Bağımlılık kayıtları veri kesitinden sonra değişti; bu sınır yalnızca bağımlılık ilişkilerini etkiler, görev sayılarını etkilemez.'
+          : '')
     });
   }
   const clippedNotes = pkg.kanitlar.filter((item) => isPlainObject(item) && item.tur === 'not' && item.kirpildi === true).map((item) => item.id);
@@ -444,7 +460,8 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     out.push({
       kimlik: 'tarihsiz_tamamlanan', bolum: 'faaliyetler',
       kanitlar: [...derived('tarihsiz_tamamlanma_uyarisi'),
-        ...pkg.kanitlar.filter((item) => isPlainObject(item) && item.olcu === 'history.undatedDone').map((item) => item.id)],
+        ...pkg.kanitlar.filter((item) => isPlainObject(item) && item.olcu === 'history.undatedDone').map((item) => item.id)]
+        .slice(0, MAX_SECTION_EVIDENCE),
       yonerge: `Gerçekleşen bitiş tarihi kayıtlı olmayan ${tamlik.tarihsiz_tamamlanan} tamamlanmış görev var. Bunları belirt; hangi dönemde bittiklerini, zamanında ya da gecikmeli bittiklerini iddia etme.`
     });
   }
@@ -454,7 +471,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
       yonerge: 'Kanıt paketi boyut sınırları nedeniyle bütün kayıtları içermiyor. Değerlendirmenin seçilmiş kanıta dayandığını ölçülü biçimde belirt; pakette olmayan iş için "yok" ya da "yapılmadı" deme.'
     });
   }
-  if (tamlik.kesit_tutarli === false) {
+  if (taskSnapshotInconsistent) {
     out.push({
       kimlik: 'kesit_tutarsiz', bolum: 'yonetici_degerlendirmesi', kanitlar: [],
       yonerge: 'Veri kesiti sırasında bazı kayıtlar değişti; anlık durum sayılarını kesin kesit gibi sunma ve bu sınırı belirt.'
@@ -493,9 +510,10 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     if (conflict.tur === 'notlar_arasi_celiski') return false;
     const evidence = distinctConflictEvidence(conflict.kanitlar, conflict.kronoloji, pkg.veri_ani);
     if (Array.isArray(conflict.kronoloji)) return hasUniqueLatestTime(evidence.chronology);
+    // Yedek kayıt zamanları da açık kronolojiyle aynı kesit kuralına tabidir: kesit sonrası zaman sıralanamaz sayılır.
     const writeTimes = evidence.references
       .map((id) => itemById.get(id))
-      .map((item) => (isPlainObject(item) ? (item.kayit_zamani ?? null) : null));
+      .map((item) => (isPlainObject(item) ? atOrBeforeCutoff(item.kayit_zamani ?? null, pkg.veri_ani) : null));
     return hasUniqueLatestTime(writeTimes);
   };
   const orderedConflictGuidance = 'Bu kanıtlar birbiriyle çelişiyor. Çelişkiyi zaman sırasıyla açıkça anlat ve en güncel kaydı esas al; değişikliği söyle, hangisinin doğru olduğuna kanıt ötesinde karar verme ve yeni tarih uydurma.';
@@ -503,7 +521,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   validConflicts.slice(0, MAX_INDIVIDUAL_CONFLICT_DISCLOSURES).forEach((conflict, index) => {
     const ordered = hasOrderableConflictTime(conflict);
     out.push({
-      kimlik: `celiski_${index + 1}`, bolum: 'faaliyetler', kanitlar: [...conflict.kanitlar],
+      kimlik: `celiski_${index + 1}`, bolum: 'faaliyetler', kanitlar: [...new Set(conflict.kanitlar)].slice(0, MAX_SECTION_EVIDENCE),
       yonerge: index === 0
         ? (ordered ? orderedConflictGuidance : undatedConflictGuidance)
         : (ordered
@@ -557,16 +575,21 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
     || partialActivity
     || tamlik.bagimliliklar === 'partial'
     || tamlik.paket_kesildi === true
-    || tamlik.kesit_tutarli === false;
+    || taskSnapshotInconsistent;
   const scopeQualifier = scopeRestricted
     ? ' Bu saptamayı yalnızca görünür ve pakete giren kayıtlarla sınırla; görünmeyen işler hakkında risk olmadığı sonucu çıkarma.'
     : '';
   const focus = pkg.istek.odak ?? 'dengeli';
   // Kanonik stil kuralı: maddi risk, gecikme, engelli iş ya da çelişki varsa Riskler bölümü açık olsa da Yönetici Değerlendirmesi'nde anılır.
   if (riskEvidence.length) {
+    // Not metni sunucuda sınıflandırılmaz; yapılandırılmış risk varken de notlarda bildirilen maddi engel özetten düşmez.
+    const noteBlockerGuidance = groups.not.length > 0
+      ? ' Yetkili görev notlarında yapılandırılmış kayıtlarda görünmeyen maddi bir engel açıkça bildiriliyorsa onu da hangi göreve ait olduğunu belirterek, kesinleşmiş olgu gibi değil not bildirimi olarak kısaca an; olağan ilerleme notlarını risk gibi sunma.'
+      : '';
     out.push({
-      kimlik: 'dengeli_sunum', bolum: 'yonetici_degerlendirmesi', kanitlar: [...new Set(riskEvidence)].slice(0, 12),
+      kimlik: 'dengeli_sunum', bolum: 'yonetici_degerlendirmesi', kanitlar: [...new Set([...riskEvidence, ...groups.not])].slice(0, 12),
       yonerge: 'Kanıtta yönetim dikkati gerektiren risk, gecikme, engelli iş ya da çelişki var. Odak tercihi ya da kapatılan bölüm ne olursa olsun bu konuyu Yönetici Değerlendirmesi içinde en az bir kez açıkça an.'
+        + noteBlockerGuidance
     });
   } else if (noteOrDepRiskEvidence.length > 0) {
     // Riskler bölümü açık ya da kapalı olsun, öncelikli iş notundaki olası engel veya açık bağımlılık Yönetici Değerlendirmesi'ne koşullu taşınır.
@@ -644,7 +667,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   if (activityExplicitZero
     && !hasPositiveReportPeriodSummary
     && !partialActivity && tamlik.kapsam_gorunurlugu !== 'partial'
-    && tamlik.paket_kesildi !== true && tamlik.kesit_tutarli !== false
+    && tamlik.paket_kesildi !== true && !taskSnapshotInconsistent
     && groups.tamamlanan.length === 0 && groups.hareketli.length === 0
     && groups.not.length === 0 && groups.belge.length === 0
     && completionCompatibleWithZero) {

@@ -681,7 +681,9 @@ export function detectNoteDuplicatesAndContradictions({
     }
 
     // Görev durumu ile yalnızca güncel olduğu doğrulanan ve kırpılmamış not arasında belirlenimci uyuşmazlık.
+    // Kesit sonrası değişen görevin canlı durumu kesit anını yansıtmadığından durum karşılaştırması yapılmaz.
     if (task && taskEvidenceId && latest && latest.surum_tipi === 'guncel'
+      && !task._postCutoffModified
       && !latest.guvenilmez_yonerge_iceriyor && !latest.kirpildi) {
       const parseOptionalAuditId = (value) => {
         if (value === null || value === undefined || value === '') return null;

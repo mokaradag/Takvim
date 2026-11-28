@@ -855,6 +855,23 @@ test('duvar saati ileri veya geri alınsa da ağ geçidi geçen süreyi tekdüze
   }
 });
 
+test('monoton süre dolduktan sonra gelen üst iptal zaman aşımı, dolmadan önce gelen iptal olarak sınıflandırılır', () => {
+  let elapsed = 0;
+  const expired = new AbortController();
+  const late = createAiDeadline({ timeoutMs: 1_000, parentSignal: expired.signal, now: () => elapsed });
+  elapsed = 1_000;
+  expired.abort();
+  assert.equal(late.failure()?.code, 'AI_TIMEOUT');
+  late.dispose();
+  elapsed = 0;
+  const early = new AbortController();
+  const cancelled = createAiDeadline({ timeoutMs: 1_000, parentSignal: early.signal, now: () => elapsed });
+  elapsed = 999;
+  early.abort();
+  assert.equal(cancelled.failure()?.code, 'AI_CANCELLED');
+  cancelled.dispose();
+});
+
 test('sonlandırılan süre sınırı saat ilerlese de yeniden zaman aşımı üretmez ve sinyali kesmez', () => {
   let elapsed = 0;
   const deadline = createAiDeadline({ timeoutMs: 1_000, now: () => elapsed });
@@ -1111,6 +1128,22 @@ test('sabit deneme isteğinin sağlayıcıca reddi kullanıcı hatası değil, y
   assert.equal(aiTelemetrySnapshot().provider.lastOutcome, 'failure');
   // Çağıranın girdisiyle yapılan istekte aynı yanıt kullanıcı hatasıdır.
   await assert.rejects(chat(), { code: 'AI_REQUEST_INVALID' });
+});
+
+test('sabit istekte yerel örnekleme doğrulama hatası sağlayıcı reddine dönüştürülmez', async (t) => {
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  let calls = 0;
+  // İstek gönderilmeden önce bağdaştırıcıda yükselen yerel doğrulama hatası (HTTP durumu yok).
+  const provider = {
+    async chatCompletion() {
+      calls += 1;
+      throw new AiError('AI_REQUEST_INVALID', { details: { reason: 'SAMPLING_INVALID' } });
+    }
+  };
+  const { chat } = gatewayFor(t, { provider, credential: { source: 'default', apiKey: DEFAULT_KEY } });
+  await assert.rejects(chat({ callerInput: false, stream: false }), (error) => error.code === 'AI_REQUEST_INVALID'
+    && error.details?.reason === 'SAMPLING_INVALID');
+  assert.ok(calls >= 1);
 });
 
 test('reddedilen kurumsal anahtar uçtan uca istekte hizmet hatasıdır; kişisel anahtarın reddi değildir', async (t) => {

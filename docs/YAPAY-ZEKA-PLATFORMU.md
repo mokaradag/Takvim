@@ -346,7 +346,8 @@ genel sohbet profilini kullanır. Diğer profiller sonraki aşamaların sözleş
 Aşama 4I-B'de yönetici raporu yazarı `report.writer` (otomatik) ve `report.writer.quality` (yüksek kalite)
 profillerini ister. Bu iki profil sohbet profil kümesinden (`AI_PROFILES`) bilinçli olarak ayrı tutulur
 (`AI_REPORT_PROFILES`) ve **nitelendirme protokolü geçilmeden hiçbir kayıtta modele eşlenmez**; eşlenmemiş
-profil `PROFILE_NOT_CONFIGURED` ile kullanılamaz kalır (bkz. [4I Kıyas ve Kabul Çerçevesi](BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md)).
+profil kullanılamaz kalır: ağ geçidi `AI_CONFIGURATION_ERROR` hata kodunu fırlatır ve çözümleme nedenini
+`details.reason: 'PROFILE_NOT_CONFIGURED'` alanında taşır (çağıran hata kodunu ve nedeni ayrı ayrı denetlemelidir) (bkz. [4I Kıyas ve Kabul Çerçevesi](BILGIN-4I-KIYAS-VE-KABUL-CERCEVESI.md)).
 Nitelikli model belirlendiğinde eşleme yalnızca kayıt verisine eklenir; `maxOutputTokens` akıl yürüten
 modellerin düşünme payını da karşılamalı, `timeoutMs` ise rolün süre kapısıyla (240 sn / 600 sn) uyumlu olmalıdır.
 

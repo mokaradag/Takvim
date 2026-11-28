@@ -2524,6 +2524,24 @@ test('not kronolojisi birim kuralları: silme/geri yükleme, harf duyarlılığ�
     'hedef bitiş sonrası bilinen kayıt zamanlı "Gecikme yok." pozitif kontrolü çelişki üretmelidir');
 });
 
+test('kesit sonrası değişen görevin canlı durumu kesit öncesi notla durum uyuşmazlığı üretmez', () => {
+  // Kesit öncesi "tamamlandı" notu, kesitten sonra yeniden açılan görevin canlı açık durumuyla çelişki sayılmaz.
+  const noteEntries = [{
+    id: 'E2', _taskId: 'T1', gorev: 'T1', _projectId: P.KUZEY, metin: 'Görev tamamlandı; rapor gönderildi.',
+    surum_tipi: 'guncel', kayit_zamani: '2026-11-05T10:00:00+03:00', kayit_zamani_durumu: 'biliniyor'
+  }];
+  const detect = (task) => detectNoteDuplicatesAndContradictions({
+    noteEntries,
+    taskById: new Map([['T1', task]]),
+    taskEvidenceIdByTaskId: new Map([['T1', 'E1']]),
+    today: REPORT_BENCH_TODAY,
+    period: { baslangic: '2026-11-02', bitis: '2026-11-08' }
+  }).filter((conflict) => conflict.tur === 'durum_not_uyusmazligi');
+  assert.equal(detect({ status: 'in-progress', projectId: P.KUZEY, _postCutoffModified: true }).length, 0);
+  // Kontrol: kesit tutarlı açık görevde aynı not uyuşmazlık üretir.
+  assert.equal(detect({ status: 'in-progress', projectId: P.KUZEY }).length, 1);
+});
+
 test('not yineleme kimliği, dönem içi sürüm önceliği ve kesit sonrası geriye dönük tamamlama koruması', async () => {
   const baseSeed = executiveReportBenchmarkSeed();
   const sharedLongPrefix = 'Ortak uzun saha raporu başlangıcı. '.repeat(60); // > 2000 karakter (> 1600 kırpma sınırı)
@@ -5166,11 +5184,17 @@ test('kesit sonrası tamamlanma projesi: aynı projede sonradan düzenlenen gör
 });
 
 test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen, güncellenen veya silinen kenarlar sınırlı sorguyla dışlanır ve kapsam partial bildirilir', async () => {
-  // Bağımlılık okuması tek sınırlı TOP (@maxRows) tablo değişkeninde yapılır; sınırsız MR_TaskDependencies taraması yoktur.
-  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /INSERT @ReportDeps[\s\S]*SELECT TOP \(@maxRows\)[\s\S]*FROM dbo\.MR_TaskDependencies d/u);
-  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /FROM @ReportDeps[\s\S]*CreatedAt <= @cutOffUtc[\s\S]*UpdatedAt <= @cutOffUtc/u);
-  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /AS IsTruncated[\s\S]*FROM @ReportDeps[\s\S]*CreatedAt > @cutOffUtc[\s\S]*UpdatedAt > @cutOffUtc[\s\S]*FROM dbo\.MR_AuditLog a[\s\S]*ActionCode IN \('UPDATE', 'DELETE'\)[\s\S]*AS HasPostCutoffChange/u);
-  assert.equal((AI_TOOL_REPORT_DEPENDENCIES_SQL.match(/FROM dbo\.MR_TaskDependencies/gu) || []).length, 1);
+  // Bağımlılık okuması tek sınırlı TOP (@maxRows) tablo değişkeninde yapılır; kesit süzgeci TOP'tan ÖNCE uygulanır.
+  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /INSERT @ReportDeps[\s\S]*SELECT TOP \(@maxRows\)[\s\S]*FROM dbo\.MR_TaskDependencies d[\s\S]*d\.CreatedAt <= @cutOffUtc[\s\S]*d\.UpdatedAt <= @cutOffUtc[\s\S]*ORDER BY d\.ProjectId, d\.TaskId, d\.PredecessorTaskId;/u);
+  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /AS IsTruncated[\s\S]*EXISTS \([\s\S]*FROM dbo\.MR_TaskDependencies d[\s\S]*d\.CreatedAt > @cutOffUtc[\s\S]*d\.UpdatedAt > @cutOffUtc[\s\S]*FROM dbo\.MR_AuditLog a[\s\S]*ActionCode IN \('UPDATE', 'DELETE'\)[\s\S]*t\.CreatedAt <= @cutOffUtc[\s\S]*AS HasPostCutoffChange/u);
+  // Değişiklik denetimi görev süzgecine bağlı değildir: süzgeç dışındaki uçtan kaldırılan kenar da yakalanır.
+  const auditBranch = AI_TOOL_REPORT_DEPENDENCIES_SQL.slice(
+    AI_TOOL_REPORT_DEPENDENCIES_SQL.indexOf('FROM dbo.MR_AuditLog a'),
+    AI_TOOL_REPORT_DEPENDENCIES_SQL.indexOf('AS HasPostCutoffChange')
+  );
+  assert.equal(auditBranch.includes('#AiTaskFilter'), false);
+  // Satır döndüren sorgu sınırlıdır; ikinci başvuru yalnızca ilk eşleşmede duran EXISTS denetimidir.
+  assert.equal((AI_TOOL_REPORT_DEPENDENCIES_SQL.match(/FROM dbo\.MR_TaskDependencies/gu) || []).length, 2);
   const baseSeed = executiveReportBenchmarkSeed();
   const depProjectId = '11111111-1111-4111-8111-111111111401';
   const taskPreId = '22222222-2222-4222-8222-222222221401';
@@ -5263,7 +5287,10 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen, güncellen
         cutOffUtc: REPORT_BENCH_NOW,
         maxRows: 1
       });
-      assert.equal(boundedRead.truncated, true, 'Kesit sonrası satır elense de aday kümesi sınırına ulaşılınca truncated bildirilmelidir.');
+      // Kesit sonrası kenar satır bütçesini tüketmez: tek tarihsel kenar sınır içinde döner ve kesik sayılmaz.
+      assert.deepEqual(boundedRead.dependencies.map((edge) => [edge.TaskId, edge.PredecessorTaskId]), [[taskMidId, taskPreId]]);
+      assert.equal(boundedRead.truncated, false);
+      assert.equal(boundedRead.hasPostCutoffChange, true);
       const taskRows = new Map(evidencePackage.kanitlar.filter((item) => item.tur === 'gorev').map((item) => [item.gorev, item]));
       assert.ok(taskRows.has(taskPostId) && taskRows.has(taskPreId) && taskRows.has(taskMidId), 'Üç görev de kanıtta bulunmalıdır.');
       assert.ok(taskRows.get(taskMidId).bagimliliklar?.oncul?.includes(taskPreId), 'Kesit öncesi kenar korunmalıdır.');
@@ -5321,11 +5348,13 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen, güncellen
   });
 
   // Sahte SQL Server ekleme yolu üretimdeki gibi CreatedAt/UpdatedAt üretir; kesit sonrası eklenen kenar tarihsel kesite sızmaz.
+  // Kesit, eklemenin gerçek damgasından türetilir; sınama ana makine saatinden bağımsızdır.
+  const ancientTs = '2000-01-01T00:00:00.000Z';
   await withReportStack({
     projects: makeProjects(),
     tasks: makeTasks(preCutoffTs),
-    taskDependencies: [originalEdge]
-  }, U.YONETICI, async () => {
+    taskDependencies: [createEdge(taskMidId, taskPreId, ancientTs, ancientTs)]
+  }, U.YONETICI, async (stack) => {
     const pool = await getSqlPool();
     const insertReq = pool.request();
     insertReq.input('dependencyId', '33333333-3333-4333-8333-333333331499');
@@ -5339,12 +5368,136 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen, güncellen
         TaskDependencyId, ProjectId, TaskId, PredecessorTaskId, DependencyType, LagDays
       ) VALUES(@dependencyId, @projectId, @taskId, @predecessorId, @type, @lagDays);
     `);
+    const inserted = stack.db.taskDependencies.find((edge) => edge.TaskId.toUpperCase() === taskPostId.toUpperCase());
+    assert.ok(inserted?.CreatedAt, 'Ekleme yolu CreatedAt üretmelidir.');
+    const insertCutOff = new Date(Date.parse(inserted.CreatedAt) - 1);
     const scope = buildRotaScope(await loadAuthorizationContext(pool));
     const read = await readReportDependencies(pool, scope, {
       projectIds: [depProjectId],
-      cutOffUtc: REPORT_BENCH_NOW
+      cutOffUtc: insertCutOff
     });
     assert.deepEqual(read.dependencies.map((edge) => [edge.TaskId, edge.PredecessorTaskId]), [[taskMidId, taskPreId]]);
     assert.equal(read.hasPostCutoffChange, true);
+  });
+});
+
+test('tarihsel bağımlılık sınırı: kesit sonrası kenarlar TOP bütçesini tüketmez, datetime2(7) kesinliği korunur', async () => {
+  const baseSeed = executiveReportBenchmarkSeed();
+  const projectId = '11111111-1111-4111-8111-111111111501';
+  // GUID sıralaması son baytlara göredir: 1501 < 1502 < 1503, kesit sonrası kenarlar SQL sırasında önce gelir.
+  const [taskA, taskB, taskC] = ['1501', '1502', '1503'].map((suffix) => `22222222-2222-4222-8222-22222222${suffix}`);
+  const projects = [
+    ...baseSeed.projects,
+    { ProjectId: projectId, SourceType: 'MANUAL', ProjectCode: 'PRJ-SINIR', ProjectName: 'Sınır Test Projesi', LeadSicil: U.YONETICI, IsActive: 1 }
+  ];
+  const task = (TaskId, CreatedAt = '2026-11-01T08:00:00.000Z') => ({
+    TaskId, ProjectId: projectId, Title: `Görev ${TaskId.slice(-4)}`, Status: 'in_progress', Priority: 'normal',
+    DueDate: '2026-11-20', CreatedBySicil: U.YONETICI, CreatedAt, UpdatedAt: CreatedAt
+  });
+  const edge = (TaskId, PredecessorTaskId, CreatedAt, UpdatedAt = CreatedAt) => ({
+    ProjectId: projectId, TaskId, PredecessorTaskId, DependencyType: 'FS', LagDays: 0, CreatedAt, UpdatedAt
+  });
+  const read = (seed, options) => withReportStack({ projects, tasks: [...baseSeed.tasks, task(taskA), task(taskB), task(taskC)], ...seed }, U.YONETICI, async () => {
+    const pool = await getSqlPool();
+    const scope = buildRotaScope(await loadAuthorizationContext(pool));
+    return readReportDependencies(pool, scope, { projectIds: [projectId], cutOffUtc: REPORT_BENCH_NOW, ...options });
+  });
+  const pairs = (result) => result.dependencies.map((row) => [row.TaskId, row.PredecessorTaskId]);
+
+  // Olumlu: iki kesit sonrası kenar geçerli tarihsel kenardan önce sıralanır; sınır 1 iken tarihsel kenar döner.
+  const late = '2026-11-09T11:30:00.000Z';
+  const bounded = await read({ taskDependencies: [edge(taskA, taskB, late), edge(taskA, taskC, late), edge(taskB, taskC, '2026-11-04T08:00:00.000Z')] }, { maxRows: 1 });
+  assert.deepEqual(pairs(bounded), [[taskB, taskC]]);
+  assert.equal(bounded.truncated, false);
+  assert.equal(bounded.hasPostCutoffChange, true);
+  // Olumsuz denetim: iki tarihsel kenar sınırı aşınca kesilme bildirilir.
+  const overflow = await read({ taskDependencies: [edge(taskA, taskB, '2026-11-03T08:00:00.000Z'), edge(taskB, taskC, '2026-11-04T08:00:00.000Z')] }, { maxRows: 1 });
+  assert.equal(overflow.dependencies.length, 1);
+  assert.equal(overflow.truncated, true);
+  assert.equal(overflow.hasPostCutoffChange, false);
+
+  // datetime2(7): kesitten bir tik önce ve tam kesitte dahil, bir tik sonra hariç.
+  const precise = await read({
+    taskDependencies: [
+      edge(taskA, taskB, '2026-11-09T05:29:59.9999999Z'),
+      edge(taskB, taskC, '2026-11-09T05:30:00.0000000Z'),
+      edge(taskA, taskC, '2026-11-09T05:00:00.0000000Z', '2026-11-09T05:30:00.0000001Z')
+    ]
+  });
+  assert.deepEqual(pairs(precise), [[taskA, taskB], [taskB, taskC]]);
+  assert.equal(precise.hasPostCutoffChange, true);
+  const exactOnly = await read({ taskDependencies: [edge(taskB, taskC, '2026-11-09T05:30:00.0000000Z')] });
+  assert.deepEqual(pairs(exactOnly), [[taskB, taskC]]);
+  assert.equal(exactOnly.hasPostCutoffChange, false);
+  // Denetim kaydı da aynı kesinlikle karşılaştırılır.
+  const auditAt = (OccurredAt, EntityId = taskB, ActionCode = 'UPDATE') => ({
+    AuditId: 9950, OccurredAt, ActorSicil: U.YONETICI, ActionCode, EntityType: 'TASK', EntityId, ProjectId: projectId
+  });
+  assert.equal((await read({ taskDependencies: [], auditLog: [auditAt('2026-11-09T05:30:00.0000000Z')] })).hasPostCutoffChange, false);
+  assert.equal((await read({ taskDependencies: [], auditLog: [auditAt('2026-11-09T05:30:00.0000001Z')] })).hasPostCutoffChange, true);
+
+  // Süzgeçli rapor: seçili öncülün kenarını bırakan süzgeç dışı ardılın güncellemesi kapsamı kısmileştirir.
+  const filtered = await read({ taskDependencies: [], auditLog: [auditAt(late, taskC)] }, { taskIds: [taskA] });
+  assert.deepEqual(pairs(filtered), []);
+  assert.equal(filtered.hasPostCutoffChange, true);
+  // Kesit sonrasında oluşturulan görevin düzenlenmesi kesit anındaki kenarları etkileyemez.
+  const createdLateId = '22222222-2222-4222-8222-222222221509';
+  const createdLate = await withReportStack({
+    projects,
+    tasks: [...baseSeed.tasks, task(taskA), task(createdLateId, '2026-11-09T10:00:00.000Z')],
+    taskDependencies: [],
+    auditLog: [...(baseSeed.auditLog || []), auditAt(late, createdLateId)]
+  }, U.YONETICI, async () => {
+    const { evidencePackage } = await buildExecutiveReportEvidence({
+      request: {
+        rapor_turu: 'haftalik', donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+        kapsam: { tur: 'proje', kimlikler: ['PRJ-SINIR'] }, notlar: 'haric'
+      },
+      now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
+    });
+    return evidencePackage;
+  });
+  assert.equal(createdLate.tamlik.bagimliliklar, 'complete');
+  assert.equal(createdLate.tamlik.kesit_tutarli, undefined);
+  // Kontrol: kesit öncesinden var olan görevin aynı düzenlemesi kapsamı kısmileştirir.
+  assert.equal((await read({ taskDependencies: [], auditLog: [auditAt(late, taskA)] })).hasPostCutoffChange, true);
+});
+
+test('tarihsel bağımlılık silme: öncül görev üretim silme yoluyla silinince süzgeçli okuma değişikliği bildirir', async () => {
+  const baseSeed = executiveReportBenchmarkSeed();
+  const projectId = '11111111-1111-4111-8111-111111111601';
+  const predecessorId = '22222222-2222-4222-8222-222222221601';
+  const successorId = '22222222-2222-4222-8222-222222221602';
+  const ancientTs = '2000-01-01T00:00:00.000Z';
+  const task = (TaskId) => ({
+    TaskId, ProjectId: projectId, Title: `Silme ${TaskId.slice(-4)}`, Status: 'in_progress', Priority: 'normal',
+    DueDate: '2026-11-20', CreatedBySicil: U.YONETICI, CreatedAt: ancientTs, UpdatedAt: ancientTs
+  });
+  await withReportStack({
+    projects: [
+      ...baseSeed.projects,
+      { ProjectId: projectId, SourceType: 'MANUAL', ProjectCode: 'PRJ-SIL', ProjectName: 'Silme Test Projesi', LeadSicil: U.YONETICI, IsActive: 1 }
+    ],
+    tasks: [...baseSeed.tasks, task(predecessorId), task(successorId)],
+    taskDependencies: [{ ProjectId: projectId, TaskId: successorId, PredecessorTaskId: predecessorId, DependencyType: 'FS', LagDays: 0, CreatedAt: ancientTs, UpdatedAt: ancientTs }]
+  }, U.YONETICI, async (stack) => {
+    const pool = await getSqlPool();
+    const scope = buildRotaScope(await loadAuthorizationContext(pool));
+    // Silmeden önce tarihsel kenar döner ve değişiklik yoktur.
+    const before = await readReportDependencies(pool, scope, { projectIds: [projectId], taskIds: [successorId], cutOffUtc: new Date('2001-01-01T00:00:00.000Z') });
+    assert.equal(before.dependencies.length, 1);
+    assert.equal(before.hasPostCutoffChange, false);
+    await stack.reload();
+    const deleted = await stack.persistence.mutate('task/delete', { type: 'task/delete', id: predecessorId });
+    assert.equal(deleted.ok, true, deleted.error?.message);
+    assert.equal(stack.db.taskDependencies.some((edge) => edge.TaskId.toUpperCase() === successorId.toUpperCase()), false, 'Üretim silme yolu kenarı kaldırmalıdır.');
+    const deleteAudit = stack.db.auditLog.find((row) => row.EntityType === 'TASK' && row.ActionCode === 'DELETE'
+      && String(row.EntityId).toUpperCase() === predecessorId.toUpperCase());
+    assert.ok(deleteAudit, 'Silme denetim kaydı yazılmalıdır.');
+    const cutOffUtc = new Date(Date.parse(deleteAudit.OccurredAt) - 1);
+    // Silinen öncül görev süzgecinde değildir; değişiklik yine de bildirilir.
+    const after = await readReportDependencies(pool, scope, { projectIds: [projectId], taskIds: [successorId], cutOffUtc });
+    assert.deepEqual(after.dependencies, []);
+    assert.equal(after.hasPostCutoffChange, true);
   });
 });

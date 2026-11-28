@@ -103,6 +103,16 @@ function ownProp(obj, key) {
   return Object.hasOwn(obj, key) ? obj[key] : undefined;
 }
 
+const TASK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/**
+ * Görev başvurusunu eşleme anahtarına çevirir: UUID büyük/küçük harf yazımları aynı görevi gösterir,
+ * UUID olmayan görev kodları birebir korunur.
+ */
+export function canonicalTaskRef(value) {
+  return typeof value === 'string' && TASK_UUID_RE.test(value) ? value.toLowerCase() : value;
+}
+
 const ISO_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/u;
 
 /** Geçerli ISO-8601 zaman damgasını milisaniye altı (nanosaniye) kesinlikte UTC BigInt değerine çevirir. */
