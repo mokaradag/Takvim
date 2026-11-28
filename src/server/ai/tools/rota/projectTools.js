@@ -4,7 +4,7 @@ import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { taskCompletionRate } from '../../../../scheduling/metrics/taskCompletionRate.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
-import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
+import { isTurnFatal, TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, isCompleteTaskView } from './rotaScope.js';
 import { readPortfolio, readProjectDetail, readProjectSearch, readTaskFacts, readWbs } from './rotaToolStore.js';
 import { buildCardPopulation } from './cardPopulation.js';
@@ -222,7 +222,10 @@ async function portfolioCardPopulation(call, scope, { page, projects, population
   const wanted = new Set(page.map((project) => project.projectId));
   const taskIds = (population || []).filter((row) => wanted.has(canonicalActualId(row.projectId))).map((row) => row.taskId);
   if (!page.length || !taskIds.length || taskIds.length > TOOL_LIMITS.maxAnalyzedTasks) return null;
-  const read = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds, maxRows: taskIds.length }));
+  let read;
+  // Kart zenginleştirmesi isteğe bağlıdır: araç düzeyindeki okuma hatası portföy sonucunu bozmaz (kart kaydı yapılmaz); iptal yayılır.
+  try { read = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds, maxRows: taskIds.length })); }
+  catch (error) { if (isTurnFatal(error)) throw error; return null; }
   if (read.truncated) return null;
   const byProject = new Map();
   for (const fact of read.facts) {

@@ -191,7 +191,7 @@ function TaskSummary({ card }) {
 /** Doğrulanmış ölçü satırları (etiket – değer). */
 function MetricList({ metrics }) {
   return (
-    <dl className="ice-facts">
+    <dl className="ice-facts is-metrics">
       {metrics.map((metric) => <div key={metric.label}><dt>{metric.label}</dt><dd className="ice-num">{metric.value}</dd></div>)}
     </dl>
   );

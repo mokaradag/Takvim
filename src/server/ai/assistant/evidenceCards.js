@@ -223,11 +223,11 @@ function taskCollection(base, { rows, assignments }, count, bind, budget = EVIDE
 
 const ENTITY_TOOLS = Object.freeze({
   rota_workload_summary: { collection: 'people', name: (row) => row.name,
-    metrics: [['openTasks', 'Açık görev'], ['inProgress', 'Devam eden'], ['overdue', 'Gecikmiş'], ['dueNext7Days', '7 gün içinde terminli']], preview: ['overdue', 'openTasks'] },
+    metrics: [['openTasks', 'Açık görev', 'Açık'], ['inProgress', 'Devam eden', 'Devam'], ['overdue', 'Gecikmiş', 'Gecikmiş'], ['dueNext7Days', '7 gün içinde terminli', '7 gün']], preview: ['overdue', 'openTasks'] },
   rota_task_analytics: { collection: 'groups', name: (row) => row.label,
-    metrics: [['count', 'Görev'], ['open', 'Açık'], ['overdue', 'Gecikmiş'], ['done', 'Tamamlanan']], preview: ['overdue', 'open', 'count'] },
+    metrics: [['count', 'Görev', 'Görev'], ['open', 'Açık', 'Açık'], ['overdue', 'Gecikmiş', 'Gecikmiş'], ['done', 'Tamamlanan', 'Tamam.']], preview: ['overdue', 'open', 'count'] },
   rota_portfolio_summary: { collection: 'projects', name: (row) => (row.code ? `${row.code} · ${row.name}` : row.name),
-    metrics: [['tasks.open', 'Açık görev'], ['tasks.overdue', 'Gecikmiş'], ['tasks.dueNext7Days', '7 gün içinde terminli'], ['tasks.done', 'Tamamlanan']], preview: ['tasks.overdue', 'tasks.open'] }
+    metrics: [['tasks.open', 'Açık görev', 'Açık'], ['tasks.overdue', 'Gecikmiş', 'Gecikmiş'], ['tasks.dueNext7Days', '7 gün içinde terminli', '7 gün'], ['tasks.done', 'Tamamlanan', 'Tamam.']], preview: ['tasks.overdue', 'tasks.open'] }
 });
 const ENTITY_LIST_LABELS = Object.freeze({ overdue: 'Gecikmiş görevler', openTasks: 'Açık görevler', open: 'Açık görevler', count: 'Görevler',
   'tasks.overdue': 'Gecikmiş görevler', 'tasks.open': 'Açık görevler' });
@@ -280,7 +280,8 @@ function collectionCard(base, bind, entry) {
   const found = bind.rows.map((path) => entityRow(entry, path));
   if (found.some((row) => !row)) return null;
   const columns = found[0].spec.metrics.slice(0, EVIDENCE_CARD_LIMITS.maxEntityColumns);
-  return { ...base, kind, title: cleanText(bind.title) || 'Kayıtlar', tone: bind.tone || 'neutral', total: bind.count, columns: columns.map(([, label]) => label),
+  // Koleksiyon tablosu dar kartta okunur kalsın diye kısa sütun adları (tekil kartın ölçü adları uzundur).
+  return { ...base, kind, title: cleanText(bind.title) || 'Kayıtlar', tone: bind.tone || 'neutral', total: bind.count, columns: columns.map(([, label, short]) => short || label),
     rows: found.slice(0, EVIDENCE_CARD_LIMITS.maxEntityRows).map((row, index) => ({ name: row.name,
       values: columns.map(([field]) => { const value = valueAt(entry.payload, `${bind.rows[index]}.${field}`); return Number.isSafeInteger(value) && value >= 0 ? value : null; }) })) };
 }

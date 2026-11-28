@@ -11,7 +11,9 @@ kabul ölçütleri ve kanıtları [ICE kabul matrisi](BILGIN-ETKILESIMLI-KANIT-K
 ## Ürün ilkesi
 
 Bilgin bir yanıtta **kaç** kayıt olduğunu söylediğinde, bu belirlenimci olarak doğrulanabiliyor ve yetkiliyse
-kullanıcı **hangileri** olduğunu da görebilmelidir. Eksik kart kabul edilebilir; **yanlış kart kabul edilemez.**
+kullanıcı **hangileri** olduğunu da görebilmelidir. Eksik kart kabul edilebilir; **yanlış kart kabul edilemez.** ICE-2'den
+itibaren gereksiz yere eksik kart da yeterli sayılmaz: katkıda bulunan yetkili nüfusu güvenle kurulabilen her doğrulanmış
+görev sayısı bağlanır; kurulamıyorsa gerekçesi kabul matrisinde yazılıdır.
 
 ## Durum terimleri
 
@@ -70,18 +72,29 @@ ICE-1 dışı (bilinçli olarak):
   yolda bağ kurulmaz, yanıt kartsız gösterilir. Düzen açıkken model seçimi olmayan yanıtta yalnızca grubun kendi sayım
   cümlesi bağlanır (bkz. mimari §2.1).
 
-## ICE-2 — Gelişmiş Analitik ve Zamansal Kanıt Kartları
+## ICE-2 — Gelişmiş Analitik ve Zamansal Kanıt Zekâsı
 
-**Durum: PLANLANDI**
+**Durum: DOĞRULANDI** (28.11.2026; zorunlu kapılar kabul matrisinde kanıtlı, istisnalar orada yazılı. Birleştirme sonrası TAMAMLANDI olur.)
 
-Gelecek kapsam:
+Birinci zorunlu hedef — **kapsamlı görev sayısı kanıtı.** ICE-1'den sonra karmaşık analitik yanıtlardaki görev sayılarının
+çoğu bağsızdı (sahibinin kıyas kümesinde kalın görev sayılarının ~%9'u). Kök nedenler ve giderimleri mimari §9'dadır: bağ
+yalnızca görev araması önermelerinde kuruluyordu; görev özeti, iş yükü ve portföy sayılarının satırları kanıtta yoktu; analitik
+ve dönemsel bulgular, dağılım/çoğunluk/döküm önermeleri, ayrıntı ve liste satırları, sentez girişi ve öncelik sonucu işaretsiz
+çiziliyordu; model düzeni kapalı yapılandırmada sunucu düzeni bağ kurmuyordu; uzun yanıtlarda 16 bağ / 8 kart sınırı doluyordu.
 
-- Bağlı kişi kartları ve geniş kullanıcı koleksiyonları (iş yükü özeti kişi satırları dahil).
-- Proje koleksiyonları; tekil proje ve kullanıcı ayrıntıları.
-- İş yükü dağılımları, yüzdeler ve doğrulanmış hesap açıklamaları.
-- Karşılaştırmalı analitik olgular ve doğrulanmış risk göstergelerinin dayanakları.
-- Yeni üretilen yanıtlarda tarihsel ve zamansal olgular; yetkili tarihsel atama ve görev hareketi kayıtları.
-- Büyük koleksiyonların incelenmesi; gerçekten gerekiyorsa sınırlı ve ölçeklenebilir ayrıntı okuması.
+Kapsam (uygulandı):
+
+- Toplu araçların **canlı nüfus kaydı**: görev özeti (toplamlar, gruplar, dizi kovaları, teslim ufku, tarihi kayıtsız
+  tamamlananlar), iş yükü (kişi satırları ve toplamlar) ve portföy (SQL toplamlarıyla birebir doğrulanan proje kümeleri).
+- Önerme, bulgu ve ayrıntı düzeyinde **anlamsal bağ** (kanıt + yük alanı yolu); metin araması yoktur.
+- Kart türleri: görev koleksiyonu ve tekil görev (ICE-1) + **kişi, proje, örgüt birimi**, bunların **koleksiyonları**,
+  doğrulanmış **hesap** (yüzde/oran işlemi) ve **karşılaştırma** (iki dönem ya da iki özne; fark ve değişim oranı).
+- Dönemsel olgular: dönemde tamamlanan/oluşturulan, dönem karşılaştırması, eğilim kovaları, teslim ufku birikimleri;
+  tarihsel anlam korunur (gerçekleşen bitiş ve oluşturulma tarihine göre nüfus; bugünkü durum dönem durumu yerine konmaz).
+- Risk göstergeleri: gecikmiş, yaklaşan termin, sorumlusuz, kilometre taşı ve iş yükü yoğunlaşması sayılarının dayanakları;
+  puan, tahmin ya da yeni sınıflandırma kuralı yoktur.
+- Büyük koleksiyonlar: kesin toplam, gösterilen ve dışarıda kalan satır her kartta açıkça yazılır; satır bütçesi kartlar arasında
+  adil bölünür. Sınırsız "Tümünü gör" yoktur (aynı nüfusu birebir gösteren güvenli mevcut görünüm bulunmadığı için).
 
 Geri yüklenen tarihsel konuşmalarda etkileşimli kartlar ICE-2'de de **kapsam dışıdır**.
 
@@ -103,6 +116,11 @@ başarım/ölçeklenebilirlik nitelendirmesi, erişilebilirlik nitelendirmesi, c
 | 27.11.2026 | Kartlar `done` olayında ayrı alan (`evidenceCards`) olarak taşınır; `assistantMessage` ve kalıcı kayıt değişmez. | Kalıcı yanıt ile geçici zenginleştirme ayrı kalır; yeniden oynatma ve uzlaştırma kart taşımaz. |
 | 27.11.2026 | İstemci yaşam süresi 15 dakika ve en son 6 yanıtla sınırlıdır; oturum hatasında bütün kartlar silinir. | Gözlemlenemeyen sunucu yetki iptalinin etkisini sınırlar; uzun konuşmada bellek sınırsız büyümez. |
 | 27.11.2026 | Kişi listesi ICE-1'de görev kartı içinde sunulur. | Ayrı kişi önermesi model görünümünü değiştirirdi (bkz. ICE-1 dışı). |
+| 28.11.2026 | ICE-2 bağları kanıt kimliği + yük alanı yoluyla kurulur; kart kurucusu yükteki sayı, bağın sayısı ve canlı kayıt büyüklüğünü karşılaştırır. | Aynı sayının farklı nüfusları farklı alan yollarıdır; üçlü eşitlik yanlış nüfusu kapalı reddeder. |
+| 28.11.2026 | Toplu araçlar katkıda bulunan görevleri sayının hesaplandığı döngüde kaydeder (canlı, geçici); portföy için tek ve sınırlı bir olgu okuması SQL toplamlarıyla birebir karşılaştırılır. | Satırsız toplu sayıların kartı yeni uç ya da genel sorgu açmadan kurulur; uyuşmazlık kartı düşürür. |
+| 28.11.2026 | Kişi ve proje kartları ayrı önerme eklemeden mevcut bulgu ve ayrıntı cümlelerindeki adlara bağlanır. | Modele giden önerme görünümü ve yönergeler değişmez (ek model belirteci yok). |
+| 28.11.2026 | Sınırlar 64 kart, 96 bağ, 360 satır ve 200.000 karakter oldu; satır bütçesi kartlar arasında adil bölünür. | Kıyas kümesinde en uzun yanıt 65 bağ ve 52 kart taşıdı; eski sınırlar uygun bağların düşmesinin kök nedenlerinden biriydi. |
+| 28.11.2026 | Model düzeni kapalı yapılandırmada sunucu düzeni de bağ kurar. | İşaretler belirlenimcidir ve modele gitmez; bu yolu dışarıda bırakmak gereksiz eksik karttı. |
 
 ## Bilinen sınırlamalar
 

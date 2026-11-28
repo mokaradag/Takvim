@@ -327,10 +327,12 @@ function tieBreak(left, right) {
 }
 
 export function sortFacts(facts, sort, today) {
+  // Gecikme günü karşılaştırma başına yeniden hesaplanmaz: sıralama öncesinde olgu başına bir kez (sıra aynıdır).
+  const late = sort === 'overdue_days_desc' ? new Map(facts.map((fact) => [fact, overdueDays(fact, today)])) : null;
   const comparators = {
     target_finish_asc: (left, right) => compareNullableDay(left.targetFinish, right.targetFinish, 1),
     target_finish_desc: (left, right) => compareNullableDay(left.targetFinish, right.targetFinish, -1),
-    overdue_days_desc: (left, right) => overdueDays(right, today) - overdueDays(left, today)
+    overdue_days_desc: (left, right) => late.get(right) - late.get(left)
       || compareNullableDay(left.targetFinish, right.targetFinish, 1),
     priority: (left, right) => PRIORITY_ORDER[left.priority] - PRIORITY_ORDER[right.priority]
       || compareNullableDay(left.targetFinish, right.targetFinish, 1),

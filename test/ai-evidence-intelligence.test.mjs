@@ -338,3 +338,19 @@ test('ICE-2 portföy kaydı SQL toplamlarıyla birebir aynıdır; iki okuma aras
   assert.ok(affected >= 0, 'değişen projenin kümeleri kaydedilmemeli');
   assert.equal([...(after.cardPopulation?.sets.keys() || [])].some((field) => field.startsWith('data.totals.')), false, 'toplam kümeleri yalnızca bütün projeler uyumluysa');
 });
+
+test('ICE-2 isteğe bağlı kart okuması başarısız olursa araç sonucu bozulmaz; yalnızca kart nüfusu kaydedilmez', async (t) => {
+  const stack = stackFor(t);
+  let reads = 0;
+  stack.db.queryBarrier = { entered: 0, get released() { return Promise.reject(new Error('önizleme okuması başarısız')); }, match(sql) {
+    // İlk görev olgusu okuması nüfustur; ikincisi kart önizlemesinin sorumlu okumasıdır ve başarısız olur.
+    if (!/rota-ai-tool:task-facts/.test(sql)) return false;
+    reads += 1;
+    return reads === 2;
+  } };
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', {});
+  assert.equal(reads >= 2, true, 'önizleme okuması denenmeli');
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(Number.isSafeInteger(result.data?.totals?.total), true);
+  assert.equal(ledger.requestEntries({ forCards: true })[0].cardPopulation, undefined);
+});

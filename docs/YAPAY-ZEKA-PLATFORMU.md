@@ -1196,7 +1196,7 @@ HTTP durumu değişemeyeceği için her akış **tam olarak bir** sonlandırıc�
 | `status` | `{ phase: 'generating' \| 'thinking' \| 'tools' \| 'verifying' \| 'composing' }` | Gerçek evre geçişi (sağlayıcı yanıt vermeye başladı / model düşünüyor / yetkili Rota verisi okunuyor / yanıtın kanıtları doğrulanıyor / doğrulanmış yanıtın düzeni hazırlanıyor) |
 | `progress` | `{}` | Görünür olay üretmeyen gerçek üretim ilerlemesi (gizli akıl yürütme, araç bağımsız değişkeni, araç yürütmesi); en fazla 10 sn'de bir |
 | `delta` | `{ text }` | Görünür yanıt metninin sıradaki parçası |
-| `done` | `{ conversation, assistantMessage (metinsiz, uzunluklu), replayed, evidenceCards? }` | Yanıt tamamlandı VE kaydedildi. İsteğe bağlı `evidenceCards`, yalnızca yeni üretilmiş doğrulanmış yanıtın geçici kanıt kartlarıdır (kalıcı değildir; yeniden oynatma ve uzlaştırma taşımaz; bkz. [ICE mimarisi](BILGIN-ETKILESIMLI-KANIT-MIMARISI.md)) |
+| `done` | `{ conversation, assistantMessage (metinsiz, uzunluklu), replayed, evidenceCards? }` | Yanıt tamamlandı VE kaydedildi. İsteğe bağlı `evidenceCards`, yalnızca yeni üretilmiş doğrulanmış yanıtın geçici kanıt kartlarıdır (sözleşme sürüm 2: görev, kişi, proje, birim, koleksiyon, hesap ve karşılaştırma kartları; kalıcı değildir; yeniden oynatma ve uzlaştırma taşımaz; bkz. [ICE mimarisi](BILGIN-ETKILESIMLI-KANIT-MIMARISI.md)) |
 | `error` | `{ code, message, reason, retryable, retryAfterMs, credentialSource, partial }` | Sonlandırıcı hata; `partial: true` metin başladıktan sonra kesildiğini söyler |
 
 Yanıt başlıkları: `Cache-Control: no-cache, no-store, no-transform`,

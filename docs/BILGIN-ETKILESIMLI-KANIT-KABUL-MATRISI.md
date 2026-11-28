@@ -40,20 +40,77 @@ bellek içi SQL Server ikizi ve sentetik veri (`scripts/ui-acceptance/uiSeed.mjs
 | Düşünme | **Kapatılamadı.** `MAX_THINKING_TOKENS=0` ve `alwaysThinkingEnabled:false` ile de uyarlamalı düşünme sürdü (çağrı başına ~140–1.300 belirteç). Görsel test için bağdaştırıcıya açık izin (`PLANNER_CLAUDE_THINKING=allow`) eklendi; varsayılan değişmedi ve düşünme her satırda kayda geçer. |
 | Veri | Yalnızca sentetik veri; üretim kanıtı dış sağlayıcıya gönderilmedi. |
 
+## ICE-2 kapıları
+
+Doğrulama tarihi: 28.11.2026 · Temel: `main` @ `72a04ca` (PR #126 birleşmiş) · Ortam: Linux kapsayıcı, Node 22, Chromium (Playwright),
+bellek içi SQL Server ikizi, yalnızca sentetik veri (kıyas kümelerinin tohumları ve `scripts/ui-acceptance` tohumları).
+
+| Kapı | Durum | Kanıt |
+| --- | --- | --- |
+| A — Görev sayısı kapsamı (birinci hedef) | KARŞILANDI | `test/ai-evidence-coverage.test.mjs`: sahibinin soru kümesinin 165 altın planlı senaryosu (yönetim analizi 38, yönetici zekâsı 46, dönemsel 62 + saldırgan 19) üretim hizmetinden geçer. Uygun görev sayısı **657 / 657 bağlı** (%100); gerekçeli bağsız 124 (hareket kaydı 75, sabit eşik 22, başarılı olmayan sonuç 12, eşitlikte çoklu nüfus 10, sıfır nüfus 5); **beklenmedik bağsız 0**. ICE-1 temel ölçümünde kaba sınıflayıcıyla 742 kalın görev sayısının 66'sı bağlıydı. |
+| B — Olgusal doğruluk | KARŞILANDI | Aynı muhasebede **yanlış bağ 0**: sayı kart toplamına, yüzde hesap sonucuna, ad kart başlığına eşit; "gecikmiş/tamamlanan/açık/yapılacak/devam eden" nitelemesi kart satırlarıyla çelişmez. `test/ai-evidence-intelligence.test.mjs`: aynı sayı (8 gecikmiş, 8 kişi, 8 tamamlanmış) üç ayrı karta; yükteki sayı, bağın sayısı ve kayıt büyüklüğü uyuşmazsa, satır kimliği kaymışsa, önizleme kayıtta yoksa, birleşim örtüşen gruplamadaysa, koşullu alt küme eksik nüfustaysa kart yok; hesap ve oran sunucunun kuralıyla yeniden hesaplanır (9 kural vakası). |
+| C — Kişi, proje, hesap, karşılaştırma, dönem ve risk kanıtı | KARŞILANDI | Aynı 165 senaryoda 1.539 kart: yüzde 166 / 195 bağlı, varlık sayısı 219 / 243, ad 506 / 640. Bağsız kalanlar: eşit oranlı birden çok varlık, atama toplamı paydalı paylar (tek alan değil), kapsam öznesi adları (süzgeç adı; satır kanıtı yok), görev satırının bağlam proje adı ve başarılı olmayan sonuçlar. Dönem karşılaştırmasında fark ve oran yalnızca iki dönemi birlikte gösteren karşılaştırma kartına bağlanır; açık (bitmemiş) dönemde yüzde yazılmadığı için kart da yoktur. |
+| D — Güvenlik ve yetki | KARŞILANDI | Kayıt yalnızca `requestEntries({ forCards: true })` ile görülür; model zarfı, kalıcı kanıt (`persistable`) ve özet kayıt taşımaz (sınama). Kart Sicil, erişim düzeyi, not ve gizli eş sorumlu adı taşımaz; varlık olmayan satırlar (sorumlusuz, diğer, birimi belirsiz) varlık kartı üretmez; prototip anahtarı taşınmaz ve küresel nesneyi kirletmez; 16 bozuk v2 alanı bütün tanımlayıcıyı düşürür; kötü niyetli ad metin olarak çizilir (JSDOM). Portföyde iki okuma arasında değişen projenin kümesi kaydedilmez (sınama). Son yetki yeniden doğrulaması ve teslim sınırı ICE-1'deki gibi; hesap/karşılaştırma kartı dayandığı bütün kanıtlara bağımlıdır. |
+| E — Model bağımsızlığı | KARŞILANDI | Ek model çağrısı, araç, yönerge ya da önerme yok; `assistantPrompt.js` ve `groundedPrompt.js` değişmedi. Uçtan uca sınamada model düzeni kapalı yapılandırmada sunucu düzeni kart taşır ve düzen çağrısı 0'dır (`test/ai-evidence-cards-e2e.test.mjs`). |
+| F — Görsel kalite ve etkileşim | KARŞILANDI | Gerçek uygulama (B profili, yönetici ve dönem tohumları, betikli uç): 1440 px, 1080 px + %125, 390 px mobil (dokunma), 667 × 300 yatay; açık ve koyu tema; normal ve odak görünümü. Dört karmaşık soruda 560 kart açılışında görünüm taşması 0, kırpma 0, istenmeyen kaydırma 0; klavyede odak karta taşınır, Esc kapatır ve odak tetikleyiciye döner. İnceleme sonrası düzeltmeler: ölçü etiketi sütunu genişletildi, koleksiyon tablosunda kısa sütun adları ve mobil sığdırma. Yatay görünümde koyu tema koşusu panel açılışında zaman aşımına uğradı (yatay açık tema ve diğer bütün koyu tema koşuları geçti). |
+| G — Yaşam döngüsü | KARŞILANDI | ICE-1 kuralları değişmedi: yalnızca yeni, başarılı yanıt; 15 dakika; en yeni 6 yanıt; oturum hatasında temizleme; geri yükleme ve yeniden oynatmada kart yok (mevcut sınamalar geçer). |
+| H — Başarım | KARŞILANDI | Aynı sentetik turlarda tam tur (12 tekrar, ilk 2 atılır): g31 214 → 262 ms, g05 185 → 243 ms, g45 değişmedi; ek SQL okuması tur başına 1–4, hepsi kimlikle sınırlı. Tanımlayıcı g31'de 87 KB. Kayıt kurulumu en kötü durumda (20.000 görev, 107 küme) ~112 ms. Tarayıcıda tıklamadan görünür karta medyan 17,0 ms, p95 21,7 ms (45 örnek); kart açma ve incelemede ağ isteği yok (görülen tek istek uygulamanın 60 saniyelik anlık görüntü yenilemesidir; etkileşimsiz ölçümle doğrulandı). |
+| I — Canlı model nitelendirmesi | KARŞILANDI (istisna aşağıda) | `scripts/evidence-qualification.mjs`, `claude-haiku-5-5`, çaba `low`: 16 soru (karmaşık analiz, kişi/proje, oran, dönem karşılaştırması, eğilim, ufuk, kilometre taşı, İngilizce, iki basit temel soru). Uygun görev sayısı **114 / 114 bağlı**, gerekçeli bağsız 7, yanlış 0, beklenmedik bağsız 0; 248 kart; yüzde 35 / 38, varlık sayısı 28 / 29, ad 71 / 88. g31'nin (en uzun yanıt) model düzeni iki denemede bağdaştırıcının "tek API çağrısı" denetimine takıldı (CLI iki iç çağrı yaptı); üretim sunucu düzenine döndü ve bu yanıtın kapsamı da temizdir (53 kart, yanlış 0, eksik 0). g09 (sektör geneli) sınır sorusu olarak desteklenmedi; kart yoktur. |
+| J — Gerileme ve mimari bütünlük | KARŞILANDI | Tam takım, lint ve derleme aşağıda. Yeni HTTP ucu, tablo, geçiş, zamanlanmış/arka plan işi, küresel değişken durum ya da bağımlılık yok. Yönetici raporu modülleri (`src/server/ai/report`, `src/domain/ai/report`) değiştirilmedi ve yeni modüllere bağımlı değildir. |
+
+### Tam takım, lint ve derleme (ICE-2)
+
+| Denetim | Sonuç |
+| --- | --- |
+| `npm test` (değişiklik öncesi, `72a04ca`) | 6.857 / 6.857 geçti |
+| `npm test` (ICE-2 sonrası) | 7.076 / 7.076 geçti (219 yeni sınama; başarısız, iptal ve atlanan 0) |
+| `npx next lint` | Uyarı ve hata yok |
+| `npx next build` | Başarılı |
+
+Gerileme sınamalarında yalnızca davranışı bilinçli olarak değişen dört beklenti güncellendi: sözleşme sürümü (v2), yeni sınırlarda
+bütçe kırpması, model düzeni kapalıyken sunucu düzeninin kart taşıması ve kart önizlemesinin kimlikle sınırlı ek okuması (nüfus
+okumalarının kapsam denetimleri aynen korunur).
+
+### Canlı model kullanımı (ICE-2)
+
+| Ölçü | Değer |
+| --- | --- |
+| Gözlenen model / çaba | `claude-haiku-5-5` / `low` (her çağrıda CLI kullanım kaydından) |
+| Düşünme | Uyarlamalı düşünme açık kaldı (ICE-1 bulgusuyla aynı); açık izinle (`PLANNER_CLAUDE_THINKING=allow`) kabul edildi, 24.416 düşünme belirteci kayda geçti |
+| Soru / model çağrısı | 16 soru; 32 çağrı (31 bağdaştırıcı + 1 doğrudan erişim denemesi); 3 çağrı CLI'nin iki iç çağrısı nedeniyle reddedildi; yeniden deneme 1 (o19 başarılı, g31 yine reddedildi) |
+| Önbelleksiz girdi | 130.256 belirteç (sınır 250.000) |
+| Önbellek yazma / okuma | 130.182 / 820.608 |
+| Çıktı | 28.992 |
+| Veri | Yalnızca sentetik veri; kayıtlar ve yanıtlar depoya eklenmedi |
+
 ## Açık sınırlamalar (ICE-1)
 
-1. Kart yalnızca görev araması (`rota_task_search`) kanıtındaki sayım önermelerine ve uç önermelerinde adı geçen göreve
-   bağlanır. Satırsız toplu kanıt (ör. analitik sayım), analitik bulgu cümleleri ve "ilk ele alınabilecek iş" gibi öneri
-   cümleleri bağsızdır (eksik kart kabul edilebilir; yanlış kart değildir).
-2. "N farklı kullanıcı" cümlesine bağlı ayrı kişi kartı yoktur (mevcut önermelerde böyle bir cümle bulunmaz); kişi
-   listesi görev kartının içindedir. ICE-2'ye ertelendi.
-3. Model düzeni kapalıyken (`MERGEN_ROTA_AI_ANSWER_COMPOSITION=false`) yalnızca doğrulanmış anlatım gösterilir ve kart
-   üretilmez. Düzen açıkken model seçimi olmayan (`NO_CHOICE`) yanıtlarda yalnızca grubun kendi sayım cümlesi bağlanır.
+1. ~~Kart yalnızca görev araması kanıtına bağlanır~~ — ICE-2'de giderildi (görev özeti, iş yükü, portföy, bulgular).
+2. ~~Ayrı kişi kartı yoktur~~ — ICE-2'de giderildi (kişi, proje, birim kartları ve koleksiyonları).
+3. Model düzeni kapalıyken sunucu düzeni ICE-2'de bağ kurar; yalnızca sunucu düzeni gerekmeyen yalın doğrulanmış anlatım
+   (`verdict` yolu) ICE-1 kuralıyla kartsızdır.
 4. Görev açma mevcut `openTask` sözleşmesini kullanır; görev artık görüntülenemiyorsa çekmece açılmaz (mevcut davranış),
    kartta ayrıca bildirim gösterilmez.
 5. Tarayıcıdaki 15 dakikalık yaşam süresi gözlemlenemeyen sunucu yetki iptalini algılamaz; yalnızca açıklama penceresini
    sınırlar. Gözlenen oturum hatasında kartlar hemen silinir.
 6. Kısmi önizlemenin "Tümünü gör" eylemi yoktur: aynı nüfusu birebir gösteren güvenli bir mevcut görünüm bulunmadığı için
-   eklenmedi (ICE-2 kapsamı).
+   ICE-2'de de eklenmedi; kartlar kesin toplamı ve gösterilen satır sayısını açıkça yazar.
 7. Haiku 5.5'in düşünmesi kapatılamadı (yukarıda). Canlı sınama, model kalitesi kıyası değil, kart davranışının temsilî
    doğrulamasıdır.
+
+## Açık sınırlamalar (ICE-2)
+
+1. **Hareket (denetim) kaydı sayıları** ("**N** görev üzerinde **M** hareket", silinen/yeniden açılan görev) bağsızdır: katkıda
+   bulunan kayıtlar silinmiş görevleri de içerir ve bugünkü yetkili görev satırı olarak gösterilemez; yeni tarihsel kayıt okuması
+   açılmadı.
+2. Eşitlikte birden çok nüfusu temsil eden tek sayı, alt sınır ("en az"), sabit eşik ("en az **3** açık görevi olanlar") ve sıfır
+   nüfus bağsızdır. Atama toplamı paydalı paylar (bir görev birden çok kişide sayılır) tek yük alanına karşılık gelmediği için hesap
+   kartı almaz.
+3. Kapsam öznesi adları (süzgeçle seçilen proje/kişi; satır kanıtı yok) ve görev satırının bağlam proje adı varlık kartına bağlanmaz.
+4. Tablo hücreleri vurgusuzdur ve bağlanmaz; aynı sayılar genellikle tablonun yanındaki cümlelerde bağlıdır.
+5. Model düzeni kapalı ve sunucu düzeni gerekmeyen yalın doğrulanmış anlatım (`verdict` yolu) ICE-1 kuralıyla kartsızdır.
+6. Ek SQL okumaları (kimlikle sınırlı önizleme sorumlu okuması; portföyde olgu okuması) gerçek SQL Server'da ölçülmedi; ICE-3
+   başarım nitelendirmesinin konusudur.
+7. Bağ bütçesi 96'dır; daha uzun yanıtta sondaki değerler sade metin kalır (kıyas kümesinde en çok 65 bağ gözlendi).
+8. Haiku 5.5'in uyarlamalı düşünmesi kapatılamadı; en uzun model düzeninde CLI'nin iki iç çağrısı bağdaştırıcı tarafından
+   reddedildi (üretim sunucu düzenine döner).
