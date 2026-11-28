@@ -6020,7 +6020,7 @@
        "tamamlanan görev bulunmu",
        "tamamlanan görev yok",
        "hiçbir görev tamamlan",
-       "0 görev tamamlan",
+       "0 görev tamamlandı",
        "görev tamamlanmadı",
        "tamamlanmış görev bulunmu",
        "tamamlanma kaydı",
@@ -16613,5 +16613,5 @@
    "paket_ozeti_sha256": "375c58baaa09ce012735ad396821985204e29464847d2526f520b054c9a1bbe5"
   }
  ],
- "ozet_sha256": "b3daed3ad6ff8c5a990deaea0a763eb15572bde4e84b91a8bfbe88789f6dfd04"
+ "ozet_sha256": "ddf4ca79465875ae22101006a4d3d9ecce28355a4c504283ee1d82fb1ecbda07"
 }

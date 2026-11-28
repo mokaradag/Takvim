@@ -266,7 +266,11 @@ function projectEvidenceItem(item, refs, omittedRefs, snapshotDay) {
           projected[kind] = list;
           continue;
         }
-        projected[kind] = list.slice(0, MAX_PROJECTED_DEPENDENCIES).map((ref) => projectTaskRef(ref, refs, omittedRefs));
+        // Pakette kanıtı olan uçlar (plan kararlarının dayandığı görevler) sınırın içinde önce tutulur; sıra kararlıdır.
+        const inPackage = list.filter((ref) => typeof ref === 'string' && refs.has(canonicalTaskRef(ref)));
+        const outsidePackage = list.filter((ref) => !(typeof ref === 'string' && refs.has(canonicalTaskRef(ref))));
+        projected[kind] = [...inPackage, ...outsidePackage].slice(0, MAX_PROJECTED_DEPENDENCIES)
+          .map((ref) => projectTaskRef(ref, refs, omittedRefs));
         if (list.length > MAX_PROJECTED_DEPENDENCIES) projected[`${kind}_gosterilmeyen_sayi`] = list.length - MAX_PROJECTED_DEPENDENCIES;
       }
       out.bagimliliklar = projected;

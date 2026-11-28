@@ -3720,7 +3720,7 @@ test('iptal etkin vekil köprüsünü durdurur ve sonraki senaryoyu başlatmaz',
   }
 });
 
-test('Windows kipinde vekil iptali bağdaştırıcı ağacını kabuksuz durdurur; ağaç aracı yoksa süreç yine sonlanır', { skip: process.platform === 'win32' }, async () => {
+test('Windows kipinde vekil iptali bağdaştırıcı ağacını kabuksuz durdurur; ağaç aracı yoksa süreç yine sonlanır', async () => {
   const { callSurrogate } = await import('../scripts/report-writer-qualification.mjs');
   const { tmpdir } = await import('node:os');
   const { setTimeout: delay } = await import('node:timers/promises');
@@ -4150,6 +4150,12 @@ test('yakınsama: bağımlılık kesiti, yedek çelişki zamanı, açıklama sı
   assert.equal(projectedDeps.oncul.length, 100);
   assert.equal(projectedDeps.oncul_gosterilmeyen_sayi, 1200);
   assert.deepEqual(projectedDeps.ardil, ['pakette_olmayan_gorev_101']);
+  // Sınırın ötesindeki ama pakette kanıtı olan uç (planın dayandığı açık görev) gizlenmez, önce tutulur.
+  const lateEvidence = structuredClone(depPkg);
+  lateEvidence.kanitlar.push({ id: 'E2', tur: 'gorev', gorev: 'GRV-ON-1300', durum: 'in_progress' });
+  const lateDeps = prompt.projectEvidencePackageForWriter(lateEvidence).kanitlar[0].bagimliliklar;
+  assert.equal(lateDeps.oncul[0], 'E2');
+  assert.equal(lateDeps.oncul.length, 100);
   assert.ok(prompt.buildReportEvidenceMessages(depPkg).length >= 1);
 
   // 7. Not yokluğu, yalnızca nota özgü sayaç kanıtlıyorsa sınırlara bağlanır.

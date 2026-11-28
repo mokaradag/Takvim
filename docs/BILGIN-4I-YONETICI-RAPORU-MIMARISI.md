@@ -340,8 +340,8 @@ Bağlayıcı kurallar:
   eşleşmelidir; farklıysa taslak reddedilir, kimlik bildirilmemişse taslak doğrulanmamış işaretlenir. Çıktı belirteci
   isteği akıl yürüten modellerin düşünme payını
   içerir (vekil koşuda düşük efor bile 20–42 bin düşünme belirteci harcadı) ve ağ geçidinde profil sınırıyla daraltılır.
-  İçerik ancak çağıranın verdiği `revalidate` denetimi açıkça `true` dönerse döner. Taslak her başarısız sonuçta
-  saklanır ama nedenler ayrıdır: denetimin `false` (ya da `true` dışı) dönmesi yetki değişimidir (`AUTHORIZATION_CHANGED`);
+  İçerik ancak çağıranın verdiği `revalidate` denetimi açıkça `true` dönerse döner. Başarısız her sonuçta taslak
+  çağırana döndürülmez (hata fırlatılır; saklama mekanizması yoktur) ama nedenler ayrıdır: denetimin `false` (ya da `true` dışı) dönmesi yetki değişimidir (`AUTHORIZATION_CHANGED`);
   denetimin süresi içinde bitmemesi `AI_TIMEOUT` (`REPORT_WRITER_REVALIDATION_TIMEOUT`), isteğin iptali `AI_CANCELLED`
   olarak bildirilir. Çağıran zaman aşımını ya da iptali yetki değişimi olarak yorumlamamalıdır.
 - **Stil belgesinin çalışma zamanı okuması (§16):** Yazar ayrıştırılmış stil belgesini parametre olarak alır; `src`

@@ -294,8 +294,8 @@ kapsamı. Defter dışı her değer ve her taslağın zorunlu olgu tamlığı ha
 grupları otomatik eşleşmiş olsa bile her taslak için bağlı `atlanan_zorunlu` kararı (`atlanan_zorunlu: []`, yalnızca hakem
 atlanan zorunlu olgu olmadığını doğruladığında) ve `dogru`/`yanlis` sayıları koşu kaydında tutulur. Defter dışı sayı
 adayları bu genel sayılarla kapanmaz: hakem kararı sayı adaylarının tek tek incelendiğini `sayilar_incelendi: true` ile
-açıkça bildirmedikçe aday `bekleyen_sayi_incelemesi_toplam` içinde bekler (kronoloji için `kronoloji_incelendi` ile
-aynı kural). Bu kural 2026-11-25 vekil koşusunun hakem kayıtlarını değiştirmez; güncel tarayıcıyla yeniden üretilen
+açıkça bildirmedikçe aday `bekleyen_sayi_incelemesi_toplam` içinde bekler (kronoloji adayı ise `kronoloji_incelendi: true`
+ya da geçerli bir `kronoloji_hatasi` sayısıyla kapanır; `kronoloji_incelendi: false` incelemeyi açık bırakır). Bu kural 2026-11-25 vekil koşusunun hakem kayıtlarını değiştirmez; güncel tarayıcıyla yeniden üretilen
 `ozet` o koşuda defter dışı sayı adayı bulmadığından bekleyen sayı incelemesi `0` kalır (2026-11-28 doğrulaması).
 Süre kapısı (D) ayrıca her zorunlu standart senaryoda pozitif bir çıktı sınırı kaydı ister; yoksa durum
 `eksik_cikti_siniri` olur. Bu tarama 4I-C nesnel doğrulayıcısı değildir.

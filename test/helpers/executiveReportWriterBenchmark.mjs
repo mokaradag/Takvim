@@ -622,8 +622,7 @@ export function packageNumbers(pkg, defaultYear = 2026) {
   return numbers;
 }
 
-/** Taslağın bütün düzyazısı (paragraflar + öne çıkan tespit). */
-/** Taslağın öne çıkan tespit ve paragraf metinleri, ayrı ayrı ve belge sırasıyla. */
+/** Taslağın öne çıkan tespit ve paragraf metinleri, ayrı ayrı ve belge sırasıyla (dizi). */
 export function draftParagraphTexts(draft) {
   const parts = [];
   for (const section of draft?.bolumler || []) {
@@ -633,6 +632,7 @@ export function draftParagraphTexts(draft) {
   return parts;
 }
 
+/** Taslağın bütün düzyazısı (paragraflar + öne çıkan tespit), satır sonuyla birleştirilmiş. */
 export function draftProse(draft) {
   return draftParagraphTexts(draft).join('\n');
 }

@@ -222,7 +222,7 @@ export const WRITER_SCENARIOS = Object.freeze([
       { k: 'd', p: 'Yıldız', t: 'Sistem entegrasyon planı', s: 'in-progress', tf: '2026-11-28', as: ['Deniz Akalın'] }
     ],
     zorunlu: [
-      { id: 'Z1', olgu: 'Ay içinde tamamlanan görev yok; ilerleme ara kilometre taşlarıyla (protokol katmanı, hata yönetimi modülü, düzeneğin kurulması) notlarda görülüyor.', anahtarlar: [['tamamlanan görev bulunmu', 'tamamlanan görev yok', 'hiçbir görev tamamlan', '0 görev tamamlan', 'görev tamamlanmadı', 'tamamlanmış görev bulunmu', 'tamamlanma kaydı', 'resmî tamamlanma', 'resmi tamamlanma', 'kapanan görev'], ['protokol katmanı'], ['hata yönetimi'], ['düzenek']] },
+      { id: 'Z1', olgu: 'Ay içinde tamamlanan görev yok; ilerleme ara kilometre taşlarıyla (protokol katmanı, hata yönetimi modülü, düzeneğin kurulması) notlarda görülüyor.', anahtarlar: [['tamamlanan görev bulunmu', 'tamamlanan görev yok', 'hiçbir görev tamamlan', '0 görev tamamlandı', 'görev tamamlanmadı', 'tamamlanmış görev bulunmu', 'tamamlanma kaydı', 'resmî tamamlanma', 'resmi tamamlanma', 'kapanan görev'], ['protokol katmanı'], ['hata yönetimi'], ['düzenek']] },
       { id: 'Z2', olgu: 'Görüntü işleme kartı sürücüsünde DMA aktarımında ara sıra veri kaybı bildirildi.', anahtarlar: [['veri kaybı'], ['sürücü']] }
     ]
   },
