@@ -16,6 +16,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { parseIsoTimestampNanos } from '../../src/domain/ai/report/reportRequest.js';
 
 const canonicalStatus = (value) => ['done', 'completed', 'cancelled'].includes(value) ? 'done'
   : ['in-progress', 'in_progress', 'blocked'].includes(value) ? 'in_progress' : 'todo';
@@ -1116,29 +1117,77 @@ function reportProjectSelectors(db, params) {
   return [rows];
 }
 
+/**
+ * SQL Server `datetime2(7)` karşılaştırmasını kesirli basamak kaybı olmadan taklit eder:
+ * değer 100 ns tik cinsinden BigInt'e çevrilir (Date nesneleri milisaniye kesinliğindedir).
+ */
+function sqlTicks(value) {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? BigInt(ms) * 10000n : null;
+  }
+  const nanos = parseIsoTimestampNanos(String(value));
+  if (nanos != null) return nanos / 100n;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? BigInt(ms) * 10000n : null;
+}
+
 function reportDependencies(db, params) {
   const scope = scopeOf(db, params);
   const limit = Number(params.maxRows || 1001);
-  const taskFilter = new Set(String(params.taskIds || '').split(',').map(upper).filter(isGuid));
-  const rows = (db.taskDependencies || [])
+  const rawTaskIds = String(params.taskIds || '');
+  const taskFilterActive = rawTaskIds.trim().length > 0;
+  const taskFilter = new Set(rawTaskIds.split(',').map((id) => upper(id.trim())).filter(isGuid));
+  const cutOffTicks = params.cutOffUtc ? sqlTicks(params.cutOffUtc) : null;
+  const afterCutoff = (value) => {
+    const ticks = sqlTicks(value);
+    return ticks != null && ticks > cutOffTicks;
+  };
+  const isPostCutoffDep = (dep) => cutOffTicks != null && (afterCutoff(dep.CreatedAt) || afterCutoff(dep.UpdatedAt));
+  // Üretim sorgusundaki sıra: FULL proje ve görev süzgeci, ardından kesit süzgeci, en son TOP.
+  const eligibleDeps = (db.taskDependencies || [])
     .filter((dep) => scope.projects.get(upper(dep.ProjectId))?.AccessLevel === 'FULL')
-    .filter((dep) => taskFilter.size === 0 || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)))
+    .filter((dep) => !taskFilterActive || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)));
+  const boundedDeps = eligibleDeps
+    .filter((dep) => !isPostCutoffDep(dep))
     .sort((a, b) => (
       sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId))
       || sqlGuidSortKey(a.TaskId).localeCompare(sqlGuidSortKey(b.TaskId))
       || sqlGuidSortKey(a.PredecessorTaskId).localeCompare(sqlGuidSortKey(b.PredecessorTaskId))
     ))
-    .slice(0, limit)
-    .map((dep) => ({
-      ProjectId: dep.ProjectId,
-      TaskId: dep.TaskId,
-      PredecessorTaskId: dep.PredecessorTaskId,
-      DependencyType: dep.DependencyType,
-      LagDays: dep.LagDays,
-      LagValue: dep.LagValue,
-      LagUnit: dep.LagUnit
-    }));
-  return [rows];
+    .slice(0, limit);
+  const isTruncated = boundedDeps.length >= limit;
+  // Kaldırılan kenarın karşı ucu süzgeç dışında kalabilir; denetim kaydı görev süzgecinden bağımsızdır.
+  // Kesit sonrasında oluşturulduğu kanıtlanan görevler dışlanır, satırı olmayan görevler sayılır.
+  const hasPostCutoffAudit = cutOffTicks != null && (db.auditLog || []).some((entry) => {
+    if (entry.EntityType !== 'TASK' || !['UPDATE', 'DELETE'].includes(entry.ActionCode)) return false;
+    if (!afterCutoff(entry.OccurredAt)) return false;
+    // Taşınan görev hedef projeyle denetlenir; taşıma öncesi proje (`BeforeJson.ProjectId`) de kapsam sayılır.
+    let beforeProjectId = null;
+    try {
+      const before = typeof entry.BeforeJson === 'string' ? JSON.parse(entry.BeforeJson) : null;
+      if (before && typeof before === 'object' && !Array.isArray(before)) beforeProjectId = before.ProjectId ?? before.projectId ?? null;
+    } catch { /* Bozuk JSON taşıma kanıtı sayılmaz. */ }
+    const inFullScope = (projectId) => typeof projectId === 'string' && scope.projects.get(upper(projectId))?.AccessLevel === 'FULL';
+    if (!inFullScope(entry.ProjectId) && !inFullScope(beforeProjectId)) return false;
+    const live = (db.tasks || []).find((task) => same(task.TaskId, entry.EntityId));
+    if (live && live.CreatedAt != null && afterCutoff(live.CreatedAt)) return false;
+    return true;
+  });
+  const hasPostCutoffChange = eligibleDeps.some(isPostCutoffDep) || hasPostCutoffAudit;
+  const rows = boundedDeps.map((dep) => ({
+    ProjectId: dep.ProjectId,
+    TaskId: dep.TaskId,
+    PredecessorTaskId: dep.PredecessorTaskId,
+    DependencyType: dep.DependencyType,
+    LagDays: dep.LagDays,
+    LagValue: dep.LagValue,
+    LagUnit: dep.LagUnit,
+    CreatedAt: dep.CreatedAt ?? null,
+    UpdatedAt: dep.UpdatedAt ?? null
+  }));
+  return [rows, [{ IsTruncated: isTruncated ? 1 : 0, HasPostCutoffChange: hasPostCutoffChange ? 1 : 0 }]];
 }
 
 function reportActivitySummary(db, params) {

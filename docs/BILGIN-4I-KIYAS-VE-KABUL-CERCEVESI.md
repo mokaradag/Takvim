@@ -7,8 +7,10 @@ sıra ve ilerleme: [4I Uygulama Yol Haritası](BILGIN-4I-UYGULAMA-YOL-HARITASI.m
 [`test/fixtures/bilgin-executive-report-benchmark.json`](../test/fixtures/bilgin-executive-report-benchmark.json)
 (eşiklerin makinece okunur kaynağı bu dosyanın `esikler` alanıdır; aşağıdaki tablolar onun okunur biçimidir).
 
-**Durum (21.11.2026):** Çerçeve, sentetik fikstür ve yapısal sınamalar hazırdır. **Hiçbir gerçek model ölçümü
-yapılmamıştır**; fikstürün `olcumler` alanı boştur ve belirlenimci sınama bunu korur.
+**Durum (25.11.2026):** Çerçeve, sentetik fikstür ve yapısal sınamalar hazırdır. 4I-B için 48 senaryonun dondurulmuş
+kanıt paketi kümesi ve nitelendirme araçları uygulandı (§10). **Kurum içi aday modellerle hiçbir nitelendirme ölçümü
+yapılmamıştır**; yalnızca geliştirme ortamında bir vekil modelle mimari güven koşusu yapıldı ve ayrı kayıtta tutuldu.
+Fikstürün `olcumler` alanı boştur ve belirlenimci sınama bunu korur.
 
 ---
 
@@ -257,3 +259,57 @@ Her nitelendirme ya da kabul koşusu: tarih, commit, ortam (geliştirme / kurum 
 bildirilen kimlikler, ayarlar, senaryo kümesi, A/B/C/D sonuçları **sayılarıyla**, puanlayıcı sayısı ve
 anlaşmazlık çözümü, bilinen sınırlar. Koşulmayan kapı **bekliyor** olarak yazılır; yapılmamış doğrulama geçti
 olarak raporlanmaz.
+
+---
+
+## 10. 4I-B dondurulmuş paket kümesi, nitelendirme araçları ve kayıtlar
+
+**Paket kümesi.** `test/fixtures/bilgin-executive-report-writer-packages.json` (şema `bilgin-yonetici-raporu-yazar-paketleri`,
+sürüm 1) 48 senaryonun her biri için model girdisinin tek kaynağı olan `4i-kanit-1` paketini, sürümlü zorunlu olgu
+listesini (düzyazıda aranacak VE-of-VEYA anahtarlarıyla) ve yetkisiz varlık listesini taşır; paket başına ve küme için
+SHA-256 özeti vardır. Elle düzenlenmez: `node scripts/yonetici-raporu-kiyas-paketleri.mjs` ile üretilir, `--denetle` ve
+`test/ai-executive-report-writer.test.mjs` CRLF satır sonları LF biçimine dönüştürüldükten sonra üretimin dosyayla bayt bayt aynı olduğunu doğrular.
+
+| Kaynak | Senaryolar |
+| --- | --- |
+| Temsili vakaların fikstür kanıtından türetilen ve `4i-kanit-1` zarfına sarılan paket (not ve dönem içi tamamlanma zarf alanları eklenir; R3/R5/R7 gün sonu `veri_ani` kapanış anına eşlenir; R4/R8 çelişki ve tamlık bilgisi taşınır; olgu değerleri ve metinler değişmez) | S12 (R1), S17 (R4), S21 (R5), S25 (R8), S28 (R7), S40 (R2), S42 (R3), S46 (R6) |
+| 4I-A kıyas tohumu + 4I-A kanıt kurucusu | S09 |
+| Senaryo evreni (`test/helpers/executiveReportWriterScenarios.mjs`) + 4I-A kanıt kurucusu, sentetik SQL ikizi | Diğer 39 senaryo |
+| Kıyasa özgü, önceden çıkarılmış belge parçası (`tur: belge`, `kaynak_belge`, `bolum`, güvenilmez metin) | S36, S37, S38, S47 (S47'de `guvenilmez_yonerge_iceriyor: true`) |
+| Yönetici ek bilgi beyanı (`koken: yonetici_beyani`, `dogrulanmis_kayit: false`) | S39 |
+
+Belge ve beyan kayıtları 4I-F yükleme yolu değildir; mevcut sözleşmenin izin verdiği `belge`/`gecici_yukleme` türüyle,
+kökenleri ayrıca işaretlenerek temsil edilir. S48 paketi yetki kaldırıldıktan sonraki durumdur (kaldırılan proje ve not
+pakette yoktur).
+
+**Çözülen tutarsızlık (tutucu).** 4I-0 fikstüründe R3, R5 ve R7 veri anı dönemin son günü `23:59:59.999999999+03:00`
+olarak yazılmıştır; 4I-A sözleşmesi (`validateEvidencePackageContract`) ise İstanbul iş günü hâlâ dönem içindeyse paketi
+açık dönem sayar. Ne fikstür ne de 4I-A sözleşmesi gevşetildi: sarma katmanı bu gün sonu işaretini 1 ns sonraki eşdeğer
+kapanış anına (ertesi gün `00:00:00+03:00`) eşler; başka hiçbir değer değişmez (sınanır).
+
+**Nesnel değerlendirme (A).** Düzyazının kendisinden yapılır; iddia eki kapsamı daraltmaz. Belirlenimci tarama
+(`assessDraftObjectively`): sentetik kadrodan pakette olmayan ad (uydurma kimlik), kapalı/yetkisiz varlık adı (yetkisiz
+açıklama), paket ve sunucu izdüşümü defterinde bulunmayan tarih ve sayı (hakem incelemesine gider) ve zorunlu olgu
+kapsamı. Defter dışı her değer ve her taslağın zorunlu olgu tamlığı hakem tarafından elle karara bağlanır; bütün anahtar
+grupları otomatik eşleşmiş olsa bile her taslak için bağlı `atlanan_zorunlu` kararı (`atlanan_zorunlu: []`, yalnızca hakem
+atlanan zorunlu olgu olmadığını doğruladığında) ve `dogru`/`yanlis` sayıları koşu kaydında tutulur. Defter dışı sayı
+adayları bu genel sayılarla kapanmaz: hakem kararı sayı adaylarının tek tek incelendiğini `sayilar_incelendi: true` ile
+açıkça bildirmedikçe aday `bekleyen_sayi_incelemesi_toplam` içinde bekler (kronoloji adayı ise `kronoloji_incelendi: true`
+ya da `kronoloji_incelendi` alanı verilmemişken geçerli bir `kronoloji_hatasi` sayısıyla kapanır; `kronoloji_incelendi: false`
+veya geçersiz karar alanları incelemeyi açık bırakır). Bu kural 2026-11-25 vekil koşusunun özgün yanıtlarını ve hakem kayıtlarını değiştirmez. **Yeniden değerlendirme
+(2026-11-28):** arşiv kaydı güncel dondurulmuş küme özetiyle uyuşmadığından olağan `ozet` satır değerlendirmez;
+`--tarihsel-uyusmazlik-izni evet` ile değerlendirildiğinde arşiv hakem kayıtlarında `sayilar_incelendi` alanı
+bulunmadığı için 12 senaryoda toplam 14 defter dışı sayı adayı bekleyen kalır (önceki kural bunları genel iddia
+sayılarıyla kapatıyordu). Bu adaylar için hakem kararı uydurulmaz; açık inceleme gereklidir.
+Süre kapısı (D) ayrıca her zorunlu standart senaryoda pozitif bir çıktı sınırı kaydı ister; yoksa durum
+`eksik_cikti_siniri` olur. Bu tarama 4I-C nesnel doğrulayıcısı değildir.
+
+**Araçlar.** `scripts/report-writer-qualification.mjs`: `kosu` (taşıyıcı `vekil` ya da `kurum-ici`; aynı paket, plan,
+istem ve ayrıştırıcı), `katalog` (kurum içi `GET /models` ile aday kimlik doğrulaması), `ozet` (A/B/D özeti, en yakın
+sıra p95, hakem ve editoryal dosyalarıyla birleştirme), `insan-paketi` (kör puanlama paketi, puan çizelgesi ve
+puanlayıcıya verilmeyen kod anahtarı). `scripts/yonetici-anlati-onizleme.mjs`: koşu kaydındaki gerçek düzyazının okunur
+Markdown önizlemesi.
+
+**Kayıtlar.** Koşu kayıtları fikstürden ayrı ve sürümlüdür: `docs/kayitlar/` altında koşu özeti, hakem kararları,
+editoryal değerlendirme ve kör puanlama paketi. Vekil model kayıtları hiçbir adayın nitelendirme sonucu yerine
+kullanılmaz ve `nitelikli_modeller` alanına yazılmaz.

@@ -25,7 +25,8 @@ const DOC_AND_CONFIG_FILES = [
   'README.md',
   '.env.example',
   'package.json',
-  ...readdirSync(path.join(ROOT, 'docs')).map((name) => `docs/${name}`)
+  // Alt klasörlerdeki belgeler (ör. ölçüm kayıtları) de taranır; klasörün kendisi dosya gibi okunmaz.
+  ...walk(path.join(ROOT, 'docs')).map((file) => path.relative(ROOT, file).split(path.sep).join('/'))
 ];
 
 /* ── Port ───────────────────────────────────────────────── */
@@ -39,21 +40,54 @@ test('üretim komutu ve belgeler MERGEN Rota için 8008 portunu kullanır', () =
   assert.match(readme, /npm run start -- -H 0\.0\.0\.0 -p 8008/);
 });
 
+function hasForeignDeploymentPort(source) {
+  const jsonPorts = source.matchAll(/"(?:port|PORT)"\s*:\s*(?:"([^"\r\n]*)"|(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?))(?=\s|[,}\]]|$)/gu);
+  // Port yazımı değil değeri sınıflandırılır: baştaki sıfırlar (`08009`) aynı portu seçer.
+  return /(?:^|[\s"'\x60])(?:-p\s*|--port(?:\s+|=))["']?0*8009["']?(?=\s|[,"'\x60;]|$)/mu.test(source)
+    // Kapsayıcı yayımlama eşlemesi (`-p 8009:8008`, `--publish 127.0.0.1:8009:8008`): ana makine portu denetlenir.
+    || /(?:^|[\s"'\x60])(?:-p|--publish)(?:\s+|=)["']?(?:[\d.]+:|\[[\da-f:]+\]:)?0*8009:\d+/imu.test(source)
+    // Nginx `listen` yönergesi (`listen 8009;`, `listen 0.0.0.0:8009 ssl;`, `listen [::]:8009;`).
+    || /(?:^|[\s{;])listen\s+(?:\S*:)?0*8009(?=[\s;])/mu.test(source)
+    || Array.from(jsonPorts).some(([, text, numeric]) => (typeof text === 'string' && /^\d+$/u.test(text.trim()) && Number(text) === 8009)
+      || Number(numeric) === 8009)
+    || /\bPORT\s*=\s*["']?0*8009["']?(?!\d)/u.test(source)
+    || /https?:\/\/[^\s"'`]+:0*8009\b/iu.test(source);
+}
+
+test('arşiv ölçümlerindeki 8009 sayısını dağıtım portu ayarından ayırır', () => {
+  assert.equal(hasForeignDeploymentPort('Toplam 8009 kayıt incelendi.'), false);
+  assert.equal(hasForeignDeploymentPort('{"output_tokens":8009}'), false);
+  assert.equal(hasForeignDeploymentPort('{"output_tokens":8.009e3}'), false);
+  assert.equal(hasForeignDeploymentPort('next start --port=80090'), false);
+  assert.equal(hasForeignDeploymentPort('docker run -p 8008:8009 ornek'), false);
+  assert.equal(hasForeignDeploymentPort('listen 8008;'), false);
+  assert.equal(hasForeignDeploymentPort('Toplam 08009 kayıt listen edildi.'), false);
+  for (const source of [
+    '{"env":{"PORT":"8009"}}', '{"port":8009}', '{"port":8.009e3}', '{"PORT":8009.0}', 'PORT=8009',
+    'next start -p 8009', 'next start --port 8009', 'next start --port=8009', 'https://örnek:8009/',
+    // Kapsayıcı yayımlama, Nginx dinleme yönergesi ve baştaki sıfırlı yazımlar da aynı portu seçer.
+    'docker run -p 8009:8008 ornek', 'docker run --publish 127.0.0.1:8009:8008 ornek',
+    'listen 8009;', 'listen 0.0.0.0:8009 ssl;', 'listen [::]:8009;',
+    'next start --port 08009', 'next start -p 08009', 'PORT=08009', '{"PORT":"08009"}'
+  ]) {
+    assert.equal(hasForeignDeploymentPort(source), true, source);
+  }
+});
+
 test('hiçbir MERGEN Rota dağıtım talimatı 8009 portunu kullanmaz', () => {
   for (const relativePath of DOC_AND_CONFIG_FILES) {
     const source = read(relativePath);
-    // Paragraf düzeyinde bakılır: cümle satır sonuna sarabilir.
-    for (const paragraph of source.split(/\n\s*\n/)) {
+    assert.equal(hasForeignDeploymentPort(source), false, relativePath);
+    // Arşivlerde sayı sayım verisi olabilir; komut, URL ve yapılandırma kuralları her belgede geçerlidir.
+    if (relativePath.startsWith('docs/kayitlar/')) continue;
+    for (const paragraph of source.split(/\n\s*\n/u)) {
       if (!paragraph.includes('8009')) continue;
-      // 8009 yalnızca "MERGEN Bilge'ye aittir" bağlamında anılabilir.
       assert.match(
         paragraph,
         /Bilge/i,
         `${relativePath}: 8009 yalnızca MERGEN Bilge bağlamında anılabilir → ${paragraph.trim().slice(0, 120)}`
       );
     }
-    // Dağıtım komutu olarak 8009 hiçbir yerde geçmez.
-    assert.doesNotMatch(source, /-p\s*8009/, relativePath);
   }
 });
 
@@ -155,6 +189,41 @@ test('istemci paketine sunucu tarafı kimlik yapılandırması sızmaz', () => {
   }
 });
 
+const ARCHIVED_DIGEST_KEYS = new Set([
+  'paket_ozeti', 'paket_kumesi_ozeti', 'taslak_ozeti', 'stil_ozeti_sha256', 'girdi_iletileri_sha256'
+]);
+const ARCHIVE_JSON_TOKENS = /"taslak_ozetleri"\s*:\s*\{\s*(?:"(?:S\d{2}|K-[0-9a-f]{6})"\s*:\s*"[0-9a-f]{64}"\s*(?:,\s*|(?=\})))*\}|"(?:[^"\\]|\\.)*"(?:\s*:\s*"[0-9a-f]{64}")?/gisu;
+
+function archiveTextForEmployeeIdScan(source, relative) {
+  if (!relative.startsWith('docs/kayitlar/')) return source;
+  if (relative.endsWith('.sha256')) return source.replace(/^[0-9a-f]{64}(?=[ \t]+\S)/gimu, ' ');
+  if (relative.endsWith('.md')) return source.replace(/^(#{1,6}\s+[^\n]*?)\bK-[0-9A-F]{6}\b/gmu, '$1K-KOD');
+  if (relative.endsWith('.csv')) return source.replace(/^K-[0-9A-F]{6}(?=,)/gmu, 'K-KOD');
+  if (!/\.jsonl?$/u.test(relative)) return source;
+
+  // Ham JSON dizgelerini bütün olarak geçeriz; metin içindeki alıntılar ve yinelenen alanlar taranmaya devam eder.
+  const masked = source.replace(ARCHIVE_JSON_TOKENS, (token) => {
+    if (/^"taslak_ozetleri"\s*:\s*\{/u.test(token)) return token.replace(/"[0-9a-f]{64}"/giu, '""');
+    const field = /^"([a-z_]+)"(\s*:\s*)"[0-9a-f]{64}"$/iu.exec(token);
+    return field && ARCHIVED_DIGEST_KEYS.has(field[1]) ? `"${field[1]}"${field[2]}""` : token;
+  });
+  return relative.endsWith('.json') ? masked.replace(/"K-[0-9A-F]{6}"/gu, '"K-KOD"') : masked;
+}
+
+test('arşivde sicil taraması yalnızca bilinen özetleri ve sağlama sütununu atlar', () => {
+  const digest = '12345' + 'a'.repeat(59);
+  const archivePath = 'docs/kayitlar/ornek.jsonl';
+  const value = JSON.stringify({ paket_ozeti: digest, metin: digest, taslak_ozeti: digest });
+  const scanned = JSON.parse(archiveTextForEmployeeIdScan(value, archivePath));
+  assert.deepEqual(scanned, { paket_ozeti: '', metin: digest, taslak_ozeti: '' });
+  const list = JSON.stringify({ taslak_ozetleri: { S01: digest }, not: `"paket_ozeti": "${digest}"` });
+  assert.equal(JSON.parse(archiveTextForEmployeeIdScan(list, 'docs/kayitlar/ornek.json')).not.includes(digest), true);
+  assert.equal(JSON.parse(archiveTextForEmployeeIdScan(list, 'docs/kayitlar/ornek.json')).taslak_ozetleri.S01, '');
+  const duplicate = '{"metin":"' + digest + '","metin":"anonim"}';
+  assert.ok(archiveTextForEmployeeIdScan(duplicate, archivePath).includes(digest));
+  assert.equal(archiveTextForEmployeeIdScan(`${digest}  belge-${digest}.md`, 'docs/kayitlar/ornek.sha256').includes(digest), true);
+});
+
 test('depoda gerçek sicil, gerçek jeton veya gerçek kurumsal adres bulunmaz', () => {
   const scanned = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'test')), ...walk(path.join(ROOT, 'database'))]
     .filter((file) => /\.(js|jsx|mjs|sql)$/.test(file));
@@ -165,10 +234,11 @@ test('depoda gerçek sicil, gerçek jeton veya gerçek kurumsal adres bulunmaz',
     if (file === selfPath) continue;
     if (!statSync(file).isFile()) continue;
     const source = readFileSync(file, 'utf8');
-    const relative = path.relative(ROOT, file);
+    const relative = path.relative(ROOT, file).split(path.sep).join('/');
+    const scannable = archiveTextForEmployeeIdScan(source, relative);
     // Kaldırılan gerçek sicil değerleri geri gelmemelidir.
     for (const sicil of ['10276', '18068', '23977', '17205']) {
-      assert.equal(source.includes(sicil), false, `${relative}: gerçek sicil değeri (${sicil}) bulunmamalıdır`);
+      assert.equal(scannable.includes(sicil), false, `${relative}: gerçek sicil değeri (${sicil}) bulunmamalıdır`);
     }
     // Gerçek JWT veya Bearer jetonu yer almamalıdır.
     assert.doesNotMatch(source, /eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}/, `${relative}: ham JWT bulunmamalıdır`);

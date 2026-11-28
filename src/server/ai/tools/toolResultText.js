@@ -10,7 +10,14 @@ export function dataText(value, maxChars = 200) {
   let text = String(value).replace(CONTROL, ' ').replace(/[【】]/g, (mark) => mark === '【' ? '(' : ')');
   text = text.replace(/\[(\s*R\d{1,3}\s*)\]/gi, '($1)');
   if (text.length > maxChars) {
-    text = `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+    // Vekil çifti (surrogate pair) bölünmeden UTF-16 kod birimi sınırında kırpılır.
+    const limit = Math.max(1, maxChars - 1);
+    let cut = limit;
+    if (cut > 0 && cut < text.length) {
+      const prev = text.charCodeAt(cut - 1);
+      if (prev >= 0xD800 && prev <= 0xDBFF) cut -= 1;
+    }
+    text = `${text.slice(0, cut).trimEnd()}…`;
     clipping.getStore()?.add(text);
   }
   return text;

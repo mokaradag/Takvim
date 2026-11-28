@@ -230,7 +230,10 @@ export function createFakeDatabase(seed = {}) {
       DependencyType: entry.DependencyType || 'FS',
       LagDays: entry.LagDays ?? 0,
       LagValue: entry.LagValue ?? null,
-      LagUnit: entry.LagUnit ?? null
+      LagUnit: entry.LagUnit ?? null,
+      // Kayıt anları yalnızca tohumda verildiyse taşınır (kesit sonrası bağımlılık sınamaları için).
+      ...(entry.CreatedAt != null ? { CreatedAt: entry.CreatedAt } : {}),
+      ...(entry.UpdatedAt != null ? { UpdatedAt: entry.UpdatedAt } : {})
     })),
     baselines: seed.baselines || [],
     taskBaselineSnapshots: seed.taskBaselineSnapshots || [],
@@ -2466,6 +2469,7 @@ function runQuery(db, statement, params, { database }) {
     return result([[]]);
   }
   if (sqlText.includes('INSERT dbo.MR_TaskDependencies(')) {
+    const nowIso = new Date().toISOString();
     db.taskDependencies.push({
       TaskDependencyId: guid(params.dependencyId),
       ProjectId: guid(params.projectId),
@@ -2474,7 +2478,9 @@ function runQuery(db, statement, params, { database }) {
       DependencyType: params.type,
       LagDays: params.lagDays ?? 0,
       LagValue: params.lagValue ?? null,
-      LagUnit: params.lagUnit ?? null
+      LagUnit: params.lagUnit ?? null,
+      CreatedAt: params.createdAt ?? nowIso,
+      UpdatedAt: params.updatedAt ?? nowIso
     });
     return result([[]]);
   }

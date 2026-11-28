@@ -1552,18 +1552,88 @@ ${REPORT_SCOPE_PROJECTS_UNBOUNDED}
 
 /**
  * Aşama 4I-A — Seçili FULL erişimli projelerin bağımlılıklarını tek sınırlı sorguda okur.
- * READ ve PARTIAL projeler hiçbir zaman bağımlılık döndürmez; görev kimliği süzgeci verildiyse
- * `TOP (@maxRows)` sınırından ÖNCE uygulanır.
+ * READ ve PARTIAL projeler hiçbir zaman bağımlılık döndürmez; görev kimliği süzgeci, kesit süzgeci ve
+ * `TOP (@maxRows)` sınırı bu sırayla tek sınırlı tablo değişkeninde (`@ReportDeps`) uygulanır.
+ * Kesit sonrası eklenen veya güncellenen bağlantılar dışlanır; kesit sonrası bağımlılık değişikliği
+ * veya aynı FULL projelerde kesit öncesinden var olan bir görevin kesit sonrası güncelleme/silme
+ * denetim kaydı varsa ikinci sonuç kümesinde `IsTruncated` ve `HasPostCutoffChange` bildirilir.
  */
 export const AI_TOOL_REPORT_DEPENDENCIES_SQL = `/* rota-ai-tool:report-dependencies */
 ${SCOPE_PROJECTS}
-  SELECT TOP (@maxRows) d.ProjectId, d.TaskId, d.PredecessorTaskId, d.DependencyType, d.LagDays, d.LagValue, d.LagUnit
+  DECLARE @ReportDeps TABLE (
+    ProjectId uniqueidentifier NOT NULL,
+    TaskId uniqueidentifier NOT NULL,
+    PredecessorTaskId uniqueidentifier NOT NULL,
+    DependencyType char(2) NOT NULL,
+    LagDays decimal(10,2) NOT NULL,
+    LagValue decimal(10,2) NULL,
+    LagUnit varchar(10) NULL,
+    CreatedAt datetime2(7) NULL,
+    UpdatedAt datetime2(7) NULL
+  );
+  INSERT @ReportDeps (
+    ProjectId, TaskId, PredecessorTaskId, DependencyType,
+    LagDays, LagValue, LagUnit, CreatedAt, UpdatedAt
+  )
+  SELECT TOP (@maxRows)
+    d.ProjectId, d.TaskId, d.PredecessorTaskId, d.DependencyType,
+    d.LagDays, d.LagValue, d.LagUnit, d.CreatedAt, d.UpdatedAt
   FROM dbo.MR_TaskDependencies d
   JOIN #AiScopeProjects v ON v.ProjectId = d.ProjectId AND v.AccessLevel = 'FULL'
   WHERE (@AiTaskFilterActive = 0
     OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.TaskId)
     OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.PredecessorTaskId))
+    -- Kesit süzgeci TOP'tan ÖNCE uygulanır: kesit sonrası kenarlar tarihsel satır bütçesini tüketemez.
+    AND (@cutOffUtc IS NULL OR (
+      (d.CreatedAt IS NULL OR d.CreatedAt <= @cutOffUtc)
+      AND (d.UpdatedAt IS NULL OR d.UpdatedAt <= @cutOffUtc)
+    ))
   ORDER BY d.ProjectId, d.TaskId, d.PredecessorTaskId;
+  SELECT ProjectId, TaskId, PredecessorTaskId, DependencyType, LagDays, LagValue, LagUnit, CreatedAt, UpdatedAt
+  FROM @ReportDeps
+  ORDER BY ProjectId, TaskId, PredecessorTaskId;
+  SELECT
+    CAST(CASE WHEN (SELECT COUNT(*) FROM @ReportDeps) >= @maxRows THEN 1 ELSE 0 END AS bit) AS IsTruncated,
+    CAST(CASE WHEN @cutOffUtc IS NOT NULL AND (
+      -- Kesit sonrası eklenen/güncellenen kenar, satır sınırına girip girmediğinden bağımsız olarak
+      -- aynı FULL proje kapsamı ve görev süzgeciyle kaynak tabloda aranır (EXISTS ilk eşleşmede durur).
+      EXISTS (
+        SELECT 1
+        FROM dbo.MR_TaskDependencies d
+        JOIN #AiScopeProjects v ON v.ProjectId = d.ProjectId AND v.AccessLevel = 'FULL'
+        WHERE (@AiTaskFilterActive = 0
+          OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.TaskId)
+          OR EXISTS (SELECT 1 FROM #AiTaskFilter tf WHERE tf.TaskId = d.PredecessorTaskId))
+          AND ((d.CreatedAt IS NOT NULL AND d.CreatedAt > @cutOffUtc)
+            OR (d.UpdatedAt IS NOT NULL AND d.UpdatedAt > @cutOffUtc))
+      )
+      -- Kaldırılan kenar tabloda iz bırakmaz; ardıl görevin kaydedilmesi, taşınması ya da iki uçtan
+      -- birinin silinmesi TASK UPDATE/DELETE denetim kaydı üretir. Silinen kenarın karşı ucu süzgeç
+      -- dışında kalabileceğinden bu denetim görev süzgecinden bağımsızdır. Kesit sonrasında oluşturulduğu
+      -- kanıtlanan görevler kesit anında kenar taşıyamayacağından dışlanır; satırı olmayan (silinmiş)
+      -- görevler tutucu biçimde sayılır.
+      -- Başka projeye taşınan görevin denetim kaydı hedef projeyle yazılır; taşımadan önceki proje
+      -- (BeforeJson.ProjectId) seçili FULL projeyse kaldırılan kenarlar da yakalanır.
+      OR EXISTS (
+        SELECT 1
+        FROM dbo.MR_AuditLog a
+        OUTER APPLY (
+          SELECT
+            MAX(CASE WHEN aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'ProjectId', N'projectId') AND aj.[type] = 1 THEN TRY_CONVERT(uniqueidentifier, aj.[value]) END) AS BeforeProjectId
+          FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('a.BeforeJson')} THEN a.BeforeJson END) aj
+          WHERE aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'ProjectId', N'projectId')
+        ) ab
+        LEFT JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)
+        WHERE a.EntityType = 'TASK'
+          AND a.ActionCode IN ('UPDATE', 'DELETE')
+          AND a.OccurredAt > @cutOffUtc
+          AND EXISTS (
+            SELECT 1 FROM #AiScopeProjects v
+            WHERE v.AccessLevel = 'FULL' AND (v.ProjectId = a.ProjectId OR v.ProjectId = ab.BeforeProjectId)
+          )
+          AND (t.TaskId IS NULL OR t.CreatedAt IS NULL OR t.CreatedAt <= @cutOffUtc)
+      )
+    ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffChange;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**

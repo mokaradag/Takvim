@@ -291,6 +291,21 @@ anlati:
     kisa: "Yönetici değerlendirmesi ve sonuç ağırlıklı; isteğe bağlı bölümler kısaltılır."
     standart: "Bütün zorunlu bölümler; varsayılan 2–3 sayfa."
     kapsamli: "Proje ve risk anlatısı derinleşir; ayrıntılı tablolar eklere gider."
+  # 4I-B yazar bölüm planı (sunucu kararı): model düzyazısının toplam sözcük aralığı (tablo, şekil, kart ve
+  # kaynak notu hariç) ve bu aralığın plana giren bölümlere ağırlıkla dağıtılması. Sayfa aralığı (sayfa.uzunluk)
+  # belge katmanının kapısıdır; bu bütçe yalnızca anlatının ölçüsüdür.
+  bolum_plani:
+    sozcuk_butcesi:
+      kisa: [350, 650]
+      standart: [800, 1300]
+      kapsamli: [1300, 2200]
+    agirliklar:
+      yonetici_degerlendirmesi: 4
+      one_cikan_gelismeler: 3
+      faaliyetler: 4
+      riskler: 3
+      oncelikler: 2
+      genel_sonuc: 2
 
 kanit:
   iddia_siniflari:

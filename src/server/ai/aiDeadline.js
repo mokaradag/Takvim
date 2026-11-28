@@ -39,15 +39,18 @@ export function createProgressWatch({ firstEventMs, idleMs, parentSignal = null 
   const controller = new AbortController();
   let failure = null;
   let timer = null;
+  let disposed = false;
   const arm = (ms) => {
     clearTimeout(timer);
+    if (disposed || controller.signal.aborted) return;
     timer = setTimeout(() => {
-      if (controller.signal.aborted) return;
+      if (disposed || controller.signal.aborted) return;
       failure = new AiError(AI_ERROR_CODES.AI_TIMEOUT, { details: { reason: 'PROVIDER_STALLED', idleMs: ms } });
       controller.abort(failure);
     }, Math.max(1, ms));
   };
   const onParentAbort = () => {
+    if (disposed) return;
     clearTimeout(timer);
     controller.abort(parentSignal.reason);
   };
@@ -61,11 +64,12 @@ export function createProgressWatch({ firstEventMs, idleMs, parentSignal = null 
     /** İlerleme yoksa sınıflandırılmış hata; aksi hâlde `null`. */
     failure: () => failure,
     touch() {
-      if (!controller.signal.aborted) arm(idleMs);
+      if (!disposed && !controller.signal.aborted) arm(idleMs);
     },
     pause() { clearTimeout(timer); },
-    restart() { if (!controller.signal.aborted) arm(firstEventMs); },
+    restart() { if (!disposed && !controller.signal.aborted) arm(firstEventMs); },
     dispose() {
+      disposed = true;
       clearTimeout(timer);
       parentSignal?.removeEventListener?.('abort', onParentAbort);
     }
@@ -78,30 +82,36 @@ export function createProgressWatch({ firstEventMs, idleMs, parentSignal = null 
  * Tek bir `AbortSignal`, hem süre dolmasını hem de istemcinin iptalini taşır;
  * hangisinin ÖNCE gerçekleştiği korunur ki zaman aşımı ile iptal ayrı
  * kodlarla bildirilsin. `dispose()` zamanlayıcıyı ve üst sinyal dinleyicisini
- * HER yolda temizler; zamanlayıcı yalnızca iş sürerken yaşar.
+ * HER yolda temizler; temizlik sonlandırıcıdır ve sonradan `AI_TIMEOUT` üretilmez.
  */
-export function createAiDeadline({ timeoutMs, parentSignal = null, now = Date.now }) {
+export function createAiDeadline({ timeoutMs, parentSignal = null, now = () => performance.now() }) {
   const controller = new AbortController();
   const startedAt = now();
   const budgetMs = Math.max(1, Math.trunc(Number(timeoutMs) || 1));
   let failure = null;
+  let disposed = false;
 
   const abort = (code) => {
-    if (failure) return;
+    if (failure || disposed) return;
     failure = new AiError(code, code === AI_ERROR_CODES.AI_TIMEOUT ? { details: { timeoutMs: budgetMs } } : {});
     controller.abort(failure);
   };
   const timer = setTimeout(() => abort(AI_ERROR_CODES.AI_TIMEOUT), budgetMs);
-  const onParentAbort = () => abort(AI_ERROR_CODES.AI_CANCELLED);
+  // Üst iptal, monoton süre zaten dolduktan sonra (zamanlayıcı geri çağrısından önce) gelirse zaman aşımıdır.
+  const onParentAbort = () => abort(now() - startedAt >= budgetMs ? AI_ERROR_CODES.AI_TIMEOUT : AI_ERROR_CODES.AI_CANCELLED);
   if (parentSignal?.aborted) onParentAbort();
   else parentSignal?.addEventListener?.('abort', onParentAbort, { once: true });
 
   return {
     signal: controller.signal,
     /** Süre dolduysa ya da iptal edildiyse sınıflandırılmış hata; aksi hâlde `null`. */
-    failure: () => failure,
-    remainingMs: () => Math.max(0, budgetMs - (now() - startedAt)),
+    failure() {
+      if (!failure && !disposed && now() - startedAt >= budgetMs) abort(AI_ERROR_CODES.AI_TIMEOUT);
+      return failure;
+    },
+    remainingMs: () => (disposed ? 0 : Math.max(0, budgetMs - (now() - startedAt))),
     dispose() {
+      disposed = true;
       clearTimeout(timer);
       parentSignal?.removeEventListener?.('abort', onParentAbort);
     }

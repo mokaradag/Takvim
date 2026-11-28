@@ -783,13 +783,15 @@ test("sıralanabilir satır eksik değeri dışlar ve belirlenimci ölçü sıra
 test("protokol kanıt açığı ortak bütçeyi yenilemez; temiz Derin başlangıcı en çok bir kez olur", async (t) => {
   const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  let elapsedMs = 0;
+  t.mock.method(performance, 'now', () => elapsedMs);
   for (const budget of [{ maxRepairRounds: 0 }, { maxToolRounds: 1 }, { maxTotalCalls: 1 }]) {
     const stack = stackFor(t);
     const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
     stack.db.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
     const shared = createToolTurnContext({ sicil: AYSE, now: NOW });
     // Her yetki okuması araç evresinde 2 sn harcar (sahte saat): atılan denemenin evre süresi ölçülebilir olur.
-    const context = { ...shared, authorization: async (signal) => { t.mock.timers.setTime(Date.now() + 2000); return shared.authorization(signal); } };
+    const context = { ...shared, authorization: async (signal) => { elapsedMs += 2000; return shared.authorization(signal); } };
     const limits = { ...TOOL_LIMITS, ...budget };
     const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
     let rounds = 0;

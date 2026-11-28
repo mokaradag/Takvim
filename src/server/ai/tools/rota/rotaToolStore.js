@@ -519,15 +519,21 @@ export async function readReportProjectsBySelectors(executor, scope, selectors =
 }
 
 /**
- * Seçili FULL erişimli projelerin bağımlılıklarını tek sınırlı SQL sorgusuyla okur.
+ * Seçili FULL erişimli projelerin bağımlılıklarını tek sınırlı SQL sorgusuyla ve veri kesitine göre okur.
  */
-export async function readReportDependencies(executor, scope, { projectIds = [], taskIds = [], maxRows = 1000 } = {}) {
-  if (!projectIds.length) return { dependencies: [], truncated: false };
+export async function readReportDependencies(executor, scope, { projectIds = [], taskIds = [], cutOffUtc = null, maxRows = 1000 } = {}) {
+  if (!projectIds.length) return { dependencies: [], truncated: false, hasPostCutoffChange: false };
+  const normalizedCutOff = normalizeCutOffUtc(cutOffUtc, { required: false });
   const request = scoped(executor, scope, { projectIds, taskIds });
+  request.input('cutOffUtc', sql.DateTime2, normalizedCutOff);
   request.input('maxRows', sql.Int, maxRows + 1);
-  const [dependencyRows = []] = recordsets(await request.query(AI_TOOL_REPORT_DEPENDENCIES_SQL));
+  const [dependencyRows = [], metaRows = []] = recordsets(await request.query(AI_TOOL_REPORT_DEPENDENCIES_SQL));
   const { rows, truncated } = capped(dependencyRows, maxRows);
-  return { dependencies: rows, truncated };
+  return {
+    dependencies: rows,
+    truncated: truncated || Boolean(metaRows[0]?.IsTruncated),
+    hasPostCutoffChange: Boolean(metaRows[0]?.HasPostCutoffChange)
+  };
 }
 
 /**

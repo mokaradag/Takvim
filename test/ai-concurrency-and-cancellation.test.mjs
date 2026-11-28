@@ -834,6 +834,119 @@ test('doğrulamada bağlantı kurulamayınca yapılan yineleme sayaca girer; soh
   assert.equal(aiTelemetrySnapshot().retries, 2, 'ağ arabirimi hatası da bağlantı öncesi hatadır ve bir kez yinelenir');
 });
 
+test('duvar saati ileri veya geri alınsa da ağ geçidi geçen süreyi tekdüze saatle ölçer', async (t) => {
+  t.after(() => resetAiTelemetryForTests());
+  let wall = Date.now();
+  t.mock.method(Date, 'now', () => wall);
+  for (const shift of [120_000, -120_000]) {
+    resetAiTelemetryForTests();
+    const fake = createFakeAiProvider();
+    const provider = { ...fake, chatCompletion(input) {
+      wall += shift;
+      return fake.chatCompletion(input);
+    } };
+    const { gateway } = isolatedGateway({ provider, config: { ...PERSONAL_CONFIG(), requestTimeoutMs: 5_000 } });
+    const result = await gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
+    assert.equal(typeof result.text, 'string');
+    assert.equal(fake.calls.length, 1);
+    const snapshot = aiTelemetrySnapshot();
+    assert.equal(snapshot.latency.provider.count, 1);
+    assert.ok(snapshot.latency.provider.p95Ms >= 0 && snapshot.latency.provider.p95Ms < 10_000);
+  }
+});
+
+test('monoton süre dolduktan sonra gelen üst iptal zaman aşımı, dolmadan önce gelen iptal olarak sınıflandırılır', () => {
+  let elapsed = 0;
+  const expired = new AbortController();
+  const late = createAiDeadline({ timeoutMs: 1_000, parentSignal: expired.signal, now: () => elapsed });
+  elapsed = 1_000;
+  expired.abort();
+  assert.equal(late.failure()?.code, 'AI_TIMEOUT');
+  late.dispose();
+  elapsed = 0;
+  const early = new AbortController();
+  const cancelled = createAiDeadline({ timeoutMs: 1_000, parentSignal: early.signal, now: () => elapsed });
+  elapsed = 999;
+  early.abort();
+  assert.equal(cancelled.failure()?.code, 'AI_CANCELLED');
+  cancelled.dispose();
+});
+
+test('sonlandırılan süre sınırı saat ilerlese de yeniden zaman aşımı üretmez ve sinyali kesmez', () => {
+  let elapsed = 0;
+  const deadline = createAiDeadline({ timeoutMs: 1_000, now: () => elapsed });
+  assert.equal(deadline.failure(), null);
+  assert.equal(deadline.signal.aborted, false);
+  deadline.dispose();
+  elapsed = 60_000;
+  assert.equal(deadline.failure(), null);
+  assert.equal(deadline.signal.aborted, false);
+  assert.equal(deadline.remainingMs(), 0);
+});
+
+test('allowRetry kapalıyken bağlantı hatasında ikinci sağlayıcı denemesi yapılmaz; varsayılan sohbet yinelemesi korunur', async (t) => {
+  t.after(() => resetAiTelemetryForTests());
+  resetAiTelemetryForTests();
+  const noRetryProvider = createFakeAiProvider();
+  noRetryProvider.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'reply' });
+  const { gateway: noRetryGateway } = isolatedGateway({ provider: noRetryProvider, config: PERSONAL_CONFIG() });
+  await assert.rejects(
+    noRetryGateway.completeChat({ profile: 'chat.fast', messages: MESSAGES, allowRetry: false }),
+    { code: 'AI_PROVIDER_UNAVAILABLE' }
+  );
+  assert.equal(noRetryProvider.calls.length, 1);
+  assert.equal(aiTelemetrySnapshot().retries, 0);
+
+  resetAiTelemetryForTests();
+  const retryProvider = createFakeAiProvider();
+  retryProvider.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'reply' });
+  const { gateway: retryGateway } = isolatedGateway({ provider: retryProvider, config: PERSONAL_CONFIG() });
+  const ok = await retryGateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
+  assert.equal(typeof ok.text, 'string');
+  assert.equal(retryProvider.calls.length, 2);
+  assert.equal(aiTelemetrySnapshot().retries, 1);
+});
+
+test('ikinci sağlayıcı çağrısından önce yetki, iptal veya süre engeli varsa yineleme sayılmaz', async (t) => {
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  t.after(() => resetAiTelemetryForTests());
+  for (const [stop, code] of [
+    [(controller) => controller.abort(), 'AI_CANCELLED'],
+    [(_controller, expire) => expire(), 'AI_TIMEOUT'],
+    [() => { throw new AiError('AI_UNAUTHORIZED'); }, 'AI_UNAUTHORIZED']
+  ]) {
+    resetAiTelemetryForTests();
+    let elapsed = 0;
+    const controller = new AbortController();
+    const provider = createFakeAiProvider();
+    provider.enqueue({ type: 'network', code: 'ECONNREFUSED' });
+    const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG(), now: () => elapsed });
+    let revalidations = 0;
+    await assert.rejects(gateway.completeChat({
+      profile: 'chat.fast', messages: MESSAGES, signal: controller.signal,
+      beforeDispatch: () => {
+        if (++revalidations === 2) stop(controller, () => { elapsed = 120_000; });
+      }
+    }), { code });
+    assert.equal(revalidations, 2);
+    assert.equal(provider.calls.length, 1);
+    assert.equal(aiTelemetrySnapshot().retries, 0);
+  }
+});
+
+test('süre sınırındaki kalıcı anahtar doğrulama sonucu tamamlanan yazımı bildirir', async () => {
+  let elapsed = 0;
+  const provider = createFakeAiProvider();
+  const { gateway } = isolatedGateway({
+    provider, config: PERSONAL_CONFIG(), now: () => elapsed,
+    storeValidation: async () => {
+      elapsed = 15_000;
+      return { recorded: true, credential: null };
+    }
+  });
+  assert.deepEqual(await gateway.validatePersonalCredential(), { status: 'VALID', stale: false, credential: null });
+});
+
 test('denetim anahtarına yalnızca kimlik doğrulamaya özgü ret (401/403) anahtarın denetlendiğini kanıtlar', async (t) => {
   resetAiTelemetryForTests();
   t.after(() => resetAiTelemetryForTests());
@@ -1015,6 +1128,22 @@ test('sabit deneme isteğinin sağlayıcıca reddi kullanıcı hatası değil, y
   assert.equal(aiTelemetrySnapshot().provider.lastOutcome, 'failure');
   // Çağıranın girdisiyle yapılan istekte aynı yanıt kullanıcı hatasıdır.
   await assert.rejects(chat(), { code: 'AI_REQUEST_INVALID' });
+});
+
+test('sabit istekte yerel örnekleme doğrulama hatası sağlayıcı reddine dönüştürülmez', async (t) => {
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  let calls = 0;
+  // İstek gönderilmeden önce bağdaştırıcıda yükselen yerel doğrulama hatası (HTTP durumu yok).
+  const provider = {
+    async chatCompletion() {
+      calls += 1;
+      throw new AiError('AI_REQUEST_INVALID', { details: { reason: 'SAMPLING_INVALID' } });
+    }
+  };
+  const { chat } = gatewayFor(t, { provider, credential: { source: 'default', apiKey: DEFAULT_KEY } });
+  await assert.rejects(chat({ callerInput: false, stream: false }), (error) => error.code === 'AI_REQUEST_INVALID'
+    && error.details?.reason === 'SAMPLING_INVALID');
+  assert.ok(calls >= 1);
 });
 
 test('reddedilen kurumsal anahtar uçtan uca istekte hizmet hatasıdır; kişisel anahtarın reddi değildir', async (t) => {

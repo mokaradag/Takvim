@@ -83,25 +83,18 @@ function normalizeOutlookSubscriptionFixtures(seed) {
  */
 export async function createActualStack(seed = {}, options = {}) {
   registerServerOnlyShim();
-  const previousDevSicil = process.env.MERGEN_ROTA_DEV_SICIL;
-  applyEnvironment(options);
-  if (options.sicil) process.env.MERGEN_ROTA_DEV_SICIL = String(options.sicil);
-
-  const db = createFakeDatabase(normalizeOutlookSubscriptionFixtures(seed));
-  const driver = createFakeSqlServerDriver(db);
-
+  const environmentKeys = [
+    'MERGEN_ROTA_DB_SERVER', 'MERGEN_ROTA_DB_DATABASE', 'MERGEN_ROTA_AUTH_MODE', 'MERGEN_ROTA_DEV_IDENTITY_ENABLED',
+    'MERGEN_ROTA_DEV_SICIL', 'MERGEN_ROTA_WBS_SYNC_TTL_MS', 'MERGEN_ROTA_WBS_DB_SERVER',
+    'MERGEN_ROTA_WBS_DB_DATABASE', 'MERGEN_ROTA_WBS_DB_TABLE'
+  ];
+  const previousEnvironment = new Map(environmentKeys.map((key) => [key, process.env[key]]));
   const { setSqlDriverForTests, resetSqlPoolForTests } = await import('../../src/server/db/pool.js');
   const { resetCorporateWbsPoolForTests } = await import('../../src/server/db/corporateWbsPool.js');
   const { resetCorporateWbsSyncScheduleForTests } = await import('../../src/server/repository/corporateWbsSyncSchedule.js');
-  setSqlDriverForTests(driver);
-  resetSqlPoolForTests();
-  resetCorporateWbsPoolForTests();
-  resetCorporateWbsSyncScheduleForTests();
-
-  // Kimlik sağlayıcısı yığın kurulmadan ÖNCE yerleştirilir: ilk anlık görüntü
-  // isteği zaten doğrulanmış kimlikle çalışmalıdır.
   const { setCurrentUserProvider } = await import('../../src/server/identity/currentUserProvider.js');
-  setCurrentUserProvider(options.currentUserProvider || null);
+  const db = createFakeDatabase(normalizeOutlookSubscriptionFixtures(seed));
+  const driver = createFakeSqlServerDriver(db);
 
   const commitRoute = await import('../../src/app/api/mergen-rota/commit/route.js');
   const snapshotRoute = await import('../../src/app/api/mergen-rota/snapshot/route.js');
@@ -158,8 +151,18 @@ export async function createActualStack(seed = {}, options = {}) {
   };
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = fetchImplementation;
-
+  const dispose = () => {
+    globalThis.fetch = originalFetch;
+    setSqlDriverForTests(null);
+    resetSqlPoolForTests();
+    resetCorporateWbsPoolForTests();
+    resetCorporateWbsSyncScheduleForTests();
+    setCurrentUserProvider(null);
+    for (const [key, value] of previousEnvironment) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
   const repository = createApiRepository({ aliasStorage: memoryStorage() });
   let state = createLoadingState();
   const applyStateAction = (action) => {
@@ -181,7 +184,20 @@ export async function createActualStack(seed = {}, options = {}) {
     return state;
   }
 
-  await reload();
+  try {
+    applyEnvironment(options);
+    if (options.sicil) process.env.MERGEN_ROTA_DEV_SICIL = String(options.sicil);
+    setSqlDriverForTests(driver);
+    resetSqlPoolForTests();
+    resetCorporateWbsPoolForTests();
+    resetCorporateWbsSyncScheduleForTests();
+    setCurrentUserProvider(options.currentUserProvider || null);
+    globalThis.fetch = fetchImplementation;
+    await reload();
+  } catch (error) {
+    dispose();
+    throw error;
+  }
 
   return {
     db,
@@ -202,15 +218,7 @@ export async function createActualStack(seed = {}, options = {}) {
     rootWbs(projectId) {
       return state.wbs.find((node) => node.projectId === projectId && node.parentId == null) || null;
     },
-    async dispose() {
-      globalThis.fetch = originalFetch;
-      setSqlDriverForTests(null);
-      resetSqlPoolForTests();
-      resetCorporateWbsPoolForTests();
-      resetCorporateWbsSyncScheduleForTests();
-      if (previousDevSicil == null) delete process.env.MERGEN_ROTA_DEV_SICIL;
-      else process.env.MERGEN_ROTA_DEV_SICIL = previousDevSicil;
-    }
+    async dispose() { dispose(); }
   };
 }
 

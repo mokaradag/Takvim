@@ -208,45 +208,66 @@ taslaklarla 4I-C'ye paralel denenebilir ama kabulü 4I-C'ye bağlıdır).
 
 ## 4I-B — İnsan kalitesinde anlatı üretimi
 
-**Durum: PLANLANDI.**
+**Durum: SÜRÜYOR.** Mühendislik uygulaması ve belirlenimci doğrulama tamamlandı; vekil modelle canlı koşu yapıldı.
+Kurum içi aday nitelendirmesi, kör insan puanlaması ve dolayısıyla `rapor_yazari_otomatik` rolünün doldurulması
+**bekliyor** (kabul koşulu karşılanmadan TAMAMLANDI yapılmaz).
 
 1. **Amaç ve kullanıcı değeri** — Kanıt paketinden, yetkin bir analistin yazacağı gibi özgün, bağlantılı ve
    bağlamlı Türkçe yönetici raporu taslağı üretmek.
-2. **İşlevsel kapsam** — Rapor yazarı (`4i-yazim-1`): sistem yönergesi, bölüm planı, kanıt iletileri, yapılandırılmış
-   çıktı (bölüm → paragraf → serbest metin + iddia eki); ayrıntı düzeyi ve odak; on-prem model nitelendirmesi
-   (DeepSeek, Qwen ve tabanlar); nitelendirme sonrası model kaydına rapor profilleri.
-3. **Yeniden kullanılan altyapı** — Ağ geçidi (`aiGateway.js`: kimlik, kapasite, süre, iptal), model kaydı ve
-   profil çözümü, kabul denetimi, içeriksiz telemetri, nitelendirme betik desenleri (`scripts/planner-*`).
-4. **Mimari sınırlar** — Sohbet düzyazı sözleşmesi kullanılmaz ve değiştirilmez; yazar araç çağırmaz, SQL görmez;
-   sunucu paragrafları yeniden kurmaz; model adı iş kodunda geçmez; denetimsiz yeniden deneme yok.
-5. **Beklenen dosya ve bileşenler** — `reportWriterPrompt.js`, `reportDraft.js` (çıktı ayrıştırma/doğrulama),
-   `reportSectionPlan.js`, kayıtta `report.writer` / `report.writer.quality` profilleri (nitelendirmeden sonra),
-   `scripts/report-writer-qualification.mjs`, `test/ai-executive-report-writer.test.mjs`.
-6. **Gözlenebilir çıktılar** — DeepSeek, Qwen ve onaylı tabanlardan tam, gerçekten insan yazısı gibi okunan rapor
-   taslakları; kör insan puanları; model başına A/B/D sonuçları.
+2. **İşlevsel kapsam** — Rapor yazarı (`4i-yazim-1`): stil belgesinden doğrulanan sistem yönergesi (`yazar-istemi-5`),
+   belirlenimci bölüm planı (bölümler, ayrıntı ve odak, sözcük bütçesi, kaldırılamaz bütünlük açıklamaları), ≤ 32 KiB
+   kanıt iletileri, yapılandırılmış çıktı (bölüm → paragraf → serbest metin + iddia eki) ve kapalı şemalı ayrıştırıcı;
+   sunucu yazarı; rapor profilleri (tanımlı, eşlemesiz); 48 senaryonun dondurulmuş kanıt paketi kümesi; nitelendirme,
+   vekil koşu, özet, kör puanlama paketi ve anlatı önizleme araçları.
+3. **Yeniden kullanılan altyapı** — Ağ geçidi `completeChat` (kimlik, kapasite, süre, iptal, profil çözümü), model
+   kaydı doğrulayıcısı, 4I-A kanıt kurucusu ve sözleşmesi (`validateEvidencePackageContract`), sentetik SQL ikizi,
+   OpenAI uyumlu sağlayıcı modülü (kurum içi nitelendirme), yalıtılmış komut satırı model köprüsü
+   (`scripts/planner-model-adapter.mjs`, iki isteğe bağlı bayrakla).
+4. **Mimari sınırlar** — Sohbet düzyazı sözleşmesi kullanılmadı ve değişmedi; yazar araç çağırmaz, SQL görmez,
+   yetki kararı vermez; sunucu paragrafları yeniden kurmaz; model adı iş kodunda geçmez (sınanır); taslak başına tek
+   yazım çağrısı, yeniden deneme yok; yeni uç, tablo, işçi, zamanlanmış iş, küresel durum ya da bağımlılık yok.
+5. **Beklenen dosya ve bileşenler** — `src/domain/ai/report/reportSectionPlan.js`, `reportWriterPrompt.js`,
+   `reportDraft.js`; `src/server/ai/report/reportWriter.js`; `src/domain/ai/aiModelRegistry.js` (`AI_REPORT_PROFILES`);
+   `aiGateway.js` (`completeChat` yanıtında `reportedModels`); `config/ai/bilgin_rapor_stili.yaml` (`anlati.bolum_plani`);
+   `scripts/report-writer-qualification.mjs`, `scripts/yonetici-raporu-kiyas-paketleri.mjs`,
+   `scripts/yonetici-anlati-onizleme.mjs`; `test/ai-executive-report-writer.test.mjs`,
+   `test/helpers/executiveReportWriterBenchmark.mjs`, `test/helpers/executiveReportWriterScenarios.mjs`,
+   `test/fixtures/bilgin-executive-report-writer-packages.json`; kayıtlar `docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/`.
+6. **Gözlenebilir çıktılar** — Gerçek yazar hattının ürettiği değiştirilmemiş taslaklar (haftalık, aylık, başarı ve
+   risk odaklı, dönem karşılaştırmalı, zengin not sentezi, çelişkili/eksik kanıt) `anlati-ornekleri.md` içinde; 48
+   senaryonun ham koşu kaydı; kör puanlama paketi. DeepSeek, Qwen ve taban model taslakları **bekliyor**.
 7. **Gerekli referans görüntüleri ve varlıklar** — Model kataloğu görüntüleri (aday kimlikleri); insan dili örnek
-   rapor (editoryal hedef).
+   rapor (editoryal hedef; bu oturumda erişilemedi, kabul çerçevesindeki ayar örnekleri kullanıldı).
 8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Kabul çerçevesi §5: 4I-B taslak A kapıları (rapor başına
-   nesnel olgu doğruluğu ≥ %95), B eşikleri (genel ≥ 4,0; uygulanabilir her ölçüt ≥ 3,5; aday düzeyinde mekanik
-   döküm ≤ %5) ve D bütçeleri (`rapor_yazari_otomatik` için standart raporda p95 ≤ 240 sn; rapor başına en çok
-   11 çağrı). 4I-B kabulü için `rapor_yazari_otomatik` rolünün dolması zorunludur. **Kritik kapı:** aday
+   nesnel olgu doğruluğu ≥ %95, zorunlu olgu tamlığı %100), B eşikleri (genel ≥ 4,0; her ölçüt ≥ 3,5; mekanik döküm
+   ≤ %5) ve D bütçeleri. 4I-B kabulü için `rapor_yazari_otomatik` rolünün dolması zorunludur. **Kritik kapı:** aday
    düzeyinde mekanik döküm oranı %5'i aşıyorsa artım olgusal doğruluktan bağımsız olarak başarısızdır.
-9. **Güvenlik ve yetki sınamaları** — Yazara yalnızca yetkili kanıt ve anlatı için gerekli kapsam/tamlık bilgisi gider.
-   Not içi yönerge izlenmez ve gerçek risk korunur (R6, K19). Kısmi erişim toplamı görünür görevlerden hesaplanır
-   ve kapalı varlık adı kesin kapıdır (R8). İçerik günlüğe girmez.
-10. **Doğal dil kalite gereksinimleri** — Stil belgesi `anlati`: bağlantılı paragraflar, sentez, somutluk, kalıp
-    tekrarından kaçınma, belirsizliğin ölçülü anlatımı, notların profesyonel dönüşümü, suç atfı yok.
-11. **Regresyon gereksinimleri** — Sohbet profilleri, yönergesi ve kıyas kapıları değişmez; ağ geçidi sınırları
-    yükseltilmez.
-12. **Başarım ve kaynak** — Rapor başına en çok 1 yazım çağrısı (+ 4I-C onarımları); standart raporda p95 eşiği
-    `rapor_yazari_otomatik` için ≤ 240 sn, `rapor_yazari_yuksek_kalite` için ≤ 600 sn; çıktı belirteci sınırı
-    profil üzerinden.
-13. **Bağımlılıklar** — 4I-A; canlı model kataloğu doğrulaması; kurum içi model erişimi.
+9. **Güvenlik ve yetki sınamaları** — Yazara yalnızca yetkili kanıt; iç görev kimlikleri ve yürütme alanları model
+   girdisinden çıkarılır; not ve belge metni plan kararını etkilemez; kapalı şema (prototip anahtarı, denetim ve çift
+   yönlü metin karakterleri reddedilir); yanıt sonrası yetki yeniden doğrulanmadan içerik dönmez; iptal ve süre
+   aşımında taslak dönmez; rıza ihlalli paket model çağrısından önce reddedilir; vekil koşu yalnızca özeti ve kadrosu
+   doğrulanmış sentetik kümeyle çalışır, kabuk yorumlaması yoktur. İçerik günlüğe girmez.
+10. **Doğal dil kalite gereksinimleri** — Stil belgesi `anlati` sistem yönergesinin tek kaynağıdır (kurallar
+    yinelenmez); bölüm rolleri tekrarı önler; sözcük bütçesi kanıt yoğunluğuyla orantılıdır (seyrek kanıtta tek kısa
+    paragraf, dolgu yok); tamlık yalnızca bir sınır varsa anlatılır; not kaynağı bir kez anılır; yöntem dili, sayaç
+    dökümü, kayıt alanı anlatımı, kanıttan sayım ve gün aritmetiği yasaktır (gecikme süresi sunucu izdüşümünden gelir).
+11. **Regresyon gereksinimleri** — Sohbet profilleri, yönergesi ve kıyas kapıları değişmedi; ağ geçidi sınırları
+    yükseltilmedi; planlayıcı köprüsünün varsayılanları (4096 belirteç, düşünme kapalı, tek API çağrısı) aynen geçerli.
+12. **Başarım ve kaynak** — Taslak başına 1 yazım çağrısı; çıktı isteği akıl yürütme payı içerir (profil sınırıyla
+    daraltılır); ön yazar süre kapısı `rapor_yazari_otomatik` için p95 ≤ 240 sn, `rapor_yazari_yuksek_kalite` için
+    ≤ 600 sn (kurum içinde ölçülecek; vekil süresi kurum içi başarımı öngörmez).
+13. **Bağımlılıklar** — 4I-A; canlı model kataloğu doğrulaması; kurum içi model erişimi; iki kör insan puanlayıcı.
 14. **Riskler ve geri alma** — `rapor_yazari_otomatik` için hiçbir aday A, B ve p95 ≤ 240 sn eşiklerini geçmezse
-    `rapor_yazari_yuksek_kalite` dolsa bile 4I-B kabulü **ENGELLİ** olur (eşik gevşetilmez); uzun süre → yüksek
-    kalite rolü ayrı (p95 ≤ 600 sn); geri alma: rapor profilleri kayıttan kaldırılır.
-15. **Kapsam dışı** — Onarım döngüsü (4I-C), DOCX (4I-D), arayüz (4I-E).
-16. **Durum ve doğrulama kanıtı** — Henüz uygulanmadı.
+    4I-B kabulü **ENGELLİ** olur (eşik gevşetilmez). İskeletsiz istem sürümlerinde vekil modelin sözleşme dışı yanıtları
+    (%4–15, tamamına yakını düşünmesiz yanıtlar) üretimde tek çağrı bütçesiyle raporun düşmesi demektir; kurum içi
+    adaylarda bu oran ayrıca ölçülmeli, 4I-C onarım tasarımı bunu dikkate almalıdır. Geri alma: rapor profilleri
+    eşlemesiz olduğundan çalışma zamanına etkisi yoktur; modüller ve araçlar dal geri alınarak kaldırılır.
+15. **Kapsam dışı** — Onarım döngüsü ve üretim nesnel doğrulayıcısı (4I-C), DOCX (4I-D), arayüz ve uçlar (4I-E),
+    gerçek belge yükleme (4I-F).
+16. **Durum ve doğrulama kanıtı** — Ayrı durumlar: (1) mühendislik uygulaması **TAMAMLANDI**; (2) belirlenimci
+    doğrulama **DOĞRULANDI**; (3) vekil canlı doğrulama **YAPILDI** (vekil model, nitelendirme değildir); (4) kör insan
+    editoryal puanlaması **BEKLİYOR** (paket hazır); (5) kurum içi DeepSeek/Qwen/taban nitelendirmesi **BEKLİYOR**
+    (`GET /models` ve kurum içi erişim yok); (6) üretim kabulü **BEKLİYOR**. Sayılar §Oturum devri'ndedir.
 
 ---
 
@@ -423,6 +444,11 @@ Aşağıdakiler **Aşama 4J**'ye aittir ve 4I'ye sessizce taşınmaz:
 | 2026-11-21 | Rapor rolleri yapılandırmada; ölçümsüz nitelikli model yok | Etkin olmak nitelik değildir |
 | 2026-11-21 | Eşikler deneylerden önce tanımlandı | Sonuca göre eşik ayarlanmasın |
 | 2026-11-21 | `js-yaml` açık geliştirme bağımlılığı (kilit dosyasında zaten aynı sürüm) | Stil belgesinin sınamada güvenli ayrıştırılması; yeni indirme yok |
+| 2026-11-25 | Rapor profilleri sohbet profil kümesinden ayrı (`AI_REPORT_PROFILES`) ve eşlemesiz | Nitelendirmesiz model rol alamaz; sohbet regresyonu yok |
+| 2026-11-25 | Taslak ayrıştırıcısı kapalı şema; kazıma ve otomatik düzeltme yok | Güvenilmez çıktı; sözleşme dışı yanıt sessizce kabul edilmez |
+| 2026-11-25 | Gecikme günü sunucu izdüşümünde (`veri_anina_gore_gecikme_takvim_gunu`) | Vekil koşuda model 31 kez kendi gün aritmetiğini yaptı; aritmetik sunucunundur |
+| 2026-11-25 | Yazar ayrıştırılmış stili parametre alır; YAML çalışma zamanı okuması 4I-D/E'ye | Yeni bağımlılık ve uç olmadan; 4I-0 sınırı korunur |
+| 2026-11-25 | R3/R5/R7 gün sonu veri anı işareti sarma katmanında eşdeğer kapanış anına eşlenir | Fikstür ve 4I-A sözleşmesi gevşetilmeden tutarlılık |
 
 ---
 
@@ -482,3 +508,36 @@ sentetik SQL ikizi işleyicileri ve kıyas verisi (`test/helpers/aiToolSql.mjs`,
 - **Sonraki giriş noktası: 4I-B** — insan kalitesinde anlatı üretimi (`4i-yazim-1`), bölüm planı, yazar istemi ve
   kurum içi canlı model nitelendirmesi (canlı `GET /models` ve kurum içi model erişimi ön koşuldur).
 
+### 2026-11-25 — Aşama 4I-B anlatı yazarı
+
+Uygulandı: bölüm planı, yazar istemi, taslak ayrıştırıcısı, sunucu yazarı, rapor profilleri (eşlemesiz), 48 senaryonun
+dondurulmuş sentetik kanıt paketi kümesi ve nitelendirme/vekil/önizleme araçları (ayrıntı: mimari §7.4, kabul çerçevesi §10).
+
+- **Belirlenimci doğrulama (Node 22, Linux):** sayılar PR açıklamasında ve aşağıdaki son doğrulama satırındadır.
+- **Vekil canlı koşu — son yapılandırma (2026-11-25, `yazar-istemi-4`, düşük eforlu küçük vekil model, yalıtılmış CLI
+  köprüsü, 48 senaryo, eşzamanlılık 4):** geçerli taslak **48/48** (sözleşme dışı yanıt 0, altyapı hatası 0); yetkisiz
+  açıklama **0**; uydurma kimlik/tarih **0** (tek aday, "denge" sözcüğü, hakemce yanlış pozitif); zorunlu olgu tamlığı
+  **48/48** raporda %100 (2'si hakem kararıyla); değer düzeyinde defter dışı yanlış değer 0. Tarihsel hakem düzeltmeleri
+  S03’te proje atfını (%93,75), S08’de desteklenmeyen gecikme bağlantısını (%94,44) ve S37’de yanlış tarih çelişkisini
+  (%88,89) kayda geçirdi. Cümle düzeyinde insan doğrulaması bekliyor.
+  Çelişki senaryolarının 3/4'ü (S25 kronoloji tersinmesi nedeniyle başarısız, bkz. `hakem-kararlari.json`)
+  ve iki gömülü yönerge senaryosu doğru işlendi; model gün aritmetiği 0;
+  standart ayrıntıda yazar süresi p95 **116 sn** (vekil; kurum içi başarımı öngörmez); ortalama 534 sözcük.
+  Kayıt: `docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/` (ham yanıtlar, hakem kararları, yapılandırma özetleri).
+- **Ara koşular (birleştirilmedi, `ara-kosular-ozet.json`):** istem 1 → 45/48 geçerli, model 31 kez gün aritmetiği;
+  istem 2 → 46/48, kör model değerlendirmesi genel 3,52 / E6 2,74 / mekanik 6/46 (B kapısı geçilemezdi; zayıf
+  taslakların tamamı seyrek kanıtlı paketler); istem 3 → seyrek kanıt bütçesi ve tamlık/şerh kuralları, ama vekilin
+  düşünmesiz yanıtları arttı ve 41/48; istem 4 → plandan türetilen çıktı iskeleti.
+- **Editoryal (`yazar-istemi-4`):** yazardan farklı, kör bir model değerlendiricisi (insan puanı değildir): genel ortalama **3,70**
+  (eşik 4,0; uygulanabilir E1–E9 ölçüt ortalamalarının ortalaması: `3,7008`), E1 3,48 · E2 3,71 · E3 3,52 · E4 3,83 · E5 4,08 · **E6 3,00** · E7 3,88 · E8 3,91 · E9 3,90; mekanik döküm
+  **1/48** (%2,1; eşik %5 → geçer). Vekil bu sürümle B kapısını genel ortalama ile E1 ve E6'da **geçemezdi**; istem 2'ye
+  göre genel ortalama 3,52→3,70, E6 2,74→3,00, mekanik 6/46→1/48 iyileşti. Kalan zayıflık küçük durumlarda zorunlu
+  bölümler arası tekrar ve küçük modelin akıcılığıdır. Değerlendirici üç taslağı daha mekaniğe yakın buldu (ikinci bir
+  puanlayıcı birini ya da ikisini işaretleyebilir; oran eşiğe yaklaşır). S25'te değer düzeyi taramanın yakalayamadığı
+  ilişkisel bir hata (4 Kasım işi 6 Kasım işinden sonra anlatılmış) ve iki dayanaksız yargı saptandı; bu tür hatalar 4I-C
+  anlamsal destek denetiminin kapsamıdır. Formal B kapısı kurum içi adaylar ve iki kör insan puanlayıcıyla kapanır.
+  İki kör insan puanlayıcı için paket `kor-puanlama-paketi.md` + `kor-puanlama-cizelgesi.csv` hazır (**bekliyor**).
+- **Bekleyen dış ön koşullar:** kurum içi `GET /models` ile aday kimliklerinin doğrulanması; DeepSeek, Qwen ve taban
+  modellerle 48 senaryonun koşulması (`node scripts/report-writer-qualification.mjs kosu --tasiyici kurum-ici --model <katalog_kimliği> --dagitim-ortami <ortam> --dusunme-kipi <ör. kapali> --nicemleme <ör. fp8> --cikti <kosu.jsonl>`, doğrulanan her aday için ayrı; bu üç üst veri bayrağından herhangi biri verilmezse `ozet` süre kapısını `eksik_ayar_bekliyor` olarak bırakır); iki kör insan
+  puanlayıcı; kurum içi p95; nitelikli model çıkarsa `report.writer` eşlemesi ve stil belgesinde rol kaydı.
+- **Sonraki giriş noktası:** 4I-B nitelendirmesi (kurum içi). 4I-C, 4I-B kabulünden sonra başlar.

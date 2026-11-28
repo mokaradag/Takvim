@@ -197,15 +197,17 @@ function requireToolMessages(messages) {
  * sınır vermediyse sınırlı bir varsayılan kullanılır; istek hiçbir zaman
  * sınırsız gitmez.
  */
-function outputTokenLimit(requested, route) {
+export function computeEffectiveOutputTokenLimit(requested, route = {}) {
   const asked = Number.isSafeInteger(requested) && requested > 0 ? requested : null;
   return Math.min(
-    asked ?? route.maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
-    route.maxOutputTokens ?? Infinity,
-    route.contextTokens ?? Infinity,
+    asked ?? route?.maxOutputTokens ?? DEFAULT_OUTPUT_TOKENS,
+    route?.maxOutputTokens ?? Infinity,
+    route?.contextTokens ?? Infinity,
     AI_MAX_OUTPUT_TOKENS
   );
 }
+
+const outputTokenLimit = computeEffectiveOutputTokenLimit;
 
 /** Anahtar kaynaklı sonuçlar hangi anahtarın reddedildiğini söyler; kurumsal anahtar için kullanıcıya yönlendirme yapılır. */
 function annotateCredentialFailure(failure, source) {
@@ -346,7 +348,7 @@ export function createAiGateway({
   currentSicil = getTrustedCurrentSicil,
   verifySicil = assertAiDirectoryMember,
   loadCatalogueTools = () => rotaToolNames().map((name) => getRotaTool(name)),
-  now = Date.now,
+  now = () => performance.now(),
   random = Math.random
 }) {
   /**
@@ -382,14 +384,23 @@ export function createAiGateway({
    * ölçümü o kodla başarısız kaydedilir, sonuç yine çağırana döner.
    */
   async function callProvider({
-    operation, deadline, invoke, source = null, context = null, healthFailure = () => null, failureCodeOf = () => null, beforeDispatch = null
+    operation, deadline, invoke, source = null, context = null, healthFailure = () => null, failureCodeOf = () => null, beforeDispatch = null, allowRetry = true
   }) {
+    let retryNetworkCode = null;
     for (let attempt = 1; ; attempt += 1) {
+      const expired = deadline.failure();
+      if (expired) throw expired;
       if (beforeDispatch) await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
-      if (context) context.attempts = attempt;
-      const startedAt = now();
+      let startedAt = null;
       try {
-        const result = await raceWithAbort(() => invoke(deadline.signal), deadline.signal);
+        const result = await raceWithAbort(() => {
+          const failure = deadline.failure();
+          if (failure) throw failure;
+          startedAt = now();
+          if (context) context.attempts = attempt;
+          if (attempt > 1) recordAiRetry({ networkCode: retryNetworkCode });
+          return invoke(deadline.signal);
+        }, deadline.signal);
         const code = failureCodeOf(result);
         recordProviderCall({
           operation,
@@ -400,13 +411,14 @@ export function createAiGateway({
         return result;
       } catch (error) {
         const failure = deadline.failure() || toAiFailure(error);
+        if (startedAt === null) throw failure;
         recordProviderCall({ operation, latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
         const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
-        const retry = attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
+        const retry = allowRetry && attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
           && deadline.remainingMs() >= delayMs + MIN_ATTEMPT_BUDGET_MS;
         if (!retry) throw failure;
         await abortableDelay(delayMs, deadline.signal);
-        recordAiRetry({ networkCode: failure.details?.networkCode ?? null });
+        retryNetworkCode = failure.details?.networkCode ?? null;
       }
     }
   }
@@ -421,9 +433,11 @@ export function createAiGateway({
    * yanıtı sağlayıcı hatası sayar (sağlık izine de öyle yazılır).
    * `callerInput: false`, iletilerin sunucunun ürettiği sabit bir istek
    * olduğunu söyler: sağlayıcının 400/413/422 yanıtı kullanıcı hatası değil,
-   * yapılandırma hatasıdır.
+   * yapılandırma hatasıdır. `allowRetry: false`, tek sağlayıcı denemesi
+   * sözleşmesi gerektiren çağıranlarda (ör. yönetici raporu yazarı) bağlantı
+   * yinelemesini kapatır.
    */
-  async function completeChat({ profile, messages, maxOutputTokens = null, signal = null, requireText = false, callerInput = true }) {
+  async function completeChat({ profile, messages, maxOutputTokens = null, sampling = null, signal = null, requireText = false, callerInput = true, beforeDispatch = null, allowRetry = true }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     let lease = null;
@@ -453,6 +467,8 @@ export function createAiGateway({
       context.source = credential.source;
       const result = await callProvider({
         operation: 'ai.provider.chat',
+        beforeDispatch,
+        allowRetry,
         deadline,
         context,
         source: credential.source,
@@ -467,17 +483,34 @@ export function createAiGateway({
               model: route.model,
               messages: safeMessages,
               maxOutputTokens: outputLimit,
+              ...(sampling != null ? { sampling } : {}),
               signal: attemptSignal
             });
           } catch (error) {
-            if (!callerInput && isAiError(error) && error.code === AI_ERROR_CODES.AI_REQUEST_INVALID) throw fixedRequestRejected(error);
+            // Yalnızca sağlayıcının HTTP reddi sabit istek reddidir; yerel örnekleme doğrulaması (SAMPLING_INVALID) korunur.
+            if (!callerInput && isAiError(error) && error.code === AI_ERROR_CODES.AI_REQUEST_INVALID
+              && Number.isInteger(error.details?.providerStatus)) throw fixedRequestRejected(error);
             throw error;
           }
           if (requireText && !String(completion.text ?? '').trim()) {
             recordEmptyCompletion({ profile: route.profile, model: route.model, diagnostics: emptyCompletionDiagnostics({
               final: completion, startedAt: attemptStartedAt, at: now(), textChars: String(completion.text ?? '').length
             }) });
-            throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, { details: { reason: 'EMPTY_COMPLETION' } });
+            const normalizedFinish = typeof completion.finishReason === 'string'
+              ? completion.finishReason.trim().toLowerCase()
+              : '';
+            const mappedFinish = normalizedFinish === 'max_tokens' || normalizedFinish === 'max_output_tokens'
+              ? 'length'
+              : normalizedFinish;
+            const safeFinishReason = ['stop', 'end_turn', 'stop_sequence', 'eos', 'eos_token', 'length', 'content_filter', 'tool_calls', 'function_call'].includes(mappedFinish)
+              ? mappedFinish
+              : (mappedFinish ? 'other' : null);
+            throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
+              details: {
+                reason: 'EMPTY_COMPLETION',
+                ...(safeFinishReason ? { finishReason: safeFinishReason } : {})
+              }
+            });
           }
           return completion;
         }
@@ -495,6 +528,8 @@ export function createAiGateway({
         // yazılmaz. Ağ geçidi sessizce başka modele yönlendirdiyse ikisi ayrışır.
         model: result.model ?? null,
         configuredModel: route.model,
+        // Kayıtta bu model için açıkça bildirilmiş diğer yanıt adları; kimlik denetimi yapan çağıran içindir.
+        reportedModels: route.reportedModels ?? [],
         credentialSource: credential.source,
         durationMs,
         queueWaitMs: context.queueWaitMs
@@ -694,20 +729,31 @@ export function createAiGateway({
    * baştan ikinci kez üretilmez).
    */
   async function connectStream({ deadline, watch, context, source, healthFailure, invoke, beforeDispatch = null, resend = true }) {
+    let retryNetworkCode = null;
     for (let attempt = 1; ; attempt += 1) {
       // Yerel varlık ve yetki denetimi sağlayıcı girişimi değildir. Her taşıma denemesinden
       // önce mevcut genel son süre içinde yeniden denetlenir.
+      const expired = deadline.failure();
+      if (expired) throw expired;
       if (beforeDispatch) {
         watch.pause();
         await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
       }
-      watch.restart();
-      context.attempts = attempt;
-      const startedAt = now();
+      let startedAt = null;
       try {
-        return { opened: await raceWithAbort(invoke, watch.signal), startedAt };
+        const opened = await raceWithAbort(() => {
+          const failure = deadline.failure() || watch.failure();
+          if (failure) throw failure;
+          watch.restart();
+          startedAt = now();
+          context.attempts = attempt;
+          if (attempt > 1) recordAiRetry({ networkCode: retryNetworkCode });
+          return invoke();
+        }, watch.signal);
+        return { opened, startedAt };
       } catch (error) {
         const failure = deadline.failure() || watch.failure() || toAiFailure(error);
+        if (startedAt === null) throw failure;
         recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
         const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
         const retry = resend && attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
@@ -715,7 +761,7 @@ export function createAiGateway({
         if (!retry) throw failure;
         watch.pause();
         await abortableDelay(delayMs, deadline.signal);
-        recordAiRetry({ networkCode: failure.details?.networkCode ?? null });
+        retryNetworkCode = failure.details?.networkCode ?? null;
       }
     }
   }
@@ -1229,7 +1275,7 @@ export function createAiGateway({
         () => storeValidation({ sicil, keyNonce: personal.keyNonce, status: outcome, signal: deadline.signal }),
         deadline.signal
       );
-      if (deadline.failure()) throw deadline.failure();
+      // Zamanlayıcıyla yarışan depolama tamamlandıysa kaydedilmiş sonucu bildir.
       recordAiValidation({ durationMs: now() - startedAt, queueWaitMs: lease.queueWaitMs });
       // Anahtar doğrulama sürerken değiştirildiyse sonuç yeni anahtara ait değildir.
       return stored.recorded

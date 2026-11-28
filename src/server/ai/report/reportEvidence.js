@@ -106,8 +106,66 @@ function roundPercent(numerator, denominator) {
   return Math.round((numerator / denominator) * 1000) / 10;
 }
 
-function projectDisplayCode(project, fallbackId) {
-  return project?.code || fallbackId;
+/** UTF-16 kod birimi sınırını aşmadan ve vekil çifti (surrogate pair) bölmeden metni kırpar. */
+function sliceWithinUtf16Limit(text, maxUnits) {
+  let out = '';
+  let units = 0;
+  for (const ch of text) {
+    if (units + ch.length > maxUnits) break;
+    out += ch;
+    units += ch.length;
+  }
+  return out.trimEnd();
+}
+
+/**
+ * Seçili ya da ölçüme giren projeler için UUID sızdırmayan, çakışma durumunda
+ * paket içi kararlı sonekle (`#1`, `#2`) ayrıştırılmış tekil etiketler üretir.
+ */
+function buildModelSafeProjectLabels(projectIds, projects) {
+  const uniqueIds = [...new Set(projectIds.filter((id) => typeof id === 'string' && id.length > 0))].sort(compareAscii);
+  const rawById = new Map();
+  const groups = new Map();
+  for (const id of uniqueIds) {
+    const project = projects.get(id);
+    // Boşluktan oluşan kod proje adını gölgelememelidir; kanonik eşdeğer Unicode yazımlar (NFC/NFD)
+    // gruplama ve çakışma denetiminden önce NFC biçimine indirgenir, UTF-16 sınırları korunur.
+    const rawCode = typeof project?.code === 'string' ? project.code.normalize('NFC') : project?.code;
+    const rawName = typeof project?.name === 'string' ? project.name.normalize('NFC') : project?.name;
+    const normalizedCode = clampModelSafeLabel(rawCode, REPORT_REQUEST_LIMITS.maxIdentifierLength);
+    const normalizedName = clampModelSafeLabel(rawName, REPORT_REQUEST_LIMITS.maxIdentifierLength);
+    const base = sliceWithinUtf16Limit((normalizedCode || normalizedName || 'PRJ-ADSIZ').normalize('NFC'), REPORT_REQUEST_LIMITS.maxIdentifierLength) || 'PRJ-ADSIZ';
+    rawById.set(id, base);
+    const key = base.toLocaleLowerCase('tr-TR');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(id);
+  }
+  const usedKeys = new Set();
+  const labels = new Map();
+  // Önce çakışmayan tekil etiketleri ayır; çakışanlar bunlarla da örtüşmesin.
+  for (const [key, ids] of groups.entries()) {
+    if (ids.length === 1) {
+      labels.set(ids[0], rawById.get(ids[0]));
+      usedKeys.add(key);
+    }
+  }
+  for (const ids of groups.values()) {
+    if (ids.length <= 1) continue;
+    let seq = 1;
+    for (const id of ids) {
+      const base = rawById.get(id);
+      let candidate;
+      do {
+        const suffix = ` #${seq++}`;
+        const maxBase = Math.max(1, REPORT_REQUEST_LIMITS.maxIdentifierLength - suffix.length);
+        const prefix = sliceWithinUtf16Limit(base, maxBase) || 'PRJ-ADSIZ';
+        candidate = `${prefix}${suffix}`.normalize('NFC');
+      } while (usedKeys.has(candidate.toLocaleLowerCase('tr-TR')));
+      usedKeys.add(candidate.toLocaleLowerCase('tr-TR'));
+      labels.set(id, candidate);
+    }
+  }
+  return labels;
 }
 
 function formatOrgMemberForHierarchy(member) {
@@ -547,6 +605,7 @@ function finalizeBoundedPackage({
   taskReadTruncated = false,
   rosterTruncated = false,
   snapshotConsistent = true,
+  dependencySnapshotConsistent = true,
   lastReopenAtByTaskId = new Map(),
   lastTargetFinishChangeByTaskId = new Map()
 }) {
@@ -713,7 +772,7 @@ function finalizeBoundedPackage({
         },
         hareket: activityCoverage,
         bagimliliklar: dependencyCoverage,
-        ...(snapshotConsistent ? {} : { kesit_tutarli: false }),
+        ...(snapshotConsistent && dependencySnapshotConsistent ? {} : { kesit_tutarli: false }),
         tarihsiz_tamamlanan: undatedDoneCount,
         paket_kesildi: truncated,
         disarida_kalan_kanit: totalOmitted,
@@ -800,7 +859,7 @@ export async function buildExecutiveReportEvidence({
   getPool,
   loadAuthorization,
   gate,
-  clock = Date.now
+  clock = () => performance.now()
 }) {
   // Önceden iptal edilmiş istek hiçbir doğrulama, kimlik veya SQL okuması başlatmaz.
   signal?.throwIfAborted?.();
@@ -929,7 +988,11 @@ export async function buildExecutiveReportEvidence({
         const taskProjectIds = new Set(visibleTasks.map((task) => task.projectId));
         return taskFactsResult.projects.filter((row) => taskProjectIds.has(canonicalActualId(row.ProjectId)));
       })();
-    const projects = projectIndex(relevantProjectRows);
+    const projects = projectIndex(relevantProjectRows.map((row) => ({
+      ...row,
+      ProjectName: typeof row.ProjectName === 'string' ? row.ProjectName.normalize('NFC') : row.ProjectName,
+      ProjectCode: typeof row.ProjectCode === 'string' ? row.ProjectCode.normalize('NFC') : row.ProjectCode
+    })));
     const effectiveScopeSummary = resolvedScope.scopeSummary
       || describeTaskScope(relevantProjectRows, { emptyComplete: scope.isAdmin || [...scope.projects.values()].every((entry) => entry.accessLevel === 'FULL' || entry.readGrant) });
     const requestedProjectIdSet = new Set(resolvedScope.projectIds);
@@ -1120,11 +1183,10 @@ export async function buildExecutiveReportEvidence({
       || periodActivityAgg.hasPostCutoffDeletion
       || compActivityAgg?.hasPostCutoffDeletion
     );
-    const snapshotConsistent = postCutoffModifiedCount === 0 && !hasPostCutoffScopeLoss;
     const rosterTruncated = taskFactsResult.roster?.truncated === true;
     const factsComplete = !taskFactsResult.truncated && !rosterTruncated;
 
-    // 6. Bağımlılıkları YALNIZCA FULL erişimli projeler için tek toplu sorguda oku (READ ve PARTIAL projelerde asla okunmaz).
+    // 6. Bağımlılıkları YALNIZCA FULL erişimli projeler için veri kesitiyle tek toplu sorguda oku (READ ve PARTIAL projelerde asla okunmaz).
     const dependencyMap = new Map();
     const fullProjectIds = [...projects.values()]
       .filter((project) => project.accessLevel === 'FULL')
@@ -1132,6 +1194,7 @@ export async function buildExecutiveReportEvidence({
     const fullProjectIdSet = new Set(fullProjectIds);
     let dependencyTruncated = false;
     let droppedDependencyEdges = 0;
+    let hasPostCutoffDependencyChange = false;
     if (fullProjectIds.length > 0) {
       effectiveSignal.throwIfAborted();
       // Kişi/ekip/örgüt kapsamlarında bağımlılık sorgusu satır sınırından ÖNCE görünür görevlere daraltılır.
@@ -1141,10 +1204,18 @@ export async function buildExecutiveReportEvidence({
       const depResult = await turn.sql(effectiveSignal, (executor) => readReportDependencies(executor, scope, {
         projectIds: fullProjectIds,
         taskIds: scopedDependencyTaskIds,
+        cutOffUtc: cutOffDate,
         maxRows: REPORT_DEPENDENCIES_MAX_ROWS
       }));
       dependencyTruncated = Boolean(depResult.truncated);
+      hasPostCutoffDependencyChange = Boolean(depResult.hasPostCutoffChange);
       for (const row of depResult.dependencies || []) {
+        const createdMs = row.CreatedAt ? Date.parse(row.CreatedAt) : NaN;
+        const updatedMs = row.UpdatedAt ? Date.parse(row.UpdatedAt) : NaN;
+        if ((Number.isFinite(createdMs) && createdMs > cutOffMs) || (Number.isFinite(updatedMs) && updatedMs > cutOffMs)) {
+          hasPostCutoffDependencyChange = true;
+          continue;
+        }
         const taskId = canonicalActualId(row.TaskId);
         const predId = canonicalActualId(row.PredecessorTaskId);
         if (!taskId || !predId || !taskById.has(taskId) || !taskById.has(predId)) {
@@ -1157,9 +1228,14 @@ export async function buildExecutiveReportEvidence({
         dependencyMap.get(predId).ardil.push(taskId);
       }
     }
+    const snapshotConsistent = postCutoffModifiedCount === 0 && !hasPostCutoffScopeLoss;
+    // Kesit sonrası görev güncellemesi veya bağımlılık değişikliği varsa silinmiş/değişmiş bağlantılar tarihsel olarak
+    // kanıtlanamayacağından bağımlılık kapsamı eksiksiz (`complete`) bildirilmez.
     const dependencyCoverage = (
       dependencyTruncated
       || droppedDependencyEdges > 0
+      || hasPostCutoffDependencyChange
+      || postCutoffModifiedCount > 0
       || Boolean(taskFactsResult.truncated)
       || rosterTruncated
       || hasPostCutoffScopeLoss
@@ -1211,16 +1287,36 @@ export async function buildExecutiveReportEvidence({
     effectiveSignal.throwIfAborted();
 
     // 9. Dönem ve anlık ölçüleri doğru payda, kesiklik, tarihsel proje kapsamı ve zaman kökeniyle hesapla.
+    // Paket genelinde (kapsam, ölçü kırılımı, görev ve notlar) aynı proje her yerde aynı ayrıştırılmış etiketi taşır.
+    const allPackageProjects = new Map(projects);
+    const registerPackageProject = (projectId, contrib = null) => {
+      if (!projectId || allPackageProjects.has(projectId)) return;
+      allPackageProjects.set(projectId, {
+        projectId,
+        code: contrib?.code ? dataText(contrib.code.normalize('NFC'), 60) : null,
+        name: contrib?.name ? dataText(contrib.name.normalize('NFC'), 160) : null
+      });
+    };
+    for (const proj of periodActivityAgg?.contributingProjects || []) registerPackageProject(proj?.projectId, proj);
+    for (const proj of compActivityAgg?.contributingProjects || []) registerPackageProject(proj?.projectId, proj);
+    for (const projectId of resolvedScope.projectIds) registerPackageProject(projectId);
+    for (const projectId of movedOutCompletedInPeriod.values()) registerPackageProject(projectId);
+    for (const projectId of cappedOutCompletedInPeriod.values()) registerPackageProject(projectId);
+    for (const projectId of auditCompletedProjectByTaskId.values()) registerPackageProject(projectId);
+    for (const task of prioritizedTasks) registerPackageProject(task.projectId);
+    for (const version of noteCollection.versions || []) registerPackageProject(version.projectId);
+    const packageProjectLabels = buildModelSafeProjectLabels([...allPackageProjects.keys()], allPackageProjects);
+    const projectLabelOf = (projectId) => packageProjectLabels.get(projectId) || 'PRJ-ADSIZ';
+
     const scopeCodes = resolvedScope.projectIds.length > 0
-      ? resolvedScope.projectIds.map((id) => projectDisplayCode(projects.get(id), id))
-      : [...projects.values()].map((project) => projectDisplayCode(project, project.projectId)).sort(compareAscii);
+      ? [...new Set(resolvedScope.projectIds)].map((id) => projectLabelOf(id))
+      : [...projects.values()].map((project) => projectLabelOf(project.projectId)).sort(compareAscii);
 
     const buildPeriodScopeCodes = (contributingProjects) => {
       if (resolvedScope.projectIds.length > 0) return scopeCodes;
       const codeSet = new Set(scopeCodes);
       for (const proj of contributingProjects || []) {
-        const known = projects.get(proj.projectId);
-        codeSet.add(known ? projectDisplayCode(known, proj.projectId) : (proj.code ? dataText(proj.code, 60) : proj.projectId));
+        if (proj?.projectId) codeSet.add(projectLabelOf(proj.projectId));
       }
       return [...codeSet].sort(compareAscii);
     };
@@ -1430,11 +1526,6 @@ export async function buildExecutiveReportEvidence({
 
     if (breakdownProjects.size > 1) {
       const sortedProjects = [...breakdownProjects.values()].sort((a, b) => compareAscii(a.projectId, b.projectId));
-      const codeCounts = new Map();
-      for (const project of sortedProjects) {
-        const code = projectDisplayCode(project, project.projectId);
-        codeCounts.set(code, (codeCounts.get(code) || 0) + 1);
-      }
       for (const project of sortedProjects) {
         // Denetim tamamlaması farklı bir projede gerçekleştiyse tamamlama kaynak projeye yazılır; taşınmış ve silinmiş tamamlamalar da eklenir.
         const projCompleted = completedInPeriodTasks.filter((task) => {
@@ -1447,8 +1538,7 @@ export async function buildExecutiveReportEvidence({
           && factsComplete
           && snapshotConsistent
           && !activityAssigneeDiverged;
-        const displayCode = projectDisplayCode(project, project.projectId);
-        const hasCodeCollision = (codeCounts.get(displayCode) || 0) > 1;
+        const displayCode = projectLabelOf(project.projectId);
         secondaryMetrics.push({
           _metricKey: `project_completed:${project.projectId}`,
           tur: 'olcu',
@@ -1456,7 +1546,6 @@ export async function buildExecutiveReportEvidence({
           olcu: 'tamamlanan',
           deger: projCompleted,
           kapsam: [displayCode],
-          ...(hasCodeCollision ? { proje_kimligi: project.projectId } : {}),
           ...(resolvedScope.tur === 'kisi' ? { sorumlu: targetPersonLabel } : {}),
           ...(resolvedScope.tur === 'ekip' ? { ekip: resolvedScope.teamLabel } : {}),
           ...(ORG_LEVEL_META[resolvedScope.tur] ? { [resolvedScope.tur]: resolvedScope.orgUnitLabel } : {}),
@@ -1492,12 +1581,23 @@ export async function buildExecutiveReportEvidence({
     const taskCandidates = selectedTasks.map((task) => {
       const project = projects.get(task.projectId);
       const deps = dependencyMap.get(task.id);
+      const currentProjectLabel = projectLabelOf(task.projectId);
+      const completedProjectId = task._completedInPeriod ? auditCompletedProjectByTaskId.get(task.id) : null;
+      const shouldEmitCompletedProject = Boolean(
+        completedProjectId && (completedProjectId !== task.projectId || task._postCutoffModified)
+      );
+      const completedProjectLabel = shouldEmitCompletedProject ? projectLabelOf(completedProjectId) : null;
       const taskItemObj = {
         _taskId: task.id,
         tur: 'gorev',
         kaynak: 'rota_task_search',
         gorev: task.id,
-        proje: projectDisplayCode(project, task.projectId),
+        proje: currentProjectLabel,
+        // Görev dönemde başka bir projede tamamlanıp taşındıysa veya kesit sonrası değiştiği için canlı proje
+        // etiketi yazar izdüşümünde çıkarılacaksa denetim destekli yetkili tamamlanma projesi korunur.
+        ...(completedProjectLabel && (task._postCutoffModified || completedProjectLabel !== currentProjectLabel)
+          ? { tamamlandigi_proje: completedProjectLabel }
+          : {}),
         ...(project?.name ? { proje_adi: project.name } : {}),
         baslik: dataText(task.title, 160),
         durum: STATUS_TO_CANONICAL[task.status] || 'baslamadi',
@@ -1519,7 +1619,6 @@ export async function buildExecutiveReportEvidence({
 
     // 11. Zenginleştirilmiş not kanıtlarını kur (yalnızca rıza varsa dolu olur).
     const noteCandidates = (noteCollection.versions || []).map((version) => {
-      const project = projects.get(version.projectId);
       return {
         _taskId: version.taskId,
         _projectId: version.projectId,
@@ -1531,7 +1630,7 @@ export async function buildExecutiveReportEvidence({
         tur: 'not',
         kaynak: version.kaynak,
         gorev: version.taskId,
-        proje: projectDisplayCode(project, version.projectId),
+        proje: projectLabelOf(version.projectId),
         kayit_zamani: version.kayit_zamani,
         kayit_zamani_durumu: version.kayit_zamani_durumu,
         surum_tipi: version.surum_tipi,
@@ -1662,12 +1761,15 @@ export async function buildExecutiveReportEvidence({
       return findings;
     };
 
-    // Sayısal Sicil ve ham kontrol karakteri (\u001F) model paketine sızmaz; okunur etiketler yayımlanır.
+    // Sayısal Sicil, proje UUID'si ve ham kontrol karakteri (\u001F) model paketine sızmaz; çakışan proje kodları paket genelinde aynı etiketle ayrıştırılır.
+    const projectScopeLabels = () => [...new Set(resolvedScope.projectIds)].map((id) => projectLabelOf(id));
     const modelSafeScopeIds = resolvedScope.tur === 'kisi'
       ? [targetPersonLabel]
       : ORG_LEVEL_META[resolvedScope.tur]
         ? [resolvedScope.orgUnitLabel]
-        : [...normalizedRequest.kapsam.kimlikler];
+        : (resolvedScope.tur === 'proje' || resolvedScope.tur === 'projeler') && resolvedScope.projectIds.length > 0
+          ? projectScopeLabels()
+          : [...normalizedRequest.kapsam.kimlikler];
 
     // 13. Kanonik paketi sınırlar içinde oluştur.
     const evidencePackage = finalizeBoundedPackage({
@@ -1720,6 +1822,7 @@ export async function buildExecutiveReportEvidence({
       taskReadTruncated: Boolean(taskFactsResult.truncated),
       rosterTruncated,
       snapshotConsistent,
+      dependencySnapshotConsistent: !hasPostCutoffDependencyChange,
       lastReopenAtByTaskId,
       lastTargetFinishChangeByTaskId
     });

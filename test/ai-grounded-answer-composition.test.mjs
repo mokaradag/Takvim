@@ -231,13 +231,31 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
   const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000' } });
   const logs = captureConsole(t);
-  // Plan turunda zamanı ilerletmek düzen penceresini oturumun kalan süresinin altına indirir.
-  stack.provider.enqueue({ type: 'script', respond: () => { t.mock.timers.setTime(Date.now() + 40000); return plan(); } });
+  let elapsedMs = 0;
+  t.mock.method(performance, 'now', () => elapsedMs);
+  stack.provider.enqueue(plan());
+  const rawStream = stack.provider.streamToolCompletion.bind(stack.provider);
+  t.mock.method(stack.provider, 'streamToolCompletion', async (input) => {
+    const opened = await rawStream(input);
+    async function* timedEvents() {
+      try {
+        for await (const event of opened.events) {
+          yield event;
+        }
+      } finally {
+        // Süre yalnızca plan turunun akışı tamamlanıp kapatılırken ilerletilir; plan AI_TIMEOUT'a düşmeden düzen penceresi bütçe dışı kalır.
+        elapsedMs += 40_000;
+      }
+    }
+    return { ...opened, events: timedEvents() };
+  });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.equal(stack.provider.calls.length, 1, 'düzen turu açılmadı');
   assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
-  assert.equal(turnLines(logs)[0].context.presentation.reason, 'BUDGET');
+  const [trace] = turnLines(logs);
+  assert.equal(trace.context.outcome, 'grounded');
+  assert.equal(trace.context.presentation.reason, 'BUDGET');
 });
 
 test('düzen turu takılırsa kendi penceresinde kesilir, oturum düşmez ve doğrulanmış anlatım teslim edilir', async (t) => {
@@ -501,7 +519,7 @@ test('düzen zaman aşımı son yetki okumasının tam bütçesini teslim payıy
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: NOW });
   createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const logs = captureConsole(t);
-  const deadline = createAiDeadline({ timeoutMs: 30000 });
+  const deadline = createAiDeadline({ timeoutMs: 30000, now: Date.now });
   t.after(() => deadline.dispose());
   let composing = false;
   let validating = false;

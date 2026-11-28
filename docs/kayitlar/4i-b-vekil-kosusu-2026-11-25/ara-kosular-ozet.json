@@ -1,0 +1,42 @@
+{
+ "not": "Son koşuyla BİRLEŞTİRİLMEYEN ara koşular. Her biri bir istem sürümünün 48 senaryoluk tam koşusudur; sonuçlar yalnızca istem gelişimini belgeler.",
+ "kosular": [
+  {
+   "istem": "yazar-istemi-1",
+   "denenen": 48,
+   "gecerli": 45,
+   "sozlesme_disi": [
+    "S44:REPORT_DRAFT_SCHEMA_INVALID",
+    "S45:REPORT_DRAFT_SCHEMA_INVALID",
+    "S46:REPORT_DRAFT_CLAIM_INVALID"
+   ],
+   "bulgu": "Sözleşme dışı 3 yanıt (S44/S45 plan alanlarını bölüme yazdı, S46 iddia eki paragraf göndergesi geçersiz); model 31 kez kendi gün aritmetiğini yaptı."
+  },
+  {
+   "istem": "yazar-istemi-2",
+   "denenen": 48,
+   "gecerli": 46,
+   "sozlesme_disi": [
+    "S23:REPORT_DRAFT_CLAIM_INVALID",
+    "S26:REPORT_DRAFT_SCHEMA_INVALID"
+   ],
+   "bulgu": "Gün aritmetiği 0 (sunucu izdüşümü). Kör model değerlendirmesi: genel 3,52 (uygulanabilir E1–E9 ölçüt ortalamalarının ortalaması), E6 2,74, mekanik 6/46 → B kapısı geçilemezdi; zayıf taslakların tamamı seyrek kanıtlı paketler.",
+   "editoryal": "ara-kosu-istem2-editoryal-degerlendirme.json"
+  },
+  {
+   "istem": "yazar-istemi-3",
+   "denenen": 48,
+   "gecerli": 41,
+   "sozlesme_disi": [
+    "S07:REPORT_DRAFT_SCHEMA_INVALID",
+    "S17:REPORT_DRAFT_SCHEMA_INVALID",
+    "S19:REPORT_DRAFT_SCHEMA_INVALID",
+    "S32:REPORT_DRAFT_CLAIM_INVALID",
+    "S33:REPORT_DRAFT_CLAIM_INVALID",
+    "S41:REPORT_DRAFT_SECTION_INVALID",
+    "S39:REPORT_DRAFT_SECTION_INVALID"
+   ],
+   "bulgu": "Seyrek kanıt bütçesi ve tamlık/şerh kuralları eklendi; vekil düşünmesiz yanıt oranı 4→13 arttı ve sözleşme dışı yanıtların 5/7si düşünmesiz yanıtlardaydı → plandan türetilen çıktı iskeleti (istem 4)."
+  }
+ ]
+}

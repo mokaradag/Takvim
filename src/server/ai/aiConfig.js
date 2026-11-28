@@ -49,6 +49,8 @@ const INTEGER_SETTINGS = Object.freeze({
   [NAMES.PROVIDER_IDLE_TIMEOUT_MS]: { fallback: 45000, min: 100, max: ASSISTANT_TIMING.providerMaxMs }
 });
 
+export const AI_REQUEST_TIMEOUT_BOUNDS = Object.freeze({ ...INTEGER_SETTINGS[NAMES.REQUEST_TIMEOUT_MS] });
+
 function text(env, name) {
   const raw = env[name];
   return raw == null ? '' : String(raw).trim();
@@ -61,6 +63,13 @@ function parseBoolean(env, name, fallback, issues) {
   if (/^(0|false|no|hayir|hayır)$/i.test(raw)) return false;
   issues.push(name);
   return false;
+}
+
+/** Üretim ortam değişkeni mantıksal dilbilgisini (1/true/yes/evet, 0/false/no/hayir/hayır) çözümler. */
+export function parseAiBooleanFlag(env, name, fallback = false) {
+  const issues = [];
+  const value = parseBoolean(env || {}, name, fallback, issues);
+  return { ok: issues.length === 0, value };
 }
 
 function parseInteger(env, name, issues) {
@@ -82,27 +91,33 @@ function isLoopbackHost(hostname) {
 }
 
 /**
- * OpenAI uyumlu taban adres.
+ * OpenAI uyumlu taban adresi doğrular ve normalleştirir.
  *
  * Anahtar `Authorization` başlığında taşındığı için düz HTTP yalnızca yerel
- * geri döngü adresinde ya da açık `MERGEN_ROTA_AI_ALLOW_INSECURE_HTTP=true`
- * onayıyla kabul edilir. Adreste kimlik bilgisi, sorgu ya da parça bulunamaz.
+ * geri döngü adresinde ya da açık `allowInsecureHttp: true` onayıyla kabul
+ * edilir. Adreste kimlik bilgisi, sorgu ya da parça bulunamaz.
  */
-function parseBaseUrl(env, allowInsecureHttp, issues) {
-  const raw = text(env, NAMES.BASE_URL);
+export function validateAiBaseUrl(raw, { allowInsecureHttp = false } = {}) {
+  const trimmed = String(raw ?? '').trim();
   let url = null;
   try {
-    url = raw ? new URL(raw) : null;
+    url = trimmed ? new URL(trimmed) : null;
   } catch {
     url = null;
   }
   const secureEnough = url && (url.protocol === 'https:'
-    || (url.protocol === 'http:' && (allowInsecureHttp || isLoopbackHost(url.hostname))));
-  if (!secureEnough || url.username || url.password || url.search || url.hash) {
+    || (url.protocol === 'http:' && (allowInsecureHttp === true || isLoopbackHost(url.hostname))));
+  if (!secureEnough || url.username || url.password || url.search || url.hash) return null;
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
+function parseBaseUrl(env, allowInsecureHttp, issues) {
+  const normalized = validateAiBaseUrl(text(env, NAMES.BASE_URL), { allowInsecureHttp });
+  if (!normalized) {
     issues.push(NAMES.BASE_URL);
     return null;
   }
-  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+  return normalized;
 }
 
 /** Örnek dosyadaki `<AD>` biçimli yer tutucu; gerçek anahtar yerine bırakılmış demektir. */
