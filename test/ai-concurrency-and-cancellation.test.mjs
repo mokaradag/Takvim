@@ -834,6 +834,62 @@ test('doğrulamada bağlantı kurulamayınca yapılan yineleme sayaca girer; soh
   assert.equal(aiTelemetrySnapshot().retries, 2, 'ağ arabirimi hatası da bağlantı öncesi hatadır ve bir kez yinelenir');
 });
 
+test('duvar saati ileri veya geri alınsa da ağ geçidi geçen süreyi tekdüze saatle ölçer', async (t) => {
+  let wall = Date.now();
+  t.mock.method(Date, 'now', () => wall);
+  for (const shift of [120_000, -120_000]) {
+    const fake = createFakeAiProvider();
+    const provider = { ...fake, chatCompletion(input) {
+      wall += shift;
+      return fake.chatCompletion(input);
+    } };
+    const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG() });
+    const result = await gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
+    assert.equal(typeof result.text, 'string');
+    assert.equal(fake.calls.length, 1);
+  }
+});
+
+test('ikinci sağlayıcı çağrısından önce yetki, iptal veya süre engeli varsa yineleme sayılmaz', async (t) => {
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  t.after(() => resetAiTelemetryForTests());
+  for (const [stop, code] of [
+    [(controller) => controller.abort(), 'AI_CANCELLED'],
+    [(_controller, expire) => expire(), 'AI_TIMEOUT'],
+    [() => { throw new AiError('AI_UNAUTHORIZED'); }, 'AI_UNAUTHORIZED']
+  ]) {
+    resetAiTelemetryForTests();
+    let elapsed = 0;
+    const controller = new AbortController();
+    const provider = createFakeAiProvider();
+    provider.enqueue({ type: 'network', code: 'ECONNREFUSED' });
+    const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG(), now: () => elapsed });
+    let revalidations = 0;
+    await assert.rejects(gateway.completeChat({
+      profile: 'chat.fast', messages: MESSAGES, signal: controller.signal,
+      beforeDispatch: () => {
+        if (++revalidations === 2) stop(controller, () => { elapsed = 120_000; });
+      }
+    }), { code });
+    assert.equal(revalidations, 2);
+    assert.equal(provider.calls.length, 1);
+    assert.equal(aiTelemetrySnapshot().retries, 0);
+  }
+});
+
+test('süre sınırındaki kalıcı anahtar doğrulama sonucu tamamlanan yazımı bildirir', async () => {
+  let elapsed = 0;
+  const provider = createFakeAiProvider();
+  const { gateway } = isolatedGateway({
+    provider, config: PERSONAL_CONFIG(), now: () => elapsed,
+    storeValidation: async () => {
+      elapsed = 15_000;
+      return { recorded: true, credential: null };
+    }
+  });
+  assert.deepEqual(await gateway.validatePersonalCredential(), { status: 'VALID', stale: false, credential: null });
+});
+
 test('denetim anahtarına yalnızca kimlik doğrulamaya özgü ret (401/403) anahtarın denetlendiğini kanıtlar', async (t) => {
   resetAiTelemetryForTests();
   t.after(() => resetAiTelemetryForTests());

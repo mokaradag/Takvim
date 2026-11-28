@@ -38,6 +38,8 @@ node scripts/report-writer-qualification.mjs ozet --girdi docs/kayitlar/4i-b-vek
 
 S03 hakem kararı tarihsel kanıt sürümü üzerinden düzeltildi. Dönemdeki iki belge güncellemesi Denge’ye, tek tamamlanan görev Meltem’e aittir. Yanlış proje atfı eklendiğinde S03’ün kayıtlı doğruluk oranı 15/15’ten 15/16’ya (%93,75) düştü. Ham taslak özeti aynı kaldı. Güncel kanıt kümesiyle özet üretildiğinde tarihsel paket uyuşmazlığı nedeniyle S03’ün doğruluk durumu bekliyor olarak raporlanır.
 
+S08’de kaynak notlarının desteklemediği Meltem–Pusula gecikme bağlantısı bir yanlış iddia sayıldı. Tarihsel doğruluk 17/18 (%94,44) oldu. S37’de 19 Kasım test tarihi ile 26 Kasım hedef bitişini çelişkili gösteren iddia bir yanlış olarak sayıldı. Tarihsel doğruluk 8/9 (%88,89) oldu. Koşunun özgün dondurulmuş kümesiyle yeniden hesaplandığında %95 altında kalan rapor sayısı 4’ten 6’ya çıktı. Güncel kümenin özeti koşu kaydıyla uyuşmadığından güncel küme üzerinden üretilen raporda tarihsel doğruluk kararları beklemede kalır. S25’in mevcut hakem notunda açıklanan olay sırası hatası yapılandırılmış sayaçta da kaydedildi.
+
 Sayısal sonuçlar ve yorumu yol haritasının "Oturum devri — 2026-11-25" girdisindedir. Kapı durumu: A ve B kapıları bu
 koşuyla **kapatılmaz** (vekil model; insan puanı ve kurum içi doğrulama yok); D yazar süresi yalnızca vekil için
 bilgidir. Formal 4I-B nitelendirmesi ve kabulü **bekliyor**.

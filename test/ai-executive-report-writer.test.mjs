@@ -530,6 +530,11 @@ test('mimari: yazar modülleri model adı, ortam değişkeni, SQL, araç ya da y
     if (node.type === 'TemplateLiteral' && node.expressions.length === 0) {
       return node.quasis.map((q) => q.value.cooked ?? '').join('');
     }
+    if (node.type === 'BinaryExpression' && node.operator === '+') {
+      const left = extractStringNode(node.left);
+      const right = extractStringNode(node.right);
+      return left !== null && right !== null ? left + right : null;
+    }
     return null;
   };
   const hasWriterModuleImport = (source, filePath = 'ornek.js') => {
@@ -590,6 +595,8 @@ test('mimari: yazar modülleri model adı, ortam değişkeni, SQL, araç ya da y
   assert.equal(hasWriterModuleImport("export const dynamic = 'force-dynamic'; import '../reportWriter.js';\n", 'ornek.js'), true);
   assert.equal(hasWriterModuleImport("export { writeExecutiveReportDraft } from '../reportWriter.js';\n", 'ornek.js'), true);
   assert.equal(hasWriterModuleImport("const mod = await import('../reportWriter.js');\n", 'ornek.js'), true);
+  assert.equal(hasWriterModuleImport("const mod = await import('../' + ('reportWriter' + '.js'));\n", 'ornek.js'), true);
+  assert.equal(hasWriterModuleImport("const mod = await import('../' + isim);\n", 'ornek.js'), false);
   assert.equal(hasWriterModuleImport("export interface Bilgi { ad: string; }\nexport const etiket: string = 'reportWriter';\n", 'ornek.ts'), false);
   assert.equal(hasWriterModuleImport("export function Etiket({ ad }: { ad: string }) { return <span title=\"reportWriter\">{ad}</span>; }\n", 'ornek.tsx'), false);
   assert.equal(hasWriterModuleImport("import type { Yazar } from '../reportWriter.js';\nexport const x: Yazar | null = null;\n", 'ornek.ts'), true);
@@ -994,7 +1001,7 @@ test('yazar ve ağ geçidi gerileme: kalite prototipi, kanıt anlık görüntüs
   // Çağırıcı await sırasında kendi evidencePackage nesnesini değiştirse bile doğrulama başlangıçtaki anlık görüntüyle yapılır.
   const mutablePkg = pkgOf('S01');
   const mutatedDuringCall = fakeGateway(async () => {
-    mutablePkg.kanitlar = mutablePkg.kanitlar.filter((k) => k.id !== 'E1');
+    mutablePkg.kanitlar.find((item) => item.id === 'E1').id = 'E999';
     return okResult(validDraftText(request.plan, { ref: 'E1' }));
   });
   const snapResult = await writer.writeExecutiveReportDraft({ evidencePackage: mutablePkg, style, gateway: mutatedDuringCall, revalidate: async () => true });
@@ -2294,7 +2301,15 @@ test('son yakınsama kök neden gerilemeleri: plan, istem, taslak, yazar, kanıt
   const wideMessages = prompt.buildReportEvidenceMessages(wideScopePkg);
   assert.ok(wideMessages.length >= 2);
   assert.ok(wideMessages.every((m) => Buffer.byteLength(m, 'utf8') <= prompt.REPORT_WRITER_MAX_MESSAGE_BYTES));
-  assert.ok(wideMessages.some((m) => m.includes('"kapsam_grubu":"K1"')));
+  const wideData = wideMessages.map((message) => JSON.parse(message.slice(message.indexOf('{'))));
+  const measure = wideData.flatMap((part) => part.kanitlar ?? []).find((item) => item.id === 'E1');
+  assert.equal(measure?.deger, 5);
+  assert.equal(measure.kapsam, undefined);
+  assert.equal(measure.kapsam_grubu, 'K1');
+  const scopeParts = wideData.flatMap((part) => part.kapsam_parcalari ?? []).filter((part) => part.kapsam_grubu === measure.kapsam_grubu);
+  assert.deepEqual(scopeParts.map((part) => part.parca), scopeParts.map((_, index) => index + 1));
+  assert.ok(scopeParts.every((part) => part.toplam_parca === scopeParts.length));
+  assert.deepEqual(scopeParts.flatMap((part) => part.kapsam), wideLabels);
 
   // 8. Yazar & ağ geçidi: bitiş nedeni normalleştirme (`max_tokens`, `stop_sequence`) ve geçersiz `revalidationTimeoutMs` sınırlandırması.
   const validText = validDraftText(s28Plan, { ref: 'E1' });
@@ -2310,6 +2325,7 @@ test('son yakınsama kök neden gerilemeleri: plan, istem, taslak, yazar, kanıt
   const { dataText } = await import('../src/server/ai/tools/toolResultText.js');
   const emojiName = `${'a'.repeat(158)}😀x`;
   const clippedEmoji = dataText(emojiName, 160);
+  assert.equal(clippedEmoji, `${'a'.repeat(158)}…`);
   assert.equal(clippedEmoji.isWellFormed(), true, 'Vekil çifti bölünerek eşleşmemiş yüksek vekil bırakılmamalıdır');
 
   // 10. Kıyas tarayıcısı: sabit 48 senaryo kadrosu, bozuk kapsam zarfı, ondalık baştaki sıfır, `yüz yüze`, büyük harfli proje ve kronoloji bağlacı.
@@ -2591,8 +2607,8 @@ test('son yakınsama kök neden regresyonları: nitelendirme, kör bağlama, kan
     ], { encoding: 'utf8', stdio: 'pipe' }));
 
     const digestFile = path.join(previewDir, 'digest.jsonl');
-    const tamperedS01 = makeQualRow({ senaryo: 'S01', taslak_ozeti: 'degistirilmis-ozet', sure_ms: null });
-    const legacyS02 = makeQualRow({ senaryo: 'S02', paket_ozeti: s02Entry.paket_ozeti_sha256, taslak: s02Draft, taslak_ozeti: null, sure_ms: 0 });
+    const tamperedS01 = makeQualRow({ senaryo: 'S01', tasiyici: 'vekil', taslak_ozeti: 'degistirilmis-ozet', sure_ms: null });
+    const legacyS02 = makeQualRow({ senaryo: 'S02', tasiyici: 'vekil', paket_ozeti: s02Entry.paket_ozeti_sha256, taslak: s02Draft, taslak_ozeti: null, sure_ms: 0 });
     fs.writeFileSync(digestFile, `${JSON.stringify(tamperedS01)}\n${JSON.stringify(legacyS02)}\n`, 'utf8');
     const previewOut = execFileSync(process.execPath, [
       path.join(ROOT, 'scripts/yonetici-anlati-onizleme.mjs'), '--girdi', digestFile
@@ -2601,6 +2617,17 @@ test('son yakınsama kök neden regresyonları: nitelendirme, kör bağlama, kan
     assert.ok(previewOut.includes('Kayıtlı taslak özeti uyuşmuyor'));
     assert.ok(previewOut.includes('süre 0 sn'));
     assert.ok(previewOut.includes('doğrulanmamış tarihsel taslak'));
+    const malformedModel = makeQualRow({ senaryo: 'S01', model: {
+      beklenen: 'aday-a', bildirilen: [{ toString: null, valueOf: null }], dogrulandi: true
+    } });
+    const missingOnPremDigest = { ...legacyS02, tasiyici: 'kurum-ici' };
+    fs.writeFileSync(digestFile, `${JSON.stringify(malformedModel)}\n${JSON.stringify(missingOnPremDigest)}\n`, 'utf8');
+    const onPremPreview = execFileSync(process.execPath, [
+      path.join(ROOT, 'scripts/yonetici-anlati-onizleme.mjs'), '--girdi', digestFile
+    ], { encoding: 'utf8' });
+    assert.match(onPremPreview, /gecersiz_kimlik/u);
+    assert.match(onPremPreview, /gecersiz_kayit/u);
+    assert.doesNotMatch(onPremPreview, /doğrulanmamış tarihsel taslak|~~~text/u);
   } finally {
     fs.rmSync(previewDir, { recursive: true, force: true });
   }
@@ -2691,6 +2718,20 @@ test('son yakınsama kök neden regresyonları: nitelendirme, kör bağlama, kan
   assert.ok(bench.normalizeProse('Sıfır virgül iki beş oranında.').includes('0,25'));
   assert.ok(bench.normalizeProse('Sıfır virgül yirmi beş oranında.').includes('0,25'));
   assert.ok(scanDraft('S21', 'Ortalama 1,7 gün sürdü.').sayilar.includes(1.7));
+  assert.deepEqual(scanDraft('S42', 'Gecikme payı %16,5 ve 8 Kasım’da ölçüldü.').tarihler, ['2026-11-08']);
+  assert.ok(scanDraft('S42', 'Gecikme payı %16,5 ve 8 Kasım’da ölçüldü.').defterde_olmayan_sayilar.includes(16.5));
+  assert.ok(scanDraft('S42', 'Kasımda 2026 görev tamamlandı.').defterde_olmayan_sayilar.includes(2026));
+  assert.ok(scanDraft('S25', 'Veri akışı yük testi 7 gün gecikti.').sayilar.includes(7));
+  assert.ok(scanDraft('S43', '«yüz yirmi kural taşındı»').sayilar.includes(120));
+  for (const dash of ['–', ' – ', '-', ' - ', '−', ' − ']) {
+    assert.deepEqual(scanDraft('S21', 'Çalışma 1' + dash + '7 gün sürdü.').sayilar, [1, 7]);
+  }
+  const dateRangeScan = scanDraft('S28', 'Ece Tunalı’nın 2–8 Kasım 2026 arasındaki kaydında bir değişiklik bulunmuyor.');
+  assert.deepEqual(dateRangeScan.tarihler, ['2026-11-02', '2026-11-08']);
+  assert.equal(dateRangeScan.sayilar.includes(2), false);
+  assert.ok(scanDraft('S28', '2–8 Kasım 2026 döneminde iki tablo karşılaştırıldı.').sayilar.includes(2));
+  assert.equal(bench.detectChronologyInversions('8 Kasım’da 1. inceleme yapıldı, ardından 6 Kasım’da onay verildi.', 2026).length, 1);
+  assert.deepEqual(bench.detectChronologyInversions('8 Kasım’da 1. Ardından 6 Kasım’da onay verildi.', 2026), []);
   assert.equal(scanDraft('S28', 'Önümüzdeki 7 gün içinde risk yok.').defterde_olmayan_sayilar.includes(7), false);
   assert.ok(scanDraft('S42', 'Fark eksi bir görev.').defterde_olmayan_sayilar.includes(-1));
   assert.equal(scanDraft('S42', 'Yalnızca bir görev tamamlandı.').defterde_olmayan_sayilar.includes(-1), false);
@@ -2795,12 +2836,21 @@ test('nihai yakınsama kök neden regresyonları: kesit izdüşümü, doğrusal 
   assert.ok(splitMessages.length <= prompt.REPORT_WRITER_MAX_EVIDENCE_MESSAGES);
   assert.ok(splitMessages.every((m) => Buffer.byteLength(m, 'utf8') <= prompt.REPORT_WRITER_MAX_MESSAGE_BYTES));
   // Parçalar birleştirildiğinde hiçbir kod noktası veya yedek çift bozulmaz.
-  const reassembled = splitMessages
-    .flatMap((m) => JSON.parse(m.slice(m.indexOf('{'))).kanitlar)
-    .filter((k) => k.id === 'E98')
-    .sort((a, b) => a.metin_parcasi - b.metin_parcasi)
-    .map((k) => k.metin)
-    .join('');
+  const documentParts = splitMessages
+    .flatMap((m) => JSON.parse(m.slice(m.indexOf('{'))).kanitlar ?? [])
+    .filter((k) => k.id === 'E98');
+  assert.ok(documentParts.length > 1);
+  for (const [index, part] of documentParts.entries()) {
+    assert.equal(part.metin_parcasi, index + 1);
+    assert.equal(part.metin_toplam_parca, documentParts.length);
+    assert.equal(part.tur, 'belge');
+    assert.equal(part.kaynak, 'gecici_yukleme');
+    assert.equal(part.dosya_turu, 'pdf');
+    assert.equal(part.bolum, 'Büyük Ek');
+    assert.equal(part.guvenilmez_veri, true);
+    assert.ok(part.metin.length > 0 && part.metin.isWellFormed());
+  }
+  const reassembled = documentParts.map((part) => part.metin).join('');
   assert.equal(reassembled, mixedChunk.repeat(8000));
 
   // C1-C5: Seyrek kapaliBolumler/kanitlar/kronoloji, yinelenen çelişki kanıtları, çoklu ölçüler, salt not paketi ve geçersiz plan paketi.
@@ -2853,7 +2903,7 @@ test('nihai yakınsama kök neden regresyonları: kesit izdüşümü, doğrusal 
   ];
   const noteOnlyHighlights = plan.buildReportSectionPlan(noteOnlyPkg, style).bolumler.find((b) => b.kimlik === 'one_cikan_gelismeler');
   assert.ok(noteOnlyHighlights.odak_kanitlar.includes('E2'));
-  assert.equal(noteOnlyHighlights.bos_bolum_yonergesi, undefined);
+  assert.doesNotMatch(noteOnlyHighlights.yonerge, /aktarılacak bir gelişme ya da kayıt yok/u);
 
   assert.throws(
     () => prompt.buildReportWriterPlanMessage(s01Plan, null, 1),
@@ -3028,6 +3078,30 @@ test('nihai yakınsama kök neden regresyonları: kesit izdüşümü, doğrusal 
   );
   const s25Row = makeRow({ senaryo: 'S25', paket_ozeti: s25Entry.paket_ozeti_sha256, taslak: s25Draft });
   const s25Digest = qual.draftDigest(s25Row);
+  for (const [scan, verdict, pending, errors, status] of [
+    [undefined, {}, 1, null, 'bilinmiyor'],
+    [undefined, { kronoloji_incelendi: true }, 0, 0, 'temiz'],
+    [undefined, { kronoloji_incelendi: true, kronoloji_hatasi: 2 }, 0, 2, 'hata_onayli'],
+    [undefined, { kronoloji_incelendi: false, kronoloji_hatasi: 0 }, 1, null, 'tamamlanmadi'],
+    [[], {}, 0, 0, 'aday_yok'],
+    [[], { kronoloji_incelendi: false, kronoloji_hatasi: 0 }, 1, null, 'tamamlanmadi'],
+    [[{}], {}, 1, null, 'bekliyor'],
+    [[{}, {}], { kronoloji_incelendi: false, kronoloji_hatasi: 0 }, 2, null, 'tamamlanmadi'],
+    [[{}, {}], { kronoloji_incelendi: false, kronoloji_hatasi: 1 }, 2, 1, 'tamamlanmadi'],
+    [[{}], { kronoloji_incelendi: true, kronoloji_hatasi: '0' }, 1, null, 'karar_gecersiz'],
+    [[{}], { kronoloji_incelendi: 'evet', kronoloji_hatasi: 0 }, 1, null, 'karar_gecersiz'],
+    [[{}], { kronoloji_hatasi: 0 }, 0, 0, 'temiz']
+  ]) {
+    const row = { ...s25Row, paket_kumesi_ozeti: 'tarihsel', nesnel: scan === undefined ? {} : { kronoloji_celiskisi_adaylari: scan } };
+    const summary = qual.summarizeRun([row], {
+      allowHistoricalDigestMismatch: true,
+      adjudication: { kosu: row.kosu, S25: { ...verdict, taslak_ozeti: s25Digest } }
+    });
+    assert.equal(summary.rapor[0].bekleyen_kronoloji_adayi, pending, JSON.stringify(verdict));
+    assert.equal(summary.rapor[0].kronoloji_hatasi, errors, JSON.stringify(verdict));
+    assert.equal(summary.rapor[0].kronoloji_inceleme_durumu, status, JSON.stringify(verdict));
+    assert.equal(summary.kronoloji_hatasi_toplam, pending ? null : errors, JSON.stringify(verdict));
+  }
   const chronFalse = qual.summarizeRun([s25Row], {
     adjudication: { kosu: 'k-nihai-1', S25: { dogru: 2, yanlis: 0, atlanan_zorunlu: [], kronoloji_incelendi: false, taslak_ozeti: s25Digest } }
   });
@@ -3053,6 +3127,7 @@ test('nihai yakınsama kök neden regresyonları: kesit izdüşümü, doğrusal 
     });
   });
   const profileMismatchSum = qual.summarizeRun(full48MismatchProfile);
+  assert.equal(profileMismatchSum.on_yazar_sure_esigi_gecti, false);
   assert.equal(profileMismatchSum.sure_kapisi_gecerli, false);
   assert.equal(profileMismatchSum.sure_kapisi_durumu, 'profil_kalite_uyusmuyor');
 
@@ -3223,7 +3298,7 @@ test('nihai yakınsama kök neden regresyonları: kesit izdüşümü, doğrusal 
 
 
 
-test('düzyazı uyarıları Unicode satır sonlarında listeyi, başlığı ve Markdown bağlantısını yakalar', () => {
+test('düzyazı uyarıları listeyi, başlığı, vurguyu, satır içi kodu ve Markdown bağlantısını yakalar', () => {
   const pkg = pkgOf('S01');
   const writerPlan = plan.buildReportSectionPlan(pkg, style);
   const raw = JSON.parse(validDraftText(writerPlan));
@@ -3235,14 +3310,26 @@ test('düzyazı uyarıları Unicode satır sonlarında listeyi, başlığı ve M
   for (const [prose, code] of [
     ['Dönem özeti.\u2028- Bir madde', 'madde_isareti'],
     ['Dönem özeti.\u2029## Bir başlık', 'markdown'],
-    ['Dönem özeti. [Ek bilgi](https://ornek.invalid)', 'markdown']
+    ['Dönem özeti. [Ek bilgi](https://ornek.invalid)', 'markdown'],
+    ['Dönem özeti. [Plan](/reports/final(v2))', 'markdown'],
+    ['Dönem özeti. [Plan](/reports/final(v2(1)))', 'markdown'],
+    ['Dönem özeti. Çalışma *tamamlandı*.', 'markdown'],
+    ['Dönem özeti. Çalışma _tamamlandı_.', 'markdown'],
+    ['Dönem özeti. İş __kritik__ durumda.', 'markdown'],
+    ['Dönem özeti. İş `tamamlandı`.', 'markdown'],
+    ['Dönem özeti. İş ``a ` b``.', 'markdown']
   ]) {
     const parsed = parseProse(prose);
     assert.ok(parsed.uyarilar.some((warning) => warning.kod === code), prose);
     assert.equal(parsed.bolumler[0].paragraflar[0].metin, prose);
   }
-  const ordinary = parseProse('Dönem özeti. (Ek bilgi, çalışmaya dahildir.)');
-  assert.equal(ordinary.uyarilar.some((warning) => warning.kod === 'markdown'), false);
+  for (const text of [
+    'Dönem özeti. (Ek bilgi, çalışmaya dahildir.)',
+    'Dönem özeti. gorev_durumu ve ölçüm_sonucu 2 * 3 üzerinden okundu.',
+    'Dönem özeti. Tek ` işareti kapatılmadı.'
+  ]) {
+    assert.equal(parseProse(text).uyarilar.some((warning) => warning.kod === 'markdown'), false, text);
+  }
 });
 
 test('kısmi hareketten sıfır çıkarmaz ve belge olsa bile pozitif dönem tamamlamasını öne alır', () => {
@@ -3266,22 +3353,70 @@ test('kısmi hareketten sıfır çıkarmaz ve belge olsa bile pozitif dönem tam
   assert.deepEqual(highlights.odak_kanitlar, ['E3', 'E4']);
 });
 
+test('yeniden açılma, kısmi sıfır ve bölüm bütçesi gerçek dönem kanıtına göre işlenir', () => {
+  const pkg = pkgOf('S01');
+  const donem = pkg.istek.donem;
+  pkg.kanitlar = [
+    { id: 'E1', tur: 'olcu', olcu: 'hareket', deger: 0, donem, tamlik: 'complete' },
+    { id: 'E2', tur: 'olcu', olcu: 'tamamlanan', deger: 0, donem, tamlik: 'complete', kayit_kapsami: 'partial' }
+  ];
+  const disclosures = () => plan.buildReportSectionPlan(pkg, style).bolumler.flatMap((section) => section.zorunlu_aciklamalar);
+  assert.equal(disclosures().some((entry) => entry.kimlik === 'degisiklik_yok'), false);
+  pkg.kanitlar[1].kayit_kapsami = 'complete';
+  assert.equal(disclosures().some((entry) => entry.kimlik === 'degisiklik_yok'), true);
+  pkg.kanitlar.push({ id: 'E3', tur: 'hareket', donem, donem_ozeti: { yeniden_acilan_gorev: 1 } });
+  const highlights = plan.buildReportSectionPlan(pkg, style).bolumler.find((section) => section.kimlik === 'one_cikan_gelismeler');
+  assert.deepEqual(highlights.odak_kanitlar, ['E3']);
+  assert.doesNotMatch(highlights.yonerge, /aktarılacak bir gelişme ya da kayıt yok/u);
+  const tooShort = structuredClone(style);
+  tooShort.anlati.bolum_plani.sozcuk_butcesi.standart = [3, 3];
+  assert.throws(() => plan.buildReportSectionPlan(pkg, tooShort), { code: 'STYLE_INVALID' });
+});
+
+test('yazar kanıtı yalnızca sunucunun parça bilgisiyle ve geçerli serileştirilmiş boyutla gönderir', async () => {
+  const pkg = pkgOf('S01');
+  const { validateEvidencePackageContract } = await import('../src/domain/ai/report/reportRequest.js');
+  delete pkg.tamlik.karakter_sayisi;
+  pkg.kanitlar.push({
+    id: 'E900', tur: 'belge', kaynak: 'gecici_yukleme', dosya_turu: 'pdf', metin: 'Kısa belge.',
+    guvenilmez_veri: true, metin_parcasi: 2, metin_toplam_parca: 3
+  });
+  const projected = prompt.projectEvidencePackageForWriter(pkg).kanitlar.find((item) => item.id === 'E900');
+  assert.equal(projected.metin, 'Kısa belge.');
+  assert.equal(projected.metin_parcasi, undefined);
+  assert.equal(projected.metin_toplam_parca, undefined);
+  const request = writer.prepareReportWriterRequest({ evidencePackage: pkg, style });
+  assert.match(request.messages[0].content, /"metin_parcasi".*"metin_toplam_parca".*"kapsam_grubu".*"toplam_parca"/u);
+  assert.match(request.messages[0].content, /Farklı görevlerin not tarihleri durum değişimi kanıtı değildir/u);
+  assert.match(request.messages.at(-1).content, /"one_cikan_tespit" isteğe bağlıdır/u);
+
+  pkg.turetilmis.push({ id: 'F900', tur: 'kismi_gorunurluk_uyarisi', girdiler: [pkg.kanitlar[0].id], aciklama: 'Ş'.repeat(15_000) });
+  assert.equal(validateEvidencePackageContract(pkg).ok, true);
+  assert.ok(prompt.buildReportEvidenceMessages(pkg).every((message) => encoder.encode(message).length <= 32 * 1024));
+  for (const char of ['Ş', '"', '\\']) {
+    pkg.turetilmis.at(-1).aciklama = char.repeat(17_000);
+    assert.ok(validateEvidencePackageContract(pkg).problems.includes('turetilmis:ileti_bayt_siniri_asildi:F900'));
+  }
+});
+
 test('çelişki gönderge ve zamanları birlikte tekilleştirilir, belirsiz son kayıt seçilmez', () => {
   const pkg = pkgOf('S01');
   const older = '2026-11-03T08:00:00+03:00';
   const latest = '2026-11-05T08:00:00+03:00';
   pkg.celiskiler = [
-    { tur: 'not_surum_celiskisi', kanitlar: ['E1', 'E1', 'E2'], kronoloji: [older, older, latest] },
+    { tur: 'not_surum_celiskisi', kanitlar: ['E1', 'E1', 'E2'], kronoloji: [older, '2026-11-03T05:00:00Z', latest] },
     { tur: 'not_surum_celiskisi', kanitlar: ['E1', 'E1', 'E2'], kronoloji: [older, latest, latest] },
-    { tur: 'not_surum_celiskisi', kanitlar: ['E1', 'E2', 'E3'], kronoloji: [older, latest, latest] }
+    { tur: 'not_surum_celiskisi', kanitlar: ['E1', 'E2', 'E3'], kronoloji: [older, latest, latest] },
+    { tur: 'not_surum_celiskisi', kanitlar: ['E1', 'E2'], kronoloji: [older, '2026-11-10T02:00:00+03:00'] }
   ];
   const projected = prompt.projectEvidencePackageForWriter(pkg);
   assert.deepEqual(projected.celiskiler[0].kanitlar, ['E1', 'E2']);
   assert.deepEqual(projected.celiskiler[0].kronoloji, [older, latest]);
   assert.equal(projected.celiskiler[1].kronoloji, undefined);
+  assert.equal(projected.celiskiler[3].kronoloji, undefined);
   const disclosures = plan.buildReportSectionPlan(pkg, style).bolumler.flatMap((section) => section.zorunlu_aciklamalar);
   assert.match(disclosures.find((entry) => entry.kimlik === 'celiski_1').yonerge, /en güncel kaydı esas al/u);
-  for (const id of ['celiski_2', 'celiski_3']) {
+  for (const id of ['celiski_2', 'celiski_3', 'celiski_4']) {
     assert.match(disclosures.find((entry) => entry.kimlik === id).yonerge, /zaman sırası uydurmadan/u);
   }
   assert.match(prompt.buildReportWriterSystemPrompt(style), /son zamanı birden çok kayıt paylaşıyorsa tek kayıt esas alınmaz/u);
@@ -3313,10 +3448,27 @@ test('geniş çelişki listelerinde 32 KiB plan sınırı ve bütün açıklama 
   assert.deepEqual(smallActivity.zorunlu_aciklamalar.at(-1), conflicts[0]);
 });
 
-test('kıyas doğrulayıcısı boş paket satırını ve başka bir sayının içindeki zorunlu niceliği reddeder', () => {
+test('kıyas doğrulayıcısı bozuk satırı, yinelenen olguyu ve yanlış senaryoya bağlanan paketi reddeder', async () => {
   const invalidSet = structuredClone(packageSet);
   invalidSet.paketler[0] = null;
   assert.ok(bench.verifyWriterPackageSet(invalidSet, fixture).includes('paket_satiri_gecersiz:0'));
+  const malformedFixture = structuredClone(fixture);
+  malformedFixture.senaryolar[0] = null;
+  assert.ok(bench.verifyWriterPackageSet(packageSet, malformedFixture).includes('senaryo_kumesi_eksik'));
+  assert.ok(bench.verifyWriterPackageSet(packageSet, null).includes('sentetik_kadro_gecersiz'));
+  const duplicate = structuredClone(packageSet);
+  duplicate.paketler[0].zorunlu_olgular[1].id = duplicate.paketler[0].zorunlu_olgular[0].id;
+  duplicate.ozet_sha256 = bench.sha256(bench.canonicalJson(duplicate.paketler));
+  assert.ok(bench.verifyWriterPackageSet(duplicate, fixture).includes('zorunlu_olgu_kimligi_yineleniyor:S01'));
+  const { buildWriterPackageSet } = await import('./helpers/executiveReportWriterScenarios.mjs');
+  const regenerated = await buildWriterPackageSet();
+  assert.deepEqual(bench.verifyWriterPackageSet(packageSet, fixture, regenerated), []);
+  const swapped = structuredClone(packageSet);
+  const [first, second] = swapped.paketler;
+  [first.paket, second.paket] = [second.paket, first.paket];
+  [first.paket_ozeti_sha256, second.paket_ozeti_sha256] = [second.paket_ozeti_sha256, first.paket_ozeti_sha256];
+  swapped.ozet_sha256 = bench.sha256(bench.canonicalJson(swapped.paketler));
+  assert.deepEqual(bench.verifyWriterPackageSet(swapped, fixture, regenerated), ['senaryo_paketi_uyusmuyor:S01', 'senaryo_paketi_uyusmuyor:S02']);
   const fact = [{ id: 'Z1', anahtarlar: [['120'], ['kural']] }];
   assert.equal(bench.mandatoryCoverage('120 kural taşındı.', fact)[0].yer_aliyor, true);
   assert.equal(bench.mandatoryCoverage('Yüz yirmi kural taşındı.', fact)[0].yer_aliyor, true);
@@ -3342,6 +3494,17 @@ test('kör pakete doğrulanmış model adını belirten düzyazı alınmaz', asy
   stored.taslak_ozeti = qual.draftDigest(stored);
   assert.throws(() => qual.buildBlindScoringPacket([stored]), /Taslak metni model kimliğini içeriyor/u);
   assert.match(stored.taslak.bolumler[0].paragraflar[0].metin, /Örnek Model 5\.5/u);
+  const short = { ...stored, model: { beklenen: 'GPT4', bildirilen: 'GPT4', dogrulandi: true } };
+  assert.equal(qual.hasVerifiedStoredModelIdentity(short), true);
+  assert.equal(qual.hasVerifiedStoredModelIdentity({ ...short, model: { ...short.model, bildirilen: ['GPT4'] } }), false);
+  assert.equal(qual.hasVerifiedStoredModelIdentity({ ...short, tasiyici: 'vekil', model: { ...short.model, bildirilen: ['GPT4'] } }), true);
+  for (const [text, leaks] of [['Bu rapor GPT4 ile hazırlandı.', true], ['Bu rapor XGPT42 kaydını özetler.', false]]) {
+    raw.bolumler[0].paragraflar[0].metin = text;
+    short.taslak = draftModule.parseReportDraft(JSON.stringify(raw), { plan: writerPlan, evidencePackage: fixtureEntry.paket });
+    short.taslak_ozeti = qual.draftDigest(short);
+    if (leaks) assert.throws(() => qual.buildBlindScoringPacket([short]), /Taslak metni model kimliğini içeriyor/u);
+    else assert.equal(qual.buildBlindScoringPacket([short]).count, 1);
+  }
 });
 
 test('dosya grubu yazma hatasında yalnızca kendi kısmi çıktılarını kaldırır', async () => {
@@ -3364,6 +3527,100 @@ test('dosya grubu yazma hatasında yalnızca kendi kısmi çıktılarını kald�
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('başlangıçta erişim denetimi başarısız olursa sentetik yığın dış ortamı geri yükler', async () => {
+  const { createActualStack } = await import('./helpers/actualStack.mjs');
+  const initialFetch = globalThis.fetch;
+  const initialSicil = process.env.MERGEN_ROTA_DEV_SICIL;
+  const initialDatabase = process.env.MERGEN_ROTA_DB_SERVER;
+  await assert.rejects(createActualStack({}, {
+    currentUserProvider: { getCurrentSicil: async () => { throw new Error('Deneme kimliği reddedildi.'); } }
+  }), /Snapshot load failed/u);
+  assert.equal(globalThis.fetch, initialFetch);
+  assert.equal(process.env.MERGEN_ROTA_DEV_SICIL, initialSicil);
+  assert.equal(process.env.MERGEN_ROTA_DB_SERVER, initialDatabase);
+});
+
+test('iptal etkin vekil köprüsünü durdurur ve sonraki senaryoyu başlatmaz', { skip: process.platform === 'win32' }, async () => {
+  const { callSurrogate, runQualificationQueue } = await import('../scripts/report-writer-qualification.mjs');
+  const { tmpdir } = await import('node:os');
+  const { setTimeout: delay } = await import('node:timers/promises');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'yazar-kopru-'));
+  const adapterPath = path.join(dir, 'vekil-surec.mjs');
+  const ready = path.join(dir, 'hazir');
+  const finished = path.join(dir, 'durduruldu');
+  fs.writeFileSync(adapterPath, [
+    "import { writeFileSync } from 'node:fs';",
+    `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(finished)}, ''); process.exit(143); });`,
+    `writeFileSync(${JSON.stringify(ready)}, '');`,
+    'process.stdin.resume();',
+    'setTimeout(() => process.exit(1), 10000);'
+  ].join('\n'));
+  const controller = new AbortController();
+  const started = [];
+  const done = runQualificationQueue(['S01', 'S02'], 1, async (id) => {
+    started.push(id);
+    const result = await callSurrogate({ messages: [], maxOutputTokens: 1 }, path.join(dir, 'defter.jsonl'), {
+      adapterPath, signal: controller.signal
+    });
+    assert.equal(result.spawnError, 'KOPRU_IPTAL');
+  }, { signal: controller.signal });
+  try {
+    for (let attempt = 0; attempt < 200 && !fs.existsSync(ready); attempt += 1) await delay(10);
+    assert.equal(fs.existsSync(ready), true);
+    controller.abort();
+    await done;
+    assert.deepEqual(started, ['S01']);
+    assert.equal(fs.existsSync(finished), true);
+  } finally {
+    controller.abort();
+    await done.catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('kurum içi koşu vekil defterine dokunmaz ve başarısız satırın kaynak commitini saklar', async (t) => {
+  const { execFile, execFileSync } = await import('node:child_process');
+  const { createServer } = await import('node:http');
+  const { tmpdir } = await import('node:os');
+  const { promisify } = await import('node:util');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'yazar-katalog-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const calls = [];
+  const server = createServer((request, response) => {
+    calls.push([request.method, request.url]);
+    request.resume();
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === '/v1/models') response.end(JSON.stringify({ data: [{ id: 'yerel-deneme' }] }));
+    else {
+      response.statusCode = 503;
+      response.end('{}');
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const command = path.join(ROOT, 'scripts/report-writer-qualification.mjs');
+  const ledger = path.join(dir, 'is-kaydi');
+  const output = ledger + '-0.jsonl';
+  const common = ['kosu', '--senaryolar', 'S01', '--defter', ledger, '--cikti', output];
+  await promisify(execFile)(process.execPath, [command, ...common, '--tasiyici', 'kurum-ici', '--model', 'yerel-deneme'], {
+    env: {
+      ...process.env,
+      MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.1:' + server.address().port + '/v1',
+      MERGEN_ROTA_AI_QUALIFICATION_KEY: 'yerel-deneme-anahtari'
+    },
+    timeout: 15000
+  });
+  assert.deepEqual(calls, [['GET', '/v1/models'], ['POST', '/v1/chat/completions']]);
+  const record = JSON.parse(fs.readFileSync(output, 'utf8'));
+  const source = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  assert.equal(record.kaynak_commit, source);
+  assert.equal(record.durum, 'altyapi_hatasi');
+  assert.match(fs.readFileSync(output, 'utf8'), /"senaryo":"S01"/u);
+  await assert.rejects(promisify(execFile)(process.execPath, [command, ...common, '--tasiyici', 'vekil'], { timeout: 5000 }),
+    /Çıktı dosyası işçi defteriyle aynı olamaz/u);
+  assert.deepEqual(JSON.parse(fs.readFileSync(output, 'utf8')), record);
 });
 
 test('vekil koşu planlayıcı bütçelerini almaz ve kurum içi seçeneği dosya açmadan reddeder', async () => {

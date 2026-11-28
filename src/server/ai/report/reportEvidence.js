@@ -123,7 +123,7 @@ function sliceWithinUtf16Limit(text, maxUnits) {
  * paket içi kararlı sonekle (`#1`, `#2`) ayrıştırılmış tekil etiketler üretir.
  */
 function buildModelSafeProjectLabels(projectIds, projects) {
-  const uniqueIds = [...new Set(projectIds.filter((id) => typeof id === 'string' && id.length > 0))];
+  const uniqueIds = [...new Set(projectIds.filter((id) => typeof id === 'string' && id.length > 0))].sort(compareAscii);
   const rawById = new Map();
   const groups = new Map();
   for (const id of uniqueIds) {
@@ -151,9 +151,8 @@ function buildModelSafeProjectLabels(projectIds, projects) {
   }
   for (const ids of groups.values()) {
     if (ids.length <= 1) continue;
-    const ordered = [...ids].sort(compareAscii);
     let seq = 1;
-    for (const id of ordered) {
+    for (const id of ids) {
       const base = rawById.get(id);
       let candidate;
       do {
@@ -606,6 +605,7 @@ function finalizeBoundedPackage({
   taskReadTruncated = false,
   rosterTruncated = false,
   snapshotConsistent = true,
+  dependencySnapshotConsistent = true,
   lastReopenAtByTaskId = new Map(),
   lastTargetFinishChangeByTaskId = new Map()
 }) {
@@ -772,7 +772,7 @@ function finalizeBoundedPackage({
         },
         hareket: activityCoverage,
         bagimliliklar: dependencyCoverage,
-        ...(snapshotConsistent ? {} : { kesit_tutarli: false }),
+        ...(snapshotConsistent && dependencySnapshotConsistent ? {} : { kesit_tutarli: false }),
         tarihsiz_tamamlanan: undatedDoneCount,
         paket_kesildi: truncated,
         disarida_kalan_kanit: totalOmitted,
@@ -859,7 +859,7 @@ export async function buildExecutiveReportEvidence({
   getPool,
   loadAuthorization,
   gate,
-  clock = Date.now
+  clock = () => performance.now()
 }) {
   // Önceden iptal edilmiş istek hiçbir doğrulama, kimlik veya SQL okuması başlatmaz.
   signal?.throwIfAborted?.();
@@ -988,7 +988,11 @@ export async function buildExecutiveReportEvidence({
         const taskProjectIds = new Set(visibleTasks.map((task) => task.projectId));
         return taskFactsResult.projects.filter((row) => taskProjectIds.has(canonicalActualId(row.ProjectId)));
       })();
-    const projects = projectIndex(relevantProjectRows);
+    const projects = projectIndex(relevantProjectRows.map((row) => ({
+      ...row,
+      ProjectName: typeof row.ProjectName === 'string' ? row.ProjectName.normalize('NFC') : row.ProjectName,
+      ProjectCode: typeof row.ProjectCode === 'string' ? row.ProjectCode.normalize('NFC') : row.ProjectCode
+    })));
     const effectiveScopeSummary = resolvedScope.scopeSummary
       || describeTaskScope(relevantProjectRows, { emptyComplete: scope.isAdmin || [...scope.projects.values()].every((entry) => entry.accessLevel === 'FULL' || entry.readGrant) });
     const requestedProjectIdSet = new Set(resolvedScope.projectIds);
@@ -1224,7 +1228,7 @@ export async function buildExecutiveReportEvidence({
         dependencyMap.get(predId).ardil.push(taskId);
       }
     }
-    const snapshotConsistent = postCutoffModifiedCount === 0 && !hasPostCutoffScopeLoss && !hasPostCutoffDependencyChange;
+    const snapshotConsistent = postCutoffModifiedCount === 0 && !hasPostCutoffScopeLoss;
     // Kesit sonrası görev güncellemesi veya bağımlılık değişikliği varsa silinmiş/değişmiş bağlantılar tarihsel olarak
     // kanıtlanamayacağından bağımlılık kapsamı eksiksiz (`complete`) bildirilmez.
     const dependencyCoverage = (
@@ -1289,8 +1293,8 @@ export async function buildExecutiveReportEvidence({
       if (!projectId || allPackageProjects.has(projectId)) return;
       allPackageProjects.set(projectId, {
         projectId,
-        code: contrib?.code ? dataText(contrib.code, 60) : null,
-        name: contrib?.name ? dataText(contrib.name, 160) : null
+        code: contrib?.code ? dataText(contrib.code.normalize('NFC'), 60) : null,
+        name: contrib?.name ? dataText(contrib.name.normalize('NFC'), 160) : null
       });
     };
     for (const proj of periodActivityAgg?.contributingProjects || []) registerPackageProject(proj?.projectId, proj);
@@ -1818,6 +1822,7 @@ export async function buildExecutiveReportEvidence({
       taskReadTruncated: Boolean(taskFactsResult.truncated),
       rosterTruncated,
       snapshotConsistent,
+      dependencySnapshotConsistent: !hasPostCutoffDependencyChange,
       lastReopenAtByTaskId,
       lastTargetFinishChangeByTaskId
     });

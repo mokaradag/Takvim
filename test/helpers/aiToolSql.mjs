@@ -1119,7 +1119,7 @@ function reportProjectSelectors(db, params) {
 function reportDependencies(db, params) {
   const scope = scopeOf(db, params);
   const limit = Number(params.maxRows || 1001);
-  const taskFilter = new Set(String(params.taskIds || '').split(',').map(upper).filter(isGuid));
+  const taskFilter = new Set(String(params.taskIds || '').split(',').map((id) => upper(id.trim())).filter(isGuid));
   const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
   const isPostCutoffDep = (dep) => {
     if (cutOffMs == null) return false;

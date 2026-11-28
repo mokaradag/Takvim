@@ -41,8 +41,9 @@ test('üretim komutu ve belgeler MERGEN Rota için 8008 portunu kullanır', () =
 });
 
 function hasForeignDeploymentPort(source) {
-  return /-p\s*8009\b/u.test(source)
-    || /"(?:port|PORT)"\s*:\s*(?:"8009"|8009)(?=\s|[,}\]]|$)/u.test(source)
+  const jsonPorts = source.matchAll(/"(?:port|PORT)"\s*:\s*(?:"([^"\r\n]*)"|(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?))(?=\s|[,}\]]|$)/gu);
+  return /(?:^|[\s"'\x60])(?:-p\s*|--port(?:\s+|=))["']?8009["']?(?=\s|[,"'\x60;]|$)/mu.test(source)
+    || Array.from(jsonPorts).some(([, text, numeric]) => text === '8009' || Number(numeric) === 8009)
     || /\bPORT\s*=\s*["']?8009["']?(?!\d)/u.test(source)
     || /https?:\/\/[^\s"'`]+:8009\b/iu.test(source);
 }
@@ -50,7 +51,12 @@ function hasForeignDeploymentPort(source) {
 test('arşiv ölçümlerindeki 8009 sayısını dağıtım portu ayarından ayırır', () => {
   assert.equal(hasForeignDeploymentPort('Toplam 8009 kayıt incelendi.'), false);
   assert.equal(hasForeignDeploymentPort('{"output_tokens":8009}'), false);
-  for (const source of ['{"env":{"PORT":"8009"}}', '{"port":8009}', 'PORT=8009', 'next start -p 8009', 'https://örnek:8009/']) {
+  assert.equal(hasForeignDeploymentPort('{"output_tokens":8.009e3}'), false);
+  assert.equal(hasForeignDeploymentPort('next start --port=80090'), false);
+  for (const source of [
+    '{"env":{"PORT":"8009"}}', '{"port":8009}', '{"port":8.009e3}', '{"PORT":8009.0}', 'PORT=8009',
+    'next start -p 8009', 'next start --port 8009', 'next start --port=8009', 'https://örnek:8009/'
+  ]) {
     assert.equal(hasForeignDeploymentPort(source), true, source);
   }
 });

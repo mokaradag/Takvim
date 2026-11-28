@@ -47,7 +47,7 @@ const KNOWN_SCHEMA_KEYS = new Set([...ROOT_KEYS, ...SECTION_KEYS, ...PARAGRAPH_K
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // Paket sözleşmesi (`reportRequest.js`) ile aynı kanıt kimliği dilbilgisi; üyelik denetimi `known.has(ref)` ile kapalıdır.
 const REF_PATTERN = /^[EF][1-9]\d{0,14}$/u;
-// Paragraf içinde yalnızca yazdırılabilir metin; yatay sekme (U+0009) ve satır sonu dışındaki C0/C1 denetim karakterleri (U+0085 dâhil),
+// Paragrafta satır sonu dışındaki C0/C1 denetim karakterleri (U+0009 ve U+0085 dâhil),
 // Unicode çift yönlü metin denetimleri (`Bidi_Control`, U+200F dâhil), görünmez biçim karakterleri ve etiket bloğu reddedilir.
 // eslint-disable-next-line no-control-regex -- güvenilmez model metnindeki denetim karakterleri bilinçli olarak eşleştirilir
 const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\uFEFF\u{E0000}-\u{E007F}\p{Bidi_Control}]/u;
@@ -220,12 +220,38 @@ function normalizeForQuote(text) {
   return text.normalize('NFC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('tr-TR');
 }
 
+function hasInlineCodeSpan(text) {
+  const delimiters = new Set();
+  for (const [run] of text.matchAll(/`+/gu)) {
+    if (delimiters.has(run.length)) return true;
+    delimiters.add(run.length);
+  }
+  return false;
+}
+
+function hasInlineMarkdownLink(text) {
+  for (const match of text.matchAll(/\[[^\[\]\r\n\u2028\u2029]+\]\(/gu)) {
+    let depth = 1;
+    for (let index = match.index + match[0].length; index < text.length; index += 1) {
+      const char = text[index];
+      if (/[\r\n\u2028\u2029]/u.test(char)) break;
+      if (char === '\\' && /[()\\]/u.test(text[index + 1] ?? '')) index += 1;
+      else if (char === '(') depth += 1;
+      else if (char === ')' && --depth === 0) return true;
+    }
+  }
+  return false;
+}
+
 /** Düzyazıdaki dikkat gerektiren biçim kusurları; yapısal hata değildir, editoryal değerlendirmeye uyarı olarak gider. */
 function styleWarnings(text, path) {
   const warnings = [];
   if (/(^|[\r\n\u2028\u2029])[^\S\r\n\u2028\u2029]*(?:[-*•]|\d+[.)])\s+/u.test(text)) warnings.push({ kod: 'madde_isareti', yol: path });
   if (/(^|[\r\n\u2028\u2029])[^\S\r\n\u2028\u2029]*#{1,6}\s/u.test(text)
-    || /\*\*[^*]+\*\*/u.test(text) || /\[[^\[\]\r\n\u2028\u2029]+\]\([^()\r\n\u2028\u2029]*\)/u.test(text)) warnings.push({ kod: 'markdown', yol: path });
+    || /(?<!\*)(\*{1,3})(?=[^\s*])[^*\r\n\u2028\u2029]*[^\s*]\1(?!\*)/u.test(text)
+    || /(?<![\p{L}\p{N}_])(_{1,3})(?=[^\s_])[^_\r\n\u2028\u2029]*[^\s_]\1(?![\p{L}\p{N}_])/u.test(text)
+    || hasInlineCodeSpan(text)
+    || hasInlineMarkdownLink(text)) warnings.push({ kod: 'markdown', yol: path });
   if (/\b[EF][1-9]\d*\b/u.test(text)) warnings.push({ kod: 'duzyazida_kanit_kimligi', yol: path });
   if (/\b\d{4}-\d{2}-\d{2}\b/u.test(text)) warnings.push({ kod: 'iso_tarih', yol: path });
   if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/iu.test(text)) warnings.push({ kod: 'ic_tanimlayici', yol: path });

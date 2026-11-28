@@ -348,7 +348,7 @@ export function createAiGateway({
   currentSicil = getTrustedCurrentSicil,
   verifySicil = assertAiDirectoryMember,
   loadCatalogueTools = () => rotaToolNames().map((name) => getRotaTool(name)),
-  now = Date.now,
+  now = () => performance.now(),
   random = Math.random
 }) {
   /**
@@ -386,14 +386,21 @@ export function createAiGateway({
   async function callProvider({
     operation, deadline, invoke, source = null, context = null, healthFailure = () => null, failureCodeOf = () => null, beforeDispatch = null
   }) {
+    let retryNetworkCode = null;
     for (let attempt = 1; ; attempt += 1) {
-      if (beforeDispatch) await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
       const expired = deadline.failure();
       if (expired) throw expired;
-      if (context) context.attempts = attempt;
-      const startedAt = now();
+      if (beforeDispatch) await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
+      let startedAt = null;
       try {
-        const result = await raceWithAbort(() => invoke(deadline.signal), deadline.signal);
+        const result = await raceWithAbort(() => {
+          const failure = deadline.failure();
+          if (failure) throw failure;
+          startedAt = now();
+          if (context) context.attempts = attempt;
+          if (attempt > 1) recordAiRetry({ networkCode: retryNetworkCode });
+          return invoke(deadline.signal);
+        }, deadline.signal);
         const code = failureCodeOf(result);
         recordProviderCall({
           operation,
@@ -404,13 +411,14 @@ export function createAiGateway({
         return result;
       } catch (error) {
         const failure = deadline.failure() || toAiFailure(error);
+        if (startedAt === null) throw failure;
         recordProviderCall({ operation, latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
         const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
         const retry = attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
           && deadline.remainingMs() >= delayMs + MIN_ATTEMPT_BUDGET_MS;
         if (!retry) throw failure;
         await abortableDelay(delayMs, deadline.signal);
-        recordAiRetry({ networkCode: failure.details?.networkCode ?? null });
+        retryNetworkCode = failure.details?.networkCode ?? null;
       }
     }
   }
@@ -716,20 +724,31 @@ export function createAiGateway({
    * baştan ikinci kez üretilmez).
    */
   async function connectStream({ deadline, watch, context, source, healthFailure, invoke, beforeDispatch = null, resend = true }) {
+    let retryNetworkCode = null;
     for (let attempt = 1; ; attempt += 1) {
       // Yerel varlık ve yetki denetimi sağlayıcı girişimi değildir. Her taşıma denemesinden
       // önce mevcut genel son süre içinde yeniden denetlenir.
+      const expired = deadline.failure();
+      if (expired) throw expired;
       if (beforeDispatch) {
         watch.pause();
         await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
       }
-      watch.restart();
-      context.attempts = attempt;
-      const startedAt = now();
+      let startedAt = null;
       try {
-        return { opened: await raceWithAbort(invoke, watch.signal), startedAt };
+        const opened = await raceWithAbort(() => {
+          const failure = deadline.failure() || watch.failure();
+          if (failure) throw failure;
+          watch.restart();
+          startedAt = now();
+          context.attempts = attempt;
+          if (attempt > 1) recordAiRetry({ networkCode: retryNetworkCode });
+          return invoke();
+        }, watch.signal);
+        return { opened, startedAt };
       } catch (error) {
         const failure = deadline.failure() || watch.failure() || toAiFailure(error);
+        if (startedAt === null) throw failure;
         recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
         const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
         const retry = resend && attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
@@ -737,7 +756,7 @@ export function createAiGateway({
         if (!retry) throw failure;
         watch.pause();
         await abortableDelay(delayMs, deadline.signal);
-        recordAiRetry({ networkCode: failure.details?.networkCode ?? null });
+        retryNetworkCode = failure.details?.networkCode ?? null;
       }
     }
   }
@@ -1251,7 +1270,7 @@ export function createAiGateway({
         () => storeValidation({ sicil, keyNonce: personal.keyNonce, status: outcome, signal: deadline.signal }),
         deadline.signal
       );
-      if (deadline.failure()) throw deadline.failure();
+      // Zamanlayıcıyla yarışan depolama tamamlandıysa kaydedilmiş sonucu bildir.
       recordAiValidation({ durationMs: now() - startedAt, queueWaitMs: lease.queueWaitMs });
       // Anahtar doğrulama sürerken değiştirildiyse sonuç yeni anahtara ait değildir.
       return stored.recorded

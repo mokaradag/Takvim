@@ -30,7 +30,7 @@
  * Gizlilik: Yalnızca dondurulmuş SENTETİK paket kümesi kullanılır; küme özeti ve her özel adın sentetik kadrodan olduğu
  * koşudan önce doğrulanır (dışarıdan paket yolu kabul edilmez). Ham yanıtlar yalnızca `--cikti` dosyasına yazılır.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -233,7 +233,8 @@ export function resolveOnPremConfig(options = {}, env = process.env) {
 }
 
 /** Vekil köprüsüne bir yazar isteği gönderir; kabuk kullanılmaz, UTF-8 parçaları tamponlanarak çözülür. */
-export function callSurrogate(request, ledger, { adapterPath = ADAPTER } = {}) {
+export function callSurrogate(request, ledger, { adapterPath = ADAPTER, signal = null } = {}) {
+  if (signal?.aborted) return Promise.resolve({ code: null, parsed: null, spawnError: 'KOPRU_IPTAL' });
   return new Promise((resolve) => {
     let settled = false;
     const finish = (payload) => {
@@ -259,6 +260,8 @@ export function callSurrogate(request, ledger, { adapterPath = ADAPTER } = {}) {
       env,
       stdio: ['pipe', 'pipe', 'pipe']
     });
+    const stop = () => child.kill('SIGTERM');
+    signal?.addEventListener('abort', stop, { once: true });
     const stdoutChunks = [];
     let stdinError = null;
     child.stdout.on('data', (chunk) => { stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); });
@@ -271,6 +274,11 @@ export function callSurrogate(request, ledger, { adapterPath = ADAPTER } = {}) {
       if (!stdinError) stdinError = error?.code || 'KOPRU_GIRDI_HATASI';
     });
     child.on('close', (code) => {
+      signal?.removeEventListener('abort', stop);
+      if (signal?.aborted) {
+        finish({ code, parsed: null, spawnError: 'KOPRU_IPTAL' });
+        return;
+      }
       const out = Buffer.concat(stdoutChunks).toString('utf8');
       let parsed = null;
       try { parsed = JSON.parse(out.trim().split('\n').pop()); } catch { /* köprü çıktısı yok */ }
@@ -318,6 +326,7 @@ async function runScenario(entry, context) {
   const stageStart = performance.now();
   const base = {
     kosu: runId, kosu_baslangic_utc: runStartedAtUtc, dagitim_ortami: deploymentEnv ?? null,
+    kaynak_commit: context.sourceCommit,
     senaryo: entry.senaryo, kaynak: entry.kaynak, paket_ozeti: entry.paket_ozeti_sha256,
     paket_kumesi_ozeti: context.setHash, stil_ozeti_sha256: styleHash,
     tasiyici: transport, kalite: quality, ayrinti: entry.paket.istek.ayrinti ?? 'standart',
@@ -346,7 +355,7 @@ async function runScenario(entry, context) {
   let extra = {};
   const transportStart = performance.now();
   if (transport === 'vekil') {
-    const { code, parsed, spawnError } = await callSurrogate(request, ledgerFor(worker));
+    const { code, parsed, spawnError } = await callSurrogate(request, ledgerFor(worker), { signal: context.signal });
     const transportMs = Math.round(performance.now() - transportStart);
     if (spawnError || code !== 0 || !parsed || typeof parsed.text !== 'string' || parsed.error) {
       const hataKodu = parsed?.error || spawnError || (code !== 0 && code !== null ? `KOPRU_CIKIS_${code}` : 'KOPRU_CIKTISI_YOK');
@@ -415,11 +424,11 @@ async function runScenario(entry, context) {
 }
 
 /** Paylaşılan ölümcül hata durumunda yeni senaryo gönderimini durduran ve etkin işçilerin bitmesini bekleyen kuyruk yürütücüsü. */
-export async function runQualificationQueue(entries, concurrency, workerFn) {
+export async function runQualificationQueue(entries, concurrency, workerFn, { signal = null } = {}) {
   const queue = [...entries];
   let fatalError = null;
   const workers = Array.from({ length: concurrency }, async (_, worker) => {
-    while (!fatalError && queue.length) {
+    while (!fatalError && !signal?.aborted && queue.length) {
       const entry = queue.shift();
       try {
         await workerFn(entry, worker);
@@ -480,14 +489,19 @@ async function commandRun(options) {
     profileMaxOutputTokens = parseOptionalPositiveInt(options['profil-cikti-siniri'], '--profil-cikti-siniri');
     modelContextTokens = parseOptionalPositiveInt(options['baglam-siniri'], '--baglam-siniri') ?? readOnPremModelContext(model);
     onPrem = resolveOnPremConfig(options);
-    const catalogue = await listOnPremModels(onPrem);
-    if (!catalogue.includes(model)) throw new Error('Model kurum içi katalogda doğrulanamadı: koşu başlamaz (BEKLIYOR).');
   }
   const parsedConcurrency = parseOptionalPositiveInt(options.eszamanlilik, '--eszamanlilik') ?? 1;
   if (!validRunConcurrency(parsedConcurrency)) throw new Error('--eszamanlilik 1 ile 4 arasında tam sayı olmalıdır.');
   const concurrency = parsedConcurrency;
   const runId = randomUUID();
   const runStartedAtUtc = new Date().toISOString();
+  let sourceCommit = null;
+  try {
+    const sha = execFileSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
+      cwd: ROOT, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    if (/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u.test(sha)) sourceCommit = sha;
+  } catch { /* Git bilgisi olmayan dağıtımlarda kaynak commit bilinmiyor. */ }
   // Göreli --defter yolu üst ve alt süreçlerde aynı konuma işaret etmesi için tek kez mutlak yola çözülür.
   const ledgerBase = path.resolve(options.defter || path.join(tmpdir(), `rapor-yazari-defter-${runId}`));
   const ledgerFor = (worker) => `${ledgerBase}-${worker}.jsonl`;
@@ -502,7 +516,7 @@ async function commandRun(options) {
     }
   }
   // İşçi defterleri ile koşu çıktı dosyasının ya da kıyas girdilerinin aynı dosyaya düşmesi önlenir.
-  for (let worker = 0; worker < concurrency; worker += 1) {
+  for (let worker = 0; transport === 'vekil' && worker < concurrency; worker += 1) {
     const workerLedger = ledgerFor(worker);
     if (sameFile(out, workerLedger)) {
       throw new Error(`Çıktı dosyası işçi defteriyle aynı olamaz: ${out}`);
@@ -512,6 +526,14 @@ async function commandRun(options) {
         throw new Error(`İşçi defteri kıyas girdi dosyalarından biriyle aynı olamaz: ${workerLedger}`);
       }
     }
+  }
+  // Özeti yeniden yazılmış olsa bile bir paketin başka bir senaryo altında koşulmasını önle.
+  const { buildWriterPackageSet } = await import('../test/helpers/executiveReportWriterScenarios.mjs');
+  const packageProblems = bench.verifyWriterPackageSet(set, fixture, await buildWriterPackageSet());
+  if (packageProblems.length) throw new Error('Dondurulmuş senaryo ve paket eşlemesi doğrulanamadı: ' + packageProblems.join(', '));
+  if (onPrem) {
+    const catalogue = await listOnPremModels(onPrem);
+    if (!catalogue.includes(model)) throw new Error('Model kurum içi katalogda doğrulanamadı: koşu başlamaz (BEKLIYOR).');
   }
   // Her koşu ayrı bir dosya açar: eski aday kaydının üzerine ekleme ve karışık koşu üretimi engellenir.
   mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
@@ -525,18 +547,34 @@ async function commandRun(options) {
   // Dosya sisteminin kendi ad ve kimlik kuralları geçerlidir; iki koşu aynı defteri açamaz.
   writeNewQualificationFiles(runFiles);
   const context = {
-    transport, style, styleHash, fixture, runId, runStartedAtUtc, deploymentEnv,
+    transport, style, styleHash, fixture, runId, runStartedAtUtc, deploymentEnv, sourceCommit,
     ledgerFor, onPrem, model, quality, setHash: set.ozet_sha256,
     concurrency, profileMaxOutputTokens, modelContextTokens, sampling, thinkingMode, quantization, requestTimeoutMs
   };
   process.stdout.write(`Koşu ${runId}: ${entries.length} senaryo, taşıyıcı ${transport}, eşzamanlılık ${concurrency} → ${out}\n`);
-  await runQualificationQueue(entries, concurrency, async (entry, worker) => {
-    const record = await runScenario(entry, { ...context, worker });
-    appendJsonlRecordAtomic(out, record);
-    const n = record.nesnel;
-    process.stdout.write(`${record.senaryo} ${record.durum}${record.hata_kodu ? ` ${record.hata_kodu}` : ''} ${Math.round((record.sure_ms || 0) / 1000)} sn`
-      + (n ? ` · sözcük ${record.sozcuk} · yetkisiz ${n.yetkisiz_aciklama.length} · uydurma ad ${n.uydurma_kimlik.length} · defter dışı tarih ${n.defterde_olmayan_tarihler.length} · atlanan zorunlu ${n.atlanan_zorunlu_otomatik.length}` : '') + '\n');
-  });
+  const controller = new AbortController();
+  const stop = (code) => {
+    controller.abort();
+    process.exitCode = code;
+  };
+  const interrupt = () => stop(130);
+  const terminate = () => stop(143);
+  if (transport === 'vekil') {
+    process.once('SIGINT', interrupt);
+    process.once('SIGTERM', terminate);
+  }
+  try {
+    await runQualificationQueue(entries, concurrency, async (entry, worker) => {
+      const record = await runScenario(entry, { ...context, worker, signal: controller.signal });
+      appendJsonlRecordAtomic(out, record);
+      const n = record.nesnel;
+      process.stdout.write(`${record.senaryo} ${record.durum}${record.hata_kodu ? ` ${record.hata_kodu}` : ''} ${Math.round((record.sure_ms || 0) / 1000)} sn`
+        + (n ? ` · sözcük ${record.sozcuk} · yetkisiz ${n.yetkisiz_aciklama.length} · uydurma ad ${n.uydurma_kimlik.length} · defter dışı tarih ${n.defterde_olmayan_tarihler.length} · atlanan zorunlu ${n.atlanan_zorunlu_otomatik.length}` : '') + '\n');
+    }, { signal: controller.signal });
+  } finally {
+    process.off('SIGINT', interrupt);
+    process.off('SIGTERM', terminate);
+  }
 }
 
 async function commandCatalogue(options) {
@@ -580,6 +618,7 @@ export function selectHomogeneousRun(records, { runId = null } = {}) {
     kosu: r?.kosu ?? null,
     kosu_baslangic_utc: r?.kosu_baslangic_utc ?? null,
     dagitim_ortami: r?.dagitim_ortami ?? null,
+    kaynak_commit: r?.kaynak_commit ?? null,
     tasiyici: r?.tasiyici ?? null,
     kalite: r?.kalite ?? null,
     profil: r?.profil ?? null,
@@ -960,9 +999,10 @@ export function isValidStoredDraftShape(draft) {
 export function hasVerifiedStoredModelIdentity(record) {
   const expected = expectedModelOf(record);
   const raw = record?.model?.bildirilen;
-  const rawValid = Array.isArray(raw) ? raw.length === 1 && raw[0] === expected : raw === expected;
-  const reported = reportedModelsOf(record);
-  return Boolean(expected && record?.model?.dogrulandi === true && rawValid && reported.length === 1 && reported[0] === expected);
+  if (typeof expected !== 'string' || !expected.trim() || record?.model?.dogrulandi !== true) return false;
+  return Array.isArray(raw)
+    ? record.tasiyici !== 'kurum-ici' && raw.length === 1 && raw[0] === expected
+    : raw === expected;
 }
 
 const EXPECTED_PROFILE_BY_QUALITY = Object.freeze({
@@ -1121,22 +1161,24 @@ export function summarizeRun(records, {
     const dateVerdictKnown = Boolean(judge && isNonNegInt(judge.uydurma_tarih));
     const datePending = offLedgerDates.length > 0 && !dateVerdictKnown ? offLedgerDates.length : 0;
     const numberPending = offLedgerNumbers.length > 0 && !hasValidCounts ? offLedgerNumbers.length : 0;
-    // `kronoloji_incelendi: false` tamamlanmamış incelemedir; bekleyen kronoloji adayını kapatmaz.
-    const chronologyErrorKnown = Boolean(judge && isNonNegInt(judge.kronoloji_hatasi));
-    const chronologyDecisionKnown = Boolean(
-      judge && (judge.kronoloji_incelendi === true || chronologyErrorKnown)
-    );
-    // Eksik kronoloji taraması temiz (0) sayılmaz; hakem kararı yoksa bekleyen kronoloji incelemesi olarak sayılır.
-    // Aday varsa yalnızca bağlı hakem dosyasında açık kronoloji kararı (`kronoloji_incelendi: true` veya `kronoloji_hatasi`) ile kapanır.
-    const chronologyPending = !hasChronologyScan
-      ? (chronologyDecisionKnown ? 0 : 1)
-      : (chronologyCandidates.length > 0 && !chronologyDecisionKnown ? chronologyCandidates.length : 0);
-    // Onaylı kronoloji hatası sayısı satırda ve özette ayrı korunur; karar yoksa `null` (0 ile karıştırılmaz).
-    const chronologyErrorConfirmed = chronologyErrorKnown
-      ? judge.kronoloji_hatasi
-      : (!hasChronologyScan
-        ? null
-        : (judge?.kronoloji_incelendi === true ? 0 : (chronologyCandidates.length === 0 ? 0 : null)));
+    const reviewFlag = judge?.kronoloji_incelendi;
+    const errorCount = judge?.kronoloji_hatasi;
+    const validCount = isNonNegInt(errorCount);
+    const malformed = (reviewFlag !== undefined && typeof reviewFlag !== 'boolean')
+      || (errorCount !== undefined && !validCount);
+    const incomplete = reviewFlag === false || malformed;
+    const decided = !incomplete && (reviewFlag === true || validCount);
+    const cleanScan = !incomplete && hasChronologyScan && chronologyCandidates.length === 0;
+    // Sayısal sıfır, açıkça bitmemiş incelemeyi kapatmaz; doğrulanmış pozitif bulgular korunur.
+    const chronologyPending = decided || cleanScan ? 0 : Math.max(1, chronologyCandidates.length);
+    const chronologyErrorConfirmed = !malformed && validCount && (decided || errorCount > 0)
+      ? errorCount
+      : (decided || cleanScan ? 0 : null);
+    let chronologyReviewStatus = hasChronologyScan ? 'bekliyor' : 'bilinmiyor';
+    if (malformed) chronologyReviewStatus = 'karar_gecersiz';
+    else if (reviewFlag === false) chronologyReviewStatus = 'tamamlanmadi';
+    else if (decided) chronologyReviewStatus = chronologyErrorConfirmed > 0 ? 'hata_onayli' : 'temiz';
+    else if (cleanScan) chronologyReviewStatus = 'aday_yok';
     const inventedDateConfirmed = !hasDateScan
       ? null
       : (dateVerdictKnown ? judge.uydurma_tarih : (offLedgerDates.length === 0 ? 0 : null));
@@ -1175,6 +1217,7 @@ export function summarizeRun(records, {
       taslak_ozeti: draftDigest(row),
       nesnel_tarama_durumu: objectiveScanStatus,
       kronoloji_tarama_durumu: hasChronologyScan ? 'tarandi' : 'taranmadi',
+      kronoloji_inceleme_durumu: chronologyReviewStatus,
       hakem_baglami: judgeBinding,
       yetkisiz_aciklama: disclosureConfirmed,
       yetkisiz_aciklama_adaylari: disclosureCandidates,
@@ -1288,7 +1331,7 @@ export function summarizeRun(records, {
   const pendingDateTotal = perReport.reduce((sum, row) => sum + row.bekleyen_tarih_adayi, 0);
   const pendingNumberTotal = perReport.reduce((sum, row) => sum + row.bekleyen_sayi_adayi, 0);
   const pendingChronologyTotal = perReport.reduce((sum, row) => sum + row.bekleyen_kronoloji_adayi, 0);
-  const confirmedChronologyErrors = perReport.length > 0 && perReport.every((row) => row.kronoloji_hatasi !== null)
+  const confirmedChronologyErrors = perReport.length > 0 && perReport.every((row) => row.kronoloji_hatasi !== null && row.bekleyen_kronoloji_adayi === 0)
     ? perReport.reduce((sum, row) => sum + row.kronoloji_hatasi, 0)
     : null;
   const confirmedChronologyErrorScenarios = perReport
@@ -1310,6 +1353,7 @@ export function summarizeRun(records, {
       nitelendirmeye_uygun: eligibleForQualification,
       nitelendirme_notu: eligibilityNote,
       model_beklenen: expectedModelOf(first),
+      kaynak_commit: first.kaynak_commit ?? null,
       bildirilen_modeller: reportedModels,
       kalite: first.kalite ?? null,
       profil: first.profil ?? null,
@@ -1366,7 +1410,7 @@ export function summarizeRun(records, {
     },
     yazar_sure_p95_standart_sn: standardP95,
     yazar_sure_p95_esigi_sn: p95CapSeconds,
-    on_yazar_sure_esigi_gecti: p95WithinCap,
+    on_yazar_sure_esigi_gecti: p95WithinCap && profileMatchesQuality,
     sure_kapisi_gecerli: latencyGateValid,
     sure_kapisi_durumu: latencyGateStatus,
     rapor: perReport
@@ -1489,11 +1533,15 @@ export function literalFence(text) {
 // Model adları tire, boşluk ve sürüm noktaları değişse de karşılaştırılır. Tarihli katalog takma adının kökü de denetlenir.
 function mentionsGeneratingModel(record) {
   const compact = (text) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-  const prose = compact(bench.draftProse(record.taslak));
+  const rawProse = bench.draftProse(record.taslak).normalize('NFKC').toLowerCase();
+  const prose = compact(rawProse);
   const identities = [expectedModelOf(record), ...reportedModelsOf(record)].filter((id) => typeof id === 'string');
   return identities.some((id) => [id, id.replace(/[-_.](?:\d{8}|bf16|fp8|fp16|int4|int8)$/iu, '')].some((alias) => {
     const name = compact(alias);
-    return name.length >= 5 && prose.includes(name);
+    if (name.length >= 5) return prose.includes(name);
+    if (!name) return false;
+    const exact = alias.normalize('NFKC').toLowerCase().replace(/[.*+?^$(){}|[\]\\]/gu, '\\$&');
+    return new RegExp('(?:^|[^\\p{L}\\p{N}])' + exact + '(?=$|[^\\p{L}\\p{N}])', 'u').test(rawProse);
   }));
 }
 

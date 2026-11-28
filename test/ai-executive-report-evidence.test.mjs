@@ -48,11 +48,14 @@ const { NOTE_LIMITS } = await import('../src/server/ai/tools/analysisPlan.js');
 const {
   TASK_NOTE_CHARS,
   REPORT_TASK_NOTE_CHARS,
+  readReportActivitySummary,
+  readReportDependencies,
   readReportScopeRoster,
   readTaskFacts
 } = await import('../src/server/ai/tools/rota/rotaToolStore.js');
 const {
   AI_TOOL_REPORT_ACTIVITY_SUMMARY_SQL,
+  AI_TOOL_REPORT_DEPENDENCIES_SQL,
   AI_TOOL_REPORT_TASK_NOTES_SQL,
   AI_TOOL_TASK_FACTS_SQL,
   AI_TOOL_TASK_NOTES_SQL
@@ -5025,45 +5028,43 @@ test('SQL ve sentetik ikiz eşliği: aynı satırdan yeniden açılma/AuditId, s
   });
 });
 
-test('proje etiket ayrıştırması: kanonik eşdeğer NFC ve NFD proje adları çakışmasız ayrıştırılır', async () => {
-  const baseSeed = executiveReportBenchmarkSeed();
-  const nfcProjectId = '11111111-1111-4111-8111-111111111201';
-  const nfdProjectId = '11111111-1111-4111-8111-111111111202';
+test('proje etiketleri kesmeden önce normalleşir ve seçici sırası değişince aynı kalır', async () => {
+  const base = executiveReportBenchmarkSeed();
+  const prefix = 'a'.repeat(158);
+  const projectNames = [prefix + 'éx', prefix + 'e\u0301x', prefix + 'zx', prefix + 'zx'];
+  const rows = projectNames.map((ProjectName, index) => ({
+    ProjectId: '11111111-1111-4111-8111-11111111120' + (index + 1),
+    TaskId: '22222222-2222-4222-8222-22222222120' + (index + 1),
+    ProjectName
+  }));
   await withReportStack({
-    projects: [
-      ...baseSeed.projects,
-      { ProjectId: nfcProjectId, SourceType: 'MANUAL', ProjectCode: '', ProjectName: 'Café', LeadSicil: U.YONETICI, IsActive: 1 },
-      { ProjectId: nfdProjectId, SourceType: 'MANUAL', ProjectCode: '', ProjectName: 'Cafe\u0301', LeadSicil: U.YONETICI, IsActive: 1 }
-    ],
-    tasks: [
-      ...baseSeed.tasks,
-      {
-        TaskId: '22222222-2222-4222-8222-222222221201', ProjectId: nfcProjectId, Title: 'NFC proje görevi',
-        Status: 'done', Priority: 'normal', ActualFinish: '2026-11-05',
-        CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: '2026-11-05T10:00:00.000Z'
-      },
-      {
-        TaskId: '22222222-2222-4222-8222-222222221202', ProjectId: nfdProjectId, Title: 'NFD proje görevi',
-        Status: 'done', Priority: 'normal', ActualFinish: '2026-11-05',
-        CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: '2026-11-05T10:00:00.000Z'
-      }
-    ]
+    projects: [...base.projects, ...rows.map(({ ProjectId, ProjectName }) => ({
+      ProjectId, SourceType: 'MANUAL', ProjectCode: '', ProjectName, LeadSicil: U.YONETICI, IsActive: 1
+    }))],
+    tasks: [...base.tasks, ...rows.map(({ ProjectId, TaskId }) => ({
+      TaskId, ProjectId, Title: 'Etiket denetimi görevi', Status: 'done', Priority: 'normal', ActualFinish: '2026-11-05',
+      CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: '2026-11-05T10:00:00.000Z'
+    }))]
   }, U.YONETICI, async () => {
-    const { evidencePackage } = await buildExecutiveReportEvidence({
-      request: {
-        rapor_turu: 'haftalik',
-        donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
-        kapsam: { tur: 'projeler', kimlikler: [nfcProjectId, nfdProjectId] },
-        notlar: 'haric'
-      },
-      now: REPORT_BENCH_NOW,
-      today: REPORT_BENCH_TODAY
-    });
-    const labels = evidencePackage.kanitlar
-      .filter((item) => item.tur === 'gorev')
-      .map((item) => item.proje)
-      .sort();
-    assert.deepEqual(labels, ['Café #1', 'Café #2']);
+    const labelsFor = async (kimlikler) => {
+      const { evidencePackage } = await buildExecutiveReportEvidence({
+        request: {
+          rapor_turu: 'haftalik',
+          donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
+          kapsam: { tur: 'projeler', kimlikler },
+          notlar: 'haric'
+        },
+        now: REPORT_BENCH_NOW,
+        today: REPORT_BENCH_TODAY
+      });
+      const tasks = new Map(evidencePackage.kanitlar.filter((item) => item.tur === 'gorev').map((item) => [item.gorev, item]));
+      for (const { TaskId, ProjectName } of rows) assert.equal(tasks.get(TaskId)?.proje_adi, ProjectName.normalize('NFC'));
+      return rows.map(({ TaskId }) => tasks.get(TaskId).proje);
+    };
+    const ids = rows.map((row) => row.ProjectId);
+    const labels = await labelsFor(ids);
+    assert.deepEqual(labels, rows.map((_, index) => prefix.slice(0, 157) + ' #' + (index + 1)));
+    assert.deepEqual(await labelsFor([...ids].reverse()), labels);
   });
 });
 
@@ -5098,6 +5099,10 @@ test('kesit sonrası tamamlanma projesi: aynı projede sonradan düzenlenen gör
         CreatedBySicil: U.YONETICI, CreatedAt: '2026-11-01T08:00:00.000Z', UpdatedAt: postCutoffTs
       }
     ],
+    taskAssignees: [
+      ...baseSeed.taskAssignees,
+      ...[sameProjectEditedId, movedFromUnauthId, missingAuditId].map((TaskId) => ({ TaskId, Sicil: U.YONETICI }))
+    ],
     auditLog: [
       ...baseSeed.auditLog,
       {
@@ -5130,7 +5135,7 @@ test('kesit sonrası tamamlanma projesi: aynı projede sonradan düzenlenen gör
       request: {
         rapor_turu: 'haftalik',
         donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
-        kapsam: { tur: 'proje', kimlikler: ['PRJ-KUZEY'] },
+        kapsam: { tur: 'kisi', kimlikler: ['Selin Karahan'] },
         notlar: 'haric'
       },
       now: REPORT_BENCH_NOW,
@@ -5150,10 +5155,19 @@ test('kesit sonrası tamamlanma projesi: aynı projede sonradan düzenlenen gör
     const missingAuditRow = evidencePackage.kanitlar.find((k) => k.tur === 'gorev' && k.gorev === missingAuditId);
     assert.ok(missingAuditRow);
     assert.equal(missingAuditRow.tamamlandigi_proje, undefined, 'denetim kaydı olmadan tarihsel tamamlanma projesi uydurulmamalıdır');
+    const pool = await getSqlPool();
+    const scope = buildRotaScope(await loadAuthorizationContext(pool));
+    const activity = await readReportActivitySummary(pool, scope, {
+      from: '2026-11-02', to: '2026-11-08', assigneeSicils: [U.YONETICI], cutOffUtc: REPORT_BENCH_NOW
+    });
+    assert.ok(activity.liveTasks.some((row) => row.taskId === sameProjectEditedId && row.completedProjectId === P.KUZEY));
+    assert.equal(activity.liveTasks.some((row) => row.taskId === movedFromUnauthId), false);
   });
 });
 
 test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya güncellenen kenarlar dışlanır ve kapsam partial olarak bildirilir', async () => {
+  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /d\.CreatedAt <= @cutOffUtc[\s\S]*d\.UpdatedAt <= @cutOffUtc[\s\S]*ORDER BY/u);
+  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /d\.CreatedAt > @cutOffUtc[\s\S]*d\.UpdatedAt > @cutOffUtc[\s\S]*AS HasPostCutoffChange/u);
   const baseSeed = executiveReportBenchmarkSeed();
   const depProjectId = '11111111-1111-4111-8111-111111111401';
   const taskPreId = '22222222-2222-4222-8222-222222221401';
@@ -5220,7 +5234,9 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya günce
     const { evidencePackage } = await buildExecutiveReportEvidence({
       request: testRequest, now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
     });
-    verify(evidencePackage);
+    const pool = await getSqlPool();
+    const scope = buildRotaScope(await loadAuthorizationContext(pool));
+    await verify(evidencePackage, pool, scope);
   });
   const createEdge = (TaskId, PredecessorTaskId, CreatedAt, UpdatedAt) => ({
     ProjectId: depProjectId, TaskId, PredecessorTaskId, DependencyType: 'FS', LagDays: 0, CreatedAt, UpdatedAt
@@ -5231,7 +5247,14 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya günce
     createEdge(taskPostId, taskMidId, postCutoffTs, null),
     createEdge(taskPreId, taskPostId, preCutoffTs, postCutoffTs)
   ]) {
-    await readDependencies(makeTasks(preCutoffTs), [originalEdge, lateEdge], (evidencePackage) => {
+    await readDependencies(makeTasks(preCutoffTs), [originalEdge, lateEdge], async (evidencePackage, pool, scope) => {
+      const read = await readReportDependencies(pool, scope, {
+        projectIds: [depProjectId],
+        taskIds: [taskMidId, ` ${lateEdge.TaskId} `],
+        cutOffUtc: REPORT_BENCH_NOW
+      });
+      assert.deepEqual(read.dependencies.map((edge) => [edge.TaskId, edge.PredecessorTaskId]), [[taskMidId, taskPreId]]);
+      assert.equal(read.hasPostCutoffChange, true);
       const taskRows = new Map(evidencePackage.kanitlar.filter((item) => item.tur === 'gorev').map((item) => [item.gorev, item]));
       assert.ok(taskRows.has(taskPostId) && taskRows.has(taskPreId) && taskRows.has(taskMidId), 'Üç görev de kanıtta bulunmalıdır.');
       assert.ok(taskRows.get(taskMidId).bagimliliklar?.oncul?.includes(taskPreId), 'Kesit öncesi kenar korunmalıdır.');
@@ -5239,6 +5262,9 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya günce
       assert.ok(!taskRows.get(lateEdge.PredecessorTaskId).bagimliliklar?.ardil?.includes(lateEdge.TaskId));
       assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
       assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
+      assert.equal(evidencePackage.tamlik.tarihsiz_tamamlanan, 0);
+      assert.equal(evidencePackage.tamlik.hareket, 'complete');
+      assert.ok(evidencePackage.kanitlar.some((item) => item.tur === 'olcu' && item.olcu === 'tamamlanan' && item.tamlik === 'complete'));
     });
   }
 

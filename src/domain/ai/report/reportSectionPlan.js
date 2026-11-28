@@ -360,13 +360,30 @@ function derivedIds(pkg, types = null) {
   return (pkg.turetilmis || []).filter((item) => isPlainObject(item) && (!types || types.includes(item.tur))).map((item) => item.id);
 }
 
-/** İlk görülen kanıt sırasını korur; bir kanıta çelişen zamanlar atanmışsa kronoloji kurulamaz. */
-export function distinctConflictEvidence(references, chronology) {
+function parseConflictTime(ts) {
+  if (typeof ts !== 'string') return null;
+  const trimmed = ts.trim();
+  if (isIsoDay(trimmed)) return { kind: 'day', value: trimmed };
+  const nanos = parseIsoTimestampNanos(trimmed);
+  return nanos !== null ? { kind: 'ns', value: nanos } : null;
+}
+
+/** İlk kanıt sırasını korur; geçersiz, çelişen veya kesit sonrası zamanları kronolojiye katmaz. */
+export function distinctConflictEvidence(references, chronology, cutoff) {
   const positions = new Map();
   references.forEach((id, index) => { if (!positions.has(id)) positions.set(id, index); });
-  const aligned = Array.isArray(chronology) && chronology.length === references.length
-    && Array.from(references).every((id, index) => Object.hasOwn(chronology, index)
-      && chronology[index] === chronology[positions.get(id)]);
+  const cutoffInstant = parseIsoTimestampNanos(cutoff);
+  const cutoffDay = snapshotDay(cutoff);
+  const times = Array.isArray(chronology) && chronology.length === references.length
+    ? Array.from(chronology, parseConflictTime)
+    : null;
+  const aligned = times && references.every((id, index) => {
+    const time = times[index];
+    const first = times[positions.get(id)];
+    if (!time || !first || time.kind !== first.kind || time.value !== first.value) return false;
+    const limit = time.kind === 'day' ? cutoffDay : cutoffInstant;
+    return limit != null && time.value <= limit;
+  });
   return {
     references: [...positions.keys()],
     chronology: aligned ? [...positions.values()].map((index) => chronology[index]) : null
@@ -447,14 +464,6 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   const itemById = new Map(pkg.kanitlar.filter((item) => isPlainObject(item) && typeof item.id === 'string').map((item) => [item.id, item]));
   // Çelişki zamanları yalnızca geçerli ISO anı (nanosaniye) ya da kesin takvim günü (YYYY-AA-GG) olarak ayrıştırılır;
   // aynı anın farklı saat dilimi yazımları (`Z` ve `+03:00`) tek anahtara indirgenir ve kuyruk çöpü reddedilir.
-  const parseConflictTime = (ts) => {
-    if (typeof ts !== 'string') return null;
-    const trimmed = ts.trim();
-    if (!trimmed) return null;
-    if (isIsoDay(trimmed)) return { kind: 'day', value: trimmed };
-    const nanos = parseIsoTimestampNanos(trimmed);
-    return nanos !== null ? { kind: 'ns', value: nanos } : null;
-  };
   // Kronolojik öncelik yalnızca karşılaştırılan TÜM kayıtlarda geçerli zaman bulunup
   // en az iki farklı zaman noktası VE tekil bir en güncel kayıt olduğunda verilir;
   // tarihsiz kayıt, seyrek dizi boşluğu ya da en son zamanı paylaşan iki kayıt varsa tek kayıt esas alınamaz.
@@ -482,7 +491,7 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   const hasOrderableConflictTime = (conflict) => {
     // Farklı görevlere ait iki güncel notun yazım zamanı farkı (`notlar_arasi_celiski`) durum değişimi kanıtı değildir.
     if (conflict.tur === 'notlar_arasi_celiski') return false;
-    const evidence = distinctConflictEvidence(conflict.kanitlar, conflict.kronoloji);
+    const evidence = distinctConflictEvidence(conflict.kanitlar, conflict.kronoloji, pkg.veri_ani);
     if (Array.isArray(conflict.kronoloji)) return hasUniqueLatestTime(evidence.chronology);
     const writeTimes = evidence.references
       .map((id) => itemById.get(id))
@@ -598,10 +607,11 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
       (Number.isFinite(item.donem_ozeti.toplam_hareket) && item.donem_ozeti.toplam_hareket > 0)
       || (Number.isFinite(item.donem_ozeti.tamamlanan_gorev) && item.donem_ozeti.tamamlanan_gorev > 0)
       || (Number.isFinite(item.donem_ozeti.olusturulan_gorev) && item.donem_ozeti.olusturulan_gorev > 0)
+      || (Number.isFinite(item.donem_ozeti.yeniden_acilan_gorev) && item.donem_ozeti.yeniden_acilan_gorev > 0)
     )
   ));
   const completedExplicitZero = completedMeasures.length > 0
-    && completedMeasures.every((item) => item.deger === 0 && item.tamlik !== 'partial');
+    && completedMeasures.every((item) => item.deger === 0 && item.tamlik !== 'partial' && item.kayit_kapsami !== 'partial');
   const completionCompatibleWithZero = completedMeasures.length === 0 || completedExplicitZero;
   const activityExplicitZero = activityMeasures.length > 0
     && activityMeasures.every((item) => item.deger === 0 && item.kayit_kapsami !== 'partial' && item.tamlik !== 'partial');
@@ -679,7 +689,8 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
         if (item.tur === 'hareket' && isPlainObject(item.donem_ozeti)) {
           const completedCount = item.donem_ozeti.tamamlanan_gorev;
           const createdCount = item.donem_ozeti.olusturulan_gorev;
-          return (Number.isFinite(completedCount) && completedCount > 0) || (Number.isFinite(createdCount) && createdCount > 0);
+          const reopenedCount = item.donem_ozeti.yeniden_acilan_gorev;
+          return [completedCount, createdCount, reopenedCount].some((count) => Number.isFinite(count) && count > 0);
         }
         return false;
       }).map((item) => item.id)
@@ -709,6 +720,7 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
   const disclosures = integrityDisclosures(pkg, classified, riskPlanned);
 
   const [styleMin, styleMax] = writerStyle.sozcukButcesi[detail];
+  if (styleMax < included.length) throw new ReportPlanError('STYLE_INVALID', 'anlati.bolum_plani.sozcuk_butcesi');
   // Bütçe kanıt yoğunluğuyla orantılıdır: dar kanıtta hem alt hem üst sınır düşer, ancak stil tavanını (`styleMax`) asla aşmaz.
   const richness = groups.gorev.length + groups.not.length + groups.belge.length + groups.hareket.length + derivedAll.length;
   const sparse = richness <= SPARSE_EVIDENCE_ITEMS;

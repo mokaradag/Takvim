@@ -80,7 +80,7 @@ export function createProgressWatch({ firstEventMs, idleMs, parentSignal = null 
  * kodlarla bildirilsin. `dispose()` zamanlayıcıyı ve üst sinyal dinleyicisini
  * HER yolda temizler; zamanlayıcı yalnızca iş sürerken yaşar.
  */
-export function createAiDeadline({ timeoutMs, parentSignal = null, now = Date.now }) {
+export function createAiDeadline({ timeoutMs, parentSignal = null, now = () => performance.now() }) {
   const controller = new AbortController();
   const startedAt = now();
   const budgetMs = Math.max(1, Math.trunc(Number(timeoutMs) || 1));

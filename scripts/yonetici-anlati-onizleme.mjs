@@ -123,7 +123,8 @@ for (const id of wanted) {
     out.push(`## ${id} — ${scenario.durum}`, '', '_Bu senaryo koşu kaydında yer almıyor (koşulmadı)._', '');
     continue;
   }
-  const model = Array.isArray(record.model?.bildirilen) ? record.model.bildirilen.join(', ') : record.model?.bildirilen ?? '-';
+  const reported = record.model?.bildirilen;
+  const model = (Array.isArray(reported) ? reported : [reported]).filter((name) => typeof name === 'string' && name).join(', ') || '-';
   const durationLabel = Number.isFinite(record.sure_ms) && record.sure_ms >= 0
     ? `${Math.round(record.sure_ms / 1000)} sn`
     : 'ölçülmedi';
@@ -137,7 +138,7 @@ for (const id of wanted) {
     } else if (!isValidStoredDraftShape(record.taslak)) {
       status = 'gecersiz_kayit';
       message = 'Kayıtlı taslak yapısı bozuk; önizleme oluşturulamadı.';
-    } else if (digest == null) {
+    } else if (digest == null && record.tasiyici === 'vekil') {
       status = 'dogrulanmamis_tarihsel';
       message = 'Uyarı: kayıtlı taslak özeti yok (doğrulanmamış tarihsel taslak).';
     } else if (typeof digest !== 'string' || !digest.trim()) {

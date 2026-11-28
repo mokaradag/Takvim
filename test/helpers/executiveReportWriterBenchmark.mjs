@@ -181,13 +181,15 @@ const FIXED_SCENARIO_IDS = Object.freeze(
 const FIXED_SCENARIO_SET = new Set(FIXED_SCENARIO_IDS);
 
 /** Paket kümesindeki sürümü, sabit 48 senaryo kadrosunu, özetleri ve sentetik kadro bütünlüğünü doğrular. */
-export function verifyWriterPackageSet(set, fixture) {
+export function verifyWriterPackageSet(set, fixture, regeneratedSet = null) {
   const problems = [];
   if (set?.sema !== 'bilgin-yonetici-raporu-yazar-paketleri' || set?.veri_niteligi !== 'sentetik') problems.push('sema_ya_da_veri_niteligi');
   if (set?.surum !== 1) problems.push('surum_desteklenmiyor');
   if (fixture?.veri_niteligi !== 'sentetik') problems.push('fikstur_sentetik_degil');
-  const fixtureIds = (fixture?.senaryolar || []).map((item) => item?.id);
-  const scenarios = new Map((fixture?.senaryolar || []).map((item) => [item.id, item]));
+  const rows = Array.isArray(fixture?.senaryolar) ? fixture.senaryolar : [];
+  const fixtureIds = Array.from(rows, (row) => row?.id);
+  const scenarios = new Map(rows.filter((row) => row && typeof row === 'object' && !Array.isArray(row)).map((row) => [row.id, row]));
+  const regeneratedById = regeneratedSet && new Map(regeneratedSet.paketler.map((row) => [row.senaryo, row]));
   const packages = Array.isArray(set?.paketler) ? set.paketler : [];
   const ids = packages.map((item) => item?.senaryo);
   const fixtureMatchesRoster = fixtureIds.length === FIXED_SCENARIO_IDS.length
@@ -199,6 +201,11 @@ export function verifyWriterPackageSet(set, fixture) {
   if (!fixtureMatchesRoster || !packagesMatchRoster) problems.push('senaryo_kumesi_eksik');
   const expectedHash = sha256(canonicalJson(packages));
   if (set?.ozet_sha256 !== expectedHash) problems.push('ozet_uyusmuyor');
+  const staff = fixture?.sentetik_kadro;
+  if (!staff || ![staff.kisiler, staff.birimler, staff.ekipler].every(Array.isArray)
+    || ![staff.projeler, staff.kapali_varliklar].every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+    return [...problems, 'sentetik_kadro_gecersiz'];
+  }
   const roster = syntheticRoster(fixture);
   const projectBaseLabels = new Set([
     ...Object.keys(fixture?.sentetik_kadro?.projeler || {}),
@@ -214,6 +221,9 @@ export function verifyWriterPackageSet(set, fixture) {
       problems.push(`paket_satiri_gecersiz:${index}`);
       continue;
     }
+    if (regeneratedById && canonicalJson(regeneratedById.get(entry.senaryo) ?? null) !== canonicalJson(entry)) {
+      problems.push('senaryo_paketi_uyusmuyor:' + entry.senaryo);
+    }
     const contract = validateEvidencePackageContract(entry?.paket);
     if (!contract.ok) problems.push(`kanit_zarfi_gecersiz:${entry?.senaryo}`);
     if (entry?.paket !== undefined && typeof entry.paket !== 'function' && typeof entry.paket !== 'symbol') {
@@ -224,6 +234,7 @@ export function verifyWriterPackageSet(set, fixture) {
     if (!Array.isArray(entry?.zorunlu_olgular)) {
       problems.push(`zorunlu_olgular_gecersiz:${entry?.senaryo}`);
     } else {
+      const factIds = new Set();
       for (const fact of entry.zorunlu_olgular) {
         const validGroups = Boolean(
           fact && typeof fact === 'object' && !Array.isArray(fact)
@@ -232,6 +243,8 @@ export function verifyWriterPackageSet(set, fixture) {
           && fact.anahtarlar.every((group) => Array.isArray(group) && group.length > 0
             && group.every((kw) => typeof kw === 'string' && kw.trim().length > 0))
         );
+        if (validGroups && factIds.has(fact.id)) problems.push('zorunlu_olgu_kimligi_yineleniyor:' + entry.senaryo);
+        if (validGroups) factIds.add(fact.id);
         if (!validGroups) problems.push(`zorunlu_olgu_gecersiz:${entry.senaryo}`);
       }
     }
@@ -302,16 +315,16 @@ const ALL_NUMBER_WORDS = new Set([
 ]);
 const NUMBER_WORD_SEQ = `(?:${[...ALL_NUMBER_WORDS].join('|')})(?:\\s+(?:${[...ALL_NUMBER_WORDS].join('|')}))*`;
 const DECIMAL_PHRASE_PATTERN = new RegExp(
-  `(?<=[\\s(])(${NUMBER_WORD_SEQ})\\s+(?:virgül|nokta)\\s+(${NUMBER_WORD_SEQ})(?=[\\s.,;:)'])`,
+  `(?<=[\\s(«„“\"'])(${NUMBER_WORD_SEQ})\\s+(?:virgül|nokta)\\s+(${NUMBER_WORD_SEQ})(?=[\\s.,;:)»”\"'])`,
   'gu'
 );
 const NUMBER_PHRASE_PATTERN = new RegExp(
-  `(?<=[\\s(])(${NUMBER_WORD_SEQ})(?=[\\s.,;:)'])`,
+  `(?<=[\\s(«„“\"'])(${NUMBER_WORD_SEQ})(?=[\\s.,;:)»”\"'])`,
   'gu'
 );
 const MONTHS = ['ocak', 'şubat', 'mart', 'nisan', 'mayis', 'haziran', 'temmuz', 'ağustos', 'eylül', 'ekim', 'kasim', 'aralik'];
 const MONTH_ALT = MONTHS.join('|');
-const BIR_BEFORE_MONTH_PATTERN = new RegExp(`(?<=[\\s(])bir(?=\\s+(?:${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?=[\\s.,;:)']))`, 'gu');
+const BIR_BEFORE_MONTH_PATTERN = new RegExp(`(?<=[\\s(«„“\"'])bir(?=\\s+(?:${MONTH_ALT})(?:'?[a-zçğıöşü]*)?(?=[\\s.,;:)»”\"']))`, 'gu');
 
 /**
  * Birleşik Türkçe sayı öbeklerini ("yüz yirmi" → 120, "on iki" → 12) tek sayı olarak çözer;
@@ -462,14 +475,14 @@ function extractDateAnalysis(text, defaultYear, { includeInvalid = true } = {}) 
     addDate(Number(m[4]), Number(m[3]), Number(m[1]), m.index);
   });
   // 3. Ay adlı gün aralığı ("2–8 Kasım 2026")
-  consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s*[–-]\\s*(\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
+  consume(new RegExp(`(?<!\\d)(\\d{1,2})\\s*[–—−-]\\s*(\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
     const year = m[4] ? Number(m[4]) : defaultYear;
     const month = MONTHS.indexOf(m[3]) + 1;
     addDate(year, month, Number(m[1]), m.index);
     addDate(year, month, Number(m[2]), m.index + m[1].length + 1);
   });
   // 4. Ortak aylı eşgüdümlü gün listesi ("26 ve 27 Kasım 2026", "10, 12 ve 14 Kasım")
-  consume(new RegExp(`(?<!\\d)(\\d{1,2}(?:\\s*,\\s*\\d{1,2})*\\s+ve\\s+\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
+  consume(new RegExp(`(?<![\\d.,%])(?<!%\\s|yüzde\\s)(\\d{1,2}(?:\\s*,\\s*\\d{1,2})*\\s+ve\\s+\\d{1,2})\\s+(${MONTH_ALT})(?:\\s+(\\d{4})(?!\\d)(?:'[a-zçğıöşü]+)?|(?:'?[a-zçğıöşü]+)?)(?![a-zçğıöşü])`, 'gu'), (m) => {
     const year = m[3] ? Number(m[3]) : defaultYear;
     const month = MONTHS.indexOf(m[2]) + 1;
     for (const dayMatch of m[1].matchAll(/\d{1,2}/gu)) {
@@ -528,24 +541,15 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null, maskHor
     // Yalnızca açık zaman ifadelerindeki yıllar ("2026 Kasım", "Kasım 2026", "2026 yılında", "2026'da") dışlanır;
     // "2026 görev" gibi nicelik kullanımları dışlanmaz.
     maskYearIfAllowed(new RegExp(`(?<!\\d)((?:19|20)\\d{2})\\s+(?:${MONTH_ALT})(?:'?[a-zçğıöşü]*)?`, 'gu'), 1);
-    maskYearIfAllowed(new RegExp(`(?:${MONTH_ALT})(?:'?[a-zçğıöşü]*)?\\s+((?:19|20)\\d{2})(?!\\d)`, 'gu'), 1);
+    maskYearIfAllowed(new RegExp(`(?<![\\p{L}])(?:${MONTH_ALT})\\s+((?:19|20)\\d{2})(?!\\d|\\s+(?:görev|iş|kayit|adet|belge|olay|kişi)(?![\\p{L}]))`, 'gu'), 1);
     maskYearIfAllowed(/(?<!\d)((?:19|20)\d{2})(?:\s+yil[a-zçğıöşü]*|'?(?:da|de|ta|te|nin|nun|nün|in|un|ün))(?![\p{L}\d])/gu, 1);
-  }
-  if (maskHorizonSeven) {
-    // 7 günlük yaklaşan termin penceresi yalnızca bağımsız zaman ifadesinde ("7 gün", "7 günlük", "7 takvim günü") istisnadır;
-    // "1,7 gün" gibi ondalık nicelikler ve "7 görev tamamlandı" normal sayı taramasına girer.
-    const horizonRegex = /(?<![\p{L}\d,.\-−])7\s+(?:takvim\s+)?gün(?:lük|de|e|ü|ün|ler|leri|lerde|içinde)?(?![\p{L}\d])/gu;
-    const current = working.join('');
-    for (const m of current.matchAll(horizonRegex)) {
-      maskRange(working, m.index, m.index + m[0].length);
-    }
   }
   const numbers = [];
   const numToken = '(?:\\d{1,3}(?:\\.\\d{3})+(?:,\\d+)?|\\d+(?:[.,]\\d+)?)';
   // Türkçe sayı çekim ekleri ("yüzde 60ı", "60'ı", "10'da") tanınır; kimlik/birim ekleri ("60km", "E60") eşleşmez.
   const trNumSuffix = "(?:'?(?:[aeiioöuü]|[dt][ae]n?|[ny][aeiiuü]))?";
   // Tarih dışı sayı aralığı ("3-4 görev", "yüzde -50–25"): her iki uç kendi işaretiyle ayrı ayrı taranır.
-  const rangeRegex = new RegExp(`(?<![\\p{L}\\d])([-−]?${numToken})\\s*[–-]\\s*([-−]?${numToken})${trNumSuffix}(?![\\p{L}\\d])`, 'gu');
+  const rangeRegex = new RegExp(`(?<![\\p{L}\\d])([-−]?${numToken})\\s*[–—−-]\\s*([-−]?${numToken})${trNumSuffix}(?![\\p{L}\\d])`, 'gu');
   const afterYear = working.join('');
   for (const m of afterYear.matchAll(rangeRegex)) {
     const a = parseTurkishNumber(m[1]);
@@ -553,6 +557,13 @@ function extractTurkishNumbers(text, defaultYear, { allowedYears = null, maskHor
     if (a !== null) numbers.push(a);
     if (b !== null) numbers.push(b);
     maskRange(working, m.index, m.index + m[0].length);
+  }
+  if (maskHorizonSeven) {
+    // Aralık uçları önce ayrılır; yalnızca açıkça adlandırılan yedi günlük raporlama penceresi dışlanır.
+    const horizonRegex = /(?<![\p{L}\d])(?:önümüzdeki|gelecek|sonraki|izleyen|yaklaşan|son|veri anindan itibaren)\s+7\s+(?:takvim\s+)?gün(?:lük|de|e|ü|ün)?(?![\p{L}\d])/gu;
+    for (const m of working.join('').matchAll(horizonRegex)) {
+      maskRange(working, m.index, m.index + m[0].length);
+    }
   }
   // Tekil işaretli veya işaretsiz sayılar ("yüzde -50", "1.000", "1.000,5", "yüzde 60ı").
   const singleRegex = new RegExp(`(?<![\\p{L}\\d])([-−]?${numToken})${trNumSuffix}(?![\\p{L}\\d])`, 'gu');
@@ -733,7 +744,7 @@ function matchesInventedRosterEntity(rawProse, normText, rawName) {
  */
 export function detectChronologyInversions(prose, defaultYear) {
   const inversions = [];
-  const sentences = String(prose).split(/(?<=[.!?])\s+|\n+/u).filter((s) => s.trim());
+  const sentences = String(prose).split(/(?<=[!?])\s+|(?<!\d\.)(?<=\.)\s+|(?<=\d\.)\s+(?!\p{Ll})|\n+/u).filter((s) => s.trim());
   const connectorRegex = /\b(?:bunun\s+ardından|ardından|sonrasında|peşinden)\b/gu;
   for (const sentence of sentences) {
     // Türkçe büyük harfler ("PEŞİNDEN", "ARDINDAN") standart `/i` ile katlanmadığından önce tr-TR küçük harfe çevrilir.

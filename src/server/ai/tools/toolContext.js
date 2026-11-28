@@ -35,7 +35,7 @@ export function createToolTurnContext({
   sicil,
   now = new Date(),
   limits = TOOL_LIMITS,
-  clock = Date.now,
+  clock = () => performance.now(),
   getPool = getSqlPool,
   loadAuthorization = loadAuthorizationContext,
   gate = toolSqlGate

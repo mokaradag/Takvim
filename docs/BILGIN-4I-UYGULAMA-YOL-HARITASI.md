@@ -214,7 +214,7 @@ Kurum içi aday nitelendirmesi, kör insan puanlaması ve dolayısıyla `rapor_y
 
 1. **Amaç ve kullanıcı değeri** — Kanıt paketinden, yetkin bir analistin yazacağı gibi özgün, bağlantılı ve
    bağlamlı Türkçe yönetici raporu taslağı üretmek.
-2. **İşlevsel kapsam** — Rapor yazarı (`4i-yazim-1`): stil belgesinden doğrulanan sistem yönergesi (`yazar-istemi-4`),
+2. **İşlevsel kapsam** — Rapor yazarı (`4i-yazim-1`): stil belgesinden doğrulanan sistem yönergesi (`yazar-istemi-5`),
    belirlenimci bölüm planı (bölümler, ayrıntı ve odak, sözcük bütçesi, kaldırılamaz bütünlük açıklamaları), ≤ 32 KiB
    kanıt iletileri, yapılandırılmış çıktı (bölüm → paragraf → serbest metin + iddia eki) ve kapalı şemalı ayrıştırıcı;
    sunucu yazarı; rapor profilleri (tanımlı, eşlemesiz); 48 senaryonun dondurulmuş kanıt paketi kümesi; nitelendirme,
@@ -517,8 +517,9 @@ dondurulmuş sentetik kanıt paketi kümesi ve nitelendirme/vekil/önizleme ara�
 - **Vekil canlı koşu — son yapılandırma (2026-11-25, `yazar-istemi-4`, düşük eforlu küçük vekil model, yalıtılmış CLI
   köprüsü, 48 senaryo, eşzamanlılık 4):** geçerli taslak **48/48** (sözleşme dışı yanıt 0, altyapı hatası 0); yetkisiz
   açıklama **0**; uydurma kimlik/tarih **0** (tek aday, "denge" sözcüğü, hakemce yanlış pozitif); zorunlu olgu tamlığı
-  **48/48** raporda %100 (2'si hakem kararıyla); değer düzeyinde defter dışı yanlış değer 0. S03'te Denge’nin iki
-  güncellemesi Meltem’e atfedilmiştir (arşiv hakem doğruluğu 15/16, %93,75). Cümle düzeyinde insan doğrulaması bekliyor.
+  **48/48** raporda %100 (2'si hakem kararıyla); değer düzeyinde defter dışı yanlış değer 0. Tarihsel hakem düzeltmeleri
+  S03’te proje atfını (%93,75), S08’de desteklenmeyen gecikme bağlantısını (%94,44) ve S37’de yanlış tarih çelişkisini
+  (%88,89) kayda geçirdi. Cümle düzeyinde insan doğrulaması bekliyor.
   Çelişki senaryolarının 3/4'ü (S25 kronoloji tersinmesi nedeniyle başarısız, bkz. `hakem-kararlari.json`)
   ve iki gömülü yönerge senaryosu doğru işlendi; model gün aritmetiği 0;
   standart ayrıntıda yazar süresi p95 **116 sn** (vekil; kurum içi başarımı öngörmez); ortalama 534 sözcük.
@@ -537,6 +538,6 @@ dondurulmuş sentetik kanıt paketi kümesi ve nitelendirme/vekil/önizleme ara�
   anlamsal destek denetiminin kapsamıdır. Formal B kapısı kurum içi adaylar ve iki kör insan puanlayıcıyla kapanır.
   İki kör insan puanlayıcı için paket `kor-puanlama-paketi.md` + `kor-puanlama-cizelgesi.csv` hazır (**bekliyor**).
 - **Bekleyen dış ön koşullar:** kurum içi `GET /models` ile aday kimliklerinin doğrulanması; DeepSeek, Qwen ve taban
-  modellerle 48 senaryonun koşulması (`report-writer-qualification.mjs kosu --tasiyici kurum-ici`); iki kör insan
+  modellerle 48 senaryonun koşulması (`node scripts/report-writer-qualification.mjs kosu --tasiyici kurum-ici --model <katalog_kimliği>`, doğrulanan her aday için ayrı); iki kör insan
   puanlayıcı; kurum içi p95; nitelikli model çıkarsa `report.writer` eşlemesi ve stil belgesinde rol kaydı.
 - **Sonraki giriş noktası:** 4I-B nitelendirmesi (kurum içi). 4I-C, 4I-B kabulünden sonra başlar.

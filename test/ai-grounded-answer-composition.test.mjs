@@ -232,7 +232,9 @@ test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış 
   const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000' } });
   const logs = captureConsole(t);
   // Plan turunda zamanı ilerletmek düzen penceresini oturumun kalan süresinin altına indirir.
-  stack.provider.enqueue({ type: 'script', respond: () => { t.mock.timers.setTime(Date.now() + 40000); return plan(); } });
+  let elapsedMs = 0;
+  t.mock.method(performance, 'now', () => elapsedMs);
+  stack.provider.enqueue({ type: 'script', respond: () => { elapsedMs += 40_000; return plan(); } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.equal(stack.provider.calls.length, 1, 'düzen turu açılmadı');
@@ -501,7 +503,7 @@ test('düzen zaman aşımı son yetki okumasının tam bütçesini teslim payıy
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: NOW });
   createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const logs = captureConsole(t);
-  const deadline = createAiDeadline({ timeoutMs: 30000 });
+  const deadline = createAiDeadline({ timeoutMs: 30000, now: Date.now });
   t.after(() => deadline.dispose());
   let composing = false;
   let validating = false;

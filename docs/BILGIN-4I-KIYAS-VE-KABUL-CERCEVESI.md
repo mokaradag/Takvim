@@ -268,7 +268,7 @@ olarak raporlanmaz.
 sürüm 1) 48 senaryonun her biri için model girdisinin tek kaynağı olan `4i-kanit-1` paketini, sürümlü zorunlu olgu
 listesini (düzyazıda aranacak VE-of-VEYA anahtarlarıyla) ve yetkisiz varlık listesini taşır; paket başına ve küme için
 SHA-256 özeti vardır. Elle düzenlenmez: `node scripts/yonetici-raporu-kiyas-paketleri.mjs` ile üretilir, `--denetle` ve
-`test/ai-executive-report-writer.test.mjs` üretimin dosyayla bayt bayt aynı olduğunu doğrular.
+`test/ai-executive-report-writer.test.mjs` CRLF satır sonları LF biçimine dönüştürüldükten sonra üretimin dosyayla bayt bayt aynı olduğunu doğrular.
 
 | Kaynak | Senaryolar |
 | --- | --- |

@@ -58,11 +58,11 @@
  },
  "S08": {
   "dogru": 17,
-  "yanlis": 0,
+  "yanlis": 1,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": null,
+  "not": "Meltem protokol gecikmesi ile Pusula güvenlik yaması gecikmesi arasında öne sürülen bağlantı kaynak notlarında yer almıyor; bir yanlış iddia sayıldı.",
   "taslak_ozeti": "40ec3724176cc10f28ddcafd5066ed96fd194571844013b2360efbe3f4b414ac"
  },
  "S07": {
@@ -197,6 +197,8 @@
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": false,
+  "kronoloji_incelendi": true,
+  "kronoloji_hatasi": 1,
   "not": "6 Kasım ortam hazırlığının ardından 4 Kasım ölçüm sonuçlarının geldiği ifadesinde kronoloji tersinmesi var; yanlış iddia olarak sayıldı ve çelişki işlenmedi.",
   "taslak_ozeti": "c203dc3f45ddb1071afe87efa445a898caba1155892494aea1fae72b7c108703"
  },
@@ -364,11 +366,11 @@
  },
  "S37": {
   "dogru": 8,
-  "yanlis": 0,
+  "yanlis": 1,
   "atlanan_zorunlu": [],
   "uydurma_tarih": 0,
   "celiski_islendi": null,
-  "not": "Arşivlenen vekil koşusunda kaynak PDF ifadesi yalnızca 19 Kasım test tarihini belirttiğinden 26 Kasım hedefiyle çelişki kredisi verilmedi; senaryo PDF metni sonrasında açık hedef tarih çelişkisine sıkılaştırıldı.",
+  "not": "Arşivlenen vekil koşusunda kaynak PDF 19 Kasım test tarihini, görev kaydı ise 26 Kasım hedef bitişini belirtir. Taslağın bunları çelişen iki tarih olarak sunması bir yanlış iddia sayıldı. Sonradan her iki tarihi de hedef bitiş olarak tanımlayan güncel senaryo bu tarihsel karara uygulanmadı.",
   "taslak_ozeti": "1dae03853ad9809ca733190bec9d38a7a578af91a68b496cf953852fa61332e0"
  },
  "S41": {

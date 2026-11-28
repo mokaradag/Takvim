@@ -52,7 +52,7 @@ export function createToolExecutor({
   onProgress = null,
   validateCall = null,
   resultScope = null,
-  clock = Date.now
+  clock = () => performance.now()
 }) {
   const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0, rounds: 0 };
 
