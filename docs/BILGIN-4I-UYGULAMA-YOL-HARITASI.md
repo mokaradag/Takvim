@@ -525,13 +525,13 @@ dondurulmuş sentetik kanıt paketi kümesi ve nitelendirme/vekil/önizleme ara�
   standart ayrıntıda yazar süresi p95 **116 sn** (vekil; kurum içi başarımı öngörmez); ortalama 534 sözcük.
   Kayıt: `docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/` (ham yanıtlar, hakem kararları, yapılandırma özetleri).
 - **Ara koşular (birleştirilmedi, `ara-kosular-ozet.json`):** istem 1 → 45/48 geçerli, model 31 kez gün aritmetiği;
-  istem 2 → 46/48, kör model değerlendirmesi genel 3,51 / E6 2,74 / mekanik 6/46 (B kapısı geçilemezdi; zayıf
+  istem 2 → 46/48, kör model değerlendirmesi genel 3,52 / E6 2,74 / mekanik 6/46 (B kapısı geçilemezdi; zayıf
   taslakların tamamı seyrek kanıtlı paketler); istem 3 → seyrek kanıt bütçesi ve tamlık/şerh kuralları, ama vekilin
   düşünmesiz yanıtları arttı ve 41/48; istem 4 → plandan türetilen çıktı iskeleti.
-- **Editoryal (`yazar-istemi-4`):** yazardan farklı, kör bir model değerlendiricisi (insan puanı değildir): genel ortalama **3,68**
-  (eşik 4,0), E1 3,48 · E2 3,71 · E3 3,52 · E4 3,83 · E5 4,08 · **E6 3,00** · E7 3,88 · E8 3,91 · E9 3,90; mekanik döküm
+- **Editoryal (`yazar-istemi-4`):** yazardan farklı, kör bir model değerlendiricisi (insan puanı değildir): genel ortalama **3,70**
+  (eşik 4,0; uygulanabilir E1–E9 ölçüt ortalamalarının ortalaması: `3,7008`), E1 3,48 · E2 3,71 · E3 3,52 · E4 3,83 · E5 4,08 · **E6 3,00** · E7 3,88 · E8 3,91 · E9 3,90; mekanik döküm
   **1/48** (%2,1; eşik %5 → geçer). Vekil bu sürümle B kapısını genel ortalama ile E1 ve E6'da **geçemezdi**; istem 2'ye
-  göre genel ortalama 3,51→3,68, E6 2,74→3,00, mekanik 6/46→1/48 iyileşti. Kalan zayıflık küçük durumlarda zorunlu
+  göre genel ortalama 3,52→3,70, E6 2,74→3,00, mekanik 6/46→1/48 iyileşti. Kalan zayıflık küçük durumlarda zorunlu
   bölümler arası tekrar ve küçük modelin akıcılığıdır. Değerlendirici üç taslağı daha mekaniğe yakın buldu (ikinci bir
   puanlayıcı birini ya da ikisini işaretleyebilir; oran eşiğe yaklaşır). S25'te değer düzeyi taramanın yakalayamadığı
   ilişkisel bir hata (4 Kasım işi 6 Kasım işinden sonra anlatılmış) ve iki dayanaksız yargı saptandı; bu tür hatalar 4I-C

@@ -384,7 +384,7 @@ export function createAiGateway({
    * ölçümü o kodla başarısız kaydedilir, sonuç yine çağırana döner.
    */
   async function callProvider({
-    operation, deadline, invoke, source = null, context = null, healthFailure = () => null, failureCodeOf = () => null, beforeDispatch = null
+    operation, deadline, invoke, source = null, context = null, healthFailure = () => null, failureCodeOf = () => null, beforeDispatch = null, allowRetry = true
   }) {
     let retryNetworkCode = null;
     for (let attempt = 1; ; attempt += 1) {
@@ -414,7 +414,7 @@ export function createAiGateway({
         if (startedAt === null) throw failure;
         recordProviderCall({ operation, latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
         const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
-        const retry = attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
+        const retry = allowRetry && attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
           && deadline.remainingMs() >= delayMs + MIN_ATTEMPT_BUDGET_MS;
         if (!retry) throw failure;
         await abortableDelay(delayMs, deadline.signal);
@@ -433,9 +433,11 @@ export function createAiGateway({
    * yanıtı sağlayıcı hatası sayar (sağlık izine de öyle yazılır).
    * `callerInput: false`, iletilerin sunucunun ürettiği sabit bir istek
    * olduğunu söyler: sağlayıcının 400/413/422 yanıtı kullanıcı hatası değil,
-   * yapılandırma hatasıdır.
+   * yapılandırma hatasıdır. `allowRetry: false`, tek sağlayıcı denemesi
+   * sözleşmesi gerektiren çağıranlarda (ör. yönetici raporu yazarı) bağlantı
+   * yinelemesini kapatır.
    */
-  async function completeChat({ profile, messages, maxOutputTokens = null, sampling = null, signal = null, requireText = false, callerInput = true, beforeDispatch = null }) {
+  async function completeChat({ profile, messages, maxOutputTokens = null, sampling = null, signal = null, requireText = false, callerInput = true, beforeDispatch = null, allowRetry = true }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     let lease = null;
@@ -466,6 +468,7 @@ export function createAiGateway({
       const result = await callProvider({
         operation: 'ai.provider.chat',
         beforeDispatch,
+        allowRetry,
         deadline,
         context,
         source: credential.source,

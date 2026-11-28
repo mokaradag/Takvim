@@ -1119,7 +1119,9 @@ function reportProjectSelectors(db, params) {
 function reportDependencies(db, params) {
   const scope = scopeOf(db, params);
   const limit = Number(params.maxRows || 1001);
-  const taskFilter = new Set(String(params.taskIds || '').split(',').map((id) => upper(id.trim())).filter(isGuid));
+  const rawTaskIds = String(params.taskIds || '');
+  const taskFilterActive = rawTaskIds.trim().length > 0;
+  const taskFilter = new Set(rawTaskIds.split(',').map((id) => upper(id.trim())).filter(isGuid));
   const cutOffMs = params.cutOffUtc ? new Date(params.cutOffUtc).getTime() : null;
   const isPostCutoffDep = (dep) => {
     if (cutOffMs == null) return false;
@@ -1128,18 +1130,27 @@ function reportDependencies(db, params) {
     return (Number.isFinite(createdMs) && createdMs > cutOffMs)
       || (Number.isFinite(updatedMs) && updatedMs > cutOffMs);
   };
-  const scopedDeps = (db.taskDependencies || [])
+  const boundedDeps = (db.taskDependencies || [])
     .filter((dep) => scope.projects.get(upper(dep.ProjectId))?.AccessLevel === 'FULL')
-    .filter((dep) => taskFilter.size === 0 || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)));
-  const hasPostCutoffChange = scopedDeps.some(isPostCutoffDep);
-  const rows = scopedDeps
-    .filter((dep) => !isPostCutoffDep(dep))
+    .filter((dep) => !taskFilterActive || taskFilter.has(upper(dep.TaskId)) || taskFilter.has(upper(dep.PredecessorTaskId)))
     .sort((a, b) => (
       sqlGuidSortKey(a.ProjectId).localeCompare(sqlGuidSortKey(b.ProjectId))
       || sqlGuidSortKey(a.TaskId).localeCompare(sqlGuidSortKey(b.TaskId))
       || sqlGuidSortKey(a.PredecessorTaskId).localeCompare(sqlGuidSortKey(b.PredecessorTaskId))
     ))
-    .slice(0, limit)
+    .slice(0, limit);
+  const isTruncated = boundedDeps.length >= limit;
+  const hasPostCutoffAudit = cutOffMs != null && (db.auditLog || []).some((entry) => {
+    if (entry.EntityType !== 'TASK' || !['UPDATE', 'DELETE'].includes(entry.ActionCode)) return false;
+    const occurredMs = entry.OccurredAt != null ? new Date(entry.OccurredAt).getTime() : NaN;
+    if (!Number.isFinite(occurredMs) || occurredMs <= cutOffMs) return false;
+    if (scope.projects.get(upper(entry.ProjectId))?.AccessLevel !== 'FULL') return false;
+    if (taskFilterActive && !taskFilter.has(upper(entry.EntityId))) return false;
+    return true;
+  });
+  const hasPostCutoffChange = boundedDeps.some(isPostCutoffDep) || hasPostCutoffAudit;
+  const rows = boundedDeps
+    .filter((dep) => !isPostCutoffDep(dep))
     .map((dep) => ({
       ProjectId: dep.ProjectId,
       TaskId: dep.TaskId,
@@ -1151,7 +1162,7 @@ function reportDependencies(db, params) {
       CreatedAt: dep.CreatedAt ?? null,
       UpdatedAt: dep.UpdatedAt ?? null
     }));
-  return [rows, [{ HasPostCutoffChange: hasPostCutoffChange ? 1 : 0 }]];
+  return [rows, [{ IsTruncated: isTruncated ? 1 : 0, HasPostCutoffChange: hasPostCutoffChange ? 1 : 0 }]];
 }
 
 function reportActivitySummary(db, params) {

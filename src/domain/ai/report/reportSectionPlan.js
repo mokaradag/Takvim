@@ -553,7 +553,14 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   const unknownOverdueMeasures = overdueMeasures.filter((item) => item.deger === null || item.tamlik === 'partial');
   const overdueUnknown = unknownOverdueMeasures.length > 0;
   const unknownOverdueIds = unknownOverdueMeasures.map((item) => item.id);
-  const scopeRestricted = tamlik.kapsam_gorunurlugu === 'partial' || tamlik.paket_kesildi === true || tamlik.kesit_tutarli === false;
+  const scopeRestricted = tamlik.kapsam_gorunurlugu === 'partial'
+    || partialActivity
+    || tamlik.bagimliliklar === 'partial'
+    || tamlik.paket_kesildi === true
+    || tamlik.kesit_tutarli === false;
+  const scopeQualifier = scopeRestricted
+    ? ' Bu saptamayı yalnızca görünür ve pakete giren kayıtlarla sınırla; görünmeyen işler hakkında risk olmadığı sonucu çıkarma.'
+    : '';
   const focus = pkg.istek.odak ?? 'dengeli';
   // Kanonik stil kuralı: maddi risk, gecikme, engelli iş ya da çelişki varsa Riskler bölümü açık olsa da Yönetici Değerlendirmesi'nde anılır.
   if (riskEvidence.length) {
@@ -577,6 +584,29 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
       kimlik: 'dengeli_sunum', bolum: 'yonetici_degerlendirmesi', kanitlar: refs,
       yonerge: parts.join(' ')
     });
+  } else if (!riskSectionPlanned && groups.not.length > 0) {
+    // Yetkili not metni sunucu karar kaynağı yapılmadan, not varlığında "risk yok" sonucu bastırılır ve notlar zorunlu bölüme taşınır.
+    const noteRefs = [...new Set([...groups.not, ...unknownOverdueIds])].slice(0, 12);
+    if (focus === 'riskler' && overdueUnknown) {
+      out.push({
+        kimlik: 'risk_odagi_gecikme_bilinmiyor', bolum: 'yonetici_degerlendirmesi', kanitlar: noteRefs,
+        yonerge: 'Rapor risk odağıyla istendi ancak geciken iş sayısı kanıtta bilinmiyor ya da kısmi durumda. Gecikme olmadığını varsayma; gecikme ölçüsünün belirlenemediğini açıkça belirt. Görev notlarında bildirilen bir engel varsa bunu kesinleşmiş olgu gibi değil yalnızca not bildirimi olarak kısaca aktar.'
+      });
+    } else if (focus === 'riskler') {
+      out.push({
+        kimlik: 'risk_odagi_not_degerlendirmesi', bolum: 'yonetici_degerlendirmesi', kanitlar: groups.not.slice(0, 12),
+        yonerge: 'Rapor risk odağıyla istendi; yapılandırılmış görünür görev kayıtlarında gecikme, engelli iş ya da kayıtlı çelişki yok. Yetkili görev notlarında yönetim dikkati gerektiren bir engel ya da risk bildiriliyorsa bunu kesinleşmiş olgu gibi değil yalnızca not bildirimi olarak Yönetici Değerlendirmesi içinde aktar; notlarda da bildirilen bir engel yoksa bunu açık ve kısa biçimde söyle ve odak tercihi nedeniyle risk üretme.'
+          + scopeQualifier
+      });
+    } else {
+      const prefix = overdueUnknown
+        ? 'Geciken iş sayısı kanıtta bilinmiyor ya da kısmi durumda; gecikme olmadığını varsayma ve bu sınırı açıkça belirt. '
+        : 'Yapılandırılmış görünür görev kayıtlarında gecikme ya da çelişki görünmüyor. ';
+      out.push({
+        kimlik: 'not_destekli_olgu', bolum: 'yonetici_degerlendirmesi', kanitlar: noteRefs,
+        yonerge: `${prefix}Yetkili görev notlarında yönetim dikkati gerektiren bir engel, risk ya da önemli gelişme bildiriliyorsa bunu kesinleşmiş olgu gibi değil yalnızca not bildirimi olarak Yönetici Değerlendirmesi içinde kısaca aktar; olağan ilerleme bildiren notları risk gibi sunma.${scopeQualifier}`
+      });
+    }
   } else if (focus === 'riskler' && !riskSectionPlanned) {
     if (overdueUnknown) {
       out.push({
@@ -584,14 +614,9 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
         yonerge: 'Rapor risk odağıyla istendi ancak geciken iş sayısı kanıtta bilinmiyor ya da kısmi durumda. Gecikme olmadığını varsayma; gecikme ölçüsünün belirlenemediğini açıkça belirt.'
       });
     } else {
-      const scopeQualifier = scopeRestricted
-        ? ' Bu saptamayı yalnızca görünür ve pakete giren kayıtlarla sınırla; görünmeyen işler hakkında risk olmadığı sonucu çıkarma.'
-        : '';
       out.push({
         kimlik: 'risk_odagi_risk_yok', bolum: 'yonetici_degerlendirmesi', kanitlar: [],
-        yonerge: (groups.not.length > 0
-          ? 'Rapor risk odağıyla istendi ancak yapılandırılmış görünür kayıtlarda gecikme ya da kayıtlı çelişki yok. Görev notlarında bildirilen bir engel de yoksa bunu açık ve kısa biçimde söyle; varsa yalnızca not bildirimi olarak aktar, odak tercihi nedeniyle risk üretme.'
-          : 'Rapor risk odağıyla istendi ancak görünür kanıtta yönetim dikkati gerektiren gecikme, çelişki ya da kayıtlı engel yok. Bunu açık ve kısa biçimde söyle; odak tercihi nedeniyle risk üretme.')
+        yonerge: 'Rapor risk odağıyla istendi ancak görünür kanıtta yönetim dikkati gerektiren gecikme, çelişki ya da kayıtlı engel yok. Bunu açık ve kısa biçimde söyle; odak tercihi nedeniyle risk üretme.'
           + scopeQualifier
       });
     }
@@ -615,11 +640,13 @@ function integrityDisclosures(pkg, { groups, noteTask }, riskSectionPlanned) {
   const completionCompatibleWithZero = completedMeasures.length === 0 || completedExplicitZero;
   const activityExplicitZero = activityMeasures.length > 0
     && activityMeasures.every((item) => item.deger === 0 && item.kayit_kapsami !== 'partial' && item.tamlik !== 'partial');
+  // Yetkili görev notu veya destekleyici belge varken "değişiklik yok" yönergesi verilmez; anlatısal gelişmeler bastırılmaz.
   if (activityExplicitZero
     && !hasPositiveReportPeriodSummary
     && !partialActivity && tamlik.kapsam_gorunurlugu !== 'partial'
     && tamlik.paket_kesildi !== true && tamlik.kesit_tutarli !== false
     && groups.tamamlanan.length === 0 && groups.hareketli.length === 0
+    && groups.not.length === 0 && groups.belge.length === 0
     && completionCompatibleWithZero) {
     out.push({
       kimlik: 'degisiklik_yok', bolum: 'yonetici_degerlendirmesi',
@@ -696,16 +723,26 @@ export function buildReportSectionPlan(evidencePackage, style, { kapaliBolumler 
       }).map((item) => item.id)
     ];
   const highlights = [...highlightsAggregates, ...highlightsPrimary];
+  const riskTaskIds = new Set([...groups.geciken, ...groups.engelli, ...groups.oncelikli]);
+  // Risk veya öncelik görevlerine bağlı olmayan (sıradan görev veya bağımsız) notlar yapılandırılmış öne çıkanlarla birlikte korunur.
+  const developmentNotes = groups.not.filter((noteId) => !riskTaskIds.has(noteTask.get(noteId)));
+  const riskAllocation = [
+    ...groups.geciken, ...groups.engelli, ...groups.gecikenOlcu, ...groups.gecikmePayi,
+    ...notesFor([...groups.geciken, ...groups.engelli], noteTask, groups.not), ...conflictIds,
+    ...groups.acikBagimli, ...notesFor(groups.oncelikli, noteTask, groups.not)
+  ];
+  const riskSectionWillOpen = !kapaliBolumler.includes('riskler') && riskAllocation.length > 0;
 
   const allocation = {
-    yonetici_degerlendirmesi: [...groups.olcu, ...derivedAll, ...groups.tamamlanan, ...groups.geciken, ...groups.engelli, ...groups.oncelikli, ...conflictIds],
-    one_cikan_gelismeler: highlights.length > 0 ? highlights : groups.not,
+    yonetici_degerlendirmesi: [
+      ...groups.olcu, ...derivedAll, ...groups.tamamlanan, ...groups.geciken, ...groups.engelli, ...groups.oncelikli, ...conflictIds,
+      ...(riskSectionWillOpen ? [] : groups.not)
+    ],
+    one_cikan_gelismeler: highlights.length > 0 ? [...highlights, ...developmentNotes] : groups.not,
     faaliyetler: [...groups.olcu, ...groups.hareket, ...groups.gorev, ...groups.not, ...groups.belge],
     // Açık engelli/kritik/yüksek öncelikli işlerin notları, açık bağımlılıklar ve pozitif gecikme ölçüsü/payı risk bölümünü besler;
     // veri kalitesi/tamlık uyarıları kendi zorunlu bölümlerinde bildirildiğinden isteğe bağlı Riskler bölümünü tek başına açmaz.
-    riskler: [...groups.geciken, ...groups.engelli, ...groups.gecikenOlcu, ...groups.gecikmePayi,
-      ...notesFor([...groups.geciken, ...groups.engelli], noteTask, groups.not), ...conflictIds,
-      ...groups.acikBagimli, ...notesFor(groups.oncelikli, noteTask, groups.not)],
+    riskler: riskAllocation,
     oncelikler: [...groups.yaklasan, ...groups.yaklasanOlcu, ...groups.oncelikli, ...groups.acikBagimli, ...notesFor(groups.yaklasan, noteTask, groups.not)],
     genel_sonuc: [...groups.olcu, ...derivedAll, ...groups.geciken, ...groups.engelli, ...groups.yaklasan]
   };

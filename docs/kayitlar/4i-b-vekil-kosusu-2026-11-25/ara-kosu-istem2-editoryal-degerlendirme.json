@@ -1,4 +1,12 @@
 {
+  "istem_surumu": "yazar-istemi-2",
+  "durum": "tarihsel_arsiv_nitelendirmez",
+  "arsiv_siniri": "İstem 2 ara koşusunun ham yanıt dosyası ve kör kod anahtarı depoda arşivlenmemiştir; bu nedenle 46 K-kodunun senaryo eşleştirmesi ve kör paket SHA-256 özeti geriye dönük olarak bağımsız doğrulanamaz. Kayıt yalnızca ara istem geliştirme gözlemidir, nitelendirme veya kabul kanıtı değildir.",
+  "dislanan_senaryolar": [
+    "S23:REPORT_DRAFT_CLAIM_INVALID",
+    "S26:REPORT_DRAFT_SCHEMA_INVALID"
+  ],
+  "e8_uygulanabilirlik": "E8: null değeri, dondurulmuş kanıt paketinde görev notu bulunmayan (notlar: haric veya 0 görev notlu) senaryolarda E8 Not dönüşümü ölçütünün Uygulanmaz (U/D) olduğunu belirtir. 48 senaryodaki 14 notsuz paketten S26 sözleşme dışı kalarak dışlandığı için bu 46 geçerli taslakta 13 E8: null kaydı vardır.",
   "degerlendirici": "Bağımsız model değerlendiricisi (yazardan farklı model, kör; insan puanı DEĞİLDİR)",
   "yontem": "Kör paketteki 46 taslak, yalnızca çerçevenin §4 ölçütü (E1–E9, 1/3/5 çıpaları ve ayar örnekleri) esas alınarak tek tek okunmuş, katı ölçekle puanlanmış ve mekanik döküm bayrağı verilmiştir; bu geçici model değerlendirmesidir, insan puanının yerine geçmez.",
   "puanlar": {

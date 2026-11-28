@@ -20,7 +20,7 @@
     "S23:REPORT_DRAFT_CLAIM_INVALID",
     "S26:REPORT_DRAFT_SCHEMA_INVALID"
    ],
-   "bulgu": "Gün aritmetiği 0 (sunucu izdüşümü). Kör model değerlendirmesi: genel 3,51, E6 2,74, mekanik 6/46 → B kapısı geçilemezdi; zayıf taslakların tamamı seyrek kanıtlı paketler.",
+   "bulgu": "Gün aritmetiği 0 (sunucu izdüşümü). Kör model değerlendirmesi: genel 3,52 (uygulanabilir E1–E9 ölçüt ortalamalarının ortalaması), E6 2,74, mekanik 6/46 → B kapısı geçilemezdi; zayıf taslakların tamamı seyrek kanıtlı paketler.",
    "editoryal": "ara-kosu-istem2-editoryal-degerlendirme.json"
   },
   {

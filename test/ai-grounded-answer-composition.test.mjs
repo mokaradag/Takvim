@@ -231,15 +231,31 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
   const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000' } });
   const logs = captureConsole(t);
-  // Plan turunda zamanı ilerletmek düzen penceresini oturumun kalan süresinin altına indirir.
   let elapsedMs = 0;
   t.mock.method(performance, 'now', () => elapsedMs);
-  stack.provider.enqueue({ type: 'script', respond: () => { elapsedMs += 40_000; return plan(); } });
+  stack.provider.enqueue(plan());
+  const rawStream = stack.provider.streamToolCompletion.bind(stack.provider);
+  t.mock.method(stack.provider, 'streamToolCompletion', async (input) => {
+    const opened = await rawStream(input);
+    async function* timedEvents() {
+      try {
+        for await (const event of opened.events) {
+          yield event;
+        }
+      } finally {
+        // Süre yalnızca plan turunun akışı tamamlanıp kapatılırken ilerletilir; plan AI_TIMEOUT'a düşmeden düzen penceresi bütçe dışı kalır.
+        elapsedMs += 40_000;
+      }
+    }
+    return { ...opened, events: timedEvents() };
+  });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.equal(stack.provider.calls.length, 1, 'düzen turu açılmadı');
   assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
-  assert.equal(turnLines(logs)[0].context.presentation.reason, 'BUDGET');
+  const [trace] = turnLines(logs);
+  assert.equal(trace.context.outcome, 'grounded');
+  assert.equal(trace.context.presentation.reason, 'BUDGET');
 });
 
 test('düzen turu takılırsa kendi penceresinde kesilir, oturum düşmez ve doğrulanmış anlatım teslim edilir', async (t) => {

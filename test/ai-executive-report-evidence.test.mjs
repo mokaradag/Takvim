@@ -5165,9 +5165,12 @@ test('kesit sonrası tamamlanma projesi: aynı projede sonradan düzenlenen gör
   });
 });
 
-test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya güncellenen kenarlar dışlanır ve kapsam partial olarak bildirilir', async () => {
-  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /d\.CreatedAt <= @cutOffUtc[\s\S]*d\.UpdatedAt <= @cutOffUtc[\s\S]*ORDER BY/u);
-  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /d\.CreatedAt > @cutOffUtc[\s\S]*d\.UpdatedAt > @cutOffUtc[\s\S]*AS HasPostCutoffChange/u);
+test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen, güncellenen veya silinen kenarlar sınırlı sorguyla dışlanır ve kapsam partial bildirilir', async () => {
+  // Bağımlılık okuması tek sınırlı TOP (@maxRows) tablo değişkeninde yapılır; sınırsız MR_TaskDependencies taraması yoktur.
+  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /INSERT @ReportDeps[\s\S]*SELECT TOP \(@maxRows\)[\s\S]*FROM dbo\.MR_TaskDependencies d/u);
+  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /FROM @ReportDeps[\s\S]*CreatedAt <= @cutOffUtc[\s\S]*UpdatedAt <= @cutOffUtc/u);
+  assert.match(AI_TOOL_REPORT_DEPENDENCIES_SQL, /AS IsTruncated[\s\S]*FROM @ReportDeps[\s\S]*CreatedAt > @cutOffUtc[\s\S]*UpdatedAt > @cutOffUtc[\s\S]*FROM dbo\.MR_AuditLog a[\s\S]*ActionCode IN \('UPDATE', 'DELETE'\)[\s\S]*AS HasPostCutoffChange/u);
+  assert.equal((AI_TOOL_REPORT_DEPENDENCIES_SQL.match(/FROM dbo\.MR_TaskDependencies/gu) || []).length, 1);
   const baseSeed = executiveReportBenchmarkSeed();
   const depProjectId = '11111111-1111-4111-8111-111111111401';
   const taskPreId = '22222222-2222-4222-8222-222222221401';
@@ -5228,8 +5231,8 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya günce
     rapor_turu: 'haftalik', donem: { baslangic: '2026-11-02', bitis: '2026-11-08' },
     kapsam: { tur: 'proje', kimlikler: ['PRJ-BAG'] }, notlar: 'haric'
   };
-  const readDependencies = async (tasks, taskDependencies, verify) => withReportStack({
-    projects: makeProjects(), tasks, taskDependencies
+  const readDependencies = async (tasks, taskDependencies, verify, extraSeed = {}) => withReportStack({
+    projects: makeProjects(), tasks, taskDependencies, ...extraSeed
   }, U.YONETICI, async () => {
     const { evidencePackage } = await buildExecutiveReportEvidence({
       request: testRequest, now: REPORT_BENCH_NOW, today: REPORT_BENCH_TODAY
@@ -5255,6 +5258,12 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya günce
       });
       assert.deepEqual(read.dependencies.map((edge) => [edge.TaskId, edge.PredecessorTaskId]), [[taskMidId, taskPreId]]);
       assert.equal(read.hasPostCutoffChange, true);
+      const boundedRead = await readReportDependencies(pool, scope, {
+        projectIds: [depProjectId],
+        cutOffUtc: REPORT_BENCH_NOW,
+        maxRows: 1
+      });
+      assert.equal(boundedRead.truncated, true, 'Kesit sonrası satır elense de aday kümesi sınırına ulaşılınca truncated bildirilmelidir.');
       const taskRows = new Map(evidencePackage.kanitlar.filter((item) => item.tur === 'gorev').map((item) => [item.gorev, item]));
       assert.ok(taskRows.has(taskPostId) && taskRows.has(taskPreId) && taskRows.has(taskMidId), 'Üç görev de kanıtta bulunmalıdır.');
       assert.ok(taskRows.get(taskMidId).bagimliliklar?.oncul?.includes(taskPreId), 'Kesit öncesi kenar korunmalıdır.');
@@ -5285,5 +5294,57 @@ test('tarihsel bağımlılık bütünlüğü: kesit sonrası eklenen veya günce
   await readDependencies(makeTasks(postCutoffTs), [], (evidencePackage) => {
     assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
     assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
+  });
+
+  // Görev satırı kesit anında okunsa bile MR_AuditLog kesit sonrası görev güncellemesi/silmesi silinmiş bağımlılık olasılığını yakalar.
+  await readDependencies(makeTasks(preCutoffTs), [originalEdge], async (evidencePackage, pool, scope) => {
+    const read = await readReportDependencies(pool, scope, {
+      projectIds: [depProjectId],
+      cutOffUtc: REPORT_BENCH_NOW
+    });
+    assert.equal(read.hasPostCutoffChange, true);
+    assert.equal(evidencePackage.tamlik.bagimliliklar, 'partial');
+    assert.equal(evidencePackage.tamlik.kesit_tutarli, false);
+  }, {
+    auditLog: [
+      ...(baseSeed.auditLog || []),
+      {
+        AuditId: 9901,
+        OccurredAt: postCutoffTs,
+        ActorSicil: U.YONETICI,
+        ActionCode: 'UPDATE',
+        EntityType: 'TASK',
+        EntityId: taskPostId,
+        ProjectId: depProjectId
+      }
+    ]
+  });
+
+  // Sahte SQL Server ekleme yolu üretimdeki gibi CreatedAt/UpdatedAt üretir; kesit sonrası eklenen kenar tarihsel kesite sızmaz.
+  await withReportStack({
+    projects: makeProjects(),
+    tasks: makeTasks(preCutoffTs),
+    taskDependencies: [originalEdge]
+  }, U.YONETICI, async () => {
+    const pool = await getSqlPool();
+    const insertReq = pool.request();
+    insertReq.input('dependencyId', '33333333-3333-4333-8333-333333331499');
+    insertReq.input('projectId', depProjectId);
+    insertReq.input('taskId', taskPostId);
+    insertReq.input('predecessorId', taskMidId);
+    insertReq.input('type', 'FS');
+    insertReq.input('lagDays', 0);
+    await insertReq.query(`
+      INSERT dbo.MR_TaskDependencies(
+        TaskDependencyId, ProjectId, TaskId, PredecessorTaskId, DependencyType, LagDays
+      ) VALUES(@dependencyId, @projectId, @taskId, @predecessorId, @type, @lagDays);
+    `);
+    const scope = buildRotaScope(await loadAuthorizationContext(pool));
+    const read = await readReportDependencies(pool, scope, {
+      projectIds: [depProjectId],
+      cutOffUtc: REPORT_BENCH_NOW
+    });
+    assert.deepEqual(read.dependencies.map((edge) => [edge.TaskId, edge.PredecessorTaskId]), [[taskMidId, taskPreId]]);
+    assert.equal(read.hasPostCutoffChange, true);
   });
 });

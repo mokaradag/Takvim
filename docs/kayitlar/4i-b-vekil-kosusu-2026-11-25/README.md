@@ -1,10 +1,12 @@
 # Bilgin 4I-B — vekil model koşu kaydı (25.11.2026)
 
 > **Bu bir kurum içi model nitelendirmesi DEĞİLDİR.** Koşu, geliştirme ortamında küçük ve düşük eforlu bir vekil
-> modelle (yalıtılmış komut satırı köprüsü) yapılmıştır. Amacı, gerçek bir dil modelinin uygulamanın ürettiği yazar
-> istemini, bölüm planını ve kanıtı aldığında yazar hattının (plan → istem → model → değiştirilmemiş yanıt → ayrıştırıcı →
-> değerlendirme) uçtan uca doğru çalıştığını göstermektir. Sonuçlar DeepSeek, Qwen ya da taban modellerin sonucu yerine
-> kullanılmaz; `nitelikli_modeller` alanına yazılmaz. Bütün içerik **sentetiktir**.
+> modelle (yalıtılmış komut satırı köprüsü) yapılmıştır. Amacı, `7d2a13f` arşiv revizyonunda gerçek bir dil modelinin
+> yazar istemini, bölüm planını ve kanıtı aldığında yazar hattının (plan → istem → model → değiştirilmemiş yanıt →
+> ayrıştırıcı → değerlendirme) uçtan uca mekanik olarak işlediğini doğrulamaktır; tüm kenar vakalarda eksiksiz doğruluk
+> ya da kabul kanıtı yerine geçmez (planlayıcı ve tarayıcı sertleştirmeleri belirlenimci regresyon sınamalarıyla ayrıca
+> korunur). Sonuçlar DeepSeek, Qwen ya da taban modellerin sonucu yerine kullanılmaz; `nitelikli_modeller` alanına
+> yazılmaz. Bütün içerik **sentetiktir**.
 
 | Alan | Değer |
 | --- | --- |
@@ -22,11 +24,11 @@
 | --- | --- |
 | `kosu-kaydi.jsonl` | 48 senaryonun değiştirilmemiş ham model yanıtları, ayrıştırılmış taslaklar, kullanım, süre ve kayıt anındaki nesnel tarama (yalnızca arşiv/koordinatör içindir; kör insan puanlayıcılarına **verilmez**) |
 | `ara-kosular-ozet.json` | İstem 1–3'ün tam koşularının özeti ve bulguları (son koşuyla birleştirilmez) |
-| `ara-kosu-istem2-editoryal-degerlendirme.json` | İstem 2 taslaklarının kör model değerlendirmesi (B kapısı geçilemezdi; istem 3–4 düzeltmelerinin gerekçesi) |
+| `ara-kosu-istem2-editoryal-degerlendirme.json` | İstem 2 taslaklarının kör model değerlendirmesi (B kapısı geçilemezdi; istem 3–4 düzeltmelerinin gerekçesi; ham koşu dosyası ve kör anahtar arşivlenmediğinden geriye dönük eşleştirilemez tarihsel nottur) |
 | `hakem-kararlari.json` | Defter dışı değerler ve otomatik eşleşmeyen zorunlu olgular için elle verilen kararlar ve gerekçeleri (hakem: geliştirme oturumu; insan değil) |
 | `anlati-ornekleri.md` | Haftalık, aylık, başarı ve risk odaklı, dönem karşılaştırmalı, zengin not sentezi ve çelişkili kanıt örnekleri — gerçek yazar çıktısı, düzeltilmemiş |
 | `gecici-editoryal-degerlendirme.json` | İstem 4 taslaklarının, yazardan farklı ve kör bir model değerlendiricisince E1–E9 ve mekanik döküm puanları (**insan puanı değildir**, destekleyici kanıttır). Değerlendirici yönergesine istem 2 değerlendirmesine göre tek açıklama eklendi: durumun gerçekten küçük olduğu raporda yerinde kısalık kusur sayılmaz (ölçütün R7 beklentisiyle uyumlu); iki değerlendirme bu nedenle tam karşılaştırılabilir değildir |
-| `kor-puanlama-paketi.md`, `kor-puanlama-cizelgesi.csv` | Arşiv kopyası (§4 E1–E9 ölçüt tanımları ve her E8 kaynak notunda sentetik görev/proje atfıyla kanonik üreticiden yenilenmiştir). **Kör dağıtım kuralı:** Gerçek insan puanlaması için bu depo arşiv dizini puanlayıcılara açılmaz (`kosu-kaydi.jsonl` aynı arşivde durduğundan model/senaryo eşleştirmesi yapılabilir); koordinatör `insan-paketi --dizin <yalitilmis-puanlayici-dizini> --anahtar <dis-yol>` komutuyla yalnızca `kor-puanlama-paketi.md` ve `kor-puanlama-cizelgesi.csv` dosyalarını ayrı bir dağıtım dizinine üretir |
+| `kor-puanlama-paketi.md`, `kor-puanlama-cizelgesi.csv` | Arşiv kopyası (§4 E1–E9 ölçüt tanımları ve her E8 kaynak notunda sentetik görev/proje atfıyla kanonik üreticiden yenilenmiştir). **Kör dağıtım kuralı:** Gerçek insan puanlaması için bu depo arşiv dizini puanlayıcılara açılmaz (`kosu-kaydi.jsonl` aynı arşivde durduğundan model/senaryo eşleştirmesi yapılabilir); koordinatör güncel bir kurum içi nitelendirme koşusunun kayıt dosyasından `node scripts/report-writer-qualification.mjs insan-paketi --girdi <kosu-kaydi.jsonl> --dizin <yalitilmis-puanlayici-dizini> --anahtar <dis-yol>` komutuyla yalnızca `kor-puanlama-paketi.md` ve `kor-puanlama-cizelgesi.csv` dosyalarını ayrı bir dağıtım dizinine üretir (arşivlenmiş 25.11.2026 vekil kaydı tarihsel paket özetleriyle üretildiği ve `taslak_ozeti` taşımadığı için yeni kör paket üretiminde kullanılmaz) |
 
 Özet yeniden üretimi (arşivlenmiş 25.11.2026 vekil koşusu güncel kanıt kümesinden önceki paket özetleriyle üretildiği için yalnızca kanıt/taslak özeti uyuşmazlıklarına izin veren `--tarihsel-uyusmazlik-izni evet` bayrağıyla çağrılır):
 

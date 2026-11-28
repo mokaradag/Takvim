@@ -835,19 +835,59 @@ test('doğrulamada bağlantı kurulamayınca yapılan yineleme sayaca girer; soh
 });
 
 test('duvar saati ileri veya geri alınsa da ağ geçidi geçen süreyi tekdüze saatle ölçer', async (t) => {
+  t.after(() => resetAiTelemetryForTests());
   let wall = Date.now();
   t.mock.method(Date, 'now', () => wall);
   for (const shift of [120_000, -120_000]) {
+    resetAiTelemetryForTests();
     const fake = createFakeAiProvider();
     const provider = { ...fake, chatCompletion(input) {
       wall += shift;
       return fake.chatCompletion(input);
     } };
-    const { gateway } = isolatedGateway({ provider, config: PERSONAL_CONFIG() });
+    const { gateway } = isolatedGateway({ provider, config: { ...PERSONAL_CONFIG(), requestTimeoutMs: 5_000 } });
     const result = await gateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
     assert.equal(typeof result.text, 'string');
     assert.equal(fake.calls.length, 1);
+    const snapshot = aiTelemetrySnapshot();
+    assert.equal(snapshot.latency.provider.count, 1);
+    assert.ok(snapshot.latency.provider.p95Ms >= 0 && snapshot.latency.provider.p95Ms < 10_000);
   }
+});
+
+test('sonlandırılan süre sınırı saat ilerlese de yeniden zaman aşımı üretmez ve sinyali kesmez', () => {
+  let elapsed = 0;
+  const deadline = createAiDeadline({ timeoutMs: 1_000, now: () => elapsed });
+  assert.equal(deadline.failure(), null);
+  assert.equal(deadline.signal.aborted, false);
+  deadline.dispose();
+  elapsed = 60_000;
+  assert.equal(deadline.failure(), null);
+  assert.equal(deadline.signal.aborted, false);
+  assert.equal(deadline.remainingMs(), 0);
+});
+
+test('allowRetry kapalıyken bağlantı hatasında ikinci sağlayıcı denemesi yapılmaz; varsayılan sohbet yinelemesi korunur', async (t) => {
+  t.after(() => resetAiTelemetryForTests());
+  resetAiTelemetryForTests();
+  const noRetryProvider = createFakeAiProvider();
+  noRetryProvider.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'reply' });
+  const { gateway: noRetryGateway } = isolatedGateway({ provider: noRetryProvider, config: PERSONAL_CONFIG() });
+  await assert.rejects(
+    noRetryGateway.completeChat({ profile: 'chat.fast', messages: MESSAGES, allowRetry: false }),
+    { code: 'AI_PROVIDER_UNAVAILABLE' }
+  );
+  assert.equal(noRetryProvider.calls.length, 1);
+  assert.equal(aiTelemetrySnapshot().retries, 0);
+
+  resetAiTelemetryForTests();
+  const retryProvider = createFakeAiProvider();
+  retryProvider.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'reply' });
+  const { gateway: retryGateway } = isolatedGateway({ provider: retryProvider, config: PERSONAL_CONFIG() });
+  const ok = await retryGateway.completeChat({ profile: 'chat.fast', messages: MESSAGES });
+  assert.equal(typeof ok.text, 'string');
+  assert.equal(retryProvider.calls.length, 2);
+  assert.equal(aiTelemetrySnapshot().retries, 1);
 });
 
 test('ikinci sağlayıcı çağrısından önce yetki, iptal veya süre engeli varsa yineleme sayılmaz', async (t) => {

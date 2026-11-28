@@ -531,7 +531,7 @@ export async function readReportDependencies(executor, scope, { projectIds = [],
   const { rows, truncated } = capped(dependencyRows, maxRows);
   return {
     dependencies: rows,
-    truncated,
+    truncated: truncated || Boolean(metaRows[0]?.IsTruncated),
     hasPostCutoffChange: Boolean(metaRows[0]?.HasPostCutoffChange)
   };
 }

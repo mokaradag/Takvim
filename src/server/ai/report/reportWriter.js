@@ -217,7 +217,7 @@ export async function writeExecutiveReportDraft({
   kapaliBolumler = [],
   signal = null,
   revalidationTimeoutMs = REPORT_WRITER_REVALIDATION_TIMEOUT_MS,
-  now = Date.now
+  now = () => performance.now()
 }) {
   cancelled(signal);
   if (typeof gateway?.completeChat !== 'function') throw writerFailure(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, 'REPORT_WRITER_GATEWAY_MISSING');
@@ -247,6 +247,8 @@ export async function writeExecutiveReportDraft({
       requireText: true,
       // İletiler sunucunun ürettiği sabit istektir: sağlayıcının 4xx yanıtı kullanıcı değil yapılandırma hatasıdır.
       callerInput: false,
+      // Yazar sözleşmesi taslak başına tek sağlayıcı denemesi zorunlu kılar; ağ yinelemesi yapılmaz.
+      allowRetry: false,
       // Kuyruk beklemesi sırasında yetki ya da rıza kaldırıldıysa kanıt sağlayıcıya hiç gönderilmez; asılı doğrulama yuvayı tutamaz.
       beforeDispatch: (dispatchSignal) => assertStillAuthorized(revalidate, dispatchSignal ?? signal, boundedRevalidationTimeoutMs)
     });

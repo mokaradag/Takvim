@@ -71,7 +71,7 @@ const { AI_REQUEST_TIMEOUT_BOUNDS, parseAiBooleanFlag, validateAiBaseUrl } = awa
 const { computeEffectiveOutputTokenLimit } = await import('../src/server/ai/aiGateway.js');
 const { createOpenAiCompatibleProvider } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
 const { renderReportDraftText } = await import('../src/domain/ai/report/reportDraft.js');
-const { projectEvidencePackageForWriter } = await import('../src/domain/ai/report/reportWriterPrompt.js');
+const { projectEvidencePackageForWriter, REPORT_WRITER_PROMPT_VERSION } = await import('../src/domain/ai/report/reportWriterPrompt.js');
 
 const DEFAULT_ONPREM_SAMPLING = writer.REPORT_WRITER_SAMPLING;
 
@@ -708,6 +708,8 @@ export function compareQualificationRuns(summaryA, summaryB) {
   if (a.paket_kumesi_ozeti !== b.paket_kumesi_ozeti) mismatches.push('paket_kumesi_ozeti');
   if (a.stil_ozeti_sha256 !== b.stil_ozeti_sha256) mismatches.push('stil_ozeti_sha256');
   if (a.istem_surumu !== b.istem_surumu) mismatches.push('istem_surumu');
+  if ((a.kalite ?? null) !== (b.kalite ?? null)) mismatches.push('kalite');
+  if ((a.profil ?? null) !== (b.profil ?? null)) mismatches.push('profil');
   if (!validRunConcurrency(a.eszamanlilik) || a.eszamanlilik !== b.eszamanlilik) mismatches.push('eszamanlilik');
   if ((a.tasiyici ?? null) !== (b.tasiyici ?? null)) mismatches.push('tasiyici');
   if ((a.dagitim_ortami ?? null) !== (b.dagitim_ortami ?? null)) mismatches.push('dagitim_ortami');
@@ -1299,30 +1301,38 @@ export function summarizeRun(records, {
       ...(validRequestTimeout(first.istek_suresi_ms) ? [] : ['istek_suresi_ms'])
     ]
     : [];
+  const currentStyleHash = bench.sha256(bench.canonicalJson(bench.loadReportStyle()));
+  const promptVersionMatches = first.istem_surumu === REPORT_WRITER_PROMPT_VERSION;
+  const styleDigestMatches = first.stil_ozeti_sha256 === currentStyleHash;
   const exactRoster = rescored.length === set.paketler.length && set.paketler.every((entry) => rowByScenario.has(entry.senaryo));
   const completeRun = exactRoster && valid.length === set.paketler.length && parseFailures.length === 0 && infraFailures.length === 0;
   const standardP95 = bench.nearestRankP95(standard);
   const p95CapSeconds = supportedQuality ? WRITER_P95_CAP_SECONDS[first.kalite] : null;
-  // Eksik standart süre ölçümü, desteklenmeyen kalite etiketi veya profil-kalite uyuşmazlığında süre kapısı geçemez.
+  // Eksik standart süre ölçümü, eski istem/stil sürümü, desteklenmeyen kalite etiketi veya profil-kalite uyuşmazlığında süre kapısı geçemez.
   const p95WithinCap = supportedQuality && allStandardTimingsValid && standardP95 !== null && standardP95 <= p95CapSeconds;
-  const latencyGateValid = isOnPrem && completeRun && missingOnPremSettings.length === 0 && allDigestsMatched && profileMatchesQuality && allStandardTimingsValid && p95WithinCap;
+  const latencyGateValid = isOnPrem && completeRun && missingOnPremSettings.length === 0 && allDigestsMatched
+    && promptVersionMatches && styleDigestMatches && profileMatchesQuality && allStandardTimingsValid && p95WithinCap;
   const latencyGateStatus = !isOnPrem
     ? 'vekil_bilgi_amaci'
     : (!completeRun ? (rescored.length < set.paketler.length ? 'eksik_kosu' : 'gecersiz_kosu')
       : (missingOnPremSettings.length ? 'eksik_ayar_bekliyor'
         : (!allDigestsMatched ? 'kanit_surumu_uyusmuyor'
-          : (!profileMatchesQuality ? 'profil_kalite_uyusmuyor'
-            : (!allStandardTimingsValid ? 'eksik_sure_olcumu'
-              : (!p95WithinCap ? 'p95_esigi_asildi' : 'gecerli'))))));
+          : (!promptVersionMatches ? 'istem_surumu_uyusmuyor'
+            : (!styleDigestMatches ? 'stil_surumu_uyusmuyor'
+              : (!profileMatchesQuality ? 'profil_kalite_uyusmuyor'
+                : (!allStandardTimingsValid ? 'eksik_sure_olcumu'
+                  : (!p95WithinCap ? 'p95_esigi_asildi' : 'gecerli'))))))));
   const eligibleForQualification = latencyGateValid;
   const eligibilityNote = !isOnPrem
     ? 'KURUM_ICI_NITELENDIRME_DEGIL (vekil koşusu)'
     : (!completeRun ? `GECERSIZ_KOSU (${latencyGateStatus})`
       : (missingOnPremSettings.length ? `BEKLIYOR: eksik ayarlar (${missingOnPremSettings.join(', ')})`
         : (!allDigestsMatched ? 'GECERSIZ_KOSU (kanit_surumu_uyusmuyor)'
-          : (!profileMatchesQuality ? 'GECERSIZ_KOSU (profil_kalite_uyusmuyor)'
-            : (!allStandardTimingsValid ? 'GECERSIZ_KOSU (eksik_sure_olcumu)'
-              : (!p95WithinCap ? `BASARISIZ (p95_esigi_asildi: ${standardP95} > ${p95CapSeconds} sn)` : 'kurum_ici_aday'))))));
+          : (!promptVersionMatches ? 'GECERSIZ_KOSU (istem_surumu_uyusmuyor)'
+            : (!styleDigestMatches ? 'GECERSIZ_KOSU (stil_surumu_uyusmuyor)'
+              : (!profileMatchesQuality ? 'GECERSIZ_KOSU (profil_kalite_uyusmuyor)'
+                : (!allStandardTimingsValid ? 'GECERSIZ_KOSU (eksik_sure_olcumu)'
+                  : (!p95WithinCap ? `BASARISIZ (p95_esigi_asildi: ${standardP95} > ${p95CapSeconds} sn)` : 'kurum_ici_aday'))))))));
 
   const contradictionRows = perReport.filter((row) => row.celiski_islendi !== 'uygulanmaz');
   const k19Rows = perReport.filter((row) => row.gomulu_yonerge_izlenmedi !== 'uygulanmaz');
@@ -1358,8 +1368,10 @@ export function summarizeRun(records, {
       kalite: first.kalite ?? null,
       profil: first.profil ?? null,
       istem_surumu: first.istem_surumu ?? null,
+      istem_surumu_guncel: promptVersionMatches,
       paket_kumesi_ozeti: first.paket_kumesi_ozeti ?? null,
       stil_ozeti_sha256: first.stil_ozeti_sha256 ?? null,
+      stil_ozeti_guncel: styleDigestMatches,
       kanit_surumu_uyustu: allDigestsMatched,
       eszamanlilik: first.eszamanlilik ?? null,
       istek_suresi_ms: first.istek_suresi_ms ?? null,

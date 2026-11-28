@@ -272,7 +272,7 @@ SHA-256 özeti vardır. Elle düzenlenmez: `node scripts/yonetici-raporu-kiyas-p
 
 | Kaynak | Senaryolar |
 | --- | --- |
-| Temsili vakaların fikstür kanıtı (aynen, `4i-kanit-1` zarfına sarılarak) | S12 (R1), S17 (R4), S21 (R5), S25 (R8), S28 (R7), S40 (R2), S42 (R3), S46 (R6) |
+| Temsili vakaların fikstür kanıtından türetilen ve `4i-kanit-1` zarfına sarılan paket (not ve dönem içi tamamlanma zarf alanları eklenir; R3/R5/R7 gün sonu `veri_ani` kapanış anına eşlenir; R4/R8 çelişki ve tamlık bilgisi taşınır; olgu değerleri ve metinler değişmez) | S12 (R1), S17 (R4), S21 (R5), S25 (R8), S28 (R7), S40 (R2), S42 (R3), S46 (R6) |
 | 4I-A kıyas tohumu + 4I-A kanıt kurucusu | S09 |
 | Senaryo evreni (`test/helpers/executiveReportWriterScenarios.mjs`) + 4I-A kanıt kurucusu, sentetik SQL ikizi | Diğer 39 senaryo |
 | Kıyasa özgü, önceden çıkarılmış belge parçası (`tur: belge`, `kaynak_belge`, `bolum`, güvenilmez metin) | S36, S37, S38, S47 (S47'de `guvenilmez_yonerge_iceriyor: true`) |

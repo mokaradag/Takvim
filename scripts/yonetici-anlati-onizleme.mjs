@@ -19,7 +19,7 @@ import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
 registerServerOnlyShim();
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { renderReportDraftText } = await import('../src/domain/ai/report/reportDraft.js');
-const { BENCHMARK_FIXTURE_PATH, REPORT_STYLE_PATH, WRITER_PACKAGES_PATH, loadBenchmarkFixture } = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
+const { BENCHMARK_FIXTURE_PATH, REPORT_STYLE_PATH, WRITER_PACKAGES_PATH, loadBenchmarkFixture, loadWriterPackageSet } = await import('../test/helpers/executiveReportWriterBenchmark.mjs');
 const { draftDigest, hasVerifiedStoredModelIdentity, isValidStoredDraftShape, literalFence, selectHomogeneousRun } = await import('./report-writer-qualification.mjs');
 
 function canonicalPath(filePath) {
@@ -77,6 +77,8 @@ if (options.cikti && protectedInputs.some((inputPath) => sameFile(inputPath, opt
 
 const fixture = loadBenchmarkFixture();
 const scenarios = new Map(fixture.senaryolar.map((item) => [item.id, item]));
+const packageSet = loadWriterPackageSet();
+const packageByScenario = new Map(packageSet.paketler.map((item) => [item.senaryo, item]));
 const rawRecords = readFileSync(options.girdi, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
 let selectedRows;
 try {
@@ -128,6 +130,12 @@ for (const id of wanted) {
   const durationLabel = Number.isFinite(record.sure_ms) && record.sure_ms >= 0
     ? `${Math.round(record.sure_ms / 1000)} sn`
     : 'ölçülmedi';
+  const pkgEntry = packageByScenario.get(id);
+  const packageDigestMatches = Boolean(
+    pkgEntry
+    && record.paket_kumesi_ozeti === packageSet.ozet_sha256
+    && record.paket_ozeti === pkgEntry.paket_ozeti_sha256
+  );
   let status = record.durum;
   let message = null;
   if (status === 'gecerli') {
@@ -140,13 +148,18 @@ for (const id of wanted) {
       message = 'Kayıtlı taslak yapısı bozuk; önizleme oluşturulamadı.';
     } else if (digest == null && record.tasiyici === 'vekil') {
       status = 'dogrulanmamis_tarihsel';
-      message = 'Uyarı: kayıtlı taslak özeti yok (doğrulanmamış tarihsel taslak).';
+      message = packageDigestMatches
+        ? 'Uyarı: kayıtlı taslak özeti yok (doğrulanmamış tarihsel taslak).'
+        : 'Uyarı: kayıtlı taslak özeti yok ve kanıt paketi özeti güncel kıyas kümesiyle uyuşmuyor (doğrulanmamış tarihsel taslak).';
     } else if (typeof digest !== 'string' || !digest.trim()) {
       status = 'gecersiz_kayit';
       message = 'Kayıtlı taslak özeti geçersiz biçimde; bozuk kayıt önizlemede gösterilmedi.';
     } else if (digest !== draftDigest(record)) {
       status = 'gecersiz_kayit';
       message = 'Kayıtlı taslak özeti uyuşmuyor; değiştirilmiş taslak önizlemede gösterilmedi.';
+    } else if (!packageDigestMatches) {
+      status = 'tarihsel_paket_uyusmuyor';
+      message = 'Uyarı: bu taslak güncel dondurulmuş kanıt paketi kümesiyle uyuşmayan tarihsel bir koşudan geliyor (güncel kıyas sonucu değildir).';
     }
   } else {
     message = `Taslak üretilemedi: ${record.hata_kodu || status}.`;
@@ -157,7 +170,7 @@ for (const id of wanted) {
   out.push(`- Taşıyıcı ${record.tasiyici} · model ${model} · istem ${record.istem_surumu} · durum ${status} · süre ${durationLabel}${record.sozcuk ? ` · ${record.sozcuk} sözcük` : ''}`, '');
   if (message) out.push(`_${message}_`, '');
   // Düzyazı, Markdown ya da HTML sözdizimiyle gizlenmemesi için düz metin çitinde sunulur.
-  if (status === 'gecerli' || status === 'dogrulanmamis_tarihsel') {
+  if (status === 'gecerli' || status === 'dogrulanmamis_tarihsel' || status === 'tarihsel_paket_uyusmuyor') {
     out.push(literalFence(renderReportDraftText(record.taslak)), '');
   }
 }
