@@ -273,37 +273,61 @@ Kurum içi aday nitelendirmesi, kör insan puanlaması ve dolayısıyla `rapor_y
 
 ## 4I-C — Orantılı doğrulama ve yerel onarım
 
-**Durum: PLANLANDI.**
+**Durum: SÜRÜYOR.** Mühendislik uygulaması ve belirlenimci doğrulama tamamlandı; 4I-B ve 4I-C için kurum içi aday
+model nitelendirmesi, bağımsız denetçi / yeniden sıralayıcı canlı kalibrasyonu ve kör insan editoryal puanlaması
+**bekliyor** (kabul koşulları karşılanmadan TAMAMLANDI yapılmaz).
 
 1. **Amaç ve kullanıcı değeri** — Olgusal hataları, iyi yazılmış düzyazıyı yok etmeden yerinde düzeltmek.
-2. **İşlevsel kapsam** — Nesnel olgu doğrulaması (sayı, tarih, kimlik, durum; biçim normalleştirme); desteklenen
-   zorunlu anlamsal destek denetimi (bağımsız denetçi veya eşdeğer inceleme, isteğe bağlı yeniden sıralama); paragraf/cümle düzeyinde yerel onarım;
-   sınırlı deneme (paragraf başına 2, rapor başına 8); nitele ya da çıkar; kritik hata ve insan incelemesi politikası.
-3. **Yeniden kullanılan altyapı** — Kanıt paketi (`E#`/`F#`), sayı ve tarih biçimleme yardımcıları, anlamsal
-   katmanın yeniden sıralama profili, ağ geçidi.
+2. **İşlevsel kapsam** — Bağlamsal nesnel olgu doğrulaması (sayı, yüzde, oran, süre, tarih/aralık, görev durumu, kesit
+   sonrası değişim, tarihsiz tamamlanma gecikme yasağı, kronoloji tersinmesi, bilinmeyen-sıfır ayrımı, planlı
+   Şekil/Tablo göndermeleri, zorunlu olgu/bütünlük açıklamaları, yazar iddia eki çapraz denetimi; Türkçe dilbilimsel
+   normalleştirme); zorunlu bağımsız anlamsal destek denetimi (`4i-denetim-1`, bağımsız model kimlik doğrulaması veya
+   eşdeğer inceleme, bütçe korumalı isteğe bağlı yeniden sıralama); paragraf/cümle düzeyinde yerel onarım
+   (`4i-onarim-1`); sınırlı deneme (paragraf başına ≤ 2, anlamsal gerektirenlerde ≤ 1, rapor başına ≤ 8); belirlenimci
+   son çare (çıkar/inceleme işareti); kritik hata ve insan incelemesi politikası.
+3. **Yeniden kullanılan altyapı** — 4I-A kanıt paketi (`4i-kanit-1`, `E#`/`F#`), 4I-B bölüm planı/yazar izdüşümü ve
+   `writeExecutiveReportDraft`, anlamsal katmanın `AI_PROFILES.RERANK` profili, `aiGateway.js`, `aiModelRegistry.js`.
 4. **Mimari sınırlar** — Birebir cümle eşleşmesi aranmaz; paragraf hazır sunucu metniyle değiştirilmez; bütün rapor
-   tek ifade için reddedilmez; kesin kapılar onarılamazsa rapor yayımlanmaz ama taslak korunur.
-5. **Beklenen dosya ve bileşenler** — `reportClaims.js` (nesnel çıkarım ve defter eşleşmesi), `reportReview.js`
-   (denetçi çıktısı), `reportRepair.js` (döngü ve bütçe), `test/ai-executive-report-repair.test.mjs`.
-6. **Gözlenebilir çıktılar** — Önce/sonra raporları: tekil olgusal sorunlar (R2, S41) düzeltilmiş, çevredeki düzyazı
-   korunmuş; işaretlenen nitelemeler; inceleme gerektiren kritik vakalar.
+   tek ifade için reddedilmez; etkilenmeyen paragraflar bayt bayt korunur; kesin kapılar onarılamazsa rapor
+   yayımlanmaz ama taslak korunur; model adı iş kodunda geçmez; yeni HTTP ucu, kalıcı tablo, işçi veya bağımlılık yok.
+5. **Beklenen dosya ve bileşenler** — `src/domain/ai/report/reportClaims.js` (Türkçe normalleştirme, olgu defteri,
+   bağlamsal nesnel doğrulama ve belirlenimci kanıt seçici), `src/domain/ai/report/reportReview.js` (`4i-denetim-1` ve
+   `4i-onarim-1` istem/ayrıştırıcı ve belirlenimci son çare), `src/server/ai/report/reportRepair.js` (bütçe, bağımsız
+   kimlik denetimi, yaşam döngüsü yetki doğrulaması ve uçtan uca yürütücü), `src/domain/ai/aiModelRegistry.js`
+   (`AI_REPORT_PROFILES.REVIEW = 'report.review'`, eşlemesiz), `src/server/ai/aiGateway.js` (`allowRetry` denetimi),
+   `scripts/yonetici-dogrulama-onizleme.mjs`, `test/ai-executive-report-repair.test.mjs`.
+6. **Gözlenebilir çıktılar** — Önce/sonra yerel onarım doğrulamaları (R2/S40, S04, S25, R8, `one_cikan_tespit`:
+   yalnızca sorunlu paragraf düzeltilmiş, çevredeki düzyazı bayt bayt korunmuş); 48 senaryoluk 4I-B arşiv taslakları
+   belirlenimci tarama özeti; inceleme gerektiren kritik/yetkisiz vakalar.
 7. **Gerekli referans görüntüleri ve varlıklar** — Gerekmez.
 8. **İşlevsel ve işlevsel olmayan kabul ölçütleri** — Kabul çerçevesi §5 onarım eşikleri (editoryal düşüş ≤ 0,3;
    tekil sorunların ≥ %90'ı yerel çözülür; hazır metne düşme 0). **Kritik kapı:** hem olgusal bütünlük hem anlatı
    kalitesi doğrulamadan sağ çıkmalıdır.
-9. **Güvenlik ve yetki sınamaları** — Kapalı/uydurma varlık kesin kapısı; yetkisiz açıklama sıfır; onarım isteğine
-   yalnızca ilgili yetkili kanıt gider; denetçi çıktısı yapılandırılmış ve doğrulanmış.
-10. **Doğal dil kalite gereksinimleri** — Onarılan paragraf çevresiyle doğal biçimde bağlanır; nitelemeler ölçülü;
-    çıkarma sonrası paragraf bütünlüğü korunur.
-11. **Regresyon gereksinimleri** — 4I-B kalite puanları onarımla anlamlı düşmez; sohbet doğrulayıcıları değişmez.
-12. **Başarım ve kaynak** — Rapor başına en çok 11 model çağrısı (1 yazım, 8 onarım, denetim ve yeniden sıralama
-    için ortak 2 çağrı). Onarım isteği yalnızca ilgili paragrafı ve kanıtı taşır.
-13. **Bağımlılıklar** — 4I-B. Model kullanıldığında denetçi ve yeniden sıralayıcı rolleri nitelendirilir.
+9. **Güvenlik ve yetki sınamaları** — Kapalı/uydurma varlık ve istem enjeksiyonu kesin kapısı; yetkisiz açıklama sıfır
+   (yetkisiz varlık adları hata/bulgu/telemetriye yansıtılmaz); onarım isteğine yalnızca ilgili yetkili kanıt alt
+   kümesi gider; denetçi ve onarım çıktıları kapalı şema + `rapor_ozeti_sha256` bağlamasıyla doğrulanır; başlangıç,
+   her çağrı öncesi/sonrası ve teslim öncesi güncel `revalidate` zorunludur.
+10. **Doğal dil kalite gereksinimleri** — Onarılan paragraf çevresiyle doğal biçimde bağlanır (komşu geçiş cümleleri
+    salt okunur bağlam olarak verilir); nitelemeler ölçülü; çıkarma sonrası paragraf bütünlüğü korunur; editoryal dil
+    ve desteklenen yorumlar aşırı katı reddedilmez.
+11. **Regresyon gereksinimleri** — 4I-A/4I-B belirlenimci sınamaları ve mevcut sohbet doğrulayıcıları değişmeden
+    geçer; 4I-B kalite puanlarının onarımla düşmediği canlı kurum içi koşu ve kör insan puanlamasıyla doğrulanacaktır.
+12. **Başarım ve kaynak** — Rapor başına kesin tavan 11 model çağrısı (1 yazım, ≤ 8 onarım, denetim ve yeniden sıralama
+    için ortak ≤ 2; yeniden sıralama zorunlu denetim payını tüketemez). Onarım isteği yalnızca ilgili paragrafı ve
+    seçilen kanıt alt kümesini taşır.
+13. **Bağımlılıklar** — 4I-B. Üretimde kullanım için `report.writer`, `report.writer.quality`, `report.review` ve
+    yeniden sıralayıcı rolleri kurum içinde nitelendirilir.
 14. **Riskler ve geri alma** — Denetçinin aşırı katılığı (yorumu reddetmesi) → eşik ve insan kalibrasyonu;
     denetçi kararının yayın kararı sayılmaması. Denetçi geri alınırsa belirlenimci nesnel denetim korunur ve
-    maddi iddia desteği eşdeğer incelemeyle doğrulanır. Doğrulanamayan içerik ve kritik sorunlar için mimari §8.2 uygulanır.
-15. **Kapsam dışı** — Stüdyo'daki kullanıcı düzenlemeleri (4I-E) ve DOCX (4I-D).
-16. **Durum ve doğrulama kanıtı** — Henüz uygulanmadı.
+    maddi iddia desteği eşdeğer incelemeyle doğrulanır. Doğrulanamayan içerik ve kritik sorunlar için mimari §8.2
+    uygulanır. Geri alma: `report.review` eşlemesiz olduğundan ve HTTP ucu bağlanmadığından dal doğrudan geri alınabilir.
+15. **Kapsam dışı** — Stüdyo'daki kullanıcı düzenlemeleri ve HTTP uçları (4I-E), DOCX (4I-D), geçici belge yükleme
+    (4I-F) ve kalıcı arka plan raporlama/arşiv (4J).
+16. **Durum ve doğrulama kanıtı** — Ayrı durumlar: (1) mühendislik uygulaması **TAMAMLANDI**; (2) belirlenimci
+    doğrulama ve 48 senaryo arşiv taraması **DOĞRULANDI**; (3) kapsayıcı bütünleştirme doğrulaması **DOĞRULANDI**;
+    (4) canlı vekil/kurum içi denetçi ve yerel onarım koşusu **BEKLİYOR** (bu ortamda haricî/kurum içi canlı model
+    erişimi yok); (5) kurum içi aday nitelendirmesi ve kör insan editoryal puanlaması **BEKLİYOR**; (6) üretim kabulü
+    **BEKLİYOR**. Sayılar §Oturum devri'ndedir.
 
 ---
 
@@ -449,6 +473,9 @@ Aşağıdakiler **Aşama 4J**'ye aittir ve 4I'ye sessizce taşınmaz:
 | 2026-11-25 | Gecikme günü sunucu izdüşümünde (`veri_anina_gore_gecikme_takvim_gunu`) | Vekil koşuda model 31 kez kendi gün aritmetiğini yaptı; aritmetik sunucunundur |
 | 2026-11-25 | Yazar ayrıştırılmış stili parametre alır; YAML çalışma zamanı okuması 4I-D/E'ye | Yeni bağımlılık ve uç olmadan; 4I-0 sınırı korunur |
 | 2026-11-25 | R3/R5/R7 gün sonu veri anı işareti sarma katmanında eşdeğer kapanış anına eşlenir | Fikstür ve 4I-A sözleşmesi gevşetilmeden tutarlılık |
+| 2026-11-28 | Bağımsız denetçi profili (`report.review`) `AI_REPORT_PROFILES` içine eşlemesiz eklendi; bağımsızlık profil adıyla değil yapılandırılan ve bildirilen model kimliğiyle sınanır | Yazarla aynı modele yönlendirilmiş denetçi bağımsız sayılamaz; nitelendirmesiz profil kapalı kalır |
+| 2026-11-28 | 4I-C bütçesi sunucuda eşzamanlı ve geri alınamaz sayaçla (`1 + ≤8 + ≤2 = ≤11`) uygulanır; isteğe bağlı yeniden sıralama zorunlu anlamsal denetim payını tüketemez | Başarısız/zaman aşımı çağrıları ve paralel istekler bütçeyi aşamaz; son denetim korunur |
+| 2026-11-28 | Nesnel doğrulama değer varlığıyla yetinmez; Türkçe Unicode sözcük sınırlarıyla yerel ölçü, varlık ve dönem bağlamında eşleme yapar; yetkisiz varlık adları bulgu/alıntı/hata çıktısına yansıtılmaz | Doğru sayının yanlış varlığa/döneme yazılmasını engeller; kapalı varlık sızıntısını önler |
 
 ---
 
@@ -541,3 +568,35 @@ dondurulmuş sentetik kanıt paketi kümesi ve nitelendirme/vekil/önizleme ara�
   modellerle 48 senaryonun koşulması (`node scripts/report-writer-qualification.mjs kosu --tasiyici kurum-ici --model <katalog_kimliği> --dagitim-ortami <ortam> --dusunme-kipi <ör. kapali> --nicemleme <ör. fp8> --cikti <kosu.jsonl>`, doğrulanan her aday için ayrı; bu üç üst veri bayrağından herhangi biri verilmezse `ozet` süre kapısını `eksik_ayar_bekliyor` olarak bırakır); iki kör insan
   puanlayıcı; kurum içi p95; nitelikli model çıkarsa `report.writer` eşlemesi ve stil belgesinde rol kaydı.
 - **Sonraki giriş noktası:** 4I-B nitelendirmesi (kurum içi). 4I-C, 4I-B kabulünden sonra başlar.
+
+### 2026-11-28 — Aşama 4I-C orantılı doğrulama ve yerel onarım
+
+PR #125 birleştirme tabanı (`206729956d38604071bf67f79b10ba36d21b81e8`) üzerinden depo sahibinin onayıyla 4I-C
+mühendislik uygulaması tamamlandı; 4I-B ve 4I-C'nin resmî kurumsal nitelendirme ve üretim kabul kısıtları aynen
+korundu.
+
+Uygulandı: bağlamsal belirlenimci nesnel olgu doğrulayıcısı ve Türkçe dilbilimsel normalleştirme + belirlenimci paragraf
+kanıt seçicisi (`src/domain/ai/report/reportClaims.js`), bağımsız anlamsal denetim (`4i-denetim-1`) ve yerel paragraf
+onarımı (`4i-onarim-1`) sözleşmeleri/istemleri/kapalı ayrıştırıcıları + belirlenimci son çare
+(`src/domain/ai/report/reportReview.js`), sunucu bütçe/kimlik/yaşam döngüsü yürütücüsü
+(`src/server/ai/report/reportRepair.js`), eşlemesiz `report.review` profili (`src/domain/ai/aiModelRegistry.js`),
+yeniden sıralamada `allowRetry` denetimi (`src/server/ai/aiGateway.js`), geliştirici doğrulama/onarım önizleme betiği
+(`scripts/yonetici-dogrulama-onizleme.mjs`) ve 32 sınamalık belirlenimci test kümesi
+(`test/ai-executive-report-repair.test.mjs`).
+
+- **Belirlenimci doğrulama ve kapsayıcı bütünleştirme (Node 22, Linux + Docker `node:22-slim`):**
+  - 4I (`foundation`, `benchmark`, `evidence`, `writer`, `repair`) + `ai-semantic-retrieval` + `ai-model-registry` +
+    `ai-architecture-contract` kümesi: **275/275** geçti (yeni `ai-executive-report-repair`: **32/32**); tam paket
+    `npm test -- --test-concurrency=4` (**6967/6967**, başarısız/iptal/atlanan 0) ile doğrulandı.
+  - `npm run lint` uyarısız; `npm run build` başarılı (yeni HTTP/API ucu, kalıcı tablo/göç ya da bağımlılık yok).
+  - İzole Docker `node:22-slim` kapsayıcısında salt okunur bağlama ile 139/139 çekirdek sınama, `scripts/yonetici-dogrulama-onizleme.mjs --ornekler` ve üretim `next start` açılış denetimi (`GET /` 200, `GET /api/mergen-rota/auth/status` 401, geçici rapor ucu yok: 404) hatasız geçti.
+- **48 senaryoluk 4I-B arşiv taraması ve kontrollü önce-sonra onarımlar:** `docs/kayitlar/4i-b-vekil-kosusu-2026-11-25/kosu-kaydi.jsonl` üzerindeki 48 gerçek taslakta belirlenimci tarama **30 temiz / 18 kritik bulgulu / 0 kesin kapı ihlali** üretti; arşivdeki S25 kronoloji tersinmesi ve S04 aritmetik/yüzde sapması (`6/%200` → `7/%250`) ile eksik zorunlu olgular belirlenimci olarak yakalandı. Kontrollü sentetik denetçi/onarım yanıtlarıyla S25, S04, R2/S40, R8 ve `one_cikan_tespit` vakalarında yalnızca sorunlu paragraf onarılıp çevredeki paragrafların bayt bayt korunduğu doğrulandı.
+- **Canlı model ve kurumsal kabul durumu (bekliyor):** Bu ortamda haricî veya kurum içi canlı dil modeli anahtarı/CLI
+  erişimi bulunmadığından canlı vekil/kurum içi denetçi ve onarım koşusu yapılmadı (sahte sonuç üretilmedi).
+  `report.writer`, `report.writer.quality` ve `report.review` profilleri üretim kaydında eşlemesiz bırakıldı.
+- **Bekleyen dış ön koşullar (4I-B + 4I-C resmî kabulü):** (1) kurum içi `GET /models` katalog doğrulaması; (2) DeepSeek,
+  Qwen ve taban adayların 4I-B + 4I-C canlı koşuları ve bağımsız denetçi/yeniden sıralayıcı kalibrasyonu; (3) iki kör
+  insan puanlayıcıyla editoryal düşüş (≤ 0,3) ve tekil sorun yerel çözüm oranı (≥ %90) doğrulaması; (4) kurum içi p95
+  süre ölçümü.
+- **Sonraki giriş noktası:** Kurum içi canlı 4I-B + 4I-C nitelendirmesi; kabul kapıları kapandıktan sonra 4I-D (kurumsal
+  DOCX üretimi).

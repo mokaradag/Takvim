@@ -519,12 +519,15 @@ test('mimari: yazar modülleri model adı, ortam değişkeni, SQL, araç ya da y
     assert.doesNotMatch(body, /runToolSession|streamToolCompletion|streamChat\(|chatCompletion\(|fetch\(/u, file);
   }
   assert.match(fs.readFileSync(path.join(ROOT, 'src/server/ai/report/reportWriter.js'), 'utf8'), /gateway\.completeChat\(\{/u);
-  // Hiçbir uç ya da özellik modülü yazarı içe aktarmaz (yeni HTTP yüzeyi yok); yalnızca iç yazar modülleri birbirini içe aktarabilir.
+  // Hiçbir uç ya da özellik modülü yazarı içe aktarmaz (yeni HTTP yüzeyi yok); yalnızca iç rapor modülleri birbirini içe aktarabilir.
   const allowedInternalImporters = new Set([
     'src/domain/ai/report/reportSectionPlan.js',
     'src/domain/ai/report/reportWriterPrompt.js',
     'src/domain/ai/report/reportDraft.js',
-    'src/server/ai/report/reportWriter.js'
+    'src/domain/ai/report/reportClaims.js',
+    'src/domain/ai/report/reportReview.js',
+    'src/server/ai/report/reportWriter.js',
+    'src/server/ai/report/reportRepair.js'
   ]);
   // Ayrıştırıcılar doğrudan bildirilmediğinden, onları bildiren paketlerin (eslint, eslint-config-next) kendi
   // çözümleme bağlamından yüklenir; iç içe npm kurulumunda da kök düzeye taşınmaya güvenilmez.

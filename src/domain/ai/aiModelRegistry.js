@@ -34,14 +34,15 @@ export const AI_PROFILES = Object.freeze({
 });
 
 /**
- * Yönetici raporu yazar profilleri (Aşama 4I-B). Sohbet profillerinden bilinçli olarak ayrıdır: sohbet
- * uçları bunları kullanmaz, rapor yazarı sohbet profillerini kullanmaz. Bir rapor profili kayıtta ancak
+ * Yönetici raporu yazar ve denetçi profilleri (Aşama 4I-B / 4I-C). Sohbet profillerinden bilinçli olarak ayrıdır:
+ * sohbet uçları bunları kullanmaz, rapor hattı sohbet profillerini kullanmaz. Bir rapor profili kayıtta ancak
  * nitelendirme protokolü geçildikten sonra bir modele eşlenir; eşlenmemiş profil `PROFILE_NOT_CONFIGURED`
  * ile güvenli biçimde kullanılamaz kalır.
  */
 export const AI_REPORT_PROFILES = Object.freeze({
   WRITER: 'report.writer',
-  WRITER_QUALITY: 'report.writer.quality'
+  WRITER_QUALITY: 'report.writer.quality',
+  REVIEW: 'report.review'
 });
 
 /** Kayıttaki modellerin bağlanabileceği sağlayıcılar. */
@@ -64,7 +65,8 @@ const PROFILE_DEFINITIONS = Object.freeze({
   [AI_PROFILES.TEXT_TO_SPEECH_QUALITY]: { label: 'Metinden konuşmaya (yüksek kalite)', requires: [AI_CAPABILITIES.TEXT_TO_SPEECH] },
   [AI_PROFILES.IMAGE_GENERATION]: { label: 'Görsel üretimi', requires: [AI_CAPABILITIES.IMAGE_GENERATION] },
   [AI_REPORT_PROFILES.WRITER]: { label: 'Yönetici raporu yazarı', requires: [AI_CAPABILITIES.CHAT] },
-  [AI_REPORT_PROFILES.WRITER_QUALITY]: { label: 'Yönetici raporu yazarı (yüksek kalite)', requires: [AI_CAPABILITIES.CHAT] }
+  [AI_REPORT_PROFILES.WRITER_QUALITY]: { label: 'Yönetici raporu yazarı (yüksek kalite)', requires: [AI_CAPABILITIES.CHAT] },
+  [AI_REPORT_PROFILES.REVIEW]: { label: 'Yönetici raporu bağımsız denetçisi', requires: [AI_CAPABILITIES.CHAT] }
 });
 
 const KNOWN_CAPABILITIES = new Set(Object.values(AI_CAPABILITIES));
