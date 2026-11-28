@@ -3747,6 +3747,17 @@ test('Windows kipinde vekil iptali bağdaştırıcı ağacını kabuksuz durduru
     const result = await pending;
     assert.equal(result.spawnError, 'KOPRU_IPTAL');
     assert.ok(Date.now() - abortedAt < 5000, 'Bağdaştırıcı kendi zaman aşımını beklemeden durdurulmalıdır.');
+    // Ağaç aracı başlayıp sıfır dışı kodla çıkarsa (burada `/pid` dosyasını bulamayan Node) bağdaştırıcı yine durdurulur.
+    fs.rmSync(path.join(dir, 'hazir'), { force: true });
+    const second = new AbortController();
+    const failingTreeKill = callSurrogate({ messages: [], maxOutputTokens: 1 }, path.join(dir, 'defter-2.jsonl'), {
+      adapterPath, signal: second.signal, platform: 'win32', treeKillCommand: process.execPath
+    });
+    for (let attempt = 0; attempt < 200 && !fs.existsSync(path.join(dir, 'hazir')); attempt += 1) await delay(10);
+    const secondAbortAt = Date.now();
+    second.abort();
+    assert.equal((await failingTreeKill).spawnError, 'KOPRU_IPTAL');
+    assert.ok(Date.now() - secondAbortAt < 5000, 'Ağaç aracı başarısız olsa da bağdaştırıcı durdurulmalıdır.');
   } finally {
     controller.abort();
     fs.rmSync(dir, { recursive: true, force: true });

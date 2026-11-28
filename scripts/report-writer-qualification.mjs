@@ -233,7 +233,12 @@ export function resolveOnPremConfig(options = {}, env = process.env) {
 }
 
 /** Vekil köprüsüne bir yazar isteği gönderir; kabuk kullanılmaz, UTF-8 parçaları tamponlanarak çözülür. */
-export function callSurrogate(request, ledger, { adapterPath = ADAPTER, signal = null, platform = process.platform } = {}) {
+export function callSurrogate(request, ledger, {
+  adapterPath = ADAPTER,
+  signal = null,
+  platform = process.platform,
+  treeKillCommand = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe')
+} = {}) {
   if (signal?.aborted) return Promise.resolve({ code: null, parsed: null, spawnError: 'KOPRU_IPTAL' });
   return new Promise((resolve) => {
     let settled = false;
@@ -268,8 +273,19 @@ export function callSurrogate(request, ledger, { adapterPath = ADAPTER, signal =
         child.kill('SIGTERM');
         return;
       }
-      const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-      killer.once('error', () => { child.kill('SIGKILL'); });
+      // Ağaç aracı PATH'e bağlı kalmadan sistem dizininden çalıştırılır. Başlatılamazsa ya da sıfır dışı kodla
+      // çıkarsa bağdaştırıcı yine de zorla sonlandırılır; bu durumda öksüz model süreci kalabileceği koşu
+      // günlüğüne yazılır (yalnızca geliştirme aracıdır, üretim yolu değildir).
+      let fallbackDone = false;
+      const fallback = () => {
+        if (fallbackDone) return;
+        fallbackDone = true;
+        process.stderr.write('Uyarı: vekil süreç ağacı durdurulamadı; bağdaştırıcı zorla sonlandırıldı, model süreci kalmış olabilir.\n');
+        child.kill('SIGKILL');
+      };
+      const killer = spawn(treeKillCommand, ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      killer.once('error', fallback);
+      killer.once('close', (code) => { if (code !== 0) fallback(); });
     };
     signal?.addEventListener('abort', stop, { once: true });
     const stdoutChunks = [];
