@@ -396,7 +396,10 @@ test('proje satırı takibi üst nüfusu ve tek proje sınırlamasını korur', 
   assert.match(opening, /kendi işleriniz/);
   assert.equal(opening.match(/· proje:/g)?.length, 1);
   const reads = next.log.filter((row) => row.query === 'task-facts');
-  assert.ok(reads.length && reads.every((row) => row.params.assigneeMode === 'me' && row.params.projectId));
+  // ICE-2: nüfus okumaları kapsamı korur; kanıt kartı önizlemesinin sorumlu okuması yalnızca o nüfustan seçilen kimliklerle sınırlıdır.
+  const population = reads.filter((row) => !String(row.params.taskIds || ''));
+  assert.ok(population.length && population.every((row) => row.params.assigneeMode === 'me' && row.params.projectId));
+  assert.ok(reads.filter((row) => !population.includes(row)).every((row) => String(row.params.taskIds || '').length > 0 && row.params.withAssignees === 1));
 });
 
 test('türü belirtilmeyen çizilemez grafik notu da kapanıştan önce gelir', async (t) => {

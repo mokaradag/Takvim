@@ -83,16 +83,23 @@ for (const composition of [false, true]) {
   });
 }
 
-test('grafik isteği model düzeni kapalıyken doğrulanmış yanıtı kartsız taşır', async (t) => {
+test('ICE-2: grafik isteği model düzeni kapalıyken sunucu düzeniyle karşılanır; doğrulanmış sayı ek model çağrısı olmadan karta bağlanır', async (t) => {
   const stack = stackFor(t, { composition: false });
   const declaration = JSON.parse(declared(OVERDUE_LIST, { language: 'tr' }));
   declaration.arguments.visual = true;
   stack.provider.enqueue({ type: 'tool-calls', preface: [JSON.stringify(declaration)], calls: [] });
   const done = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Geciken görevlerimi grafikle göster.' }));
-  assert.match(done.assistantMessage.content, /gecik/i);
-  assert.match(done.assistantMessage.content, /grafik|rota-chart/i);
-  assert.equal(done.evidenceCards, undefined);
-  assert.equal(hasBindingMarks(done.assistantMessage.content), false);
+  const content = done.assistantMessage.content;
+  assert.match(content, /gecik/i);
+  assert.match(content, /grafik|rota-chart/i);
+  assert.equal(hasBindingMarks(content), false);
+  // Sunucu düzeninin konum işaretleri belirlenimcidir: kart, model düzeni kapalı yapılandırmada da teslim edilir.
+  const cards = normalizeEvidenceCards(done.evidenceCards);
+  assert.ok(cards, `kart tanımlayıcısı olmalı: ${content}`);
+  const strong = strongTexts(content);
+  for (const anchor of cards.anchors) assert.equal(strong[anchor.strong], anchor.text);
+  // Model yalnızca planlama turunu gördü; kart için düzen ya da başka bir model çağrısı yoktur.
+  assert.equal(stack.provider.calls.filter((call) => isCompositionCall(call)).length, 0);
 });
 
 test('dizin çözüm durumu kartı düzeltir, model ve kalıcı kanıt görünümü korunur', async (t) => {

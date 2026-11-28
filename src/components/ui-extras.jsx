@@ -745,11 +745,12 @@ export function useReveal() {
 // - `canOpen`: açma yolunda yeniden denetlenen geçerlilik koşulu.
 // - `closeOnScroll`: kart dışındaki bir kaydırma kartı kapatır (kaydırılan metinden kopmuş kart kalmaz).
 // - `hideListHead`: liste başlığı satırı çizilmez.
+// - `hideList` (ICE-2): liste bölümü (başlık ve satırlar) hiç çizilmez; kart yalnızca özetten oluşur (ör. hesap kartı).
 export function HoverListCard({
   children, title, icon, accent, summary, items = [], renderItem,
   listLabel = 'Görevler', listHint, onViewAll, emptyText = 'Kayıt yok.',
   wrapperStyle, wrapperClass = 'hovercard-trigger',
-  cardClass = '', cardLabel, triggerLabel, manageFocus = false, closeOnScroll = false, hideListHead = false, canOpen, focusFallbackRef
+  cardClass = '', cardLabel, triggerLabel, manageFocus = false, closeOnScroll = false, hideListHead = false, hideList = false, canOpen, focusFallbackRef
 }) {
   const [show, setShow] = useSx(false);
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
@@ -946,18 +947,20 @@ export function HoverListCard({
       )}
       <div className="rich-tip-body">
         {summary}
-        {!hideListHead && (
+        {!hideList && !hideListHead && (
           <div className="rt-list-head">
             <span>{listLabel} · {items.length}</span>
             {listHint && <span className="rt-list-hint">{listHint}</span>}
           </div>
         )}
-        {onViewAll && <button type="button" className="btn ghost sm hover-list-detail" onClick={() => { closeNow(); onViewAll(wrapRef); }}>Tüm görevleri gör <Icons.ChevronRight size={12} /></button>}
-        <div className="rt-list">
-          {items.length === 0
-            ? <div className="rt-list-empty">{emptyText}</div>
-            : items.map((it, i) => renderItem(it, i, closeNow))}
-        </div>
+        {!hideList && onViewAll && <button type="button" className="btn ghost sm hover-list-detail" onClick={() => { closeNow(); onViewAll(wrapRef); }}>Tüm görevleri gör <Icons.ChevronRight size={12} /></button>}
+        {!hideList && (
+          <div className="rt-list">
+            {items.length === 0
+              ? <div className="rt-list-empty">{emptyText}</div>
+              : items.map((it, i) => renderItem(it, i, closeNow))}
+          </div>
+        )}
       </div>
     </div>,
     document.body

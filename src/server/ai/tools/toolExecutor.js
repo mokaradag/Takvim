@@ -253,7 +253,7 @@ export function createToolExecutor({
             round: state.rounds
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
-          if (id) ledger.attachPayload(id, content, result.outcome.cardAssignments);
+          if (id) ledger.attachPayload(id, content, result.outcome.cardAssignments, result.outcome.cardPopulation);
           else {
             // Dolu defter sınırdır; eksik ya da tutarsız köken sunucu sözleşme hatasıdır: model düzeltemez, boyut hatası değildir.
             code = ledger.full() ? TOOL_ERROR_CODES.LIMIT_EXCEEDED : TOOL_ERROR_CODES.INTERNAL;

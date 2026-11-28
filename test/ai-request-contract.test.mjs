@@ -152,7 +152,8 @@ test("aynı yanıttaki genel yol bildirimi de araç turunu açmaz", async (t) =>
   ], { user: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   assert.ok(onlyRefusals(inputs[1]), 'istek bildirilmeden araç çalışmaz');
   assert.match(systemText(inputs[1].messages), /Araç çağrıları çalıştırılmadı/);
-  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, 1, 'yalnızca bildirimli tur SQL çalıştırdı');
+  // ICE-2: bildirimli turun tek nüfus okuması; kart önizlemesinin sorumlu okuması yalnızca kimlikle sınırlıdır ve aynı turdadır.
+  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts' && !String(entry.params.taskIds || '')).length, 1, 'yalnızca bildirimli tur SQL çalıştırdı');
   assert.equal(result.outcome, 'grounded');
 });
 

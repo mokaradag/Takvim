@@ -440,7 +440,13 @@ export function hoursCoverage(facts) {
   };
 }
 
-export function statusTotals(facts, today) {
+/**
+ * `members` (isteğe bağlı, ICE-2): verilirse her toplamın katkıda bulunan olguları AYNI döngüde ve AYNI koşulla toplanır
+ * (`members.overdue` = gecikmiş sayısını oluşturan olgular). Canlı kanıt kartının nüfusu böylece sayıyla yapı gereği eşittir.
+ */
+export function statusTotals(facts, today, members = null) {
+  const add = members ? (key, fact) => { (members[key] ||= []).push(fact); } : () => {};
+  if (members) members.total = [...facts];
   const totals = {
     total: facts.length,
     todo: 0,
@@ -457,17 +463,19 @@ export function statusTotals(facts, today) {
   for (const fact of facts) {
     if (fact.status === 'done') {
       totals.done += 1;
-      if (!fact.actualFinish) totals.doneWithoutActualFinish += 1;
+      add('done', fact);
+      if (!fact.actualFinish) { totals.doneWithoutActualFinish += 1; add('doneWithoutActualFinish', fact); }
       continue;
     }
     totals.open += 1;
-    if (fact.status === 'in_progress') totals.inProgress += 1;
-    else totals.todo += 1;
-    if (isOverdue(fact, today)) totals.overdue += 1;
-    if (fact.targetFinish === today) totals.dueToday += 1;
-    if (isDueWithin(fact, today, DUE_SOON_DAYS)) totals.dueNext7Days += 1;
-    if (!fact.targetFinish) totals.openWithoutTargetFinish += 1;
-    if (fact.milestone) totals.milestonesOpen += 1;
+    add('open', fact);
+    if (fact.status === 'in_progress') { totals.inProgress += 1; add('inProgress', fact); }
+    else { totals.todo += 1; add('todo', fact); }
+    if (isOverdue(fact, today)) { totals.overdue += 1; add('overdue', fact); }
+    if (fact.targetFinish === today) { totals.dueToday += 1; add('dueToday', fact); }
+    if (isDueWithin(fact, today, DUE_SOON_DAYS)) { totals.dueNext7Days += 1; add('dueNext7Days', fact); }
+    if (!fact.targetFinish) { totals.openWithoutTargetFinish += 1; add('openWithoutTargetFinish', fact); }
+    if (fact.milestone) { totals.milestonesOpen += 1; add('milestonesOpen', fact); }
   }
   totals.completionRatePercent = taskCompletionRate(totals.done, facts.length);
   return totals;

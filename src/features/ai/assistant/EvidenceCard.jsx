@@ -9,7 +9,11 @@ import { fmt } from '../../../scheduling/dates';
 import { evidenceTimeLabel } from './assistantPresentation.js';
 
 /**
- * Bilgin etkileşimli kanıt kartı (ICE-1).
+ * Bilgin etkileşimli kanıt kartı (ICE-1, ICE-2).
+ *
+ * ICE-2 kart türleri: tekil kişi/proje/örgüt birimi (doğrulanmış ölçüler ve görev önizlemesi), bunların koleksiyonları (ad ve
+ * sütun başına sayı), hesap (pay, payda, işlem ve sonuç) ve karşılaştırma (iki değer ve fark). Bütün metinler ve sayılar
+ * sunucunun doğrulanmış tanımlayıcısındandır; tarayıcı hiçbir değeri yeniden hesaplamaz.
  *
  * Kart içeriği sunucunun doğrulanmış, yetkili ve geçici tanımlayıcısıdır; tarayıcı yalnızca çizer. Değerler kanıtın
  * üretildiği andaki değerlerdir (durum, gecikme, termin): canlı görev verisiyle değiştirilmez. Görev ayrıntısı mevcut
@@ -130,13 +134,14 @@ function PeopleSection({ card }) {
   );
 }
 
-function Notices({ card }) {
+function Notices({ card, preview = true }) {
   // Kaynak listesiyle aynı biçim ve saat dilimi (Türkiye saati).
   const time = evidenceTimeLabel(card.generatedAt);
+  const items = card.items || [];
   return (
     <>
-      {card.items.length < card.total && (
-        <p className="ice-notice"><Icons.Info size={12} aria-hidden="true" /><span>Kanıt sınırı nedeniyle {card.total} görevin tamamı değil, {card.items.length} görev gösteriliyor.</span></p>
+      {preview && items.length > 0 && items.length < card.total && (
+        <p className="ice-notice"><Icons.Info size={12} aria-hidden="true" /><span>Kanıt sınırı nedeniyle {card.total} görevin tamamı değil, {items.length} görev gösteriliyor.</span></p>
       )}
       {card.scopePartial && (
         <p className="ice-notice is-quiet"><Icons.Shield size={12} aria-hidden="true" /><span>Yalnızca görüntüleme yetkiniz bulunan kayıtlar.</span></p>
@@ -183,6 +188,76 @@ function TaskSummary({ card }) {
   );
 }
 
+/** Doğrulanmış ölçü satırları (etiket – değer). */
+function MetricList({ metrics }) {
+  return (
+    <dl className="ice-facts">
+      {metrics.map((metric) => <div key={metric.label}><dt>{metric.label}</dt><dd className="ice-num">{metric.value}</dd></div>)}
+    </dl>
+  );
+}
+
+const ENTITY_ICONS = Object.freeze({ person: Icons.Users, project: Icons.Briefcase, unit: Icons.Layers, people: Icons.Users, projects: Icons.Briefcase, units: Icons.Layers });
+const COLLECTION_NOUNS = Object.freeze({ people: 'kişi', projects: 'proje', units: 'birim' });
+
+/** Tekil kişi/proje/birim: ölçüler; görev önizlemesi aşağıdaki listede. */
+function EntitySummary({ card }) {
+  return (
+    <>
+      <MetricList metrics={card.metrics} />
+      <Notices card={card} />
+    </>
+  );
+}
+
+/** Varlık koleksiyonu: kaç varlık olduğu ve her birinin doğrulanmış sayıları (kaydırılabilir küçük tablo). */
+function CollectionTable({ card }) {
+  const noun = COLLECTION_NOUNS[card.kind] || 'kayıt';
+  return (
+    <>
+      <div className="ice-metric">
+        <span className="ice-metric-value">{card.total}</span>
+        <span className="ice-metric-label">{noun}{card.rows.length < card.total ? ` · ${card.rows.length} gösteriliyor` : ''}</span>
+      </div>
+      <div className="ice-table-wrap" tabIndex={0} aria-label={`${card.title} tablosu`}>
+        <table className="ice-table">
+          <thead><tr><th scope="col">{noun === 'kişi' ? 'Kişi' : noun === 'proje' ? 'Proje' : 'Birim'}</th>{card.columns.map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
+          <tbody>
+            {card.rows.map((row, index) => (
+              <tr key={`${row.name}-${index}`}>
+                <th scope="row" title={row.name}>{row.name}</th>
+                {row.values.map((value, position) => <td key={card.columns[position]}>{value == null ? '—' : value}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {card.rows.length < card.total && <p className="ice-notice"><Icons.Info size={12} aria-hidden="true" /><span>{card.total} {noun} kaydının {card.rows.length} tanesi gösteriliyor.</span></p>}
+      <Notices card={card} preview={false} />
+    </>
+  );
+}
+
+/** Hesap ve karşılaştırma: işlenenler, sonuç ve işlem (yeniden hesaplanmaz; sunucunun doğrulanmış metni). */
+function FactSummary({ card }) {
+  return (
+    <>
+      <div className="ice-metric"><span className="ice-metric-value">{card.result}</span></div>
+      <MetricList metrics={card.metrics} />
+      {card.formula && <p className="ice-formula"><span className="ice-section-label">{card.kind === 'calc' ? 'Hesaplama' : 'Değişim'}</span><span>{card.formula}</span></p>}
+      {card.note && <p className="ice-section-hint ice-note">{card.note}</p>}
+      <Notices card={card} preview={false} />
+    </>
+  );
+}
+
+const CARD_LABELS = Object.freeze({
+  task: (card) => `${card.title}: görev kanıtı`, tasks: (card) => `${card.title}: ${card.total} görev`,
+  person: (card) => `${card.title}: kişi kanıtı`, project: (card) => `${card.title}: proje kanıtı`, unit: (card) => `${card.title}: birim kanıtı`,
+  people: (card) => `${card.title}: ${card.total} kişi`, projects: (card) => `${card.title}: ${card.total} proje`, units: (card) => `${card.title}: ${card.total} birim`,
+  calc: (card) => `${card.title}: ${card.result}`, compare: (card) => `${card.title}: ${card.result}`
+});
+
 /**
  * Doğrulanmış olgunun etkileşimli tetikleyicisi. Metin değişmez; yalnızca ince noktalı alt çizgiyle ayırt edilir. Süresi
  * dolan kart açılmaz ve ifade sade metne döner.
@@ -193,19 +268,26 @@ export function EvidenceReference({ card, receivedAt, expiresAt, focusFallbackRe
   if (!card || !canOpen()) return children;
   const openFreshTask = openTask ? (id) => { if (canOpen()) openTask(id); } : null;
   const tone = TONES[card.tone] || TONES.neutral;
-  const ToneIcon = tone.icon;
+  const ToneIcon = ENTITY_ICONS[card.kind] || (card.kind === 'calc' || card.kind === 'compare' ? Icons.Chart : tone.icon);
   const single = card.kind === 'task';
-  const label = single ? `${card.title}: görev kanıtı` : `${card.title}: ${card.total} görev`;
+  const entity = ['person', 'project', 'unit'].includes(card.kind);
+  const collection = ['people', 'projects', 'units'].includes(card.kind);
+  const fact = card.kind === 'calc' || card.kind === 'compare';
+  const label = (CARD_LABELS[card.kind] || CARD_LABELS.tasks)(card);
+  const items = card.items || [];
+  const summary = single ? <TaskSummary card={card} /> : entity ? <EntitySummary card={card} /> : collection ? <CollectionTable card={card} />
+    : fact ? <FactSummary card={card} /> : <CollectionSummary card={card} />;
   return (
     <HoverListCard
       title={card.title}
       icon={<ToneIcon size={13} aria-hidden="true" />}
       accent={tone.accent}
-      items={card.items}
-      listLabel="Görevler"
-      listHint={openTask ? 'Açmak için tıklayın' : null}
+      items={items}
+      listLabel={entity ? card.listLabel || 'Görevler' : 'Görevler'}
+      listHint={openTask && items.length ? 'Açmak için tıklayın' : null}
       hideListHead={single}
-      summary={single ? <TaskSummary card={card} /> : <CollectionSummary card={card} />}
+      hideList={collection || fact || (entity && !items.length)}
+      summary={summary}
       renderItem={(item, index, close) => (single
         ? (openTask ? (
           <button key={item.id} type="button" className="rt-list-item ice-open" onClick={() => { close(); openFreshTask(item.id); }}>
@@ -215,7 +297,7 @@ export function EvidenceReference({ card, receivedAt, expiresAt, focusFallbackRe
         : <TaskRow key={item.id} item={item} onOpen={openFreshTask} close={close} />)}
       wrapperClass={`ice-ref is-${card.tone}`}
       wrapperStyle={{ display: 'inline' }}
-      cardClass={`ice-card${single ? ' is-single' : ''}`}
+      cardClass={`ice-card${single || fact ? ' is-single' : ''}${collection ? ' is-table' : ''}`}
       cardLabel={label}
       triggerLabel={`${text} — ${label}. Kayıtları göster`}
       manageFocus

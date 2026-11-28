@@ -1945,7 +1945,8 @@ export async function presentVerdict(turn, verdict, compose) {
       const bound = narrative ? settleEvidenceBindings({ ...verdict, normalized: narrative.text }, narrative.bindings) : verdict;
       return visual ? withChartNote(turn, bound) : bound;
     }
-    const rendered = renderComposition(composition, validated, { bind: turn.composeAnswers });
+    // ICE-2: konum işaretleri belirlenimcidir ve modele gitmez; model düzeni kapalı yapılandırmada da sunucu düzeni bağları taşır.
+    const rendered = renderComposition(composition, validated, { bind: true });
     if (!rendered.citedIds.every((id) => verdict.citedIds.includes(id))) {
       turn.trace.presentation = { mode: 'narrative', reason: 'CITATION_SCOPE' };
       return visual ? withChartNote(turn, verdict) : verdict;

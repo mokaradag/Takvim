@@ -6,7 +6,8 @@ import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, isCompleteTaskView } from './rotaScope.js';
-import { readPortfolio, readProjectDetail, readProjectSearch, readWbs } from './rotaToolStore.js';
+import { readPortfolio, readProjectDetail, readProjectSearch, readTaskFacts, readWbs } from './rotaToolStore.js';
+import { buildCardPopulation } from './cardPopulation.js';
 import {
   accessExplanation,
   accessLevelOf,
@@ -14,9 +15,10 @@ import {
   ID_PROPERTY,
   LIMIT_PROPERTY,
   notFound,
+  projectIndex,
   requireVisibleProject
 } from './rotaToolSupport.js';
-import { addDays, DUE_SOON_DAYS, sqlDay, sqlInstant } from './taskFacts.js';
+import { addDays, DUE_SOON_DAYS, sqlDay, sqlInstant, statusTotals } from './taskFacts.js';
 
 function sourceLabel(sourceType) {
   return sourceType === 'CORPORATE' ? 'Kurumsal (CN43N)' : 'Manuel';
@@ -205,6 +207,46 @@ const PORTFOLIO_SORTS = Object.freeze({
   name_asc: () => 0
 });
 
+/** Portföy satırı toplamlarının görev olgusu karşılıkları (SQL tanımlarıyla aynı koşullar; bkz. AI_TOOL_PORTFOLIO_SQL). */
+const PORTFOLIO_METRICS = Object.freeze(['total', 'todo', 'inProgress', 'done', 'open', 'overdue', 'dueNext7Days', 'openWithoutTargetFinish', 'milestonesOpen']);
+const PORTFOLIO_TOTALS = Object.freeze({ tasks: 'total', open: 'open', done: 'done', overdue: 'overdue', dueNext7Days: 'dueNext7Days', openWithoutTargetFinish: 'openWithoutTargetFinish' });
+
+/**
+ * ICE-2 — portföy sayılarının katkıda bulunan görevleri. Portföy sayıları SQL toplamıdır; satırları kanıtta yoktur. Sayfadaki
+ * projelerin AYNI görünür görev nüfusu (portföy sorgusunun döndürdüğü görev kimlikleri) tek ve sınırlı bir okumayla alınır,
+ * sayılar aynı koşullarla yeniden hesaplanır ve her proje için SQL toplamlarıyla BİREBİR karşılaştırılır. Tek ölçü bile
+ * uyuşmazsa (ör. iki okuma arasında değişen görev) o projenin hiçbir kümesi kaydedilmez; toplamlar yalnızca bütün projeler
+ * sayfada ve uyumluysa kaydedilir. Okuma sınırı aşılırsa kayıt yoktur (kart üretilmez; yanıt değişmez).
+ */
+async function portfolioCardPopulation(call, scope, { page, projects, population, totals }) {
+  const wanted = new Set(page.map((project) => project.projectId));
+  const taskIds = (population || []).filter((row) => wanted.has(canonicalActualId(row.projectId))).map((row) => row.taskId);
+  if (!page.length || !taskIds.length || taskIds.length > TOOL_LIMITS.maxAnalyzedTasks) return null;
+  const read = await call.sql((executor) => readTaskFacts(executor, scope, { taskIds, maxRows: taskIds.length }));
+  if (read.truncated) return null;
+  const byProject = new Map();
+  for (const fact of read.facts) {
+    if (!byProject.has(fact.projectId)) byProject.set(fact.projectId, []);
+    byProject.get(fact.projectId).push(fact);
+  }
+  const sets = [];
+  const verified = [];
+  page.forEach((project, index) => {
+    const members = {};
+    const recount = statusTotals(byProject.get(project.projectId) || [], call.today, members);
+    if (!PORTFOLIO_METRICS.every((metric) => recount[metric] === project.tasks[metric])) return;
+    verified.push(members);
+    for (const metric of PORTFOLIO_METRICS) sets.push([`data.projects.${index}.tasks.${metric}`, members[metric] || [], project.projectId]);
+  });
+  if (verified.length === projects.length && projects.length === page.length) {
+    for (const [field, metric] of Object.entries(PORTFOLIO_TOTALS)) {
+      const list = verified.flatMap((members) => members[metric] || []);
+      if (list.length === totals[field]) sets.push([`data.totals.${field}`, list]);
+    }
+  }
+  return buildCardPopulation(call, scope, { sets, projects: projectIndex(read.projects || []), today: call.today });
+}
+
 const portfolioSummary = {
   name: 'rota_portfolio_summary',
   version: 1,
@@ -257,7 +299,9 @@ const portfolioSummary = {
     const descriptor = describeTaskScope(filteredRows.map(scopeAccess));
     const page = projects.slice(0, limit);
     const rankField = { overdue_desc: 'overdue', open_desc: 'open', due_soon_desc: 'dueNext7Days' }[sort];
+    const cardPopulation = await portfolioCardPopulation(call, scope, { page, projects, population, totals });
     return {
+      ...(cardPopulation ? { cardPopulation } : {}),
       ...(rankField && projects.length > page.length ? { rankingBoundary: {
         collection: 'projects', metric: `tasks.${rankField}`, order: 'desc', returnedCount: page.length,
         nextValue: projects[page.length].tasks[rankField]

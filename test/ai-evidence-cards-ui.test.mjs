@@ -18,12 +18,12 @@ const { RotaAssistantPanel } = await import('../src/features/ai/assistant/RotaAs
 const { createAssistantController } = await import('../src/features/ai/assistant/assistantController.js');
 const { useModalFocusTrap } = await import('../src/hooks/useModalFocusTrap.js');
 const { HoverListCard } = await import('../src/components/ui-extras.jsx');
-const { EVIDENCE_CARD_LIMITS, normalizeEvidenceCards } = await import('../src/domain/ai/evidenceCards.js');
+const { EVIDENCE_CARD_LIMITS, EVIDENCE_CARD_VERSION, normalizeEvidenceCards } = await import('../src/domain/ai/evidenceCards.js');
 
 const taskId = (n) => `21000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const item = (n, overrides = {}) => ({ id: taskId(n), title: `Görev ${n}`, project: 'Altyapı', status: 'in_progress', overdue: true, overdueDays: 10 + n, due: '2026-11-10',
   finished: null, progress: 30, assignees: ['Ayşe Demir'], hiddenAssignees: 0, assignment: 'visible', ...overrides });
-const descriptor = normalizeEvidenceCards({ v: 1, cards: [{ id: 'c1', kind: 'tasks', title: 'Gecikmiş görevleriniz', tone: 'overdue', generatedAt: '2026-11-27T08:00:00.000Z',
+const descriptor = normalizeEvidenceCards({ v: EVIDENCE_CARD_VERSION, cards: [{ id: 'c1', kind: 'tasks', title: 'Gecikmiş görevleriniz', tone: 'overdue', generatedAt: '2026-11-27T08:00:00.000Z',
   total: 12, scopePartial: true, items: [item(1), item(2), item(3, { assignees: [], assignment: 'unassigned' })], people: [{ name: 'Ayşe Demir', tasks: 2 }], unassigned: 1, undisclosed: 0 }],
 anchors: [{ strong: 0, text: '12', card: 'c1' }] });
 const [card] = descriptor.cards;
@@ -310,7 +310,7 @@ test('fareyle sabitlenen kart tetikleyiciden başka öğeye odak gidince kapanı
 
 test('salt okunur kartın kökü odaklanabilir ve ters Tab ile tetikleyiciye dönülür', () => {
   const singleCard = normalizeEvidenceCards({
-    v: 1,
+    v: EVIDENCE_CARD_VERSION,
     cards: [{ id: 'c1', kind: 'task', title: 'Tekil görev', tone: 'neutral', generatedAt: '2026-11-27T08:00:00.000Z',
       total: 1, scopePartial: false, items: [item(1)], people: [{ name: 'Ayşe Demir', tasks: 1 }], unassigned: 0, undisclosed: 0 }],
     anchors: [{ strong: 0, text: 'Tekil görev', card: 'c1' }]

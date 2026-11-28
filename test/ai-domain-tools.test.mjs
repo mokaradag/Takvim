@@ -837,11 +837,13 @@ test('çağrı sınırları: turda en fazla beş çağrı yürütülür; tanınm
   assert.deepEqual(ledger.ids(), ['R1', 'R2'], 'kanıt kimlikleri çağrı sırasıyla verilir');
   const factReads = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts');
   assert.equal(factReads.filter((entry) => !entry.params.taskIds).length, 1, 'liste ve toplam aynı olgu okumasından gelir; yinelenen çağrı yeniden çalışmaz');
-  assert.equal(factReads.length, 2, 'nüfus ve sayfa izdüşümü ayrı okunur; yineleme ikisini de yeniden okumaz');
+  // ICE-2: portföy kanıt kartı nüfusu için yalnızca kimlikle sınırlı iki okuma eklenir (katkıda bulunan olgular ve önizleme sorumluları).
+  assert.equal(factReads.length, 4, 'nüfus ve sayfa izdüşümü ayrı okunur; yineleme ikisini de yeniden okumaz; portföy kartı iki sınırlı okuma ekler');
   assert.equal(factReads[0].params.withAssignees, 0);
   assert.equal(factReads[0].params.taskIds, '');
   assert.equal(factReads[1].params.withAssignees, 1);
   assert.ok(factReads[1].params.taskIds);
+  assert.ok(factReads.slice(2).every((entry) => entry.params.taskIds), 'portföy kartı okumaları yalnızca kimlikle sınırlıdır');
   const oversize = await callRotaTools(stack, AYSE, [['rota_task_search', JSON.stringify({ text: 'a', filler: 'x'.repeat(9000) })]]);
   assert.equal(oversize.results[0].error.code, 'INVALID_ARGUMENTS');
   assert.deepEqual(oversize.results[0].error.details, ['$:tooLarge']);
