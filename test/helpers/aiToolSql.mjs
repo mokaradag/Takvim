@@ -1163,7 +1163,14 @@ function reportDependencies(db, params) {
   const hasPostCutoffAudit = cutOffTicks != null && (db.auditLog || []).some((entry) => {
     if (entry.EntityType !== 'TASK' || !['UPDATE', 'DELETE'].includes(entry.ActionCode)) return false;
     if (!afterCutoff(entry.OccurredAt)) return false;
-    if (scope.projects.get(upper(entry.ProjectId))?.AccessLevel !== 'FULL') return false;
+    // Taşınan görev hedef projeyle denetlenir; taşıma öncesi proje (`BeforeJson.ProjectId`) de kapsam sayılır.
+    let beforeProjectId = null;
+    try {
+      const before = typeof entry.BeforeJson === 'string' ? JSON.parse(entry.BeforeJson) : null;
+      if (before && typeof before === 'object' && !Array.isArray(before)) beforeProjectId = before.ProjectId ?? before.projectId ?? null;
+    } catch { /* Bozuk JSON taşıma kanıtı sayılmaz. */ }
+    const inFullScope = (projectId) => typeof projectId === 'string' && scope.projects.get(upper(projectId))?.AccessLevel === 'FULL';
+    if (!inFullScope(entry.ProjectId) && !inFullScope(beforeProjectId)) return false;
     const live = (db.tasks || []).find((task) => same(task.TaskId, entry.EntityId));
     if (live && live.CreatedAt != null && afterCutoff(live.CreatedAt)) return false;
     return true;

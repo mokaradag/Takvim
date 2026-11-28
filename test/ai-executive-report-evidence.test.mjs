@@ -5440,6 +5440,16 @@ test('tarihsel bağımlılık sınırı: kesit sonrası kenarlar TOP bütçesini
   const filtered = await read({ taskDependencies: [], auditLog: [auditAt(late, taskC)] }, { taskIds: [taskA] });
   assert.deepEqual(pairs(filtered), []);
   assert.equal(filtered.hasPostCutoffChange, true);
+  // Seçili FULL projeden kesit sonrası başka projeye taşınan görev: denetim kaydı hedef projeyle yazılır,
+  // taşıma öncesi proje `BeforeJson.ProjectId` alanından tanınır.
+  const otherProjectId = '11111111-1111-4111-8111-111111111502';
+  const movedAudit = {
+    ...auditAt(late, taskC), ProjectId: otherProjectId,
+    BeforeJson: JSON.stringify({ ProjectId: projectId }), AfterJson: JSON.stringify({ ProjectId: otherProjectId })
+  };
+  assert.equal((await read({ taskDependencies: [], auditLog: [movedAudit] })).hasPostCutoffChange, true);
+  // Kontrol: kapsam dışı iki proje arasındaki taşıma bu projeleri etkilemez.
+  assert.equal((await read({ taskDependencies: [], auditLog: [{ ...movedAudit, BeforeJson: JSON.stringify({ ProjectId: otherProjectId }) }] })).hasPostCutoffChange, false);
   // Kesit sonrasında oluşturulan görevin düzenlenmesi kesit anındaki kenarları etkileyemez.
   const createdLateId = '22222222-2222-4222-8222-222222221509';
   const createdLate = await withReportStack({

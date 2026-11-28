@@ -1612,14 +1612,25 @@ ${SCOPE_PROJECTS}
       -- dışında kalabileceğinden bu denetim görev süzgecinden bağımsızdır. Kesit sonrasında oluşturulduğu
       -- kanıtlanan görevler kesit anında kenar taşıyamayacağından dışlanır; satırı olmayan (silinmiş)
       -- görevler tutucu biçimde sayılır.
+      -- Başka projeye taşınan görevin denetim kaydı hedef projeyle yazılır; taşımadan önceki proje
+      -- (BeforeJson.ProjectId) seçili FULL projeyse kaldırılan kenarlar da yakalanır.
       OR EXISTS (
         SELECT 1
         FROM dbo.MR_AuditLog a
-        JOIN #AiScopeProjects v ON v.ProjectId = a.ProjectId AND v.AccessLevel = 'FULL'
+        OUTER APPLY (
+          SELECT
+            MAX(CASE WHEN aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'ProjectId', N'projectId') AND aj.[type] = 1 THEN TRY_CONVERT(uniqueidentifier, aj.[value]) END) AS BeforeProjectId
+          FROM OPENJSON(CASE WHEN ${IS_JSON_OBJECT_SQL('a.BeforeJson')} THEN a.BeforeJson END) aj
+          WHERE aj.[key] COLLATE Latin1_General_100_BIN2 IN (N'ProjectId', N'projectId')
+        ) ab
         LEFT JOIN dbo.MR_Tasks t ON t.TaskId = TRY_CONVERT(uniqueidentifier, a.EntityId)
         WHERE a.EntityType = 'TASK'
           AND a.ActionCode IN ('UPDATE', 'DELETE')
           AND a.OccurredAt > @cutOffUtc
+          AND EXISTS (
+            SELECT 1 FROM #AiScopeProjects v
+            WHERE v.AccessLevel = 'FULL' AND (v.ProjectId = a.ProjectId OR v.ProjectId = ab.BeforeProjectId)
+          )
           AND (t.TaskId IS NULL OR t.CreatedAt IS NULL OR t.CreatedAt <= @cutOffUtc)
       )
     ) THEN 1 ELSE 0 END AS bit) AS HasPostCutoffChange;
