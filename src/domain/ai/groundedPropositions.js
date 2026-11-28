@@ -1,6 +1,7 @@
 import { canonicalGroupLabel, escapedFactText } from './evidenceFacts.js';
 import { turkishPossessiveSuffix } from './evidenceNarrative.js';
 import { stripBindingMarks } from './evidenceCards.js';
+import { calcBind, entitiesBind, factEntityBind, factEvidenceId, factOperand, factTaskBind, operand, taskSetBind } from './evidenceBindings.js';
 
 /**
  * Kanıta dayalı yanıtın SUNUCUYA AİT önermeleri (Aşama 4D anlatımı).
@@ -51,7 +52,8 @@ const day = (value, locale) => new Intl.DateTimeFormat(locale === 'en' ? 'en-GB'
 const clipName = (text) => (text.length > MAX_PLAIN_NAME ? `${text.slice(0, MAX_PLAIN_NAME - 1)}…` : text);
 
 /** Değer: çizimde vurgulu ve kaçışlı, sayfada düz metin. Sayı ve tarih sunucunun biçimidir. */
-const v = (text) => ({ value: String(text), strong: true });
+/** `bind` (ICE-2, isteğe bağlı): değerin kanıt kartı bağı; yalnızca sunucunun işaretleyicili çiziminde konuma dönüşür. */
+const v = (text, bind = null) => (bind ? { value: String(text), strong: true, bind: Object.freeze(bind) } : { value: String(text), strong: true });
 const strongPart = v;
 /** Vurgusuz veri metni (ör. grup adı): çizimde yine kaçışlıdır. */
 const t = (text) => ({ value: String(text), strong: false });
@@ -234,16 +236,17 @@ function numericValue(value, semantic, locale) {
 }
 
 /** Grubun konumu: "**Tamamlandı** durumunda", "have **Orta** priority". */
-function groupPlace(groupBy, label, locale) {
+function groupPlace(groupBy, label, locale, bind = null) {
+  const value = v(label, bind);
   if (locale === 'en') {
-    return { status: ['are in the ', v(label), ' status'], priority: ['have ', v(label), ' priority'], project: ['are in the ', v(label), ' project'],
-      target_month: ['are due in ', v(label)], department: ['are assigned in ', v(label)], unit: ['are assigned in ', v(label)],
-      date_week: ['fall in the week of ', v(label)], date_month: ['fall in ', v(label)], due_horizon: ['are due in the ', v(label), ' band'] }[groupBy] || ['are in the ', v(label), ' group'];
+    return { status: ['are in the ', value, ' status'], priority: ['have ', value, ' priority'], project: ['are in the ', value, ' project'],
+      target_month: ['are due in ', value], department: ['are assigned in ', value], unit: ['are assigned in ', value],
+      date_week: ['fall in the week of ', value], date_month: ['fall in ', value], due_horizon: ['are due in the ', value, ' band'] }[groupBy] || ['are in the ', value, ' group'];
   }
-  return { status: [v(label), ' durumunda'], priority: [v(label), ' öncelikte'], project: [v(label), ' projesinde'], target_month: [v(label), ' termin ayında'],
-    department: [v(label), ' bölümündeki sorumlularda'], unit: [v(label), ' birimindeki sorumlularda'],
-    date_week: [v(label), ' haftasında'], date_month: [v(label), ' ayında'], due_horizon: [v(label), ' bandında'] }[groupBy]
-    || [v(label), ' grubunda'];
+  return { status: [value, ' durumunda'], priority: [value, ' öncelikte'], project: [value, ' projesinde'], target_month: [value, ' termin ayında'],
+    department: [value, ' bölümündeki sorumlularda'], unit: [value, ' birimindeki sorumlularda'],
+    date_week: [value, ' haftasında'], date_month: [value, ' ayında'], due_horizon: [value, ' bandında'] }[groupBy]
+    || [value, ' grubunda'];
 }
 
 /** Küçük payın kesri korunur; sıfır ya da tamamı olmayan pay yuvarlamayla 0 ya da 100 görünmez. */
@@ -263,12 +266,19 @@ const percent = (value, locale) => {
  * (ör. 1001/2000 → %50,05). Gösterilen değer kesin paydan hiçbir zaman büyük değildir ve her zaman %50'yi aşar.
  */
 export function majorityPercent(value, total, locale) {
+  const shown = majorityValue(value, total);
+  if (shown == null) return null;
+  return Number.isInteger(shown) ? number(shown, locale) : new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { maximumFractionDigits: 6 }).format(shown);
+}
+
+/** Çoğunluk yüzdesinin sayısal değeri (biçimsiz): kanıt kartının hesap doğrulaması aynı değeri yeniden üretir. */
+export function majorityValue(value, total) {
   const whole = sharePercent(value, total);
-  if (whole > 50) return number(whole, locale);
+  if (whole > 50) return whole;
   for (let digits = 1; digits <= 6; digits += 1) {
     const scale = 10 ** digits;
     const shown = Math.floor((value * 100 * scale) / total) / scale;
-    if (shown > 50) return new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { maximumFractionDigits: digits }).format(shown);
+    if (shown > 50) return shown;
   }
   return null;
 }
@@ -292,16 +302,24 @@ const countTone = (filters, value) => (filters?.deadline === 'overdue' && value 
  * nüfusunun büyüklüğüdür; nüfus aynı kanıtın satırlarıdır (aynı araç çağrısı, aynı süzgeçler). Kartın başlığı ve tonu
  * süzgeçlerden sunucunun belirlenimci metnidir; olgu taşımaz.
  */
-function taskCollectionBind(group, filters, count, locale) {
-  if (group?.tool !== 'rota_task_search' || !Number.isSafeInteger(count) || count < 1) return null;
+function taskCollectionBind(group, filters, count, locale, field = 'totalCount') {
+  if (!TASK_TOOLS.has(group?.tool) || !Number.isSafeInteger(count) || count < 1) return null;
   const f = filters || {};
   const statuses = Array.isArray(f.statuses) ? f.statuses : [];
   const tone = f.deadline === 'overdue' ? 'overdue' : f.assignee === 'unassigned' ? 'unassigned'
     : TERM_WINDOWS.has(f.deadline) ? 'due' : statuses.length === 1 && statuses[0] === 'done' ? 'done'
       : statuses.length === 1 && statuses[0] === 'in_progress' ? 'progress' : 'neutral';
   const title = titleCandidate({ tool: group.tool, filters: f, locale }) || (locale === 'en' ? 'Tasks' : 'Görevler');
+  // ICE-2: görev özetinin sayımı aynı okumanın canlı nüfus kaydına bağlanır (satırları kanıtta olmayan toplu sayım).
+  if (group.tool !== 'rota_task_search') {
+    const bind = taskSetBind({ tool: group.tool, evidenceId: group.evidenceId, field, count, title, locale });
+    return bind ? { ...bind, tone: field === 'totalCount' ? tone : bind.tone } : null;
+  }
   return { type: 'tasks', evidenceId: group.evidenceId, count, title, tone };
 }
+
+/** Grup satırının görünen adı (kart başlığının kapsamı). */
+const groupScope = (fact, title, locale) => (fact ? canonicalGroupLabel(fact, title, locale) : title);
 
 const GROUP_TITLES = Object.freeze({ status: ['durum', 'status'], priority: ['öncelik', 'priority'], project: ['proje', 'project'], deadline: ['termin', 'deadline'],
   target_month: ['termin ayı', 'deadline month'], date_week: ['hafta', 'week'], date_month: ['ay', 'month'], due_horizon: ['teslim ufku', 'delivery horizon'] });
@@ -481,32 +499,38 @@ export function tablePropositions({ group, described, distribution, locale, popu
     if (total <= 0) return [];
     const filters = facts[0].semantic?.filters;
     const whose = ownerParts(filters, locale);
-    add('total', TASK_TOOLS.has(group.tool) ? taskCountSentence(filters, total, locale, { total: true }) : null, 'info', { count: total });
+    add('total', TASK_TOOLS.has(group.tool) ? taskCountSentence(filters, total, locale, { total: true, bind: taskCollectionBind(group, filters, total, locale) }) : null, 'info', { count: total });
+    const totalOperand = operand({ evidenceId: group.evidenceId, field: 'totalCount', value: total, label: locale === 'en' ? 'All tasks' : 'Bütün görevler' });
     // Kısmi tarih kovaları tam dönemle aynı uzunlukta değildir: toplam korunur, en büyük kova / çoğunluk iddiası kurulmaz.
     if (['date_week', 'date_month'].includes(groupBy) && facts.some((fact) => fact.semantic?.group?.partial || fact.semantic?.series?.partial)) return out;
     const max = Math.max(...facts.map((fact) => fact.value));
     const ownerTitle = soleRow(described, facts, max);
-    const owner = ownerTitle == null ? null : canonicalGroupLabel(facts.find((fact) => fact.value === max), ownerTitle, locale);
+    const ownerFact = facts.find((fact) => fact.value === max);
+    const owner = ownerTitle == null ? null : canonicalGroupLabel(ownerFact, ownerTitle, locale);
+    const ownerBind = owner ? factTaskBind(ownerFact, { locale, scope: owner }) : null;
+    const ownerOperand = owner ? factOperand(ownerFact, owner) : null;
     // Tek dolu grup (bütün görevler aynı grupta) çoğunluk değildir: toplam ve döküm onu söyler.
     if (owner && max < total) {
       const share = sharePercent(max, total);
-      const place = groupPlace(groupBy, owner, locale);
+      const place = groupPlace(groupBy, owner, locale, ownerBind);
       const done = groupBy === 'status' && facts[facts.findIndex((fact) => fact.value === max)].semantic?.group?.key === 'done';
       if (max * 2 > total) {
         // Çoğunluk ("büyük bölümü") yalnızca birbirini dışlayan tam dağılımda pay yarıyı aştığında; gösterilen pay da %50'yi aşar.
         const majority = majorityPercent(max, total, locale);
+        const majorityBind = calcBind({ numerator: ownerOperand, denominator: totalOperand, shown: majorityValue(max, total), rule: 'majority', title: locale === 'en' ? 'Majority share' : 'Çoğunluk payı' });
         // Akıcı biçim: toplam söylendiyse özne yinelenmez ("… göreviniz var ve bunların büyük bölümü …").
-        const them = en ? ['most of them (', v(percent(majority, locale)), ') ', ...place] : ['bunların büyük bölümü (', v(percent(majority, locale)), ') ', ...place];
+        const them = en ? ['most of them (', v(percent(majority, locale), majorityBind), ') ', ...place] : ['bunların büyük bölümü (', v(percent(majority, locale), majorityBind), ') ', ...place];
         add('majority', en
-          ? sentence([`Most of ${whose ? '' : 'the tasks in this result'}`, ...(whose || []), ' (', v(percent(majority, locale)), ') ', ...place, '.'])
-          : sentence([...(whose || ['bu sonuçtaki görevlerin']), ' büyük bölümü (', v(percent(majority, locale)), ') ', ...place, '.']), done ? 'success' : 'info',
+          ? sentence([`Most of ${whose ? '' : 'the tasks in this result'}`, ...(whose || []), ' (', v(percent(majority, locale), majorityBind), ') ', ...place, '.'])
+          : sentence([...(whose || ['bu sonuçtaki görevlerin']), ' büyük bölümü (', v(percent(majority, locale), majorityBind), ') ', ...place, '.']), done ? 'success' : 'info',
         { anaphor: { count: total, join: [en ? ', and ' : ' ve ', ...them], lead: them } });
       } else {
-        const largest = en ? ['the largest group is ', v(owner), ' (', v(number(max, locale)), ` ${max === 1 ? 'task' : 'tasks'}, `, v(percent(share, locale)), ')']
-          : ['en büyük grup ', v(owner), ' (', v(number(max, locale)), ' görev, ', v(percent(share, locale)), ')'];
+        const shareBind = calcBind({ numerator: ownerOperand, denominator: totalOperand, shown: share, rule: 'share', title: locale === 'en' ? 'Group share' : 'Grubun payı' });
+        const largest = en ? ['the largest group is ', v(owner, ownerBind), ' (', v(number(max, locale), ownerBind), ` ${max === 1 ? 'task' : 'tasks'}, `, v(percent(share, locale), shareBind), ')']
+          : ['en büyük grup ', v(owner, ownerBind), ' (', v(number(max, locale), ownerBind), ' görev, ', v(percent(share, locale), shareBind), ')'];
         add('largest', en
-          ? sentence(['The largest group is ', v(owner), ': ', v(number(max, locale)), ` ${max === 1 ? 'task' : 'tasks'} (`, v(percent(share, locale)), ').'])
-          : sentence(['En büyük grup ', v(owner), ': ', v(number(max, locale)), ' görev (', v(percent(share, locale)), ').']), 'info',
+          ? sentence(['The largest group is ', v(owner, ownerBind), ': ', v(number(max, locale), ownerBind), ` ${max === 1 ? 'task' : 'tasks'} (`, v(percent(share, locale), shareBind), ').'])
+          : sentence(['En büyük grup ', v(owner, ownerBind), ': ', v(number(max, locale), ownerBind), ' görev (', v(percent(share, locale), shareBind), ').']), 'info',
         { anaphor: { count: total, join: [en ? ', and ' : '; ', ...largest], lead: largest } });
       }
     }
@@ -517,18 +541,23 @@ export function tablePropositions({ group, described, distribution, locale, popu
       const open = total - done;
       if (done > 0 && open > 0) {
         const share = sharePercent(done, total);
-        const sofar = en ? ['so far ', v(percent(share, locale)), ' are completed; ', v(number(open, locale)), ` ${open === 1 ? 'task is' : 'tasks are'} still open`]
-          : share < 1 ? ['tamamlanma oranı ', v(percent(share, locale)), '; ', v(number(open, locale)), ' görev hâlâ açık']
-            : ['şu ana kadar ', v(percent(share, locale)), `${turkishPossessiveSuffix(share)} tamamlandı; `, v(number(open, locale)), ' görev hâlâ açık'];
+        const doneFact = facts[keys.indexOf('done')];
+        const doneBind = calcBind({ numerator: factOperand(doneFact, locale === 'en' ? 'Completed tasks' : 'Tamamlanan görev'), denominator: totalOperand, shown: share, rule: 'share',
+          title: locale === 'en' ? 'Completion share' : 'Tamamlanma payı', tone: 'done' });
+        const openBind = taskCollectionBind(group, { ...(filters || {}), statuses: ['todo', 'in_progress'] }, open, locale, 'data.totals.open');
+        const sofar = en ? ['so far ', v(percent(share, locale), doneBind), ' are completed; ', v(number(open, locale), openBind), ` ${open === 1 ? 'task is' : 'tasks are'} still open`]
+          : share < 1 ? ['tamamlanma oranı ', v(percent(share, locale), doneBind), '; ', v(number(open, locale), openBind), ' görev hâlâ açık']
+            : ['şu ana kadar ', v(percent(share, locale), doneBind), `${turkishPossessiveSuffix(share)} tamamlandı; `, v(number(open, locale), openBind), ' görev hâlâ açık'];
         add('completion', en
-          ? sentence([v(percent(share, locale)), ` of ${whose ? '' : 'the tasks in this result'}`, ...(whose || []), ' are completed; ', v(number(open, locale)), ` ${open === 1 ? 'task is' : 'tasks are'} still open.`])
-          : sentence([...(whose || ['bu sonuçtaki görevlerin']), share < 1 ? ' tamamlanma oranı ' : ' ', v(percent(share, locale)),
-            share < 1 ? '; ' : `${turkishPossessiveSuffix(share)} tamamlandı; `, v(number(open, locale)), ' görev hâlâ açık.']),
+          ? sentence([v(percent(share, locale), doneBind), ` of ${whose ? '' : 'the tasks in this result'}`, ...(whose || []), ' are completed; ', v(number(open, locale), openBind), ` ${open === 1 ? 'task is' : 'tasks are'} still open.`])
+          : sentence([...(whose || ['bu sonuçtaki görevlerin']), share < 1 ? ' tamamlanma oranı ' : ' ', v(percent(share, locale), doneBind),
+            share < 1 ? '; ' : `${turkishPossessiveSuffix(share)} tamamlandı; `, v(number(open, locale), openBind), ' görev hâlâ açık.']),
         done * 2 > total ? 'success' : 'info', { anaphor: { count: total, join: [en ? ', and ' : ' ve ', ...sofar], lead: sofar } });
       }
     }
     if (described.rows.length <= MAX_BREAKDOWN_GROUPS) {
-      const items = described.rows.flatMap((row, position) => [...(position ? [', '] : []), t(canonicalGroupLabel(facts[position], row.title, locale)), ' ', v(number(facts[position].value, locale))]);
+      const items = described.rows.flatMap((row, position) => [...(position ? [', '] : []), t(canonicalGroupLabel(facts[position], row.title, locale)), ' ',
+        v(number(facts[position].value, locale), factTaskBind(facts[position], { locale, scope: canonicalGroupLabel(facts[position], row.title, locale) }))]);
       add('breakdown', sentence([`${GROUP_NOUNS[groupBy][lang(locale)]}: `, ...items, '.']));
     }
     return out;
@@ -598,6 +627,11 @@ export function tablePropositions({ group, described, distribution, locale, popu
       // Bir haftayı aşan gecikme: sunucunun sabit eşiği (7 gün), modelin yorumu değil.
       const late = values.filter((value) => value > 7).length;
       const base = values.length;
+      // ICE-2: bir haftayı aşan gecikmeli satırlar aynı tam nüfusun adlandırılmış alt kümesidir; taban aramanın kendi sayımıdır.
+      const lateIds = facts.filter((fact) => fact.value > 7).map((fact) => fact.semantic?.row?.identity);
+      const lateBind = group.tool === 'rota_task_search' && late > 0 && lateIds.every(Boolean)
+        ? { type: 'tasks', evidenceId: group.evidenceId, taskIds: lateIds, count: lateIds.length, title: en ? 'More than a week overdue' : 'Bir haftadan uzun süredir gecikmiş görevler', tone: 'overdue' } : null;
+      const baseBind = group.tool === 'rota_task_search' ? taskCollectionBind(group, populationScope(described), base, locale) : null;
       const week = en ? ' more than a week overdue' : ' bir haftadan uzun süredir gecikmiş';
       if (!late) {
         add('threshold', sentence(en ? ['None of these tasks is more than a week overdue.'] : ['Hiçbir görevin gecikmesi bir haftayı aşmıyor.']), 'success',
@@ -608,17 +642,17 @@ export function tablePropositions({ group, described, distribution, locale, popu
           { share: shareForms(en ? [`all of these tasks are${week}`] : [`bu görevlerin tamamı${week}`], en ? [`all of them are${week}`] : [`bunların tamamı${week}`],
             en ? [`all are${week}`] : [`tamamı${week}`], base) });
       } else {
-        add('threshold', sentence(en ? [v(number(late, locale)), ` of the `, v(number(base, locale)), ' tasks are more than a week overdue.']
-          : [v(number(base, locale)), ' görevin ', v(number(late, locale)), `${turkishPossessiveSuffix(late)} bir haftadan uzun süredir gecikmiş.`]), 'warning',
-        { share: shareForms(en ? [v(number(late, locale)), ' of the ', v(number(base, locale)), ` tasks are${week}`] : [v(number(base, locale)), ' görevin ', v(number(late, locale)), `${turkishPossessiveSuffix(late)}${week}`],
-          en ? ['of these, ', v(number(late, locale)), ` are${week}`] : ['bunların ', v(number(late, locale)), `${turkishPossessiveSuffix(late)}${week}`],
-          en ? [v(number(late, locale)), ` are${week}`] : [v(number(late, locale)), `${turkishPossessiveSuffix(late)} de${week}`], base) });
+        add('threshold', sentence(en ? [v(number(late, locale), lateBind), ` of the `, v(number(base, locale), baseBind), ' tasks are more than a week overdue.']
+          : [v(number(base, locale), baseBind), ' görevin ', v(number(late, locale), lateBind), `${turkishPossessiveSuffix(late)} bir haftadan uzun süredir gecikmiş.`]), 'warning',
+        { share: shareForms(en ? [v(number(late, locale), lateBind), ' of the ', v(number(base, locale), baseBind), ` tasks are${week}`] : [v(number(base, locale), baseBind), ' görevin ', v(number(late, locale), lateBind), `${turkishPossessiveSuffix(late)}${week}`],
+          en ? ['of these, ', v(number(late, locale), lateBind), ` are${week}`] : ['bunların ', v(number(late, locale), lateBind), `${turkishPossessiveSuffix(late)}${week}`],
+          en ? [v(number(late, locale), lateBind), ` are${week}`] : [v(number(late, locale), lateBind), `${turkishPossessiveSuffix(late)} de${week}`], base) });
       }
     }
   }
   column = null;
   // "Bu görevler" yalnızca görev koleksiyonunun satırlarıdır.
-  if (TASK_TOOLS.has(group.tool) && String(collection ?? '').split('.').at(-1) === 'tasks') add('concentration', projectConcentration(described, locale));
+  if (TASK_TOOLS.has(group.tool) && String(collection ?? '').split('.').at(-1) === 'tasks') add('concentration', projectConcentration(described, locale, group));
   return out;
 }
 
@@ -643,16 +677,24 @@ function entityLead(described, noun, locale, add, allowLead = true) {
       && fact.semantic?.metric !== 'tasks.done' && !/Percent$/.test(String(fact.semantic?.metric || ''))));
   const total = described.rows.length;
   const overdue = counts.find(({ facts }) => facts.every((fact) => fact.semantic?.metric === 'tasks.overdue'));
+  // ICE-2: kapsama sayıları varlık koleksiyonuna (satırların kendisi), öndeki satır varlık kartına, sayıları satırın nüfusuna bağlanır.
+  const tool = overdue?.facts[0]?.semantic?.provenance?.tool || counts[0]?.facts[0]?.semantic?.provenance?.tool || null;
+  const evidenceId = factEvidenceId(described.rows[0]?.entries[0]?.fact);
+  const rowPaths = (facts) => facts.map((fact) => fact.semantic?.row?.path);
+  const collection = (facts, title) => (evidenceId && facts.length ? entitiesBind({ tool, evidenceId, rows: rowPaths(facts), title, locale }) : null);
   if (overdue && (noun === 'project' || allowLead)) {
-    const late = overdue.facts.filter((fact) => fact.value > 0).length;
+    const lateFacts = overdue.facts.filter((fact) => fact.value > 0);
+    const late = lateFacts.length;
     const nouns = en ? (noun === 'project' ? ['project', 'projects'] : ['person', 'people']) : (noun === 'project' ? 'proje' : 'kişi');
+    const allBind = collection(overdue.facts, en ? (noun === 'project' ? 'Listed projects' : 'Listed people') : (noun === 'project' ? 'Listelenen projeler' : 'Listelenen kişiler'));
+    const lateBind = collection(lateFacts, en ? (noun === 'project' ? 'Projects with overdue tasks' : 'People with overdue tasks') : (noun === 'project' ? 'Gecikmiş görevi olan projeler' : 'Gecikmiş görevi olan kişiler'));
     const realized = late === total
-      ? sentence(en ? [noun === 'project' ? 'All ' : 'All ', v(number(total, locale)), ` ${nouns[1]} have overdue tasks.`]
-        : [`listedeki `, v(number(total, locale)), ` ${nouns}nin hepsinde gecikmiş görev var.`])
+      ? sentence(en ? [noun === 'project' ? 'All ' : 'All ', v(number(total, locale), allBind), ` ${nouns[1]} have overdue tasks.`]
+        : [`listedeki `, v(number(total, locale), allBind), ` ${nouns}nin hepsinde gecikmiş görev var.`])
       : late === 0
         ? sentence(en ? [`None of the ${nouns[1]} has overdue tasks.`] : [`${nouns === 'proje' ? 'Projelerin' : 'Kişilerin'} hiçbirinde gecikmiş görev yok.`])
-        : sentence(en ? [v(number(late, locale)), ' of the ', v(number(total, locale)), ` ${nouns[1]} have overdue tasks.`]
-          : [v(number(total, locale)), ` ${nouns}nin `, v(number(late, locale)), `${locativeOf(late)} gecikmiş görev var.`]);
+        : sentence(en ? [v(number(late, locale), lateBind), ' of the ', v(number(total, locale), allBind), ` ${nouns[1]} have overdue tasks.`]
+          : [v(number(total, locale), allBind), ` ${nouns}nin `, v(number(late, locale), lateBind), `${locativeOf(late)} gecikmiş görev var.`]);
     add('coverage', realized, late ? 'warning' : 'success', overdue.index, late);
   }
   if (!allowLead) return;
@@ -666,18 +708,21 @@ function entityLead(described, noun, locale, add, allowLead = true) {
   if (!ranked.length || (ranked[1] && ranked[1][1].length === ranked[0][1].length)) return;
   const [owner, columns] = ranked[0];
   const labels = columns.map((item) => lowerLabel(item.header.label, locale));
+  const ownerFacts = columns.map((item) => item.facts.find((fact) => fact.value === item.max));
+  const ownerBind = ownerFacts[0] ? factEntityBind(ownerFacts[0]) : null;
+  const amount = (item, index) => v(number(item.max, locale), factTaskBind(ownerFacts[index], { locale, scope: owner }));
   // Aşama F: "**X**, açık görev (**12**) … sayısında en üstte" yerine sayılar sıfat gibi okunur: "**X**, **12** açık ve **5** gecikmiş
   // görevle projeler arasında ilk sırada." Etiket "görev" adıyla bitmiyorsa eski (etiketli) biçim kalır.
   if (!en && labels.every((label) => label.endsWith(' görev'))) {
-    const listed = series(columns.map((item, index) => [v(number(item.max, locale)), ` ${labels[index].slice(0, -' görev'.length)}`]), locale);
+    const listed = series(columns.map((item, index) => [amount(item, index), ` ${labels[index].slice(0, -' görev'.length)}`]), locale);
     // Aşama G: kapsama cümlesinin hemen ardından tek cümlede ("… gecikmiş görev var; **X** ise … görevle ilk sırada.").
-    add('leader', sentence([v(owner), ', ', ...listed, ` görevle ${noun === 'project' ? 'projeler' : 'listelenen kişiler'} arasında ilk sırada.`]), 'info', columns[0].index, null,
-      { afterCoverage: ['; ', v(owner), ' ise ', ...listed, ' görevle ilk sırada'] });
+    add('leader', sentence([v(owner, ownerBind), ', ', ...listed, ` görevle ${noun === 'project' ? 'projeler' : 'listelenen kişiler'} arasında ilk sırada.`]), 'info', columns[0].index, null,
+      { afterCoverage: ['; ', v(owner, ownerBind), ' ise ', ...listed, ' görevle ilk sırada'] });
     return;
   }
-  const listed = series(columns.map((item, index) => [labels[index], ' (', v(number(item.max, locale)), ')']), locale);
-  add('leader', sentence(en ? [v(owner), ' leads in ', ...listed, '.'] : [v(owner), ', ', ...listed, ' sayısında en üstte.']), 'info', columns[0].index, null,
-    { afterCoverage: en ? ['; ', v(owner), ' leads in ', ...listed] : ['; ', v(owner), ' ise ', ...listed, ' sayısında en üstte'] });
+  const listed = series(columns.map((item, index) => [labels[index], ' (', amount(item, index), ')']), locale);
+  add('leader', sentence(en ? [v(owner, ownerBind), ' leads in ', ...listed, '.'] : [v(owner, ownerBind), ', ', ...listed, ' sayısında en üstte.']), 'info', columns[0].index, null,
+    { afterCoverage: en ? ['; ', v(owner, ownerBind), ' leads in ', ...listed] : ['; ', v(owner, ownerBind), ' ise ', ...listed, ' sayısında en üstte'] });
 }
 
 /**
@@ -699,17 +744,21 @@ function openPartition(described, group, locale, add) {
   const title = soleRow(described, facts, max);
   const whose = ownerParts(facts[0].semantic?.filters, locale);
   if (!total || !title || !whose || max === total) return [];
-  const owner = canonicalGroupLabel(facts.find((fact) => fact.value === max), title, locale);
+  const ownerFact = facts.find((fact) => fact.value === max);
+  const owner = canonicalGroupLabel(ownerFact, title, locale);
   const en = locale === 'en';
   const open = ownerParts(facts[0].semantic?.filters, locale, { open: true });
   const push = (kind, realized) => add(kind, realized);
+  const ownerBind = factTaskBind(ownerFact, { locale, scope: owner });
   if (open && max * 2 > total) {
     const share = majorityPercent(max, total, locale);
-    push('majority', en ? sentence(['Most of ', ...open, ' (', v(percent(share, locale)), ') ', ...groupPlace(groupBy, owner, locale), '.'])
-      : sentence([...open, ' büyük bölümü (', v(percent(share, locale)), ') ', ...groupPlace(groupBy, owner, locale), '.']));
+    const shareBind = calcBind({ numerator: factOperand(ownerFact, owner), denominator: operand({ evidenceId: group.evidenceId, field: 'data.totals.open', value: total, label: en ? 'Open tasks' : 'Açık görev' }),
+      shown: majorityValue(max, total), rule: 'majority', title: en ? 'Majority share' : 'Çoğunluk payı' });
+    push('majority', en ? sentence(['Most of ', ...open, ' (', v(percent(share, locale), shareBind), ') ', ...groupPlace(groupBy, owner, locale, ownerBind), '.'])
+      : sentence([...open, ' büyük bölümü (', v(percent(share, locale), shareBind), ') ', ...groupPlace(groupBy, owner, locale, ownerBind), '.']));
   } else if (open) {
-    push('largest', en ? sentence(['The largest share of ', ...open, ' (', v(number(max, locale)), ') ', ...groupPlace(groupBy, owner, locale), '.'])
-      : sentence([...open, ' en büyük kısmı (', v(number(max, locale)), ' görev) ', ...groupPlace(groupBy, owner, locale), '.']));
+    push('largest', en ? sentence(['The largest share of ', ...open, ' (', v(number(max, locale), ownerBind), ') ', ...groupPlace(groupBy, owner, locale, ownerBind), '.'])
+      : sentence([...open, ' en büyük kısmı (', v(number(max, locale), ownerBind), ' görev) ', ...groupPlace(groupBy, owner, locale, ownerBind), '.']));
   }
 }
 
@@ -718,10 +767,11 @@ function openPartition(described, group, locale, add) {
  * projenin çoğunluğu ya da kaç projeye yayıldığı. Gruplama doğrulanmış proje KİMLİĞİYLEdir (aynı adlı iki proje
  * ayrıdır); ad yalnızca gösterimdir. Kimliği olmayan satırda yoğunlaşma iddiası yoktur.
  */
-function projectConcentration(described, locale) {
+function projectConcentration(described, locale, group = null) {
   // Nüfus zaten tek projeyse ("bu projedeki gecikmiş işler") "hepsi bu projede" bilgi taşımaz.
   if (described.rows[0]?.entries[0]?.fact.semantic?.filters?.projectId) return null;
-  const projects = described.rows.map((row) => ({ id: row.entries[0]?.fact.semantic?.row?.projectId || null, name: row.context?.project || null }));
+  const projects = described.rows.map((row) => ({ id: row.entries[0]?.fact.semantic?.row?.projectId || null, name: row.context?.project || null,
+    taskId: row.entries[0]?.fact.semantic?.row?.identity || null }));
   if (projects.length < 2 || projects.some((project) => !project.id || !project.name)) return null;
   const counts = new Map();
   for (const { id, name } of projects) counts.set(id, { name, count: (counts.get(id)?.count || 0) + 1 });
@@ -737,12 +787,18 @@ function projectConcentration(described, locale) {
   const ranked = [...counts.values()].sort((left, right) => right.count - left.count);
   // Ad, kimliği ayırt etmiyorsa (başka bir proje aynı adı taşıyor) bir projeyi adıyla öne çıkarmak yanıltır.
   if (ranked[0].count * 2 > total && ranked.filter((item) => item.name === ranked[0].name).length === 1) {
-    const count = v(number(ranked[0].count, locale));
+    // ICE-2: projedeki satırlar aynı tam nüfusun adlandırılmış alt kümesidir (görev kimlikleriyle); toplam aramanın kendi sayımıdır.
+    const leadId = [...counts.entries()].find(([, item]) => item === ranked[0])?.[0];
+    const taskIds = projects.filter((project) => project.id === leadId).map((project) => project.taskId);
+    const subset = group?.tool === 'rota_task_search' && taskIds.every(Boolean) && taskIds.length === ranked[0].count
+      ? { type: 'tasks', evidenceId: group.evidenceId, taskIds, count: taskIds.length, title: `${ranked[0].name} · ${en ? 'tasks' : 'görevler'}`, tone: 'neutral' } : null;
+    const all = group?.tool === 'rota_task_search' ? taskCollectionBind(group, populationScope(described), total, locale) : null;
+    const count = v(number(ranked[0].count, locale), subset);
     const of = `${turkishPossessiveSuffix(ranked[0].count)}`;
     const name = v(ranked[0].name);
-    return withShare(sentence(en ? [count, ' of the ', v(number(total, locale)), ' tasks are in the ', name, ' project.']
-      : [v(number(total, locale)), ' görevin ', count, `${of} `, name, ' projesinde.']),
-    shareForms(en ? [count, ' of the ', v(number(total, locale)), ' tasks are in the ', name, ' project'] : [v(number(total, locale)), ' görevin ', count, `${of} `, name, ' projesinde'],
+    return withShare(sentence(en ? [count, ' of the ', v(number(total, locale), all), ' tasks are in the ', name, ' project.']
+      : [v(number(total, locale), all), ' görevin ', count, `${of} `, name, ' projesinde.']),
+    shareForms(en ? [count, ' of the ', v(number(total, locale), all), ' tasks are in the ', name, ' project'] : [v(number(total, locale), all), ' görevin ', count, `${of} `, name, ' projesinde'],
       en ? ['of these, ', count, ' are in the ', name, ' project'] : ['bunların ', count, `${of} `, name, ' projesinde'],
       en ? [count, ' are in the ', name, ' project'] : [count, `${of} de `, name, ' projesinde'], total));
   }
@@ -822,6 +878,21 @@ function unassignedSmall(items, rows, assigned) {
   const fact = items.find(({ fact: item, evidenceId }) => item.field === 'data.unassignedOpenTasks' && evidenceId === rows[0].evidenceId);
   const value = fact?.fact.value;
   return Number.isSafeInteger(value) && value >= 0 && value * rows.length <= assigned;
+}
+
+/**
+ * ICE-2: tamamlanma oranının işlem kartı: aynı kanıtın tamamlanan ve toplam görev sayıları (yükteki alanlar) ve sunucunun
+ * tamamlanma kuralı (tam sayıya yuvarlama). Toplamlar kanıt yükünden doğrulanır; değer tutmazsa kart üretilmez.
+ */
+function completionBind(totals, rate, locale) {
+  const sample = totals.get('tasks.completionRatePercent')?.fact || totals.get('tasks.open')?.fact;
+  const evidenceId = factEvidenceId(sample);
+  if (!evidenceId || !Number.isSafeInteger(rate)) return null;
+  // Seçilmemiş toplam da aynı kanıt yükündedir: değer kart kurulurken yükten okunur ve oran yeniden hesaplanır.
+  const side = (metric, field, label) => (totals.get(metric) ? factOperand(totals.get(metric).fact, label) : operand({ evidenceId, field, value: null, label }));
+  return calcBind({ numerator: side('tasks.done', 'data.totals.done', locale === 'en' ? 'Completed tasks' : 'Tamamlanan görev'),
+    denominator: side('tasks.total', 'data.totals.total', locale === 'en' ? 'All tasks' : 'Bütün görevler'),
+    shown: rate, rule: 'round', title: locale === 'en' ? 'Completion rate' : 'Tamamlanma oranı', tone: 'done' });
 }
 
 /** Doğrulanmış tam kanıttan sayı (sonlu, negatif olmayan tam sayı); değilse `null`. */
@@ -923,33 +994,41 @@ export function analystPropositions(parts, locale = 'tr') {
       const rateEntry = totals.get('tasks.completionRatePercent');
       const rate = rateEntry && Number.isFinite(rateEntry.fact.value) ? rateEntry.fact.value : null;
       const evidence = totals.get('tasks.open')?.evidenceId;
+      // ICE-2: toplamlar aynı okumanın canlı nüfuslarına, oranlar sunucunun yeniden hesapladığı işlem kartına bağlanır.
+      const bindOf = (metric) => (totals.get(metric) ? factTaskBind(totals.get(metric).fact, { locale }) : null);
+      const openBind = bindOf('tasks.open');
+      const overdueBind = bindOf('tasks.overdue');
+      const soonBind = bindOf('tasks.dueNext7Days');
+      const pressureBind = open > 0 && overdue != null ? calcBind({ numerator: factOperand(totals.get('tasks.overdue')?.fact, en ? 'Overdue tasks' : 'Gecikmiş görev'),
+        denominator: factOperand(totals.get('tasks.open')?.fact, en ? 'Open tasks' : 'Açık görev'), shown: sharePercent(overdue, open), rule: 'share', title: en ? 'Overdue share of open work' : 'Açık işlerde gecikme oranı', tone: 'overdue' }) : null;
+
       if (open != null && overdue != null && sameEvidence([totals.get('tasks.open'), totals.get('tasks.overdue')])) {
         if (rate != null && rate >= 50 && overdue > 0 && sameEvidence([totals.get('tasks.open'), rateEntry])) {
           add(evidence, 'contrast', en
-            ? sentence(['The completion picture is positive (', v(percent(rate, locale)), '); however, ', v(number(overdue, locale)), ` overdue ${overdue === 1 ? 'task needs' : 'tasks need'} attention.`])
-            : sentence(['Tamamlanma görünümü olumlu (', v(percent(rate, locale)), '); buna karşılık ', v(number(overdue, locale)), ' gecikmiş görev dikkat gerektiriyor.']), 'warning',
+            ? sentence(['The completion picture is positive (', v(percent(rate, locale), completionBind(totals, rate, locale)), '); however, ', v(number(overdue, locale), overdueBind), ` overdue ${overdue === 1 ? 'task needs' : 'tasks need'} attention.`])
+            : sentence(['Tamamlanma görünümü olumlu (', v(percent(rate, locale), completionBind(totals, rate, locale)), '); buna karşılık ', v(number(overdue, locale), overdueBind), ' gecikmiş görev dikkat gerektiriyor.']), 'warning',
           { states: ['tasks.completionRatePercent', 'tasks.overdue'] });
         } else if (open > 0 && overdue > 0) {
           const share = sharePercent(overdue, open);
           add(evidence, 'pressure', en
-            ? sentence([v(number(overdue, locale)), ` of the `, v(number(open, locale)), ` open ${open === 1 ? 'task is' : 'tasks are'} overdue (`, v(percent(share, locale)), ').'])
-            : sentence(['Açık ', v(number(open, locale)), ' görevin ', v(ofCount(overdue, locale)), ' (', v(percent(share, locale)), ') gecikmiş durumda.']), share >= 25 ? 'warning' : 'info',
+            ? sentence([v(number(overdue, locale), overdueBind), ` of the `, v(number(open, locale), openBind), ` open ${open === 1 ? 'task is' : 'tasks are'} overdue (`, v(percent(share, locale), pressureBind), ').'])
+            : sentence(['Açık ', v(number(open, locale), openBind), ' görevin ', v(ofCount(overdue, locale), overdueBind), ' (', v(percent(share, locale), pressureBind), ') gecikmiş durumda.']), share >= 25 ? 'warning' : 'info',
           { host: 'totals', states: ['tasks.open', 'tasks.overdue'] });
         } else if (open > 0 && overdue === 0) {
-          add(evidence, 'positive', en ? sentence(['There are currently no overdue tasks among the ', v(number(open, locale)), ' open tasks.'])
-            : sentence(['Açık ', v(number(open, locale)), ' görev arasında şu anda gecikmiş görev yok.']), 'success', { host: 'totals', states: ['tasks.open', 'tasks.overdue'] });
+          add(evidence, 'positive', en ? sentence(['There are currently no overdue tasks among the ', v(number(open, locale), openBind), ' open tasks.'])
+            : sentence(['Açık ', v(number(open, locale), openBind), ' görev arasında şu anda gecikmiş görev yok.']), 'success', { host: 'totals', states: ['tasks.open', 'tasks.overdue'] });
         }
         if (open > 0 && soon != null && soon > 0 && sameEvidence([totals.get('tasks.open'), totals.get('tasks.dueNext7Days')])) {
           const due = en ? ` open ${soon === 1 ? 'task is' : 'tasks are'}` : ' açık görevin termini var';
           add(evidence, 'urgency', en
-            ? sentence([v(number(soon, locale)), ` open ${soon === 1 ? 'task is' : 'tasks are'} due in the seven-day period starting today.`])
-            : sentence(['Bugün başlayan yedi günlük dönemde ', v(number(soon, locale)), ' açık görevin termini var.']), soon * 2 >= open ? 'warning' : 'info',
+            ? sentence([v(number(soon, locale), soonBind), ` open ${soon === 1 ? 'task is' : 'tasks are'} due in the seven-day period starting today.`])
+            : sentence(['Bugün başlayan yedi günlük dönemde ', v(number(soon, locale), soonBind), ' açık görevin termini var.']), soon * 2 >= open ? 'warning' : 'info',
           // Gecikme cümlesinin devamı: "…; bugün başlayan yedi günlük dönemde de **1** açık görevin termini var." Gecikme yoksa ve yakın
           // termin dikkat gerektiriyorsa karşıtlık ("ancak"), değilse yalın ek.
           { states: ['tasks.dueNext7Days'], follow: { key: 'totals',
-            also: en ? ['; ', v(number(soon, locale)), `${due} also due in the seven-day period starting today`] : ['; bugün başlayan yedi günlük dönemde de ', v(number(soon, locale)), due],
-            plain: en ? ['; ', v(number(soon, locale)), `${due} due in the seven-day period starting today`] : ['; bugün başlayan yedi günlük dönemde ', v(number(soon, locale)), due],
-            contrast: en ? ['; however, ', v(number(soon, locale)), `${due} due in the seven-day period starting today`] : ['; ancak bugün başlayan yedi günlük dönemde ', v(number(soon, locale)), due] } });
+            also: en ? ['; ', v(number(soon, locale), soonBind), `${due} also due in the seven-day period starting today`] : ['; bugün başlayan yedi günlük dönemde de ', v(number(soon, locale), soonBind), due],
+            plain: en ? ['; ', v(number(soon, locale), soonBind), `${due} due in the seven-day period starting today`] : ['; bugün başlayan yedi günlük dönemde ', v(number(soon, locale), soonBind), due],
+            contrast: en ? ['; however, ', v(number(soon, locale), soonBind), `${due} due in the seven-day period starting today`] : ['; ancak bugün başlayan yedi günlük dönemde ', v(number(soon, locale), soonBind), due] } });
         }
       }
     }
@@ -958,8 +1037,9 @@ export function analystPropositions(parts, locale = 'tr') {
     for (const item of items) {
       const match = /^data\.people\.(\d+)\.(name|openTasks|overdue)$/.exec(item.fact.field);
       if (!match || item.fact.semantic?.provenance?.tool !== 'rota_workload_summary') continue;
-      if (!people.has(match[1])) people.set(match[1], { evidenceId: item.evidenceId, identity: `person:${item.evidenceId}:data.people.${match[1]}`, size: item.fact.semantic?.row?.collectionSize ?? null });
+      if (!people.has(match[1])) people.set(match[1], { evidenceId: item.evidenceId, identity: `person:${item.evidenceId}:data.people.${match[1]}`, size: item.fact.semantic?.row?.collectionSize ?? null, facts: {} });
       people.get(match[1])[match[2]] = item.fact.value;
+      people.get(match[1]).facts[match[2]] = item.fact;
     }
     const rows = [...people.values()].filter((row) => typeof row.name === 'string' && Number.isSafeInteger(row.openTasks) && row.openTasks >= 0);
     const populationComplete = rows.length && items.some(({ fact, evidenceId }) => evidenceId === rows[0].evidenceId
@@ -973,13 +1053,17 @@ export function analystPropositions(parts, locale = 'tr') {
       if (sum > 0 && unique && top[0].openTasks >= 2 * top[1].openTasks && top[0].openTasks * 3 >= sum) {
         const share = sharePercent(top[0].openTasks, sum);
         add(rows[0].evidenceId, 'concentration', en
-          ? sentence([v(percent(share, locale)), ' of the open task assignments are on ', v(top[0].name), '; the workload is concentrated on this person.'])
-          : sentence(['Açık iş atamalarının ', v(`${percent(share, locale)}${turkishPossessiveSuffix(share)}`), ' ', v(top[0].name), ' üzerinde; iş yükü bu kişide yoğunlaşıyor.']), share >= 50 ? 'warning' : 'info',
+          ? sentence([v(percent(share, locale)), ' of the open task assignments are on ', v(top[0].name, factEntityBind(top[0].facts.name)), '; the workload is concentrated on this person.'])
+          : sentence(['Açık iş atamalarının ', v(`${percent(share, locale)}${turkishPossessiveSuffix(share)}`), ' ', v(top[0].name, factEntityBind(top[0].facts.name)), ' üzerinde; iş yükü bu kişide yoğunlaşıyor.']), share >= 50 ? 'warning' : 'info',
         { host: top[0].identity });
       } else if (low > 0 && top[0].openTasks * 2 <= low * 3 && unassignedSmall(items, rows, sum)) {
+        // En düşük değer tek kişideyse o kişinin açık işlerine bağlanır; eşitlikte (birden çok nüfus) bağ kurulmaz.
+        const lows = top.filter((row) => row.openTasks === low);
+        const soleLow = lows.length === 1 ? factTaskBind(lows[0].facts.openTasks, { locale, scope: lows[0].name }) : null;
+        const soleHigh = unique ? factTaskBind(top[0].facts.openTasks, { locale, scope: top[0].name }) : null;
         add(rows[0].evidenceId, 'balance', en
-          ? sentence(['Open work is spread fairly evenly across people (highest ', v(number(top[0].openTasks, locale)), ', lowest ', v(number(low, locale)), ').'])
-          : sentence(['Açık işler kişiler arasında görece dengeli dağılmış (en yüksek ', v(number(top[0].openTasks, locale)), ', en düşük ', v(number(low, locale)), ').']), 'success');
+          ? sentence(['Open work is spread fairly evenly across people (highest ', v(number(top[0].openTasks, locale), soleHigh), ', lowest ', v(number(low, locale), soleLow), ').'])
+          : sentence(['Açık işler kişiler arasında görece dengeli dağılmış (en yüksek ', v(number(top[0].openTasks, locale), soleHigh), ', en düşük ', v(number(low, locale), soleLow), ').']), 'success');
       }
       const late = rows.filter((row) => Number.isSafeInteger(row.overdue) && row.overdue >= 0);
       const lateSum = late.length === rows.length ? late.reduce((total, row) => total + row.overdue, 0) : 0;
@@ -988,8 +1072,8 @@ export function analystPropositions(parts, locale = 'tr') {
         const lateShare = sharePercent(worst[0].overdue, lateSum);
         const shown = en ? v(percent(lateShare, locale)) : v(`${percent(lateShare, locale)}${turkishPossessiveSuffix(lateShare)}`);
         add(rows[0].evidenceId, 'overdueConcentration', en
-          ? sentence([shown, ' of the overdue task assignments are on ', v(worst[0].name), '.'])
-          : sentence(['Gecikmiş iş atamalarının ', shown, ' ', v(worst[0].name), ' üzerinde.']), 'warning',
+          ? sentence([shown, ' of the overdue task assignments are on ', v(worst[0].name, factEntityBind(worst[0].facts.name)), '.'])
+          : sentence(['Gecikmiş iş atamalarının ', shown, ' ', v(worst[0].name, factEntityBind(worst[0].facts.name)), ' üzerinde.']), 'warning',
         // Aynı kişinin açık iş yoğunlaşmasından sonra: "…; iş yükü bu kişide yoğunlaşıyor, gecikmiş iş atamalarının %80'i de onda."
         { follow: { key: worst[0].identity, also: en ? [', and ', shown, ' of the overdue assignments are also on this person'] : [', gecikmiş iş atamalarının ', shown, ' de onda'] } });
       }
@@ -1003,14 +1087,17 @@ export function analystPropositions(parts, locale = 'tr') {
       const head = delays.reduce((best, item) => (item.fact.value > best.fact.value ? item : best));
       const ties = delays.filter((item) => item.fact.value === head.fact.value).length;
       const title = items.find(({ fact, evidenceId }) => evidenceId === head.evidenceId && fact.field === head.fact.field.replace(/overdueDays$/, 'title'))?.fact.value;
+      // ICE-2: önerilen görevin adı aynı satırın tekil görev kartına bağlanır (satırın kanıttaki görev kimliği).
+      const identity = head.fact.semantic?.row?.identity;
+      const taskBind = head.fact.semantic?.provenance?.tool === 'rota_task_search' && typeof identity === 'string' && identity ? { type: 'task', evidenceId: head.evidenceId, taskId: identity } : null;
       if (ties === 1 && typeof title === 'string') {
         // Öneri gerekçesiyle söylenir (en uzun gecikme); görev bu paragrafta en uzun gecikmeli olarak adlandırıldıysa kısa biçim.
         add(head.evidenceId, 'attention', en
-          ? sentence(['A sensible first focus is ', v(title), ': it has been overdue for ', v(number(head.fact.value, locale)), ' days, the longest delay.'])
-          : sentence(['İlk ele alınabilecek iş ', v(title), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda.']), 'warning',
-        { refers: { title, days: head.fact.value, short: en ? ['as the longest-overdue task, ', v(title), ' is a sensible first focus'] : ['en uzun süredir beklediği için ilk ele alınabilecek iş ', v(title), ' görünüyor'] },
-          afterCount: en ? ['; a sensible first focus is ', v(title), ', overdue for ', v(number(head.fact.value, locale)), ' days, the longest delay']
-            : ['; ilk ele alınabilecek iş ', v(title), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda'] });
+          ? sentence(['A sensible first focus is ', v(title, taskBind), ': it has been overdue for ', v(number(head.fact.value, locale)), ' days, the longest delay.'])
+          : sentence(['İlk ele alınabilecek iş ', v(title, taskBind), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda.']), 'warning',
+        { refers: { title, days: head.fact.value, short: en ? ['as the longest-overdue task, ', v(title, taskBind), ' is a sensible first focus'] : ['en uzun süredir beklediği için ilk ele alınabilecek iş ', v(title, taskBind), ' görünüyor'] },
+          afterCount: en ? ['; a sensible first focus is ', v(title, taskBind), ', overdue for ', v(number(head.fact.value, locale)), ' days, the longest delay']
+            : ['; ilk ele alınabilecek iş ', v(title, taskBind), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda'] });
       }
     }
   }
@@ -1203,6 +1290,7 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
  * Aşama F bulgu motorunun (`analyticalFindings.js`) kullandığı ortak biçim yardımcıları: cümle kurulumu, vurgulu/vurgusuz veri,
  * sayı, gün ve yüzde biçimi ile Türkçe iyelik eki. Yeni bir biçim kuralı eklenmez; önermelerle aynı yazım kullanılır.
  */
+export { taskCollectionBind as taskCountBind };
 export { sentence as factSentence, v as strongFact, t as plainFact, number as formatCount, day as formatFactDay, percent as formatPercent, ofCount as possessiveCount, locativeOf as locativeCountSuffix };
 
 /** Görev listesinin kesin sayım cümlesi; doğrulanmış anlatım ve düzen aynı nüfusu adlandırır. */

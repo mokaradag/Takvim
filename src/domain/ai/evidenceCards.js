@@ -12,17 +12,31 @@
  */
 import { canonicalActualId } from '../identity/actualId.js';
 
-export const EVIDENCE_CARD_VERSION = 1;
+export const EVIDENCE_CARD_VERSION = 2;
 
+/**
+ * ICE-2 sınırları. Karmaşık analitik yanıt (ör. dört bölümlü yönetim özeti) gözlenen kıyas kümesinde 60'ı aşan kanıtlanabilir
+ * sayı, ad ve oran taşır; bu yüzden bağ ve kart sınırları yükseltildi (bağ anahtarı biçimi en çok 99'a izin verir). En kötü
+ * durum: tanımlayıcının JSON uzunluğu 200.000 UTF-16 kod birimini aşamaz. En çok 6 canlı yanıt tutulur.
+ * Satır bütçesi görev ve varlık koleksiyonlarına birlikte uygulanır.
+ */
 export const EVIDENCE_CARD_LIMITS = Object.freeze({
   /** Yanıt başına en fazla kart. */
-  maxCards: 8,
+  maxCards: 64,
   /** Yanıt başına en fazla bağ (işaretli olgu). */
-  maxAnchors: 16,
+  maxAnchors: 96,
   /** Kart başına en fazla görev satırı. */
   maxItemsPerCard: 30,
-  /** Yanıt başına toplam görev satırı. */
-  maxTotalItems: 120,
+  /** Yanıt başına toplam görev ve varlık koleksiyonu satırı. */
+  maxTotalItems: 360,
+  /** Varlık koleksiyonu kartının en fazla satırı (kişi/proje/birim). */
+  maxEntityRows: 30,
+  /** Varlık koleksiyonu kartının en fazla ölçü sütunu. */
+  maxEntityColumns: 4,
+  /** Tekil varlık, hesap ve karşılaştırma kartının en fazla ölçü satırı. */
+  maxMetrics: 6,
+  /** Ölçü değeri metninin üst sınırı. */
+  maxValueChars: 40,
   /** Kart başına en fazla farklı sorumlu. */
   maxPeoplePerCard: 30,
   /** Satır başına gösterilen sorumlu adı. */
@@ -32,7 +46,7 @@ export const EVIDENCE_CARD_LIMITS = Object.freeze({
   /** Bağlı kalın metnin üst sınırı. */
   maxAnchorTextChars: 160,
   /** Tanımlayıcının JSON uzunluğu. */
-  maxPayloadChars: 64000,
+  maxPayloadChars: 200000,
   /** Tarayıcıda kartın yaşam süresi (alındığı andan). */
   ttlMs: 15 * 60 * 1000,
   /** Kart taşıyabilen en yeni canlı yanıt sayısı. */
@@ -41,7 +55,15 @@ export const EVIDENCE_CARD_LIMITS = Object.freeze({
   maxCount: 1000000
 });
 
-export const EVIDENCE_CARD_KINDS = Object.freeze(['tasks', 'task']);
+/**
+ * Kart türleri: görev koleksiyonu ve tekil görev (ICE-1); tekil kişi/proje/örgüt birimi, onların koleksiyonları, doğrulanmış
+ * hesap (yüzde, oran) ve karşılaştırma (ICE-2).
+ */
+export const EVIDENCE_CARD_KINDS = Object.freeze(['tasks', 'task', 'person', 'project', 'unit', 'people', 'projects', 'units', 'calc', 'compare']);
+const TASK_KINDS = new Set(['tasks', 'task']);
+const ENTITY_KINDS = new Set(['person', 'project', 'unit']);
+const COLLECTION_KINDS = new Set(['people', 'projects', 'units']);
+const FACT_KINDS = new Set(['calc', 'compare']);
 export const EVIDENCE_CARD_TONES = Object.freeze(['overdue', 'done', 'progress', 'due', 'unassigned', 'neutral']);
 const STATUSES = new Set(['todo', 'in_progress', 'done']);
 const ASSIGNMENTS = new Set(['visible', 'unresolved', 'unassigned', 'undisclosed']);
@@ -103,13 +125,15 @@ export function resolveBindingAnchors(text, strongTexts) {
   }
   if (!Array.isArray(marked) || !Array.isArray(plain) || marked.length !== plain.length) return reject('STRONG_COUNT');
   const anchors = [];
+  let anchoredMarks = 0;
   marked.forEach((value, strong) => {
     const lead = leadingBindingMark(value);
-    if (!lead || hasBindingMarks(lead.text) || plain[strong] !== lead.text || !lead.text.trim() || lead.text.length > EVIDENCE_CARD_LIMITS.maxAnchorTextChars) return;
-    anchors.push({ key: lead.key, strong, text: lead.text });
+    if (!lead || hasBindingMarks(lead.text) || plain[strong] !== lead.text) return;
+    anchoredMarks += 1;
+    if (strong <= 4000 && textLabelAllowed(lead.text)) anchors.push({ key: lead.key, strong, text: lead.text });
   });
-  // Kalın düğümün başında bulunmayan (ör. düğüm dışına taşmış) işaret bağ değildir: bütün bağlar düşer.
-  if (anchors.length !== keys.length) return reject('UNANCHORED_MARK');
+  // Kalın düğümün dışına taşan işaret yapısal hatadır. Geçerli konumdaki uzun etiket yalnızca kendi bağını düşürür.
+  if (anchoredMarks !== keys.length) return reject('UNANCHORED_MARK');
   return { text: stripped, anchors, rejected: null };
 }
 
@@ -137,6 +161,8 @@ function text(value, { optional = false, max = EVIDENCE_CARD_LIMITS.maxTextChars
   if (typeof value !== 'string' || !value.trim() || value.length > max || HAS_UNSAFE_TEXT.test(value)) return { ok: false };
   return { ok: true, value };
 }
+
+const textLabelAllowed = (value) => text(value, { max: EVIDENCE_CARD_LIMITS.maxAnchorTextChars }).ok;
 
 function count(value, { optional = false } = {}) {
   if (value == null && optional) return { ok: true, value: null };
@@ -185,8 +211,75 @@ function normalizePerson(person) {
   return name.ok && tasks.ok && tasks.value >= 1 ? Object.freeze({ name: name.value, tasks: tasks.value }) : null;
 }
 
+/** Ölçü satırı: sunucunun etiketi ve biçimlenmiş değeri (ör. `{ label: 'Gecikmiş', value: '5' }`). */
+function normalizeMetric(metric) {
+  if (!isPlain(metric)) return null;
+  const label = text(metric.label);
+  const value = text(metric.value, { max: EVIDENCE_CARD_LIMITS.maxValueChars });
+  return label.ok && value.ok ? Object.freeze({ label: label.value, value: value.value }) : null;
+}
+
+function normalizeMetrics(list, { min = 1 } = {}) {
+  if (!Array.isArray(list) || list.length < min || list.length > EVIDENCE_CARD_LIMITS.maxMetrics) return null;
+  const metrics = list.map(normalizeMetric);
+  return metrics.some((metric) => !metric) ? null : Object.freeze(metrics);
+}
+
+/** Ortak kart künyesi; bozuksa `null`. */
+function cardHead(card) {
+  const title = text(card.title);
+  if (!title.ok || typeof card.generatedAt !== 'string' || !INSTANT.test(card.generatedAt) || Number.isNaN(Date.parse(card.generatedAt)) || typeof card.scopePartial !== 'boolean') return null;
+  return { id: card.id, kind: card.kind, title: title.value, tone: card.tone, generatedAt: card.generatedAt, scopePartial: card.scopePartial };
+}
+
+/** Tekil kişi/proje/birim: doğrulanmış ölçüler ve (varsa) aynı varlığın görev önizlemesi. */
+function normalizeEntityCard(card) {
+  const head = cardHead(card);
+  const metrics = normalizeMetrics(card.metrics);
+  const total = count(card.total);
+  const listLabel = text(card.listLabel, { optional: true });
+  if (!head || !metrics || !total.ok || !listLabel.ok || !Array.isArray(card.items) || card.items.length > EVIDENCE_CARD_LIMITS.maxItemsPerCard) return null;
+  const items = card.items.map(normalizeItem);
+  if (items.some((item) => !item) || new Set(items.map((item) => item.id)).size !== items.length || items.length > total.value || (items.length > 0 && !listLabel.value)) return null;
+  return Object.freeze({ ...head, metrics, total: total.value, items: Object.freeze(items), ...(listLabel.value ? { listLabel: listLabel.value } : {}) });
+}
+
+/** Varlık koleksiyonu: adlar ve sütun başına doğrulanmış sayı (bilinmeyen değer `null`). */
+function normalizeCollectionCard(card) {
+  const head = cardHead(card);
+  const total = count(card.total);
+  if (!head || !total.ok || total.value < 1 || !Array.isArray(card.columns) || card.columns.length > EVIDENCE_CARD_LIMITS.maxEntityColumns
+    || !Array.isArray(card.rows) || !card.rows.length || card.rows.length > EVIDENCE_CARD_LIMITS.maxEntityRows || card.rows.length > total.value) return null;
+  const columns = card.columns.map((label) => text(label));
+  if (columns.some((label) => !label.ok)) return null;
+  const rows = [];
+  for (const row of card.rows) {
+    const name = isPlain(row) ? text(row.name) : { ok: false };
+    if (!name.ok || !Array.isArray(row.values) || row.values.length !== columns.length) return null;
+    const values = row.values.map((value) => count(value, { optional: true }));
+    if (values.some((value) => !value.ok)) return null;
+    rows.push(Object.freeze({ name: name.value, values: Object.freeze(values.map((value) => value.value)) }));
+  }
+  return Object.freeze({ ...head, total: total.value, columns: Object.freeze(columns.map((label) => label.value)), rows: Object.freeze(rows) });
+}
+
+/** Hesap ve karşılaştırma: işlenenler, sonuç ve (hesapta) işlem metni. */
+function normalizeFactCard(card) {
+  const head = cardHead(card);
+  const metrics = normalizeMetrics(card.metrics, { min: 2 });
+  const result = text(card.result, { max: EVIDENCE_CARD_LIMITS.maxValueChars * 2 });
+  const formula = text(card.formula, { optional: true });
+  const note = text(card.note, { optional: true });
+  if (!head || !metrics || !result.ok || !formula.ok || !note.ok) return null;
+  return Object.freeze({ ...head, metrics, result: result.value, ...(formula.value ? { formula: formula.value } : {}), ...(note.value ? { note: note.value } : {}) });
+}
+
 function normalizeCard(card) {
   if (!isPlain(card) || typeof card.id !== 'string' || !CARD_ID.test(card.id) || !EVIDENCE_CARD_KINDS.includes(card.kind) || !EVIDENCE_CARD_TONES.includes(card.tone)) return null;
+  if (ENTITY_KINDS.has(card.kind)) return normalizeEntityCard(card);
+  if (COLLECTION_KINDS.has(card.kind)) return normalizeCollectionCard(card);
+  if (FACT_KINDS.has(card.kind)) return normalizeFactCard(card);
+  if (!TASK_KINDS.has(card.kind)) return null;
   const title = text(card.title);
   const total = count(card.total);
   const unassigned = count(card.unassigned);
@@ -220,7 +313,7 @@ export function normalizeEvidenceCards(value) {
   if (size > EVIDENCE_CARD_LIMITS.maxPayloadChars) return null;
   const cards = value.cards.map(normalizeCard);
   if (cards.some((card) => !card) || new Set(cards.map((card) => card.id)).size !== cards.length
-    || cards.reduce((sum, card) => sum + card.items.length, 0) > EVIDENCE_CARD_LIMITS.maxTotalItems) return null;
+    || cards.reduce((sum, card) => sum + (card.items?.length ?? card.rows?.length ?? 0), 0) > EVIDENCE_CARD_LIMITS.maxTotalItems) return null;
   const known = new Set(cards.map((card) => card.id));
   const anchors = [];
   for (const anchor of value.anchors) {

@@ -10,9 +10,10 @@ import {
   renderGroupDetails,
   renderGroupRows
 } from './evidenceNarrative.js';
-import { escapedFactText, factPresentation } from './evidenceFacts.js';
+import { canonicalGroupLabel, escapedFactText, factPresentation } from './evidenceFacts.js';
 import { bindingMark, stripBindingMarks } from './evidenceCards.js';
-import { analystPropositions, singleSubjectPropositions, caveatPropositions, countProposition, taskCountLead, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tableLeadSentence, tablePropositions, titleCandidate } from './groundedPropositions.js';
+import { calcBind, entitiesBind, factEntityBind, factEvidenceId, factTaskBind, operand } from './evidenceBindings.js';
+import { analystPropositions, singleSubjectPropositions, caveatPropositions, countProposition, factSentence, taskCountBind, taskCountLead, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tableLeadSentence, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 import { analyticalSynthesis, aspectTitle, framingSentence, nextStepSentence, synthesisNarrative, findingScope } from './analyticalFindings.js';
 import { comparisonCharts, completedListLead, noteListLead, seriesChartTitle, singleRowLead, temporalCoverage } from './temporalFindings.js';
@@ -416,16 +417,19 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       const cover = covered && (covered.part == null || covered.part === ordinal) ? covered : null;
       // Dönemde tamamlananların listesi: sayımı giriş paragrafı söylemiştir; liste kendi giriş cümlesini alır (ölçütlü sayım yinelenmez).
       const shownRows = new Set(presentation.facts.filter((item) => item.evidenceId === group.evidenceId).map((item) => /^data\.tasks\.(\d+)\./.exec(item.fact?.field || '')?.[1]).filter(Boolean)).size;
-      const hasNoteText = cover?.kind === 'notes' && presentation.facts.some((item) => item.evidenceId === group.evidenceId
-        && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '') && typeof item.fact?.value === 'string' && item.fact.value.trim().length > 0);
+      const shownTaskIds = [...new Set(presentation.facts.filter(item => item.evidenceId === group.evidenceId && /^data\.tasks\.\d+\./.test(item.fact?.field || ''))
+        .map(item => item.fact.semantic?.row?.identity).filter(id => typeof id === 'string' && id))];
+      const noteRows = cover?.kind === 'notes' ? presentation.facts.filter((item) => item.evidenceId === group.evidenceId
+        && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '') && typeof item.fact?.value === 'string' && item.fact.value.trim()) : [];
+      const noteTaskIds = noteRows.map(item => item.fact.semantic?.row?.identity).filter(id => typeof id === 'string' && id);
       // Tek satırlı liste ayrıntı cümlesiyle çizilir (satır o cümlededir): giriş önermesi onu örtmez.
       // Liste giriş cümlesi yalnızca listenin doğrulanmış toplamı girişin söylediği sayıyla aynıysa kullanılır; farklıysa (iki okuma
       // arasında yeni tamamlanan görev) listenin kendi sayımı ayrıntıda kalır.
       const listAgrees = cover?.kind !== 'completedList' || (cover.total != null && cover.total === cover.aggregate);
       const countId = cover?.kind === 'completedList' && shownRows > 1 && listAgrees
-        ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...completedListLead(shownRows, cover.total, locale) })
-        : cover?.kind === 'notes' && shownRows > 1 && hasNoteText
-          ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...noteListLead(locale, { shown: shownRows, total: cover.total }) })
+        ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...completedListLead(shownRows, cover.total, locale, group.tool === 'rota_task_search' ? group.evidenceId : null, shownTaskIds) })
+        : cover?.kind === 'notes' && shownRows > 1 && noteRows.length > 0
+          ? propose(ordinal, { kind: 'count', tone: 'info', evidenceId: group.evidenceId, ...noteListLead(locale, { shown: noteRows.length, total: cover.total, evidenceId: group.evidenceId, taskIds: noteTaskIds }) })
         : !cover && envelopeOnlyGroup(group, presentation.layout)
           ? propose(ordinal, countProposition(group, totalFact, locale, totalFact ? countFallback() : null)) : null;
       if (totalFact) entitle(ordinal, group, [totalFact]);
@@ -567,12 +571,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       if (cover?.kind === 'completedList' && shownRows === 0 && cover.aggregate === 0 && cover.total === 0) continue;
       // Notu tanıtan cümle yalnızca gerçekten dönen boş olmayan açıklamada kullanılır: iki okuma arasında boşaltılmış açıklamanın görev
       // satırı görünür kalır ama "notu okunan görev" denmez.
-      const noteRead = presentation.facts.some((item) => item.evidenceId === group.evidenceId && /^data\.tasks\.\d+\.description$/.test(item.fact?.field || '')
-        && typeof item.fact.value === 'string' && item.fact.value.trim());
-      const singleRow = shownRows === 1 && (cover?.kind === 'notes' && noteRead || cover?.kind === 'completedList' && cover.total === 1 && listAgrees);
+      const singleRow = shownRows === 1 && (cover?.kind === 'notes' && noteRows.length > 0 || cover?.kind === 'completedList' && cover.total === 1 && listAgrees);
       const clippedSingle = cover?.kind === 'completedList' && shownRows === 1 && cover.total > shownRows;
+      const subsetLead = clippedSingle ? completedListLead(shownRows, cover.total, locale, group.evidenceId, shownTaskIds) : null;
       const lead = singleRow ? singleRowLead(cover.kind, locale)
-        : clippedSingle ? completedListLead(shownRows, cover.total, locale).markdown
+        : subsetLead ? subsetLead.markdown
           : taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
       const criteriaStated = Boolean(lead && !singleRow && !clippedSingle);
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead, criteriaStated });
@@ -585,7 +588,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         // Aşama H: boş not okumasının yokluğunu giriş cümlesi söyler; giriş bu kanıtı anıyorsa ayrıntı yeniden yazılmaz.
         details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText, covers: countId, notices: Object.freeze(notices),
           ...(cover?.kind === 'notes' && shownRows === 0 ? { silent: true } : {}),
-          source: Object.freeze({ group, empty: presentation.empty || [], layout: presentation.layout, lead, criteriaStated }) }));
+          source: Object.freeze({ group, empty: presentation.empty || [], layout: presentation.layout, lead, subsetLead, criteriaStated }) }));
         for (const table of ownedTables) tables.set(table.id, Object.freeze({ ...table, detail: id }));
         if (!countId) viewDetails.push({ id, part: ordinal, text: clip(renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, cite: false }), COMPOSITION_LIMITS.maxValueChars) });
       }
@@ -1534,7 +1537,7 @@ export function renderComposition(composition, validated, { bind = false } = {})
     return (detail.source.group.main?.entries || []).filter(({ fact }) => Object.hasOwn(totals, fact.semantic?.metric) && totals[fact.semantic.metric] === fact.value)
       .map(({ fact }) => fact.semantic.metric);
   };
-  const detailText = (detail, lead = detail.source?.lead ?? null) => {
+  const detailText = (detail, lead = detail.source?.lead ?? null, factMark = null) => {
     if (detail.silent && (stated.get(detail.evidenceId)?.size || 0) > 0) return '';
     const omit = new Set([...(stated.get(detail.evidenceId) || []), ...derived(detail)]);
     const entries = detail.source?.group?.main?.entries || [];
@@ -1542,27 +1545,100 @@ export function renderComposition(composition, validated, { bind = false } = {})
     for (const claim of claimed.get(detail.evidenceId) || []) {
       if (Object.entries(claim.values).every(([metric, value]) => valueOf(metric) === value)) omit.add(claim.metric);
     }
-    return (omit.size || lead !== (detail.source?.lead ?? null)) && detail.source
-      ? renderGroupDetails(detail.source.group, { locale, empty: detail.source.empty, layout: detail.source.layout, lead, criteriaStated: detail.source.criteriaStated, ...(omit.size ? { omitMetrics: omit } : {}) })
+    return (omit.size || lead !== (detail.source?.lead ?? null) || factMark) && detail.source
+      ? renderGroupDetails(detail.source.group, { locale, empty: detail.source.empty, layout: detail.source.layout, lead, criteriaStated: detail.source.criteriaStated, ...(omit.size ? { omitMetrics: omit } : {}),
+        ...(factMark ? { mark: factMark } : {}) })
       : detail.text;
+  };
+  /**
+   * ICE-2: ayrıntı ve liste satırlarındaki doğrulanmış değerin bağı olgunun kendisinden türetilir (kanıt + yük alanı): kayıtlı
+   * görev nüfusu, varlık satırı (kişi/proje/birim), grup satırının kayıt sayısı ya da görev aramasının satırı/kesin toplamı.
+   */
+  const detailBind = (group, fact, role, row) => {
+    if (!fact || !group) return null;
+    if (role === 'title') {
+      if (group.tool === 'rota_task_search') {
+        const identity = fact.semantic?.row?.identity;
+        return typeof identity === 'string' && identity && /^data\.tasks\.\d+\./.test(fact.field) ? { type: 'task', evidenceId: group.evidenceId, taskId: identity } : null;
+      }
+      const entity = factEntityBind(fact);
+      if (entity) return entity;
+      const count = (row?.entries || []).find(({ fact: item }) => /(^|\.)groups\.\d+\.count$/.test(item.field))?.fact;
+      const label = count ? canonicalGroupLabel(count, row?.subject || count.semantic?.group?.label || '', locale) : null;
+      return count ? factTaskBind(count, { locale, scope: label }) : null;
+    }
+    if (fact.field === 'totalCount' && group.tool === 'rota_task_search' && Number.isSafeInteger(fact.value)) return taskCountBind(group, fact.semantic?.filters, fact.value, locale);
+    const evidenceId = factEvidenceId(fact);
+    // Tamamlanma oranı: aynı kaydın tamamlanan ve toplam görev alanlarından sunucunun yuvarlama kuralıyla doğrulanan hesap kartı.
+    if (/(^|\.)completionRatePercent$/.test(fact.field) && Number.isSafeInteger(fact.value) && evidenceId) {
+      const base = fact.field.slice(0, -'completionRatePercent'.length);
+      return calcBind({ numerator: operand({ evidenceId, field: `${base}done`, value: null, label: locale === 'en' ? 'Completed tasks' : 'Tamamlanan görev' }),
+        denominator: operand({ evidenceId, field: `${base}total`, value: null, label: locale === 'en' ? 'All tasks' : 'Bütün görevler' }),
+        shown: fact.value, rule: 'round', title: locale === 'en' ? 'Completion rate' : 'Tamamlanma oranı', tone: 'done' });
+    }
+    // Portföyün görünür proje sayısı: sayfa bütün projeleri taşıyorsa proje satırlarının koleksiyonu.
+    if (fact.field === 'data.totals.projects' && group.tool === 'rota_portfolio_summary' && fact.semantic?.complete === true && Number.isSafeInteger(fact.value) && fact.value > 0 && evidenceId) {
+      return entitiesBind({ tool: group.tool, evidenceId, rows: Array.from({ length: fact.value }, (_, index) => `data.projects.${index}`), locale,
+        title: locale === 'en' ? 'Visible projects' : 'Görünür projeler' });
+    }
+    if (fact.field === 'data.totals.projectsWithOverdue' && group.tool === 'rota_portfolio_summary'
+      && fact.semantic?.complete === true && Number.isSafeInteger(fact.value) && fact.value > 0 && evidenceId) {
+      const rows = [...(group.collections.get('data.projects')?.values() || [])].flatMap(record => record.entries).map(({ fact: item }) => item)
+        .filter(item => /^data\.projects\.\d+\.tasks\.overdue$/.test(item.field) && Number.isSafeInteger(item.value) && item.value > 0)
+        .map(item => item.field.slice(0, -'.tasks.overdue'.length));
+      if (rows.length !== fact.value) return null;
+      return entitiesBind({ tool: group.tool, evidenceId, rows, locale,
+        title: locale === 'en' ? 'Projects with overdue tasks' : 'Gecikmiş görevi olan projeler' });
+    }
+    const scope = fact.semantic?.group?.label || (fact.semantic?.row ? fact.semantic.row.name : null);
+    return factTaskBind(fact, { locale, scope: typeof scope === 'string' ? scope : null });
+  };
+  /** Aday metin doğrulanmadan bağ dizisine yazmayan, sahnelenmiş işaretleyici. */
+  const stagedMarker = () => {
+    const staged = [];
+    const local = (spec) => {
+      const value = bindingMark(bindings.length + staged.length + 1);
+      if (value) staged.push(spec);
+      return value;
+    };
+    return { staged, local };
   };
   // ICE: ayrıntının sayım giriş cümlesi (aynı kanıtın `taskCountLead`'i) işaretli biçimiyle yeniden çizilir; yalnızca işaretsiz
   // biçim çizilmiş metinle birebir aynıysa kullanılır (metin araması yapılmaz, ayrıntı değişmez).
   const markedDetail = (detail, text) => {
     const source = detail.source;
-    if (!mark || !text || !source?.lead || source.group?.tool !== 'rota_task_search') return text;
-    const empty = (source.empty || []).includes(detail.evidenceId);
-    if (taskCountLead(source.group, locale, { empty }) !== source.lead) return text;
+    if (!mark || !text || !source?.group) return text;
     // Aday metin doğrulanmadan ortak bağ dizisi değiştirilmez; reddedilen deneme bağ bütçesi tüketmez.
+    const { staged, local } = stagedMarker();
+    let lead = source.lead ?? null;
+    const empty = (source.empty || []).includes(detail.evidenceId);
+    if (source.subsetLead?.parts && source.subsetLead.markdown === lead) {
+      lead = factSentence(source.subsetLead.parts, local).markdown;
+    } else if (lead && source.group.tool === 'rota_task_search' && taskCountLead(source.group, locale, { empty }) === source.lead) {
+      lead = taskCountLead(source.group, locale, { empty, mark: local }) || lead;
+    }
+    const candidate = detailText(detail, lead, (fact, role, row) => {
+      const bind = detailBind(source.group, fact, role, row);
+      return bind ? local(bind) : '';
+    });
+    if (stripBindingMarks(candidate) !== text) return text;
+    bindings.push(...staged);
+    return candidate;
+  };
+  /**
+   * ICE-2: bölümler arası giriş, analiz paragrafı ve öncelik maddeleri sunucunun bulgu cümleleridir; parçalarından işaretli
+   * biçimleriyle yeniden kurulur. İşaretsiz biçim çizilmiş metinle birebir aynı değilse işaretsiz metin kalır ve bağ eklenmez.
+   */
+  const markedSentences = (block, sentences = block?.sentences) => {
+    if (!mark || !block?.markdown || !Array.isArray(sentences) || !sentences.length) return block?.markdown ?? '';
     const staged = [];
-    const lead = taskCountLead(source.group, locale, { empty, mark: (spec) => {
+    const local = (spec) => {
       const value = bindingMark(bindings.length + staged.length + 1);
       if (value) staged.push(spec);
       return value;
-    } });
-    if (!lead || lead === source.lead) return text;
-    const candidate = detailText(detail, lead);
-    if (stripBindingMarks(candidate) !== text) return text;
+    };
+    const candidate = sentences.map((parts) => factSentence(parts, local).markdown).join(' ');
+    if (stripBindingMarks(candidate) !== block.markdown) return block.markdown;
     bindings.push(...staged);
     return candidate;
   };
@@ -1727,8 +1803,17 @@ export function renderComposition(composition, validated, { bind = false } = {})
         tableLeads.add(table.part);
         emit(tableLead(table, block.style), table.part);
       }
-      let rowsText = renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated: statedText,
-        criteriaStated: Boolean(detail?.source?.criteriaStated) || namedPopulations.has(table.evidenceId) });
+      const rowOptions = { locale, layout: block.style, stated: statedText, criteriaStated: Boolean(detail?.source?.criteriaStated) || namedPopulations.has(table.evidenceId) };
+      let rowsText = renderGroupRows(table.group, table.collection, rowOptions);
+      // ICE-2: liste biçimindeki satırların vurgulu adları ve sayıları da bağlanır (tablo hücreleri vurgusuzdur); işaretsiz biçim birebir aynı olmalıdır.
+      if (mark && rowsText) {
+        const { staged, local } = stagedMarker();
+        const candidate = renderGroupRows(table.group, table.collection, { ...rowOptions, mark: (fact, role, row) => {
+          const bind = detailBind(table.group, fact, role, row);
+          return bind ? local(bind) : '';
+        } });
+        if (stripBindingMarks(candidate) === rowsText) { bindings.push(...staged); rowsText = candidate; }
+      }
       // Aynı ölçüt satırı yanıtta ikinci kez yazılmaz (aynı nüfusun ikinci tablosu).
       const caption = /^_[^\n]+_\n\n/.exec(rowsText)?.[0];
       const captionKey = `${signature(table.group) || table.evidenceId}|${caption}`;
@@ -1779,12 +1864,13 @@ export function renderComposition(composition, validated, { bind = false } = {})
     const insights = synthesis.intro.insights;
     if (insights) {
       // Karışık kapsamda her kapsamın analizi ayrı paragraftır (kendi kaynaklarıyla); tek kapsamda tek paragraf.
-      for (const paragraph of [...(insights.paragraphs || [insights])].reverse()) {
-        out.unshift({ text: `${paragraph.markdown} ${citation(paragraph.evidenceIds)}`, part: null, rowBearing: false });
-      }
+      // İşaret anahtarları metin sırasıyla verilir: önce giriş, sonra analiz paragrafları (yalnızca okunabilirlik; bağ sırası anlam taşımaz).
+      const introText = markedSentences(synthesis.intro);
+      const paragraphs = (insights.paragraphs || [insights]).map((paragraph) => `${markedSentences(paragraph)} ${citation(paragraph.evidenceIds)}`);
+      for (const text of [...paragraphs].reverse()) out.unshift({ text, part: null, rowBearing: false });
       cited.push(...insights.evidenceIds);
-    }
-    out.unshift({ text: `${synthesis.intro.markdown} ${citation(synthesis.intro.evidenceIds)}`, part: null, rowBearing: false });
+      out.unshift({ text: `${introText} ${citation(synthesis.intro.evidenceIds)}`, part: null, rowBearing: false });
+    } else out.unshift({ text: `${markedSentences(synthesis.intro)} ${citation(synthesis.intro.evidenceIds)}`, part: null, rowBearing: false });
     cited.push(...synthesis.intro.evidenceIds);
     // Genel değerlendirmede açılış, sorunun asıl yanıtı olan genel durum cümlesidir (açık, gecikmiş ve yakın terminli iş): okuyucu
     // önce durumu, ardından onu açıklayan bölümler arası bulguları okur. Bölümün ilk paragrafı öne taşınır (yinelenmez, içeriği ve
@@ -1820,8 +1906,9 @@ export function renderComposition(composition, validated, { bind = false } = {})
     // gerekçe bulgunun doğrulanmış cümlesidir; sunucu yalnızca sıra bağlaçlarını ("önce", "ardından", "son olarak") ekler.
     // Tek öncelik etiketli tek satırdır.
     const [only] = conclusion.items;
-    out.push({ text: conclusion.items.length === 1 ? `**${conclusion.heading}:** ${only.markdown} ${citation(only.evidenceIds)}`
-      : `${closingSentence(conclusion.items.map((item) => item.markdown), locale)} ${citation(conclusion.evidenceIds)}`, part: null, rowBearing: false });
+    const itemText = (item) => markedSentences(item, [item.parts]);
+    out.push({ text: conclusion.items.length === 1 ? `**${conclusion.heading}:** ${itemText(only)} ${citation(only.evidenceIds)}`
+      : `${closingSentence(conclusion.items.map(itemText), locale)} ${citation(conclusion.evidenceIds)}`, part: null, rowBearing: false });
     cited.push(...conclusion.evidenceIds);
   } else if (render.closing) {
     // Kanıtlı öncelik yoksa yanıt bir sonraki adım önerisiyle kapanır (olgu taşımaz).

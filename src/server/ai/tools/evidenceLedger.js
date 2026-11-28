@@ -127,10 +127,12 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
      * Modele verilen sonuç metni (kimliği içerir) kayda bağlanır. Sınırı aşan
      * metin kesilmez (kesik JSON geçersiz olurdu); yerine geçerli bir not saklanır.
      */
-    attachPayload(id, text, cardAssignments) {
+    attachPayload(id, text, cardAssignments, cardPopulation = null) {
       const entry = entries.find((item) => item.id === id);
       if (!entry) return;
       if (cardAssignments) entry.cardAssignments = cardAssignments;
+      // ICE-2: toplu sayıların canlı kart nüfusu; kalıcı kayda, modele ve özete girmez (yalnızca `requestEntries({ forCards })`).
+      if (cardPopulation) entry.cardPopulation = cardPopulation;
       const payload = String(text);
       entry.payload = payload.length <= MAX_EVIDENCE_TEXT_CHARS
         ? payload
@@ -177,7 +179,8 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
         let payload = null;
         try { payload = JSON.parse(entry.payload); } catch { /* Bozuk yük kanıt değildir. */ }
         return { id: entry.id, tool: entry.tool, args: entry.args, round: entry.round, payload,
-          ...(forCards && entry.cardAssignments ? { cardAssignments: entry.cardAssignments } : {}) };
+          ...(forCards && entry.cardAssignments ? { cardAssignments: entry.cardAssignments } : {}),
+          ...(forCards && entry.cardPopulation ? { cardPopulation: entry.cardPopulation } : {}) };
       });
     },
     /** Verilen kimliklerin özetleri, kanıt sırasına göre. */

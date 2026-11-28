@@ -4,9 +4,10 @@ import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { taskCompletionRate } from '../../../../scheduling/metrics/taskCompletionRate.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
-import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
+import { isTurnFatal, TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, isCompleteTaskView } from './rotaScope.js';
-import { readPortfolio, readProjectDetail, readProjectSearch, readWbs } from './rotaToolStore.js';
+import { readPortfolio, readProjectDetail, readProjectSearch, readTaskFacts, readWbs } from './rotaToolStore.js';
+import { buildCardPopulation } from './cardPopulation.js';
 import {
   accessExplanation,
   accessLevelOf,
@@ -14,9 +15,10 @@ import {
   ID_PROPERTY,
   LIMIT_PROPERTY,
   notFound,
+  projectIndex,
   requireVisibleProject
 } from './rotaToolSupport.js';
-import { addDays, DUE_SOON_DAYS, sqlDay, sqlInstant } from './taskFacts.js';
+import { addDays, DUE_SOON_DAYS, sqlDay, sqlInstant, statusTotals, taskStatus } from './taskFacts.js';
 
 function sourceLabel(sourceType) {
   return sourceType === 'CORPORATE' ? 'Kurumsal (CN43N)' : 'Manuel';
@@ -128,6 +130,23 @@ function taskTotals(row) {
 
 /* ── rota_project_detail ──────────────────────────────────── */
 
+async function detailCardPopulation(call, scope, population, projectId, total) {
+  const taskIds = [...new Set(population.map((row) => row.taskId))];
+  if (!taskIds.length || taskIds.length !== total || taskIds.length !== population.length
+    || population.some((row) => row.projectId !== projectId)) return null;
+  try {
+    const read = await (call.optionalSql ?? call.sql)((executor) => readTaskFacts(executor, scope,
+      { projectId, taskIds, maxRows: taskIds.length }));
+    const returned = new Set(read?.facts.map((fact) => fact.id));
+    if (!read || read.truncated || returned.size !== total || read.facts.length !== total
+      || !taskIds.every(id => returned.has(id))) return null;
+    return buildCardPopulation(call, scope, { sets: [['data.visibleTasks.total', read.facts]], projects: projectIndex(read.projects), today: call.today });
+  } catch (error) {
+    if (isTurnFatal(error)) throw error;
+    return null;
+  }
+}
+
 const projectDetail = {
   name: 'rota_project_detail',
   version: 1,
@@ -158,7 +177,9 @@ const projectDetail = {
     const tags = detail.tags.slice(0, 20).map((tag) => dataText(tag, 60));
     const overLimit = { DependencyCount: 'dependencyCount', BaselineCount: 'baselineCount', WbsNodeCount: 'wbsNodeCount', TagCount: 'tagCount' };
     const countsOverLimit = detail.countsOverLimit.map((column) => overLimit[column]);
+    const cardPopulation = await detailCardPopulation(call, scope, detail.population, canonicalActualId(row.ProjectId), totals.total);
     return {
+      ...(cardPopulation ? { cardPopulation } : {}),
       data: {
         project: {
           projectId: canonicalActualId(row.ProjectId),
@@ -205,6 +226,61 @@ const PORTFOLIO_SORTS = Object.freeze({
   name_asc: () => 0
 });
 
+/** Portföy satırı toplamlarının görev olgusu karşılıkları (SQL tanımlarıyla aynı koşullar; bkz. AI_TOOL_PORTFOLIO_SQL). */
+const PORTFOLIO_METRICS = Object.freeze(['total', 'todo', 'inProgress', 'done', 'open', 'overdue', 'dueNext7Days', 'openWithoutTargetFinish', 'milestonesOpen']);
+const PORTFOLIO_TOTALS = Object.freeze({ tasks: 'total', open: 'open', done: 'done', overdue: 'overdue', dueNext7Days: 'dueNext7Days', openWithoutTargetFinish: 'openWithoutTargetFinish' });
+
+/** Portföy sayısının dayandığı kimlikler ve durumlar, önizleme okumasıyla küme bazında karşılaştırılır. */
+async function portfolioCardPopulation(call, scope, { page, projects, snapshot, totals }) {
+  const wanted = new Set(page.map(({ projectId }) => canonicalActualId(projectId)).filter(Boolean));
+  const snapshotByProject = new Map();
+  for (const row of snapshot) {
+    const projectId = canonicalActualId(row.ProjectId);
+    const id = canonicalActualId(row.TaskId);
+    if (!wanted.has(projectId) || !id) continue;
+    if (!snapshotByProject.has(projectId)) snapshotByProject.set(projectId, []);
+    snapshotByProject.get(projectId).push({ id, status: taskStatus(row.Status), targetFinish: sqlDay(row.TargetFinish),
+      milestone: Boolean(row.IsMilestone) });
+  }
+  const taskIds = [...new Set([...snapshotByProject.values()].flatMap((facts) => facts.map(({ id }) => id)))];
+  if (!taskIds.length || taskIds.length > TOOL_LIMITS.maxAnalyzedTasks) return null;
+  let read;
+  // İsteğe bağlı sorgu, araç süresi dolmadan kendi iptal sınırına ulaşır.
+  try { read = await (call.optionalSql ?? call.sql)((executor) => readTaskFacts(executor, scope, { taskIds, withAssignees: false, maxRows: taskIds.length })); }
+  catch (error) { if (isTurnFatal(error)) throw error; return null; }
+  if (!read || read.truncated) return null;
+  const byProject = new Map();
+  for (const fact of read.facts) {
+    if (!byProject.has(fact.projectId)) byProject.set(fact.projectId, []);
+    byProject.get(fact.projectId).push(fact);
+  }
+  const sets = [];
+  const verified = [];
+  page.forEach((project, index) => {
+    const projectId = canonicalActualId(project.projectId);
+    if (!projectId || page.filter((row) => canonicalActualId(row.projectId) === projectId).length !== 1) return;
+    const members = {};
+    const original = {};
+    const originalCounts = statusTotals(snapshotByProject.get(projectId) || [], call.today, original);
+    const recount = statusTotals(byProject.get(projectId) || [], call.today, members);
+    if (!PORTFOLIO_METRICS.every((metric) => {
+      const ids = new Set((original[metric] || []).map(({ id }) => id));
+      const current = new Set((members[metric] || []).map(({ id }) => id));
+      return ids.size === originalCounts[metric] && current.size === recount[metric] && ids.size === project.tasks[metric]
+        && ids.size === current.size && [...current].every(id => ids.has(id));
+    })) return;
+    verified.push(members);
+    for (const metric of PORTFOLIO_METRICS) sets.push([`data.projects.${index}.tasks.${metric}`, members[metric] || [], project.projectId]);
+  });
+  if (verified.length === projects.length && projects.length === page.length) {
+    for (const [field, metric] of Object.entries(PORTFOLIO_TOTALS)) {
+      const list = verified.flatMap((members) => members[metric] || []);
+      if (list.length === totals[field]) sets.push([`data.totals.${field}`, list]);
+    }
+  }
+  return buildCardPopulation(call, scope, { sets, projects: projectIndex(read.projects || []), today: call.today });
+}
+
 const portfolioSummary = {
   name: 'rota_portfolio_summary',
   version: 1,
@@ -228,7 +304,7 @@ const portfolioSummary = {
     const source = args.source || 'all';
     const { scope } = await call.authorization();
     const soonEnd = addDays(call.today, DUE_SOON_DAYS - 1);
-    const { rows, population } = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source }));
+    const { rows, population, snapshot } = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source }));
     call.notePopulation?.(population);
     const filteredRows = rows
       .filter((row) => source === 'all' || (source === 'corporate') === (row.SourceType === 'CORPORATE'))
@@ -242,7 +318,7 @@ const portfolioSummary = {
       tasks: taskTotals(row)
     }));
     const compare = PORTFOLIO_SORTS[sort];
-    projects.sort((left, right) => compare(left, right) || left.name.localeCompare(right.name, 'tr') || left.projectId.localeCompare(right.projectId));
+    projects.sort((left, right) => compare(left, right) || left.name.localeCompare(right.name, 'tr') || String(left.projectId ?? '').localeCompare(String(right.projectId ?? '')));
     call.noteProjects?.(filteredRows.map((row) => canonicalActualId(row.ProjectId)));
     const totals = projects.reduce((sum, project) => ({
       projects: sum.projects + 1,
@@ -257,7 +333,9 @@ const portfolioSummary = {
     const descriptor = describeTaskScope(filteredRows.map(scopeAccess));
     const page = projects.slice(0, limit);
     const rankField = { overdue_desc: 'overdue', open_desc: 'open', due_soon_desc: 'dueNext7Days' }[sort];
+    const cardPopulation = await portfolioCardPopulation(call, scope, { page, projects, snapshot, totals });
     return {
+      ...(cardPopulation ? { cardPopulation } : {}),
       ...(rankField && projects.length > page.length ? { rankingBoundary: {
         collection: 'projects', metric: `tasks.${rankField}`, order: 'desc', returnedCount: page.length,
         nextValue: projects[page.length].tasks[rankField]

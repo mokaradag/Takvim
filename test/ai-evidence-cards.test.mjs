@@ -14,7 +14,7 @@ import { findElement } from './helpers/clientComponentHarness.mjs';
 registerServerOnlyShim();
 
 const cardsDomain = await import('../src/domain/ai/evidenceCards.js');
-const { EVIDENCE_CARD_LIMITS, bindingMark, hasBindingMarks, normalizeEvidenceCards, resolveBindingAnchors, stripBindingMarks, cleanEvidenceCardText, evidenceCardsExpired } = cardsDomain;
+const { EVIDENCE_CARD_LIMITS, EVIDENCE_CARD_VERSION, bindingMark, hasBindingMarks, normalizeEvidenceCards, resolveBindingAnchors, stripBindingMarks, cleanEvidenceCardText, evidenceCardsExpired } = cardsDomain;
 const { countProposition, fluentParagraph, tablePropositions, taskCountLead } = await import('../src/domain/ai/groundedPropositions.js');
 const { renderComposition } = await import('../src/domain/ai/groundedComposition.js');
 const { renderGroupDetails } = await import('../src/domain/ai/evidenceNarrative.js');
@@ -270,11 +270,18 @@ test('yetkisiz ya da atfedilmemiş kanıt ve son metinde kaymış bağ kart üre
   assert.equal(single(1, rows, { summaries: [] }), null, 'kanıt künyesi yok');
 });
 
+/**
+ * ICE-2 sınırlarında (200.000 karakter, 360 satır) bütçeyi aşan tanımlayıcı: uzun adlı, dört görünür sorumlulu satırlar. Her satır
+ * ~1.100 karakterdir; sekiz tam kart satır sınırına sığsa da boyut sınırını aşar ve sondaki kartlar düşer.
+ */
+const heavyRow = (n, longTitle) => taskRow(n, { title: longTitle, project: { projectId: PROJECT_A, name: 'Ç'.repeat(150), code: 'ALT' },
+  assignees: Array.from({ length: 4 }, (_, index) => ({ name: `${'Ğ'.repeat(148)}${String(n).padStart(4, '0')}${index}`, sicil: n * 10 + index })) });
+
 test('kart tanımlayıcısı yanıt bütçesini aşarsa sondaki kartlar düşer', () => {
   const longTitle = 'Ş'.repeat(150);
   const bindings = Array.from({ length: 8 }, (_, index) => ({ type: 'tasks', evidenceId: `R${index + 1}`, count: 30, title: `Kart ${index}`, tone: 'neutral' }));
   const text = bindings.map((_, index) => `**${bindingMark(index + 1)}30**`).join(' ');
-  const entries = bindings.map((bind, index) => entry(bind.evidenceId, Array.from({ length: 30 }, (__, row) => taskRow(index * 100 + row + 1, { title: longTitle }))));
+  const entries = bindings.map((bind, index) => entry(bind.evidenceId, Array.from({ length: 30 }, (__, row) => heavyRow(index * 100 + row + 1, longTitle))));
   const { text: clean, evidenceBindings } = bound(text, bindings);
   const built = buildEvidenceCards({ evidenceBindings, finalText: clean, entries, summaries: bindings.map((bind) => summary(bind.evidenceId)), citedIds: bindings.map((bind) => bind.evidenceId) });
   assert.ok(built.descriptor.cards.length < 8);
@@ -290,7 +297,7 @@ test('geçerli tanımlayıcı doğrulanır; her bozuk alan bütün tanımlayıc�
   const base = JSON.parse(JSON.stringify(validDescriptor()));
   assert.ok(normalizeEvidenceCards(base));
   const mutations = [
-    (value) => { value.v = 2; },
+    (value) => { value.v = EVIDENCE_CARD_VERSION + 1; },
     (value) => { value.anchors[0].card = 'c9'; },
     (value) => { value.anchors.push({ ...value.anchors[0] }); },
     (value) => { value.cards[0].items[0].id = 'R1'; },
@@ -313,8 +320,8 @@ test('geçerli tanımlayıcı doğrulanır; her bozuk alan bütün tanımlayıc�
     mutate(copy);
     assert.equal(normalizeEvidenceCards(copy), null, `bozulma ${index}`);
   }
-  assert.equal(normalizeEvidenceCards(Object.assign(Object.create({ v: 1 }), base)), null, 'düz olmayan nesne');
-  assert.equal(normalizeEvidenceCards('{"v":1}'), null);
+  assert.equal(normalizeEvidenceCards(Object.assign(Object.create({ v: EVIDENCE_CARD_VERSION }), base)), null, 'düz olmayan nesne');
+  assert.equal(normalizeEvidenceCards(`{"v":${EVIDENCE_CARD_VERSION}}`), null);
 });
 
 test('akış çözücüsü bozuk kart tanımlayıcısını atar, yanıtı korur', () => {
@@ -328,7 +335,7 @@ test('akış çözücüsü bozuk kart tanımlayıcısını atar, yanıtı korur'
     task.cards[0].items[0].id = id;
     return [[card, false], [task, false]];
   });
-  for (const [cards, kept] of [[validDescriptor(), true], ...wrongIds, [{ v: 1, cards: [], anchors: [] }, false], [{ ...validDescriptor(), anchors: [{ strong: 0, text: '2', card: 'c5' }] }, false]]) {
+  for (const [cards, kept] of [[validDescriptor(), true], ...wrongIds, [{ v: EVIDENCE_CARD_VERSION, cards: [], anchors: [] }, false], [{ ...validDescriptor(), anchors: [{ strong: 0, text: '2', card: 'c5' }] }, false]]) {
     const decoder = createAssistantStreamDecoder({ turnId: user.turnId });
     const frames = `event: accepted\ndata: ${JSON.stringify({ v: 1, conversation, userMessage: user, mode: 'standard', replay: false, context: {} })}\n\n`
       + `event: done\ndata: ${JSON.stringify({ conversation, assistantMessage: answer, replayed: false, evidenceCards: cards })}\n\n`;
@@ -439,24 +446,22 @@ test('çizim bağlı kalın düğümü tetikleyiciye sarar; metni uyuşmayan ba�
 
 test('bütçe kırpmasıyla düşen kartın kanıt kimliği bağımlılıklardan çıkarılır, kalan kartlarınki korunur', () => {
   const longTitle = 'Ü'.repeat(150);
+  const ids = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8'];
   const bindings = [
     { type: 'tasks', evidenceId: 'R1', count: 30, title: 'Birinci kart', tone: 'overdue' },
     { type: 'task', evidenceId: 'R1', taskId: taskId(1) },
-    { type: 'tasks', evidenceId: 'R2', count: 30, title: 'İkinci kart', tone: 'neutral' },
-    { type: 'tasks', evidenceId: 'R3', count: 30, title: 'Üçüncü kart', tone: 'neutral' },
-    { type: 'tasks', evidenceId: 'R4', count: 30, title: 'Dördüncü kart', tone: 'neutral' },
-    { type: 'tasks', evidenceId: 'R5', count: 30, title: 'Beşinci kart', tone: 'neutral' }
+    ...ids.slice(1).map((id, index) => ({ type: 'tasks', evidenceId: id, count: 30, title: `Kart ${index + 2}`, tone: 'neutral' }))
   ];
   const text = bindings.map((_, index) => `**${bindingMark(index + 1)}30**`).join(' ');
-  const rowsFor = (offset) => Array.from({ length: 30 }, (_, row) => taskRow(offset + row + 1, { title: longTitle }));
-  const entries = ['R1', 'R2', 'R3', 'R4', 'R5'].map((id, index) => entry(id, rowsFor(index * 100)));
+  const rowsFor = (offset) => Array.from({ length: 30 }, (_, row) => heavyRow(offset + row + 1, longTitle));
+  const entries = ids.map((id, index) => entry(id, rowsFor(index * 100)));
   const summaries = entries.map((item) => summary(item.id));
   const { text: clean, evidenceBindings } = bound(text, bindings);
   const built = buildEvidenceCards({ evidenceBindings, finalText: clean, entries, summaries, citedIds: entries.map((item) => item.id) });
   assert.ok(built, 'bütçeye sığan kartlar kalmalı');
-  assert.ok(built.descriptor.cards.length < 5, 'sondaki kartlar bütçe nedeniyle düşmeli');
+  assert.ok(built.descriptor.cards.length < bindings.length, 'sondaki kartlar bütçe nedeniyle düşmeli');
   assert.equal(built.evidenceIds.includes('R1'), true, 'kalan kartların ortak kanıtı korunmalı');
-  assert.equal(built.evidenceIds.includes('R5'), false, 'düşen kartın kanıtı bağımlılıkta kalmamalı');
+  assert.equal(built.evidenceIds.includes('R8'), false, 'düşen kartın kanıtı bağımlılıkta kalmamalı');
   assert.equal(new Set(built.evidenceIds).size, built.evidenceIds.length, 'ortak kanıt kimliği tekilleştirilmeli');
   // Düşen kartın kanıtı (R5) teslimde yoksa bile kalan kartlar yetki denetiminden geçer; kalan kartın kanıtı (R1) kalkarsa reddedilir.
   const deliveredWithoutDropped = new Set(built.evidenceIds);

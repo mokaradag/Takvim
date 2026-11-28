@@ -8,6 +8,7 @@ import { loadFilteredFacts } from './taskTools.js';
 import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS, TEAM_LEVELS } from './taskFacts.js';
 
 import { TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
+import { buildCardPopulation } from './cardPopulation.js';
 import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
 
 /* ── rota_workload_summary ────────────────────────────────── */
@@ -39,13 +40,19 @@ const workloadSummary = {
     const filters = normalizeTaskFilters({ projectId: args.projectId, status: ['todo', 'in_progress'], personSicil: args.personSicil,
       ...(team ? { assignee: 'team', ...(args.teamLevel ? { teamLevel: args.teamLevel } : {}) } : args.teamLevel ? { teamLevel: args.teamLevel } : {}) });
     const { scope } = await call.authorization();
-    const { facts, assignees, roster } = await loadFilteredFacts(call, scope, filters, { withAssignees: true, rosterRows: team && args.personSicil == null ? TEAM_ROSTER_LIMIT : 0 });
+    const { facts, projects, assignees, roster } = await loadFilteredFacts(call, scope, filters, { withAssignees: true, rosterRows: team && args.personSicil == null ? TEAM_ROSTER_LIMIT : 0 });
     const people = new Map();
     const hoursByPerson = new Map();
     let unassigned = 0;
     let unrepresented = 0;
     let incompleteAssignments = false;
     const unresolvedMembers = new Set();
+    // ICE-2: kişi satırlarının ve toplamların katkıda bulunan olguları sayıların arttığı satırda toplanır (yalnızca canlı kart).
+    const members = new Map();
+    const memberOf = (key, metric, fact) => {
+      if (!members.has(key)) members.set(key, {});
+      (members.get(key)[metric] ||= []).push(fact);
+    };
     for (const fact of facts) {
       // Kısıtlı kimlik görünümü SQL sonucunun bütün ortak sorumluları içerdiğini kanıtlayamaz.
       // Bu durum gizli atama varlığından bağımsızdır; gizli atama sayısı veya varlığı açıklanmaz.
@@ -54,6 +61,7 @@ const workloadSummary = {
       if (!fact.identityBase && !team) incompleteAssignments = true;
       if (assignmentState(fact) === 'unassigned') {
         unassigned += 1;
+        memberOf('', 'unassignedOpenTasks', fact);
         continue;
       }
       // Ekip kapsamında yalnızca yönetim kapsamındaki çalışanlar kişi olarak sayılır (eş sorumlu ekip dışıysa sayılmaz).
@@ -61,7 +69,7 @@ const workloadSummary = {
       const visible = relevant.filter((person) => person.resolved && person.identityVisible && person.sicil != null);
       if (visible.length !== relevant.length) incompleteAssignments = true;
       for (const person of relevant) if (!person.resolved || !person.identityVisible) unresolvedMembers.add(person.sicil);
-      if (!visible.length) { unrepresented += 1; continue; }
+      if (!visible.length) { unrepresented += 1; memberOf('', 'unrepresentedOpenTasks', fact); continue; }
       for (const person of visible) {
         if (args.personSicil != null && person.sicil !== args.personSicil) continue;
         if (!people.has(person.sicil)) {
@@ -78,9 +86,10 @@ const workloadSummary = {
         }
         const entry = people.get(person.sicil);
         entry.openTasks += 1;
-        if (fact.status === 'in_progress') entry.inProgress += 1;
-        if (isOverdue(fact, call.today)) entry.overdue += 1;
-        if (isDueWithin(fact, call.today, DUE_SOON_DAYS)) entry.dueNext7Days += 1;
+        memberOf(person.sicil, 'openTasks', fact);
+        if (fact.status === 'in_progress') { entry.inProgress += 1; memberOf(person.sicil, 'inProgress', fact); }
+        if (isOverdue(fact, call.today)) { entry.overdue += 1; memberOf(person.sicil, 'overdue', fact); }
+        if (isDueWithin(fact, call.today, DUE_SOON_DAYS)) { entry.dueNext7Days += 1; memberOf(person.sicil, 'dueNext7Days', fact); }
         if (fact.plannedHours != null) {
           hoursByPerson.set(person.sicil, (hoursByPerson.get(person.sicil) ?? 0n) + scaledDecimal(fact.plannedHours, 2));
           entry.tasksWithPlannedHours += 1;
@@ -112,7 +121,13 @@ const workloadSummary = {
     // Sayıların nüfusunu belirleyen seçiciler olgunun niteleyicisidir (proje ve kişi adıyla).
     const projectName = filters.project || null;
     const personName = filters.person || null;
+    const cardPopulation = await buildCardPopulation(call, scope, {
+      sets: [['data.openTaskCount', facts], ...Object.entries(members.get('') || {}).map(([metric, list]) => [`data.${metric}`, list]),
+        ...page.flatMap((person, index) => Object.entries(members.get(person.sicil) || {}).map(([metric, list]) => [`data.people.${index}.${metric}`, list, person.sicil]))],
+      projects, assignees, today: call.today
+    });
     return {
+      ...(cardPopulation ? { cardPopulation } : {}),
       ...(page.length < ordered.length ? { rankingBoundary: {
         collection: 'people', metric: 'tasks.open', order: 'desc', returnedCount: page.length, nextValue: ordered[page.length].openTasks
       } } : {}),

@@ -1,7 +1,6 @@
 import 'server-only';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
-import { cleanEvidenceCardText } from '../../../../domain/ai/evidenceCards.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
@@ -9,6 +8,7 @@ import { TOOL_LIMITS } from '../toolLimits.js';
 import { invalidArguments, TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, projectAccess } from './rotaScope.js';
 import { readTaskDetail, readTaskFacts, readTaskNotes, readWbsSelector, TASK_NOTE_CHARS, TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
+import { buildCardPopulation, cardAssignmentsFor } from './cardPopulation.js';
 import {
   accessExplanation,
   CURSOR_PROPERTY,
@@ -189,7 +189,8 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false, 
       .items.find((person) => person.sicil === filters.personSicil)?.name;
     filters.person = resolved && resolved !== String(filters.personSicil) ? dataText(resolved, 120) : 'Seçilen kişi';
   }
-  return { facts, projects, assignees: result.assignees, roster: result.roster || null, ...(historyBasis ? { undatedDone: undatedKnown ? undated.length : null } : {}) };
+  // ICE-2: tarihi kayıtlı olmayan tamamlanmış görevlerin kendisi de (yalnızca canlı kart nüfusu için) döner; sayı ile aynı dizidir.
+  return { facts, projects, assignees: result.assignees, roster: result.roster || null, ...(historyBasis ? { undatedDone: undatedKnown ? undated.length : null, undatedFacts: undatedKnown ? undated : null } : {}) };
 }
 
 function filterHighlights(filters) {
@@ -300,22 +301,7 @@ const taskSearch = {
     const nextValue = next && rankSort ? (rankSort[0] === 'overdueDays'
       ? (isOverdue(next, call.today) ? overdueDays(next, call.today) : null) : next[rankSort[0]] ?? null) : null;
     // Yalnızca canlı kart için; model zarfına ve kalıcı kanıta eklenmez.
-    const cardAssignments = new Map(pageFacts.map((fact) => {
-      const unresolved = [];
-      let visibleCount = 0;
-      let hiddenCount = 0;
-      let hasUnusableName = false;
-      (pageAssignees.get(fact.id) || []).forEach((person, index) => {
-        if (!person.identityVisible) hiddenCount += 1;
-        else if (!person.resolved) unresolved.push(index);
-        else if (cleanEvidenceCardText(person.name)) visibleCount += 1;
-        else {
-          unresolved.push(index);
-          hasUnusableName = true;
-        }
-      });
-      return [fact.id, { unresolved, visibleCount, hiddenCount, hasUnusableName }];
-    }));
+    const cardAssignments = cardAssignmentsFor(pageFacts, pageAssignees);
     return {
       cardAssignments,
       ...(rankSort && offset === 0 && next ? { rankingBoundary: {
@@ -594,12 +580,19 @@ const taskAnalytics = {
     const teamOrganization = filters.assignee === 'team' && ORGANIZATION_GROUP_BY.includes(groupBy);
     // Gerçekleşen bitişe göre dönem okuması: tarihi kayıtlı olmayan tamamlanmış görevler aynı okumada sayılır (tamlık ölçüsü).
     const historyBasis = filters.dateField === 'actualFinish' && Boolean(filters.dateFrom || filters.dateTo);
-    const { facts, projects, assignees, roster, undatedDone = null } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy),
+    const { facts, projects, assignees, roster, undatedDone = null, undatedFacts = null } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy),
       rosterRows: teamOrganization ? TEAM_ROSTER_LIMIT : 0, historyBasis });
     // Ekip kapsamında sorumlu gruplaması yalnızca yönetim kapsamındaki kişilerdir (görevin kapsam dışı eş sorumlusu sayılmaz).
     const context = { projects, assignees, today: call.today, teamOnly: filters.assignee === 'team' };
     let groups = null;
     let groupCount = 0;
+    // ICE-2: her grup sayısının katkıda bulunan olguları sayının arttığı satırda toplanır (yalnızca canlı kart için).
+    const members = new Map();
+    const memberOf = (group, metric, fact) => {
+      if (!members.has(group)) members.set(group, {});
+      (members.get(group)[metric] ||= []).push(fact);
+    };
+    let groupMembers = [];
     if (groupBy === 'due_horizon') {
       const rows = HORIZON_BANDS.map(([key, label, from, to]) => ({ key, label, count: 0, open: 0, overdue: 0, done: 0, from, to }));
       for (const fact of facts) {
@@ -608,8 +601,10 @@ const taskAnalytics = {
         const row = rows.find((band) => ahead >= band.from && ahead <= band.to);
         if (!row) continue;
         row.count += 1; row.open += 1;
+        memberOf(row, 'count', fact); memberOf(row, 'open', fact);
       }
       groups = rows.map(({ from: _from, to: _to, ...row }) => row);
+      groupMembers = rows.map((row) => members.get(row) || {});
       groupCount = groups.length;
     } else if (buckets) {
       const byKey = new Map(buckets.map((bucket) => [bucket.key, { key: bucket.key, label: bucketLabel(bucket, seriesBucket, 'tr'), count: 0, open: 0, overdue: 0, done: 0,
@@ -619,11 +614,13 @@ const taskAnalytics = {
         // Süzgeç aralığın dışındaki tarihi zaten eler; kovası olmayan olgu sayılmaz (savunma, sessiz yeni kova açılmaz).
         if (!group) continue;
         group.count += 1;
-        if (fact.status === 'done') group.done += 1;
-        else group.open += 1;
-        if (isOverdue(fact, call.today)) group.overdue += 1;
+        memberOf(group, 'count', fact);
+        if (fact.status === 'done') { group.done += 1; memberOf(group, 'done', fact); }
+        else { group.open += 1; memberOf(group, 'open', fact); }
+        if (isOverdue(fact, call.today)) { group.overdue += 1; memberOf(group, 'overdue', fact); }
       }
       groups = [...byKey.values()];
+      groupMembers = groups.map((group) => members.get(group) || {});
       groupCount = groups.length;
     } else if (groupBy) {
       const byKey = new Map();
@@ -634,9 +631,10 @@ const taskAnalytics = {
           if (parent) parents.set(key, parent);
           const group = byKey.get(key);
           group.count += 1;
-          if (fact.status === 'done') group.done += 1;
-          else group.open += 1;
-          if (isOverdue(fact, call.today)) group.overdue += 1;
+          memberOf(group, 'count', fact);
+          if (fact.status === 'done') { group.done += 1; memberOf(group, 'done', fact); }
+          else { group.open += 1; memberOf(group, 'open', fact); }
+          if (isOverdue(fact, call.today)) { group.overdue += 1; memberOf(group, 'overdue', fact); }
         }
       }
       // Aynı adlı farklı birimler görünen adlarıyla da ayrışır: önce en yakın üst birimle ("Test · Bölüm A"); bu da yetmezse
@@ -679,22 +677,40 @@ const taskAnalytics = {
       const overlapping = ORGANIZATION_GROUP_BY.includes(groupBy);
       const visibleGroupLimit = ordered.length > limit && !overlapping ? Math.max(0, limit - 1) : limit;
       groups = ordered.slice(0, visibleGroupLimit);
+      groupMembers = groups.map((group) => members.get(group) || {});
       if (ordered.length > visibleGroupLimit && !overlapping) {
         const rest = ordered.slice(visibleGroupLimit).reduce((sum, group) => ({
           count: sum.count + group.count, open: sum.open + group.open, overdue: sum.overdue + group.overdue, done: sum.done + group.done
         }), { count: 0, open: 0, overdue: 0, done: 0 });
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
+        // Sorumlu gruplarının “diğer” satırı atama sayısıdır. Yalnızca ayrık grupların görevleri birleştirilir.
+        const restMembers = {};
+        if (groupBy !== 'assignee') {
+          for (const group of ordered.slice(visibleGroupLimit)) for (const [metric, list] of Object.entries(members.get(group) || {})) (restMembers[metric] ||= []).push(...list);
+        }
+        groupMembers.push(restMembers);
       }
     }
     const groupsTruncated = Boolean(groupBy && groupBy !== 'due_horizon' && groupCount > limit || teamOrganization && roster?.truncated);
-    const totals = statusTotals(facts, call.today);
+    const totalMembers = {};
+    const totals = statusTotals(facts, call.today, totalMembers);
+    const metricMembers = new Map();
+    const aging = overdueAging(facts, call.today, metricMembers);
+    const hours = hoursCoverage(facts, metricMembers);
     const descriptor = searchedScope(scope, filters.projectId);
+    const cardPopulation = await buildCardPopulation(call, scope, {
+      sets: [['totalCount', facts], ['data.hours.taskCount', facts], ...metricMembers, ...Object.entries(totalMembers).map(([key, list]) => [`data.totals.${key}`, list]),
+        ...(Array.isArray(undatedFacts) ? [['data.history.undatedDone', undatedFacts]] : []),
+        ...groupMembers.flatMap((sets, index) => Object.entries(sets).map(([metric, list]) => [`data.groups.${index}.${metric}`, list, groups[index].key]))],
+      projects, assignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy) || filters.assignee === 'person' ? assignees : null, today: call.today
+    });
     return {
+      ...(cardPopulation ? { cardPopulation } : {}),
       data: {
         totals,
         filters,
-        overdueAging: overdueAging(facts, call.today),
-        hours: hoursCoverage(facts),
+        overdueAging: aging,
+        hours,
         ...(groups ? { groupBy, groups, groupCount } : {}),
         ...(buckets ? { series: { bucket: seriesBucket, dateField: filters.dateField, dateFrom: filters.dateFrom, dateTo: filters.dateTo } } : {}),
         // Geçmiş dönem okumasının tamlığı: tarihi kayıtlı olmayan tamamlanmış görevler hiçbir döneme yerleştirilemez.

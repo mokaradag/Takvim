@@ -45,7 +45,7 @@ const COMPLETED_AUDIT_STATUSES_SQL = Object.entries(PERSISTED_TASK_STATUSES)
  * kurduğu bütün geçici tablolar düşürülür, henüz kurulmamış olanlar atlanır.
  */
 const RESULT_TOO_LARGE = `BEGIN
-    DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTaskIds, #AiScopeTasks, #AiTaskFilter, #AiProjectFilter, #AiAssigneeFilter, #AiTasks,
+    DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTaskIds, #AiScopeTasks, #AiTaskFilter, #AiProjectFilter, #AiAssigneeFilter, #AiTasks, #AiProjectTaskSnapshot,
       #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts,
       #AiProjectMatches, #AiWbsFocus, #AiRequiredWbs, #AiDependencies, #AiRosterStart, #AiRosterEnd, #AiPostCutoffGrants;
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
@@ -843,6 +843,15 @@ ${SCOPE_PROJECTS}
   SELECT ProjectId FROM #AiProjectMatches;
   DROP TABLE #AiProjectMatches, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
+// Sayımlar ve kart üyeliği, aynı sorguda yakalanan sınırlı görev görüntüsünü paylaşır.
+const PROJECT_TASK_SNAPSHOT = `
+  DROP TABLE IF EXISTS #AiProjectTaskSnapshot;
+  SELECT visible.TaskId, visible.ProjectId, t.Status, t.TargetFinish, t.IsMilestone, t.UpdatedAt
+  INTO #AiProjectTaskSnapshot
+  FROM #AiTasks visible
+  JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId AND t.ProjectId = visible.ProjectId;
+`;
+
 /**
  * Proje başına görünür görev toplamları. Sayılar yalnızca görünür görevler
  * üzerindedir; kısmi projede proje bütününü temsil etmez (kapsam künyesi
@@ -852,6 +861,7 @@ ${SCOPE_PROJECTS}
 export const AI_TOOL_PORTFOLIO_SQL = `/* rota-ai-tool:portfolio */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
+${PROJECT_TASK_SNAPSHOT}
   SELECT v.ProjectId, p.ProjectName, p.ProjectCode, p.SourceType, p.LeadSicil, p.CalendarId,
     v.AccessLevel, v.HasReadGrant, v.IsTaskScoped,
     COUNT(t.TaskId) AS TaskCount,
@@ -866,13 +876,12 @@ ${visibleTasks()}
     MAX(t.UpdatedAt) AS LastTaskUpdateAt
   FROM #AiScopeProjects v
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
-  LEFT JOIN #AiTasks visible ON visible.ProjectId = v.ProjectId
-  LEFT JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
+  LEFT JOIN #AiProjectTaskSnapshot t ON t.ProjectId = v.ProjectId
   GROUP BY v.ProjectId, p.ProjectName, p.ProjectCode, p.SourceType, p.LeadSicil, p.CalendarId,
     v.AccessLevel, v.HasReadGrant, v.IsTaskScoped;
-  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
+  SELECT TaskId, ProjectId, Status, TargetFinish, IsMilestone FROM #AiProjectTaskSnapshot;
 
-  DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+  DROP TABLE #AiProjectTaskSnapshot, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
  * Tek proje künyesi: proje satırı, etiketler, takvim ve lider adı, görünür
@@ -881,6 +890,7 @@ ${visibleTasks()}
 export const AI_TOOL_PROJECT_DETAIL_SQL = `/* rota-ai-tool:project-detail */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
+${PROJECT_TASK_SNAPSHOT}
   SELECT v.ProjectId, p.ProjectName, p.ProjectCode, p.SourceType, p.ProjectTypeName, p.LeadSicil, p.DataDate,
     v.AccessLevel, v.HasReadGrant, v.IsTaskScoped,
     NULLIF(LTRIM(RTRIM(lead.DisplayName)), N'') AS LeadName,
@@ -918,11 +928,10 @@ ${visibleTasks()}
     COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' AND t.IsMilestone = 1 THEN 1 ELSE 0 END), 0) AS OpenMilestoneCount,
     MIN(CASE WHEN ${STATUS_SQL} <> 'done' AND t.TargetFinish >= @today THEN t.TargetFinish END) AS NextTargetFinish,
     MAX(t.UpdatedAt) AS LastTaskUpdateAt
-  FROM #AiTasks visible
-  JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId;
-  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
+  FROM #AiProjectTaskSnapshot t;
+  SELECT TaskId, ProjectId FROM #AiProjectTaskSnapshot;
 
-  DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+  DROP TABLE #AiProjectTaskSnapshot, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 export const AI_TOOL_WBS_SELECTOR_SQL = `/* rota-ai-tool:wbs-selector */
   DECLARE @selectedProjectId uniqueidentifier = (SELECT ProjectId FROM dbo.MR_WBS WHERE WbsId = @wbsId);

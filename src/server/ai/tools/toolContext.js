@@ -155,7 +155,7 @@ export function createToolTurnContext({
    * paylaşır. Her kanıt kendi alan gereksinimine göre değerlendirilir; birinin
    * daha yüksek kimlik veya proje gereksinimi diğerini düşürmez.
    */
-  async function revalidateEvidence(entries, signal, run = withSql) {
+  async function revalidateEvidence(entries, signal, run = withSql, liveCards = null) {
     const prepared = new Map();
     const projectIds = new Set();
     const taskIds = new Set();
@@ -219,6 +219,19 @@ export function createToolTurnContext({
       const validNodes = item.nodes.every(node => nodes.get(node.projectId)?.has(node.id));
       if (validProjects && validTasks && validNodes) authorized.add(saved.id);
     }
+    if (liveCards) {
+      const { auth } = state.current;
+      const identities = new Set(auth.scopeIdentities);
+      const ownTasks = new Set((auth.scopeTaskRights || []).filter(row => row.reason === 'ASSIGNEE').map(row => row.taskId));
+      for (const [cardId, { previews }] of liveCards.requirements) {
+        if (previews.every((preview) => {
+          if (!taskStillValid(tasks, preview, preview.needsIdentityBase)) return false;
+          if (tasks.get(preview.taskId).identityBase) return true;
+          return (!preview.needsOwnAssignment || ownTasks.has(preview.taskId))
+            && preview.assignees.every(id => id === sicil || identities.has(id));
+        })) liveCards.authorized.add(cardId);
+      }
+    }
     return authorized;
   }
 
@@ -228,7 +241,7 @@ export function createToolTurnContext({
    * değişiklik bu okumanın ardından sıralanır. Ağ teslimiyle atomiklik iddiası
    * yoktur. Önceki denetimlerin gözlemleri bu işleme taşınmaz.
    */
-  async function recheckEvidenceTasks(entries, signal) {
+  async function recheckEvidenceDisclosure(entries, signal, requirements = null) {
     return withSql(signal, async (_executor, track, transactionSignal) => {
       // Gövde salt okumadır ve her denemede yetkiyi baştan okur: kilitlenme kurbanı işlem yalnız bir kez,
       // yeni işlemde ve aynı SQL kapısı/süre sınırı içinde yinelenir. Diğer hatalar yinelenmez.
@@ -241,11 +254,12 @@ export function createToolTurnContext({
         await loadScope(transactionSignal, true, run);
         // Önceki iletinin dönemi bu işlemin yetki kaynağı değildir.
         const epoch = state.epoch;
-        const authorized = await revalidateEvidence(entries, transactionSignal, run);
+        const cards = new Set();
+        const authorized = await revalidateEvidence(entries, transactionSignal, run, requirements ? { requirements, authorized: cards } : null);
         await loadScope(transactionSignal, true, run);
         if (state.epoch !== epoch) throw new ToolError(TOOL_ERROR_CODES.TIMEOUT);
         transactionSignal.throwIfAborted();
-        return new Set(entries.filter(entry => authorized.has(entry.id)));
+        return { entries: new Set(entries.filter(entry => authorized.has(entry.id))), cards };
       }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE, deadlockRetries: 1 });
       track(pending);
       return raceWithAbort(() => pending, transactionSignal);
@@ -302,7 +316,8 @@ export function createToolTurnContext({
     },
     isEvidenceAuthorized,
     revalidateEvidence,
-    recheckEvidenceTasks,
+    recheckEvidenceTasks: async (entries, signal) => (await recheckEvidenceDisclosure(entries, signal)).entries,
+    recheckEvidenceDisclosure,
     revalidateAuthorization(signal) { return loadScope(signal, true); },
     timeoutCode(signal) { return waiting.has(signal) ? TOOL_ERROR_CODES.BUSY : TOOL_ERROR_CODES.TIMEOUT; },
     stats() {
